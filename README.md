@@ -6,6 +6,11 @@ selected mission routes, combat, persistent maps, earned equipment, learned
 psi, versioned saves and the original startup/menu presentation. Complete
 campaign reconstruction remains unfinished.
 
+<img width="802" height="632" alt="image" src="https://github.com/user-attachments/assets/c4dd1720-2598-4bdf-92d0-d091ed59266e" />
+<img width="802" height="632" alt="image" src="https://github.com/user-attachments/assets/dfba2cc2-34f4-4e30-b7e9-385d32a3f442" />
+<img width="802" height="632" alt="image" src="https://github.com/user-attachments/assets/c9540a6f-94a6-43d8-aca0-d0c694dc343b" />
+
+
 ## Source and content
 
 This repository contains reconstruction code, test source, extraction and
