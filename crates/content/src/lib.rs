@@ -1,0 +1,348 @@
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::fs;
+use std::path::{Component, Path};
+use thiserror::Error;
+
+pub mod audio;
+pub mod combat;
+pub mod graphics;
+pub mod mission;
+pub mod ui;
+
+pub const WARRIOR_BYTES: usize = 0xc42;
+pub const ITEM_BYTES: usize = 150;
+pub const INVENTORY_BYTES: usize = 22;
+
+#[derive(Debug, Error)]
+pub enum ContentError {
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Json(#[from] serde_json::Error),
+    #[error("invalid content: {0}")]
+    Invalid(String),
+}
+
+pub fn span(bytes: &[u8], offset: usize, size: usize) -> Result<&[u8], ContentError> {
+    offset
+        .checked_add(size)
+        .and_then(|end| bytes.get(offset..end))
+        .ok_or_else(|| {
+            ContentError::Invalid(format!("range {offset}+{size} exceeds {}", bytes.len()))
+        })
+}
+
+pub fn word(bytes: &[u8], offset: usize) -> Result<i16, ContentError> {
+    let value = span(bytes, offset, 2)?;
+    Ok(i16::from_be_bytes([value[0], value[1]]))
+}
+
+pub fn digest(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Warrior {
+    pub name: String,
+    pub original_sha256: String,
+    pub bytes: Vec<u8>,
+}
+
+impl Warrior {
+    pub fn read(bytes: &[u8]) -> Result<Self, ContentError> {
+        if bytes.len() != WARRIOR_BYTES {
+            return Err(ContentError::Invalid(format!(
+                "warrior size {}, expected {WARRIOR_BYTES}",
+                bytes.len()
+            )));
+        }
+        let name_field = span(bytes, 0xa21, 31)?;
+        let length = name_field
+            .iter()
+            .position(|b| *b == 0)
+            .ok_or_else(|| ContentError::Invalid("unterminated warrior name".into()))?;
+        if length == 0 {
+            return Err(ContentError::Invalid("empty warrior name".into()));
+        }
+        let name_bytes = &name_field[..length];
+        if !name_bytes.is_ascii() {
+            return Err(ContentError::Invalid(
+                "non-ASCII warrior name needs MacRoman decoder".into(),
+            ));
+        }
+        Ok(Self {
+            name: String::from_utf8(name_bytes.to_vec()).unwrap(),
+            original_sha256: digest(bytes),
+            bytes: bytes.to_vec(),
+        })
+    }
+
+    pub fn stamina(&self) -> Result<i16, ContentError> {
+        word(&self.bytes, 0x50)
+    }
+    pub fn psi_points(&self) -> Result<i16, ContentError> {
+        word(&self.bytes, 0x58)
+    }
+    pub fn knows_spell(&self, spell: i16) -> Result<bool, ContentError> {
+        let school = spell / 1000;
+        let row = spell % 1000 / 100 - 1;
+        let column = spell % 100 - 1;
+        if school < 1 || !(0..7).contains(&row) || !(0..7).contains(&column) {
+            return Ok(false);
+        }
+        Ok(word(&self.bytes, 0x36)? == school
+            && span(&self.bytes, 0x9f0, 49)?[(row * 7 + column) as usize] != 0)
+    }
+    pub fn inventory(&self) -> Result<Vec<InventoryRecord>, ContentError> {
+        let count = word(&self.bytes, 0x1a)?;
+        if !(0..=100).contains(&count) {
+            return Err(ContentError::Invalid(format!("inventory count {count}")));
+        }
+        (0..count as usize)
+            .map(|i| {
+                InventoryRecord::read(span(
+                    &self.bytes,
+                    0x132 + i * INVENTORY_BYTES,
+                    INVENTORY_BYTES,
+                )?)
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InventoryRecord(pub [u8; INVENTORY_BYTES]);
+
+impl InventoryRecord {
+    pub fn read(bytes: &[u8]) -> Result<Self, ContentError> {
+        let mut record = [0; INVENTORY_BYTES];
+        record.copy_from_slice(span(bytes, 0, INVENTORY_BYTES)?);
+        Ok(Self(record))
+    }
+    pub fn id(&self) -> i16 {
+        i16::from_be_bytes([self.0[0], self.0[1]])
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct Fork {
+    path: String,
+    kind: String,
+    size: usize,
+    sha256: String,
+}
+#[derive(Debug, Deserialize)]
+struct Manifest {
+    schema_version: u32,
+    input_manifest_sha256: String,
+    forks: Vec<Fork>,
+    resources: Vec<Resource>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Resource {
+    pub original: String,
+    pub r#type: String,
+    pub id: i16,
+    pub size: usize,
+    pub sha256: String,
+    pub output: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct Content {
+    pub identity: String,
+    pub warriors: Vec<Warrior>,
+    pub items: Vec<Vec<u8>>,
+    pub resources: Vec<Resource>,
+    pub scenario: Option<mission::ScenarioContent>,
+    pub original_services: Option<OriginalServices>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct OriginalServices {
+    pub schema_version: u32,
+    pub content_identity: String,
+    pub executable_code_sha256: String,
+    pub registration_accepted: bool,
+    pub authority: String,
+}
+
+fn safe_path(root: &Path, relative: &str) -> Result<std::path::PathBuf, ContentError> {
+    if relative.contains('\\')
+        || relative.contains(':')
+        || Path::new(relative)
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return Err(ContentError::Invalid(format!("unsafe path {relative:?}")));
+    }
+    let canonical_root = root.canonicalize()?;
+    let path = root.join(relative).canonicalize()?;
+    if !path.starts_with(canonical_root) {
+        return Err(ContentError::Invalid("path escapes input root".into()));
+    }
+    Ok(path)
+}
+
+impl Content {
+    pub fn map(&self, index: i32) -> Option<&mission::OpeningMission> {
+        self.scenario
+            .as_ref()?
+            .maps
+            .get(usize::try_from(index).ok()?)
+    }
+
+    pub fn load(originals: &Path, extracted: &Path) -> Result<Self, ContentError> {
+        let manifest: Manifest =
+            serde_json::from_slice(&fs::read(extracted.join("manifest.json"))?)?;
+        if manifest.schema_version != 1 {
+            return Err(ContentError::Invalid(
+                "unsupported extraction manifest".into(),
+            ));
+        }
+        if digest(&fs::read(originals.join("packsmith-mapping.json"))?)
+            != manifest.input_manifest_sha256
+        {
+            return Err(ContentError::Invalid(
+                "original manifest identity changed".into(),
+            ));
+        }
+        let mut warriors = Vec::new();
+        let mut items = Vec::new();
+        let mut item_cache = None;
+        let scenario_items = "TheNewCenturions/Scenarios/The Thunder of Guns/0/Data NI";
+        for fork in manifest.forks.iter().filter(|f| f.kind == "data") {
+            let starter =
+                fork.path.starts_with("TheNewCenturions/Warriors/") && fork.size == WARRIOR_BYTES;
+            let item_table = fork.path == "TheNewCenturions/Data Files/Data ID";
+            if !starter && !item_table && fork.path != scenario_items {
+                continue;
+            }
+            let bytes = fs::read(safe_path(originals, &fork.path)?)?;
+            if bytes.len() != fork.size || digest(&bytes) != fork.sha256 {
+                return Err(ContentError::Invalid(format!(
+                    "fork identity mismatch: {}",
+                    fork.path
+                )));
+            }
+            if starter {
+                warriors.push(Warrior::read(&bytes)?);
+            }
+            if item_table {
+                if bytes.len() % ITEM_BYTES != 0 {
+                    return Err(ContentError::Invalid("partial item record".into()));
+                }
+                item_cache = Some(span(&bytes, 0, 200 * ITEM_BYTES)?.to_vec());
+                items = span(&bytes, 0, 800 * ITEM_BYTES)?
+                    .as_chunks::<ITEM_BYTES>()
+                    .0
+                    .iter()
+                    .map(|record| record.to_vec())
+                    .collect();
+            }
+        }
+        let scenario_item_bytes = read_fork(originals, &manifest.forks, scenario_items)?;
+        items.extend(
+            span(&scenario_item_bytes, 0, 200 * ITEM_BYTES)?
+                .as_chunks::<ITEM_BYTES>()
+                .0
+                .iter()
+                .map(|v| v.to_vec()),
+        );
+        let mut scenario =
+            mission::ScenarioContent::read(|path| read_fork(originals, &manifest.forks, path))?;
+        let prologue = manifest
+            .resources
+            .iter()
+            .find(|r| {
+                r.r#type == "TEXT"
+                    && r.id == 1000
+                    && r.original.ends_with("/The Thunder of Guns/0/Scenario")
+            })
+            .ok_or_else(|| ContentError::Invalid("opening prologue missing".into()))?;
+        let mut tables = (*scenario.maps[0].shared).clone();
+        tables.item_cache = item_cache
+            .ok_or_else(|| ContentError::Invalid("missing original item cache".into()))?;
+        tables.prologue = encoding_rs::MACINTOSH
+            .decode(&read_resource(extracted, prologue)?)
+            .0
+            .replace('\r', "\n");
+        for resource in manifest.resources.iter().filter(|r| {
+            r.r#type == "TEXT" && r.original.ends_with("/The Thunder of Guns/0/Scenario")
+        }) {
+            tables.movies.insert(
+                resource.id,
+                encoding_rs::MACINTOSH
+                    .decode(&read_resource(extracted, resource)?)
+                    .0
+                    .replace('\r', "\n"),
+            );
+        }
+        let tables = std::sync::Arc::new(tables);
+        for map in &mut scenario.maps {
+            map.shared = tables.clone();
+        }
+        warriors.sort_by(|a, b| a.name.cmp(&b.name));
+        if warriors.len() != 6 {
+            return Err(ContentError::Invalid(format!(
+                "expected six starter warriors, found {}",
+                warriors.len()
+            )));
+        }
+        if items.is_empty() {
+            return Err(ContentError::Invalid("missing item table".into()));
+        }
+        Ok(Self {
+            identity: manifest.input_manifest_sha256,
+            warriors,
+            items,
+            resources: manifest.resources,
+            scenario: Some(scenario),
+            original_services: None,
+        })
+    }
+}
+
+fn read_fork(root: &Path, forks: &[Fork], path: &str) -> Result<Vec<u8>, ContentError> {
+    let fork = forks
+        .iter()
+        .find(|f| f.kind == "data" && f.path == path)
+        .ok_or_else(|| ContentError::Invalid(format!("missing data fork {path}")))?;
+    let bytes = fs::read(safe_path(root, path)?)?;
+    if bytes.len() != fork.size || digest(&bytes) != fork.sha256 {
+        return Err(ContentError::Invalid(format!(
+            "fork identity mismatch: {path}"
+        )));
+    }
+    Ok(bytes)
+}
+
+pub fn read_resource(extracted: &Path, resource: &Resource) -> Result<Vec<u8>, ContentError> {
+    let bytes = fs::read(safe_path(extracted, &resource.output)?)?;
+    if bytes.len() != resource.size || digest(&bytes) != resource.sha256 {
+        return Err(ContentError::Invalid(format!(
+            "resource identity mismatch: {} {}:{}",
+            resource.original, resource.r#type, resource.id
+        )));
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn rejects_overflow_and_truncation() {
+        assert!(span(&[0; 4], usize::MAX, 2).is_err());
+        assert!(Warrior::read(&[0; WARRIOR_BYTES - 1]).is_err());
+        assert!(InventoryRecord::read(&[0; 21]).is_err());
+    }
+    #[test]
+    fn warrior_name_is_bounded() {
+        let mut bytes = vec![0; WARRIOR_BYTES];
+        bytes[0xa21..0xa40].fill(b'a');
+        assert!(Warrior::read(&bytes).is_err());
+    }
+}

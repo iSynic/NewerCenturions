@@ -1,0 +1,55 @@
+param([switch]$Package, [switch]$OriginalFixtures)
+$ErrorActionPreference = 'Stop'
+$taskRoot = Split-Path $PSScriptRoot -Parent
+Push-Location $taskRoot
+try {
+    $hasOriginals = (Test-Path -LiteralPath 'NewCenturions/packsmith-mapping.json') -and (Test-Path -LiteralPath 'evidence/fixtures')
+    if ($OriginalFixtures -and -not $hasOriginals) { throw 'Original fixture checks require local NewCenturions and evidence/fixtures directories' }
+    $verifyOriginals = $OriginalFixtures -or $hasOriginals
+    if ($verifyOriginals) {
+        python tools/extract.py
+        if ($LASTEXITCODE) { throw 'Content extraction failed' }
+        python -m unittest discover -s tests/python
+    } else {
+        python -m unittest discover -s tests/python -p test_extract.py
+        if ($LASTEXITCODE) { throw 'Parser tests failed' }
+        python -m unittest discover -s tests/python -p test_public.py
+    }
+    if ($LASTEXITCODE) { throw 'Parser tests failed' }
+    cargo fmt --check
+    if ($LASTEXITCODE) { throw 'Formatting failed' }
+    if ($verifyOriginals) {
+        cargo test --workspace --features original-fixtures
+    } else {
+        cargo test --workspace
+    }
+    if ($LASTEXITCODE) { throw 'Tests failed' }
+    cargo test --manifest-path vendor/miniquad/Cargo.toml --lib --target-dir target/miniquad-check
+    if ($LASTEXITCODE) { throw 'Windows keyboard compatibility tests failed' }
+    if ($verifyOriginals) {
+        cargo clippy --workspace --all-targets --features original-fixtures -- -D warnings
+    } else {
+        cargo clippy --workspace --all-targets -- -D warnings
+    }
+    if ($LASTEXITCODE) { throw 'Clippy failed' }
+    cargo build --workspace --release
+    if ($LASTEXITCODE) { throw 'Release build failed' }
+    if ($verifyOriginals) {
+        foreach ($seed in @(12, 1)) {
+            & '.\target\release\centurions-tools.exe' verify-opening $taskRoot $seed
+            if ($LASTEXITCODE) { throw "Opening workflow failed for seed $seed" }
+        }
+        & '.\target\release\centurions-tools.exe' verify-fight $taskRoot
+        if ($LASTEXITCODE) { throw 'Combat and resumed replay failed' }
+        & '.\target\release\centurions-tools.exe' verify-day-two $taskRoot
+        if ($LASTEXITCODE) { throw 'Day-two routes failed' }
+        & '.\target\release\centurions-tools.exe' verify-sustained $taskRoot
+        if ($LASTEXITCODE) { throw 'Authored supply, reload and subsequent battle workflow failed' }
+        & '.\target\release\centurions-tools.exe' verify-stage-one $taskRoot
+        if ($LASTEXITCODE) { throw 'First mission transition and resumed replay failed' }
+    }
+    if ($Package) {
+        python tools/package.py
+        if ($LASTEXITCODE) { throw 'Packaging failed' }
+    }
+} finally { Pop-Location }

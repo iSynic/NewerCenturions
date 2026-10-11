@@ -1,0 +1,15 @@
+/NewCenturions/
+/assets/
+/analysis/
+/reference/
+/evidence/
+/target/
+/dist/
+__pycache__/
+*.tmp
+*.rsrc
+*.hfv
+*.ROM
+*.sit
+*.sitx
+/vendor/miniquad/Cargo.lock

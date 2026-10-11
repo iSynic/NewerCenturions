@@ -1,0 +1,26 @@
+name: Source build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Update Rust
+        run: rustup update stable
+      - name: Audit public source and history
+        run: python tools/audit_public.py
+      - name: Build and verify without game assets
+        shell: pwsh
+        run: ./tools/Build.ps1

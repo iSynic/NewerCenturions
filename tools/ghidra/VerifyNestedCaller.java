@@ -1,0 +1,69 @@
+import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
+
+/** Authored outer encounter continuation through a deferred death encounter. */
+public class VerifyNestedCaller extends VerifyNestedVictory {
+    byte[] doors,extraCodes,battles;
+    StringBuilder rewards;
+    int battleCalls,rewardCalls;
+    public void run() throws Exception {
+        Path root=Path.of(getScriptArgs()[0]),original=root.resolve("NewCenturions/TheNewCenturions"),scenario=original.resolve("Scenarios/The Thunder of Guns/0");
+        items=Files.readAllBytes(original.resolve("Data Files/Data ID"));scenarioItems=Files.readAllBytes(scenario.resolve("Data NI"));races=Files.readAllBytes(original.resolve("Data Files/Data Race"));monsters=Files.readAllBytes(scenario.resolve("Data MD"));battles=Files.readAllBytes(scenario.resolve("Data BD"));battle=Arrays.copyOfRange(battles,15*1372,16*1372);properties=Files.readAllBytes(original.resolve("Data Files/Data Swamp BD"));doors=Files.readAllBytes(scenario.resolve("Data ED3"));extraCodes=Files.readAllBytes(scenario.resolve("Data EDCD"));
+        party=new byte[6*3138];String[] names={"Cindred","Coriand","Kevlar","PDP 11","Sifini","Solestri"};for(int i=0;i<6;i++)System.arraycopy(Files.readAllBytes(original.resolve("Warriors/"+names[i])),0,party,i*3138,3138);
+        StringBuilder cases=new StringBuilder();for(long seed:new long[]{12,1})probeCaller(seed,cases);
+        StringBuilder identity=new StringBuilder();String[][] inputs={{"probe","tools/ghidra/VerifyNestedCaller.java"},{"parent_probe","tools/ghidra/VerifyNestedVictory.java"},{"inventory_probe","tools/ghidra/VerifyStoryInventory.java"},{"harness","tools/ghidra/ActionOracleHarness.java"},{"sane_boundary","tools/ghidra/SaneBoundary.java"},{"mapped_binary","analysis/ghidra/startup/code1-mapped.bin"},{"battles","NewCenturions/TheNewCenturions/Scenarios/The Thunder of Guns/0/Data BD"},{"monsters","NewCenturions/TheNewCenturions/Scenarios/The Thunder of Guns/0/Data MD"},{"scripts","NewCenturions/TheNewCenturions/Scenarios/The Thunder of Guns/0/Data ED3"},{"extras","NewCenturions/TheNewCenturions/Scenarios/The Thunder of Guns/0/Data EDCD"},{"items","NewCenturions/TheNewCenturions/Data Files/Data ID"},{"scenario_items","NewCenturions/TheNewCenturions/Scenarios/The Thunder of Guns/0/Data NI"},{"races","NewCenturions/TheNewCenturions/Data Files/Data Race"},{"properties","NewCenturions/TheNewCenturions/Data Files/Data Swamp BD"}};
+        for(String[] input:inputs){if(identity.length()>0)identity.append(',');identity.append('"').append(input[0]).append("_sha256\":\"").append(ActionOracleHarness.sha256(root.resolve(input[1]))).append('"');}
+        Files.writeString(root.resolve("evidence/fixtures/nested-caller.json"),"{\"authority\":\"Original newland1400e4 runs exact ED3 script55 on one continuous stack through two opcode2 returns. Controlled BD14 combat completion supplies one exact MD66 dead record and calls original killbody12e4e4 with the spell semaphore set, followed by original emptyque121524. Its authored ED3 script51 runs original newland and calls BD15. Each BD15 executes original enemy-generation11e0fe..11eb86 with exact MD67 and controlled flat1155 terrain/origin5/base40/bounds5..85; generated HP110 alone is forced0 and combat completion acknowledged. Original booty105748 executes all reward preparation and native closing gameplay for each caller; first window allocation1064c2 is acknowledged as Close107e52. File boundaries supply exact ED3/EDCD and item definitions. loadland13107a is a controlled map-reload acknowledgement retaining world coordinates77,9; actual combatmap/origin placement, battle turns, screen layout and the execution of replacement script56 are outside this fixture. Stop occurs when opcode39 requests script56. No live original-game claim.\",\"identity\":{"+identity+"},\"script55\":\""+hex(Arrays.copyOfRange(doors,55*42,56*42))+"\",\"script51\":\""+hex(Arrays.copyOfRange(doors,51*42,52*42))+"\",\"cases\":["+cases+"]}\n");
+        println("Two original nested caller sequences exported");
+    }
+    void call(ActionOracleHarness h,RunResult result,long address,int body,int index,long stop) throws Exception {
+        long stack=h.sp();int size=address==0x12e4e4?8:4;h.value(stack-size,4,stop);if(size==8){h.value(stack-4,2,body);h.value(stack-2,2,index);}h.cpu.writeRegister("SP",stack-size);h.jump(address);executeCaller(h,result,stop,false);h.cpu.writeRegister("SP",stack);
+    }
+    void generateChild(ActionOracleHarness h,RunResult result) throws Exception {
+        String[] registers={"D0","D1","D2","D3","D4","D5","D6","D7","A0","A1","A2","A3","A4","A5","A6","SP","XF","NF","ZF","VF","CF"};BigInteger[] saved=new BigInteger[registers.length];for(int i=0;i<registers.length;i++)saved[i]=h.cpu.readRegister(registers[i]);long entry=h.pc();
+        h.write(0x70c000,new byte[24576]);h.cpu.writeRegister("A6",0x710000);h.cpu.writeRegister("SP",0x70fe00);h.write(0x43979c,battle);h.write(0x4085b8,terrain());h.write(0x439d3c,new byte[100*288]);h.write(0x43167c,Arrays.copyOfRange(properties,64,12064));h.value(0x43874a,2,0);h.value(0x4435c4,2,0);h.value(0x43877c,2,0);h.value(0x439582,2,0);h.cpu.writeRegister("D5",40);h.cpu.writeRegister("D6",40);h.value(0x70fff8,2,5);h.value(0x70fffa,2,5);h.value(0x70fffc,2,85);h.value(0x70fffe,2,85);h.jump(0x11e0fe);SaneBoundary sane=new SaneBoundary(h.cpu,currentProgram);long offset=0;
+        boolean done=false;for(int step=0;step<1500000;step++){
+            long pc=h.pc(),sp=h.sp();if(pc==0x11eb86){done=true;break;}
+            if(pc==0x136cfa||pc==0x400068){h.ret();continue;}if(pc==0x400070){h.cpu.writeRegister("A0",0x600000);h.ret();continue;}if(pc==0x400078){offset=h.pointer(sp+8);h.cpu.writeRegister("D0",0);h.ret();continue;}
+            if(pc==0x400048){int size=(int)h.pointer(sp+8);if(size!=288||offset+size>monsters.length)throw new Exception("Nested monster file boundary");h.write(h.pointer(sp+4),Arrays.copyOfRange(monsters,(int)offset,(int)offset+size));offset+=size;h.cpu.writeRegister("D0",1);h.ret();continue;}
+            if(pc==0x400038){h.cpu.writeRegister("D0",Math.abs(h.word(sp+4)));h.ret();continue;}if(pc==0x153ca4){result.rng(h);continue;}
+            int op=h.word(pc)&65535;if(op==0xa9eb){sane.execute();continue;}if(op==0xa8ad){long rect=h.pointer(sp);int y=h.word(sp+4),x=h.word(sp+6);h.value(sp+8,1,y>=h.word(rect)&&x>=h.word(rect+2)&&y<h.word(rect+4)&&x<h.word(rect+6)?1:0);h.pop(8);h.jump(pc+2);continue;}
+            if(!h.cpu.step(monitor))throw new Exception("Caller child generation at "+Long.toHexString(pc)+": "+h.cpu.getLastError());
+        }if(!done)throw new Exception("Caller child generation budget");
+        event("[\"generated\","+battleCalls+","+h.word(0x43874a)+","+h.word(0x439d3c+0x112)+","+result.seed+"]");for(int i=0;i<h.word(0x43874a);i++)h.value(0x439d3c+i*288+0x110,2,0);h.value(0x44374c,2,h.word(0x43874a));for(int i=0;i<registers.length;i++)h.cpu.writeRegister(registers[i],saved[i]);h.jump(entry);
+    }
+    void executeCaller(ActionOracleHarness h,RunResult result,long stop,boolean stopReplacement) throws Exception {
+        SaneBoundary sane=new SaneBoundary(h.cpu,currentProgram);for(int step=0;step<4000000;step++){
+            long pc=h.pc(),sp=h.sp();if(pc==stop)return;
+            if(pc==0x123c60){int id=h.word(sp+4);event("[\"load_script\","+id+"]");if(id==56&&stopReplacement)return;byte[] record=Arrays.copyOfRange(doors,id*42,(id+1)*42);System.arraycopy(h.read(0x479eaa,8),0,record,0,8);h.write(0x479eaa,record);h.ret();continue;}
+            if(pc==0x1383e6){int id=h.word(sp+4);h.write(0x44330a,Arrays.copyOfRange(extraCodes,id*10,(id+1)*10));event("[\"load_extra\","+id+"]");h.ret();continue;}
+            if(pc==0x1400e4)event("[\"newland\","+h.word(sp+12)+","+h.word(sp+14)+","+h.word(sp+16)+"]");
+            if(pc==0x114378){battleCalls++;int id=h.word(0x43874e);event("[\"combat\","+battleCalls+","+id+"]");h.value(0x43800c,2,0);h.value(0x437a90,2,0);h.value(0x4386b2,1,0);h.value(0x438776,2,1);
+                if(id==14){byte[] record=Arrays.copyOfRange(monsters,66*288,67*288);ByteBuffer.wrap(record).putShort(0x110,(short)0).putShort(0x112,(short)100).putShort(0x118,(short)1155).putShort(0x11a,(short)1155).putShort(0x11c,(short)1155).putShort(0x11e,(short)1155);h.write(0x439d3c,new byte[28800]);h.write(0x439d3c,record);h.value(0x43874a,2,1);h.value(0x44374c,2,0);h.value(0x446f0a,2,20);h.value(0x446f0c,2,20);for(int x=24;x<=25;x++)for(int y=24;y<=25;y++)h.value(0x4085b8+(x*90+y)*2,2,10);h.value(0x438760,2,1);call(h,result,0x12e4e4,10,0,0x900014);h.value(0x438760,2,0);call(h,result,0x121524,0,0,0x900015);}
+                else if(id==15)generateChild(h,result);else throw new Exception("Unexpected caller battle "+id);
+                h.value(0x438776,2,0);h.ret();continue;
+            }
+            if(pc==0x105748){rewardCalls++;event("[\"booty\","+rewardCalls+","+h.word(0x43874a)+"]");}
+            if(pc==0x1064c2){int share=(int)h.pointer(h.cpu.readRegister("A6").longValue()-0x96);if(rewards.length()>0)rewards.append(',');rewards.append("{\"invocation\":").append(rewardCalls).append(",\"share\":").append(share).append(",\"seed\":").append(result.seed).append(",\"draws_total\":").append(result.draws).append(",\"enemy_count\":").append(h.word(0x43874a)).append(",\"warriors\":\"").append(hex(h.read(0x448aa0,party.length))).append("\",\"body\":\"").append(hex(h.read(0x479eaa,42))).append("\"}");event("[\"close\","+rewardCalls+","+h.word(0x43874a)+","+share+"]");h.jump(0x107e52);continue;}
+            if(pc==0x1047f8)event("[\"bodycount\","+h.word(0x43874a)+"]");
+            if(pc==0x13107a){event("[\"load_map\","+(int)h.pointer(sp+4)+","+(int)h.pointer(0x442764)+","+(int)h.pointer(0x442768)+"]");h.ret();continue;}if(pc==0x13bb20){event("[\"update_main\"]");h.ret();continue;}if(pc==0x15dc34){event("[\"text\","+h.word(sp+6)+"]");h.ret();continue;}
+            if(pc==0x130afe){loadItem(h);continue;}if(pc==0x153ca4){result.rng(h);continue;}if(pc==0x133a18||pc==0x16474a){event("[\"sound\","+h.word(sp+4)+"]");result.sound(h);continue;}if(pc==0x400038){h.cpu.writeRegister("D0",Math.abs(h.word(sp+4)));h.ret();continue;}
+            if(pc==0x120c14||pc==0x105572||pc==0x10e6b6||pc==0x133d46||pc==0x158454||pc==0x13154c||pc==0x11f1a8||pc==0x11edc4||pc==0x14a02c||pc==0x13a2c4||pc==0x1205f8||pc==0x16043e||pc==0x1382a8||pc==0x11f136||pc==0x11f690||pc==0x1046e0||pc==0x13e13c||pc==0x13a7c4||pc==0x12382a||pc==0x160fb2){h.ret();continue;}
+            int op=h.word(pc)&65535;if(op==0xa9eb){sane.execute();continue;}if(op==0xa8a7){long rect=h.pointer(sp+8);h.write(rect,h.read(sp+4,4));h.write(rect+4,h.read(sp,4));h.pop(12);h.jump(pc+2);continue;}if(op==0xa939){h.pop(6);h.jump(pc+2);continue;}
+            if(op==0xa873||op==0xaa1c||op==0xa862||op==0xa863||op==0xa89b||op==0xa893||op==0xa891||op==0xa884||op==0xa93c||op==0xa914){h.pop(4);h.jump(pc+2);continue;}if(op==0xaa1e){h.value(sp+2,4,0);h.pop(2);h.jump(pc+2);continue;}if(op==0xa032||op==0xa937){h.jump(pc+2);continue;}
+            if(!h.cpu.step(monitor))throw new Exception("Caller sequence at "+Long.toHexString(pc)+": "+h.cpu.getLastError());
+        }throw new Exception("Caller instruction budget");
+    }
+    void probeCaller(long seed,StringBuilder cases) throws Exception {
+        ActionOracleHarness h=frame();RunResult result=new RunResult(seed);events=new StringBuilder();rewards=new StringBuilder();battleCalls=0;rewardCalls=0;
+        try{
+            byte[] warriors=party.clone();for(int i=0;i<6;i++){warriors[i*3138+0x9df]=1;ByteBuffer.wrap(warriors).putShort(i*3138+0x20,(short)(i+1)).putShort(i*3138+0x18,(short)-1);}common(h,warriors);h.write(0x439d3c,new byte[28800]);h.write(0x440edc,new byte[5760]);h.write(0x437a94,new byte[1400]);h.write(0x4085b8,terrain());h.write(0x44258c,new byte[128]);h.write(0x4470b8,new byte[220]);for(int i=0;i<110;i++)h.value(0x4470b8+i*2,2,-1);for(int i=0;i<6;i++){h.value(0x44709a+i*4,2,20+i);h.value(0x44709c+i*4,2,20);h.value(0x437a6e+i*2,2,1155);h.value(0x4470b8+(i+1)*2,2,i);}
+            h.write(0x4537fe,Arrays.copyOfRange(items,0,30000));h.write(0x46978e,Arrays.copyOfRange(items,90000,120000));h.value(0x442780,4,5);h.value(0x442784,4,5);h.value(0x442764,4,77);h.value(0x442768,4,9);h.value(0x442774,4,1);h.value(0x438776,2,0);h.value(0x4386b2,1,0);h.value(0x435658,1,0);h.value(0x447194,2,1);h.value(0x442739,1,0);h.value(0x4427b3,1,1);h.value(0x43957e,2,0);h.value(0x43800c,2,0);h.value(0x438582,2,0);h.value(0x438584,1,0);h.value(0x438585,1,0);h.value(0x438760,2,0);h.value(0x402f43,1,0);
+            h.write(0x479eaa,Arrays.copyOfRange(doors,55*42,56*42));h.enter(0x1400e4,0x6ffe00,0x900000);h.value(0x6ffe04,4,0);h.value(0x6ffe08,4,0);h.value(0x6ffe0c,2,-1);h.value(0x6ffe0e,2,55);h.value(0x6ffe10,2,0);executeCaller(h,result,0x900000,true);
+            if(battleCalls!=3||rewardCalls!=3)throw new Exception("Incomplete authored chain "+battleCalls+" battles "+rewardCalls+" rewards");if(cases.length()>0)cases.append(',');cases.append("{\"seed\":").append(seed).append(",\"seed_after\":").append(result.seed).append(",\"rng_draws\":").append(result.draws).append(",\"battle_calls\":").append(battleCalls).append(",\"reward_calls\":").append(rewardCalls).append(",\"rewards\":[").append(rewards).append("],\"events\":[").append(events).append("],\"warriors_after\":\"").append(hex(h.read(0x448aa0,party.length))).append("\",\"enemy_count_after\":").append(h.word(0x43874a)).append(",\"queue_count_after\":").append(h.word(0x43800c)).append(",\"queue_after\":\"").append(hex(h.read(0x437a94,1400))).append("\",\"records_after\":\"").append(hex(h.read(0x439d3c,28800))).append("\",\"body_after\":\"").append(hex(h.read(0x479eaa,42))).append("\"}");
+        }finally{h.cpu.dispose();}
+    }
+}

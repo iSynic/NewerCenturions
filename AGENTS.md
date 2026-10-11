@@ -1,0 +1,14 @@
+# The New Centurions
+
+- The supplied Centurions 1.3.2 binary is the behavior authority. Realmz projects are read-only references.
+- Preserve `NewCenturions/` byte-for-byte. Generated extraction and Ghidra outputs belong in ignored `analysis/`.
+- Recover actions with resource/address evidence, integer widths, ordered effects, and RNG consumption. Unsupported gameplay must return a diagnostic without changing state.
+- Keep rule state and randomness independent of desktop presentation. Use the same command boundary for desktop and replay.
+- Verify independent binary/reference cases before calling behavior faithful. Static analysis, bounded emulation, and live original-game observations are distinct evidence levels.
+- New saves are versioned and never overwrite original warriors or game saves.
+- Registration is always satisfied in the reconstruction. Registration-check opcode98 continues without a gate; promotion uses registered behavior. Do not require registration receipts or warrior codes.
+- Public distributions must exclude original copyrighted assets and use the player's existing New Centurions installation. Bundled originals are for local development checkpoints only.
+- Use ordinary maintainer-facing names and comments. Never use Codex in branch names.
+- Verification: `python -m unittest discover -s tests/python`, `cargo fmt --check`, `cargo test --workspace --features original-fixtures`, `cargo clippy --workspace --all-targets --features original-fixtures -- -D warnings`, `cargo build --workspace --release`.
+
+- Public source-only checks use default Cargo features. Original-data tests require the optional `original-fixtures` feature and private local inputs. Export only the allowlisted source snapshot; never push this checkout's private history.

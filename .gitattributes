@@ -1,0 +1,31 @@
+* text=auto
+*.rs text eol=lf
+*.java text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+vendor/** -whitespace
+# Oracle provenance binds these files to their exact recorded bytes.
+tools/ghidra/VerifyEarnedLoadedShot.java -text whitespace=cr-at-eol
+tools/ghidra/VerifyEarnedLoadedShotReplay.java -text whitespace=cr-at-eol
+evidence/earned-loaded-shot-oracle.md -text whitespace=cr-at-eol
+evidence/earned-loaded-shot-replay-oracle.md -text whitespace=cr-at-eol
+evidence/fixtures/earned-loaded-shot-provenance.json -text whitespace=cr-at-eol
+evidence/fixtures/earned-loaded-shot-replay-provenance.json -text whitespace=cr-at-eol
+# Retain checkpoint 22 oracle and native-control receipt identities.
+evidence/actions.json -text whitespace=cr-at-eol
+evidence/coverage.md -text whitespace=cr-at-eol
+evidence/current-terrain-restriction-policy.md -text whitespace=cr-at-eol
+evidence/equipment-spell-cache-alias.md -text whitespace=cr-at-eol
+evidence/fixtures/ammunition-management-provenance.json -text whitespace=cr-at-eol
+evidence/fixtures/current-terrain-restricted-npc-spell-provenance.json -text whitespace=cr-at-eol
+evidence/fixtures/npc-poison-psi-provenance.json -text whitespace=cr-at-eol
+evidence/fixtures/public-remove-equipment-provenance.json -text whitespace=cr-at-eol
+evidence/fixtures/reaction-work-refresh-provenance.json -text whitespace=cr-at-eol
+evidence/npc-poison-psi-oracle.md -text whitespace=cr-at-eol
+evidence/ui/checkpoint22-native-controls.json -text whitespace=cr-at-eol
+tools/ghidra/VerifyNpcPoisonPsi.java -text whitespace=cr-at-eol
+
+# Preserve the omitted-music candidate as the recorded native-run bytes.
+tools/ghidra/VerifyCurrentNpcPoisonCaller.java -text whitespace=cr-at-eol

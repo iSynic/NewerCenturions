@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<language_definitions>
+  <language processor="68000" endian="big" size="32" variant="Centurions" version="1.0"
+            slafile="Centurions.sla" processorspec="68000.pspec" id="68000:BE:32:Centurions">
+    <description>68k with opaque Classic Mac Toolbox traps</description>
+    <compiler name="default" spec="68000.cspec" id="default"/>
+  </language>
+</language_definitions>

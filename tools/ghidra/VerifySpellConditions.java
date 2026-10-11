@@ -1,0 +1,30 @@
+import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
+
+/** Complete original effect-36 resolution with explicit body masks. */
+public class VerifySpellConditions extends VerifyEnemySpells {
+    String changes(byte[] before,byte[] after){StringBuilder s=new StringBuilder("[");for(int i=0;i<before.length;i++)if(before[i]!=after[i]){if(s.length()>1)s.append(',');s.append('[').append(i).append(',').append(after[i]&255).append(']');}return s.append(']').toString();}
+    void word(byte[] b,int offset,int value){ByteBuffer.wrap(b).putShort(offset,(short)value);}
+    public void run() throws Exception {
+        Path root=Path.of(getScriptArgs()[0]),base=root.resolve("NewCenturions/TheNewCenturions"),scenario=base.resolve("Scenarios/The Thunder of Guns/0");
+        items=Files.readAllBytes(base.resolve("Data Files/Data ID"));races=Files.readAllBytes(base.resolve("Data Files/Data Race"));monsters=Files.readAllBytes(scenario.resolve("Data MD"));properties=Files.readAllBytes(base.resolve("Data Files/Data Swamp BD"));attacks=Files.readAllBytes(base.resolve("Data Files/Data S"));areas=Files.readAllBytes(base.resolve("Data Files/Data AD"));scenarioItems=Files.readAllBytes(scenario.resolve("Data NI"));
+        party=new byte[6*3138];String[] names={"Cindred","Coriand","Kevlar","PDP 11","Sifini","Solestri"};for(int i=0;i<6;i++){System.arraycopy(Files.readAllBytes(base.resolve("Warriors/"+names[i])),0,party,i*3138,3138);party[i*3138+0x9df]=1;word(party,i*3138+0x50,100);word(party,i*3138+0xa4,0);word(party,i*3138+0x9a,0);}
+        byte[] baseline=new byte[100*288];for(int i=0;i<100;i++){byte[] m=monster(new int[]{13,28,65,94}[i%4],100);m[0xd5]=0;System.arraycopy(m,0,baseline,i*288,288);}
+        StringBuilder cases=new StringBuilder();int total=0;
+        for(long initial:new long[]{12,1})for(int count:new int[]{1,3,7})for(int variant=0;variant<18;variant++){
+            ActionOracleHarness h=frame();RunResult result=new RunResult(initial);
+            try{
+                byte[] before=party.clone(),records=baseline.clone();int[] mask=new int[110];for(int i=0;i<6;i++)mask[i]=1;for(int i=10;i<110;i++)mask[i]=1;
+                for(int i=0;i<6;i++){int o=i*3138;if(variant==1||variant==16)word(before,o+0x9a,variant==1?1:-1);if(variant==2)word(before,o+0x7e,-1);if(variant==3){word(before,o+0x96,-1);word(before,o+0x32,3);}if(variant==4)word(before,o+0x22,32767);if(variant>=5&&variant<=13)word(before,o+0xa4,new int[]{-1,-2,-32768,96,97,98,99,100,32767}[variant-5]);if(variant==17){word(before,o+0x50,-10);word(before,o+0x90,-1);}if(variant==14&&i%2==0)mask[i]=-1;if(variant==15)mask[i]=0;}
+                for(int i=0;i<100;i++){int o=i*288;if(variant==2)records[o+0xc2]=-1;if(variant==3){records[o+0xce]=-1;records[o+0xab]=1;}if(variant==4){word(records,o+0xa,32767);records[o+0x93]=101;}if(variant>=5&&variant<=13)records[o+0xd5]=(byte)new int[]{-1,-2,-128,121,122,123,124,125,127}[variant-5];if(variant==17){word(records,o+0x110,-10);records[o+0xcb]=-1;}if(variant==14&&i%2==0)mask[i+10]=-1;if(variant==15)mask[i+10]=0;}
+                state(h,records,terrain());h.value(0x43874a,2,100);h.write(0x448aa0,before);h.write(0x44374e,packet(1703));h.value(0x4435c6,2,0);h.value(0x4435c8,2,6);h.value(0x4435ca,2,2);h.value(0x4435cc,2,count);h.write(0x453768,new byte[150]);h.write(0x4536d2,new byte[150]);h.write(0x4434e0,new byte[220]);for(int i=0;i<110;i++)h.value(0x4434e0+i*2,2,mask[i]);h.value(0x438760,2,1);h.value(0x4358c2,1,0);h.write(0x435884,new byte[128]);
+                h.enter(0x151022,0x6ffe00,0x900000);execute(h,result,0x900000);
+                if(cases.length()>0)cases.append(',');cases.append("{\"variant\":").append(variant).append(",\"count\":").append(count).append(",\"seed_before\":").append(initial).append(",\"party_input\":").append(changes(party,before)).append(",\"monster_input\":").append(changes(baseline,records)).append(",\"party_changes\":").append(changes(before,h.read(0x448aa0,before.length))).append(",\"monster_changes\":").append(changes(records,h.read(0x439d3c,records.length))).append(",\"mask\":").append(Arrays.toString(mask)).append(",\"duration\":").append(h.word(0x4427a4)).append(",\"seed_after\":").append(result.seed).append(",\"rng_draws\":").append(result.draws).append(",\"draws\":[").append(result.drawRecords).append("],\"sounds\":[").append(result.sounds).append("]}");total++;
+            }finally{h.cpu.dispose();}
+        }
+        String identity="\"probe_sha256\":\""+ActionOracleHarness.sha256(root.resolve("tools/ghidra/VerifySpellConditions.java"))+"\",\"parent_probe_sha256\":\""+ActionOracleHarness.sha256(root.resolve("tools/ghidra/VerifyEnemySpells.java"))+"\",\"harness_sha256\":\""+ActionOracleHarness.sha256(root.resolve("tools/ghidra/ActionOracleHarness.java"))+"\",\"mapped_binary_sha256\":\""+ActionOracleHarness.sha256(root.resolve("analysis/ghidra/startup/code1-mapped.bin"))+"\",\"attacks_sha256\":\""+ActionOracleHarness.sha256(base.resolve("Data Files/Data S"))+"\",\"monsters_sha256\":\""+ActionOracleHarness.sha256(scenario.resolve("Data MD"))+"\"";
+        Files.writeString(root.resolve("evidence/fixtures/spell-conditions.json"),"{\"authority\":\"Complete original resolvespell151022, actual resist150114 and spelllist15b9d8 for authored1703 condition36/save8, all six original warriors and all100 monster body slots repeating authoredMD13/28/65/94. Explicit positive/zero/negative masks; initial duration2..3, counts1/3/7, signedword/byte limits and permanent states, ward duration, spell immunities, disease and race states. Full party and roster represented by observed byte patches. Presentation and sound rendering intercepted, ordered sound calls and Rand observed, finite SANE modeled. Does not establish caller PSI cost, target geometry, other conditions or live battle.\","+identity+",\"packet\":\""+hex(packet(1703))+"\",\"party\":\""+hex(party)+"\",\"monsters\":\""+hex(baseline)+"\",\"cases\":["+cases+"]}\n");println(total+" original spell condition cases exported");
+    }
+}

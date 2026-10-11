@@ -1,0 +1,15 @@
+[package]
+name = "centurions-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+centurions-content.workspace = true
+centurions-core.workspace = true
+serde_json.workspace = true
+png = "=0.17.16"
+
+[features]
+default = []
+original-fixtures = ["centurions-content/original-fixtures", "centurions-core/original-fixtures"]

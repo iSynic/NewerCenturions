@@ -1,0 +1,4 @@
+@include "68000.sinc"
+
+# Opaque Mac A-line dispatch. This provides instruction boundaries, not Toolbox semantics.
+:MacToolbox op015 is op=0xa & op015 { __m68k_trap(op015:2); }
