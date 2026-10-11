@@ -1,4 +1,4 @@
-# The New Centurions
+# Newer Centurions
 
 A work-in-progress native Windows Rust reconstruction of Centurions 1.3.2.
 The original binary is the behavior authority. The current build covers
