@@ -11,9 +11,12 @@ pub struct Assets {
     pub icons: HashMap<i16, Texture2D>,
     pub portraits: HashMap<i16, Texture2D>,
     pub panels: HashMap<i16, Texture2D>,
+    pub movie_background: Texture2D,
     pub menus: HashMap<i16, ui::Menu>,
     pub menu_bar: Vec<i16>,
     pub font: Font,
+    symbol_font: Font,
+    pub music_ids: Vec<i16>,
     pub names: HashMap<i16, String>,
     pub conditions: Vec<String>,
 }
@@ -26,10 +29,17 @@ impl Assets {
         let mut menus = HashMap::new();
         let mut menu_bar = None;
         let mut font = None;
+        let mut movie_background = None;
         let mut names = HashMap::new();
         let mut conditions = Vec::new();
         for resource in &content.resources {
             let cargo = resource.original.ends_with("/Cargo Pod");
+            if cargo && resource.r#type == "ppat" && resource.id == 131 {
+                let image = graphics::decode_pattern(&read_resource(extracted, resource)?)?;
+                let texture = Texture2D::from_rgba8(image.width, image.height, &image.rgba);
+                texture.set_filter(FilterMode::Nearest);
+                movie_background = Some(texture);
+            }
             if cargo && resource.r#type == "MENU" {
                 let menu = ui::menu(&read_resource(extracted, resource)?).map_err(|error| {
                     ContentError::Invalid(format!("MENU {}: {error}", resource.id))
@@ -115,9 +125,22 @@ impl Assets {
             icons,
             portraits,
             panels,
+            movie_background: movie_background
+                .ok_or_else(|| ContentError::Invalid("movie pixel pattern 131 missing".into()))?,
             menus,
             menu_bar,
-            font: font.ok_or_else(|| ContentError::Invalid("Textile font missing".into()))?,
+            symbol_font: font
+                .ok_or_else(|| ContentError::Invalid("Textile font missing".into()))?,
+            font: std::env::var_os("WINDIR")
+                .and_then(|root| std::fs::read(Path::new(&root).join("Fonts/segoeui.ttf")).ok())
+                .and_then(|bytes| load_ttf_font_from_bytes(&bytes).ok())
+                .unwrap_or_else(get_default_font),
+            music_ids: content
+                .resources
+                .iter()
+                .filter(|r| r.r#type == "snd " && (20128..=20140).contains(&r.id))
+                .map(|r| r.id)
+                .collect(),
             names,
             conditions,
         })
@@ -153,7 +176,11 @@ impl Assets {
             x,
             y,
             TextParams {
-                font: Some(&self.font),
+                font: Some(if text == "\u{f8ff}" {
+                    &self.symbol_font
+                } else {
+                    &self.font
+                }),
                 font_size: size,
                 color,
                 ..Default::default()

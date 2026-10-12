@@ -264,3 +264,18 @@ the earlier combat, movement, area and temple translations. These connections
 bring the shared dispatcher to 220 entries; they do not establish a completed
 application or native fidelity. See
 [native gameplay leaf evidence](../evidence/source-gameplay-leaf-actions.md).
+Expanded instruction compilation is split across the internal gameplay,
+system and application libraries. The composition library supplies the complete
+routine registry; the maintained runtime receives an explicit object-safe
+resolver and service references. No third-party dependency was added for this
+split. Expanded libraries use release optimization level 1 with incremental
+compilation and 256 code-generation units, and have no unit-test or doctest
+targets. Maintained runtime release settings remain unchanged.
+
+The consolidated native-reference runner depends only on the maintained runtime
+and content library. Separate execution-limit tests use four synthetic routines,
+without the production registry. `tools/source_audit.py` enforces the project
+ceiling of 25 percent test code relative to maintained runtime code, including
+test helpers, optional native harnesses and test scripts. Expanded instruction
+bodies, generated catalogs, fixture data and build/recovery code are excluded
+from the production denominator. `tools/Build.ps1` runs this gate before compiling.

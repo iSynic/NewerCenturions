@@ -94,7 +94,7 @@ pub enum SelectionControlQualification {
 }
 pub const QUALIFICATION: SelectionControlQualification =
     SelectionControlQualification::SourcePortWithObservedBoundariesAndCapturedChildren;
-struct Execution<'a, S> {
+struct Execution<'a, S: ?Sized> {
     plan: SelectionControlPlan,
     services: &'a mut S,
     limits: SelectionControlLimits,
@@ -102,7 +102,7 @@ struct Execution<'a, S> {
     draws: u64,
     d0: Option<u32>,
 }
-impl<S: SelectionControlServices> Execution<'_, S> {
+impl<S: SelectionControlServices + ?Sized> Execution<'_, S> {
     fn step(&mut self) -> Result<(), RuleError> {
         self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
             RuleError::Invalid("selection control processing budget exhausted".into())
@@ -908,7 +908,7 @@ impl<S: SelectionControlServices> Execution<'_, S> {
         Ok(())
     }
 }
-fn execution<'a, S>(
+fn execution<'a, S: ?Sized>(
     state: &SelectionControlState,
     limits: SelectionControlLimits,
     services: &'a mut S,
@@ -929,11 +929,11 @@ fn execution<'a, S>(
     }
 }
 
-pub(crate) fn existing_child_plan(
+pub fn existing_child_plan(
     state: &SelectionControlState,
     entry: u32,
     limits: SelectionControlLimits,
-    services: &mut impl SelectionControlServices,
+    services: &mut (impl SelectionControlServices + ?Sized),
 ) -> Result<SelectionControlPlan, RuleError> {
     let mut e = execution(state, limits, services);
     match entry {
@@ -1092,14 +1092,14 @@ impl DrawingServices for FixedDrawing {
         Err(RuleError::Invalid("unused selection allocation".into()))
     }
 }
-struct TierBridge<'a, S>(&'a mut S);
-impl<S: SpellUiServices> TierServices for TierBridge<'_, S> {
+struct TierBridge<'a, S: ?Sized>(&'a mut S);
+impl<S: SpellUiServices + ?Sized> TierServices for TierBridge<'_, S> {
     fn dialog_item(&mut self, dialog: u32, item: i16) -> Result<(i16, u32, BodyRect), RuleError> {
         let value = SpellUiServices::dialog_item(self.0, dialog, item)?;
         Ok((value.item_type, value.handle, value.rect))
     }
 }
-impl<S: SpellUiServices> DrawingServices for TierBridge<'_, S> {
+impl<S: SpellUiServices + ?Sized> DrawingServices for TierBridge<'_, S> {
     fn color_icon(&mut self, id: i16) -> Result<u32, RuleError> {
         DrawingServices::color_icon(self.0, id)
     }
@@ -1120,11 +1120,11 @@ impl<S: SpellUiServices> DrawingServices for TierBridge<'_, S> {
         DrawingServices::new_world(self.0, depth, bounds)
     }
 }
-struct Clock<'a, 'b, S> {
+struct Clock<'a, 'b, S: ?Sized> {
     execution: &'a mut Execution<'b, S>,
     remaining: usize,
 }
-impl<S: SelectionControlServices> TimingServices for Clock<'_, '_, S> {
+impl<S: SelectionControlServices + ?Sized> TimingServices for Clock<'_, '_, S> {
     fn tick_count(&mut self) -> Result<u32, RuleError> {
         self.remaining = self
             .remaining
@@ -1142,7 +1142,7 @@ pub fn combat_errors(
     state: &SelectionControlState,
     frame: u32,
     limits: SelectionControlLimits,
-    services: &mut impl SelectionControlServices,
+    services: &mut (impl SelectionControlServices + ?Sized),
 ) -> Result<SelectionControlPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let stack = frame;
@@ -1202,24 +1202,26 @@ pub fn combat_errors(
 fn list_address(frame: u32, n: i16) -> u32 {
     index(frame.wrapping_sub(220), n, 2)
 }
-fn caster<S: SelectionControlServices>(e: &Execution<'_, S>) -> Result<i16, RuleError> {
+fn caster<S: SelectionControlServices + ?Sized>(e: &Execution<'_, S>) -> Result<i16, RuleError> {
     Ok(i16::from(e.b(0x44273f)? as i8))
 }
-fn school<S: SelectionControlServices>(e: &Execution<'_, S>) -> Result<i16, RuleError> {
+fn school<S: SelectionControlServices + ?Sized>(e: &Execution<'_, S>) -> Result<i16, RuleError> {
     Ok(e.w(warrior(caster(e)?) + 0x36)?.wrapping_sub(1))
 }
-fn spell_available<S: SelectionControlServices>(e: &Execution<'_, S>) -> Result<bool, RuleError> {
+fn spell_available<S: SelectionControlServices + ?Sized>(
+    e: &Execution<'_, S>,
+) -> Result<bool, RuleError> {
     Ok((e.w(0x438776)? != 0 && e.b(0x443763)? != 0)
         || (e.w(0x438776)? == 0 && e.b(0x443764)? != 0)
         || e.w(0x447198)? != 0)
 }
-fn spell_cost<S: SelectionControlServices>(
+fn spell_cost<S: SelectionControlServices + ?Sized>(
     e: &Execution<'_, S>,
     quantity: i16,
 ) -> Result<i16, RuleError> {
     Ok(i16::from(e.b(0x44376c)?).wrapping_mul(quantity))
 }
-fn spell_highlight<S: SelectionControlServices>(
+fn spell_highlight<S: SelectionControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     frame: u32,
 ) -> Result<(), RuleError> {
@@ -1236,7 +1238,7 @@ fn spell_highlight<S: SelectionControlServices>(
     )?;
     Ok(())
 }
-fn spell_name<S: SelectionControlServices>(
+fn spell_name<S: SelectionControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     stack: u32,
 ) -> Result<(), RuleError> {
@@ -1246,7 +1248,7 @@ fn spell_name<S: SelectionControlServices>(
     e.dialog_number(stack.wrapping_sub(14), 44, e.w(warrior(caster(e)?) + 0x58)?)?;
     Ok(())
 }
-fn spell_description<S: SelectionControlServices>(
+fn spell_description<S: SelectionControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     secondary: u32,
     record: i16,
@@ -1270,7 +1272,7 @@ fn spell_description<S: SelectionControlServices>(
     e.get_item(secondary, 2, 0x4434ba)?;
     Ok(())
 }
-fn shortcut_address<S: SelectionControlServices>(
+fn shortcut_address<S: SelectionControlServices + ?Sized>(
     e: &Execution<'_, S>,
     offset: u32,
 ) -> Result<u32, RuleError> {
@@ -1301,7 +1303,7 @@ pub fn cast_spell(
     frame: u32,
     registers: SelectionRegisters,
     limits: SelectionControlLimits,
-    services: &mut impl SelectionControlServices,
+    services: &mut (impl SelectionControlServices + ?Sized),
 ) -> Result<SelectionControlPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let stack = frame.wrapping_sub(60);
@@ -2023,7 +2025,7 @@ pub fn cast_spell(
     }
 }
 
-fn scan_spell_slot<S: SelectionControlServices>(
+fn scan_spell_slot<S: SelectionControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     direction: &mut i16,
 ) -> Result<CastPhase, RuleError> {
@@ -2038,19 +2040,19 @@ fn scan_spell_slot<S: SelectionControlServices>(
     Ok(CastPhase::Slot)
 }
 
-fn current_list<S: SelectionControlServices>(
+fn current_list<S: SelectionControlServices + ?Sized>(
     e: &Execution<'_, S>,
     frame: u32,
 ) -> Result<i16, RuleError> {
     e.w(list_address(frame, e.w(0x4434aa)?))
 }
-fn selected_list<S: SelectionControlServices>(
+fn selected_list<S: SelectionControlServices + ?Sized>(
     e: &Execution<'_, S>,
     frame: u32,
 ) -> Result<i16, RuleError> {
     e.w(list_address(frame, e.w(0x4434b2)?.wrapping_sub(3)))
 }
-fn read_creature<S: SelectionControlServices>(
+fn read_creature<S: SelectionControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     stack: u32,
     selection: i16,
@@ -2078,7 +2080,7 @@ pub fn beast(
     frame: u32,
     registers: SelectionRegisters,
     limits: SelectionControlLimits,
-    services: &mut impl SelectionControlServices,
+    services: &mut (impl SelectionControlServices + ?Sized),
 ) -> Result<SelectionControlPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let stack = frame.wrapping_sub(284);
@@ -2306,7 +2308,7 @@ pub fn beast(
         "beast dialog polling budget exhausted".into(),
     ))
 }
-fn survivor_cursor<S: SelectionControlServices>(
+fn survivor_cursor<S: SelectionControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     selected: i16,
     capacity: i16,
@@ -2327,7 +2329,7 @@ fn survivor_cursor<S: SelectionControlServices>(
     }
     Ok(())
 }
-fn survivor_notice<S: SelectionControlServices>(
+fn survivor_notice<S: SelectionControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     stack: u32,
     pointer: u32,
@@ -2347,7 +2349,7 @@ pub fn body_count(
     state: &SelectionControlState,
     frame: u32,
     limits: SelectionControlLimits,
-    services: &mut impl SelectionControlServices,
+    services: &mut (impl SelectionControlServices + ?Sized),
 ) -> Result<SelectionControlPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let stack = frame.wrapping_sub(240);
@@ -2593,137 +2595,4 @@ pub fn body_count(
     Err(RuleError::Invalid(
         "bodycount dialog polling budget exhausted".into(),
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recovered_prompt_control::tests::{FRAME, Observed, state};
-    fn unused() -> RuleError {
-        RuleError::Invalid("unexpected focused selection observation".into())
-    }
-    impl TimingServices for Observed {
-        fn tick_count(&mut self) -> Result<u32, RuleError> {
-            Err(unused())
-        }
-        fn button(&mut self) -> Result<bool, RuleError> {
-            Err(unused())
-        }
-    }
-    impl NpcNameServices for Observed {
-        fn copy_name(&self, _: u32, _: &[u8]) -> Result<PascalString, RuleError> {
-            Err(unused())
-        }
-    }
-    impl SpellUiServices for Observed {
-        fn dialog_item(
-            &mut self,
-            _: u32,
-            _: i16,
-        ) -> Result<spell::DialogItemObservation, RuleError> {
-            Err(unused())
-        }
-        fn string_width(&mut self, _: &PascalString) -> Result<i16, RuleError> {
-            Err(unused())
-        }
-        fn color_cursor(&mut self, _: i16) -> Result<u32, RuleError> {
-            Err(unused())
-        }
-        fn square_root_extended(&mut self, _: [u8; 10]) -> Result<[u8; 10], RuleError> {
-            Err(unused())
-        }
-        fn truncate_extended(&mut self, _: [u8; 10]) -> Result<i32, RuleError> {
-            Err(unused())
-        }
-    }
-    impl SelectionControlServices for Observed {}
-    fn limits() -> SelectionControlLimits {
-        SelectionControlLimits {
-            prompt: PromptLimits {
-                maximum_steps: 1000,
-                ..prompt::tests::limits()
-            },
-            maximum_random_draws: 100,
-        }
-    }
-    fn word(s: &mut SelectionControlState, a: u32, value: u16) {
-        s.memory.insert_region(a, &value.to_be_bytes());
-    }
-    #[test]
-    fn survivor_gate_uses_word_and_no_eligible_bodies_keep_existing_menu() {
-        let mut input = state();
-        word(&mut input, 0x408578, 1);
-        let result = body_count(&input, FRAME, limits(), &mut Observed::new()).unwrap();
-        assert_eq!(result.state, input);
-        assert!(result.effects.is_empty());
-        assert_eq!(result.native_return, PromptReturn::Unchanged);
-        word(&mut input, 0x408578, 0);
-        word(&mut input, 0x40857a, 1);
-        word(&mut input, 0x43874a, 2);
-        word(&mut input, 0x44257c, 0);
-        input.memory.insert_region(0x439d3c, &[0; 576]);
-        input.memory.insert_region(0x404044, &[0]);
-        input.memory.insert_region(0x439dec, &[255, 1]);
-        word(&mut input, 0x439d4a, 12);
-        input.memory.insert_region(0x439e14, &[2]);
-        word(&mut input, 0x439eb6, u16::MAX);
-        word(&mut input, 0x439e6a, 7);
-        let result = body_count(&input, FRAME, limits(), &mut Observed::new()).unwrap();
-        assert_eq!(result.state.memory.byte(0x439dec).unwrap(), 1);
-        assert_eq!(result.state.memory.word(0x439d4a).unwrap(), 0);
-        assert_eq!(result.state.memory.byte(0x439e14).unwrap(), 0);
-        assert_eq!(result.state.memory.word(0x439e6a).unwrap(), 0);
-        assert_eq!(result.state.memory.word(0x4434aa).unwrap(), 2);
-        assert_eq!(result.native_return, PromptReturn::Full(0));
-        assert_eq!(result.state.random, input.random);
-    }
-    #[test]
-    fn spell_copy_uses_actual_signed_byte_coordinates_and_full_record() {
-        let mut input = state();
-        let source = 0x443788 + 2842 + 406 + 58;
-        let bytes: Vec<u8> = (0..58).collect();
-        input.memory.insert_region(source, &bytes);
-        input.memory.insert_region(0x44374e, &[0; 58]);
-        let mut observed = Observed::new();
-        let mut e = execution(&input, limits(), &mut observed);
-        e.load_spell(FRAME - 60, 257, 257, 257).unwrap();
-        assert_eq!(read(&e.plan.state.memory, 0x44374e, 58).unwrap(), bytes);
-        assert_eq!(e.plan.state.memory.word(FRAME - 66).unwrap(), 257);
-        assert_eq!(e.d0, Some(0));
-        let before = e.plan.state.clone();
-        assert!(e.load_spell(FRAME - 60, -1, 0, 0).is_err());
-        assert_eq!(input.memory.word(FRAME - 66).unwrap(), 0);
-        assert_eq!(before.random, e.plan.state.random);
-    }
-    #[test]
-    fn spell_scan_keeps_native_out_of_range_step_and_reverses_once() {
-        let mut input = state();
-        input.memory.insert_region(0x437a6b, &[0; 2]);
-        let mut observed = Observed::new();
-        let mut e = execution(&input, limits(), &mut observed);
-        let mut direction = 1;
-        e.ww(0x4434b2, 12).unwrap();
-        assert!(matches!(
-            scan_spell_slot(&mut e, &mut direction).unwrap(),
-            CastPhase::Slot
-        ));
-        assert_eq!(e.w(0x4434b2).unwrap(), 13);
-        assert_eq!(direction, -1);
-        assert!(matches!(
-            scan_spell_slot(&mut e, &mut direction).unwrap(),
-            CastPhase::Slot
-        ));
-        assert_eq!(e.w(0x4434b2).unwrap(), 12);
-        e.ww(0x4434b2, 1).unwrap();
-        assert!(matches!(
-            scan_spell_slot(&mut e, &mut direction).unwrap(),
-            CastPhase::Prepare
-        ));
-        assert_eq!(e.w(0x4434b2).unwrap(), 0);
-        e.write(0x437a6b, &[1, 0x7f]).unwrap();
-        e.write(0x44273f, &[0xff]).unwrap();
-        assert_eq!(caster(&e).unwrap(), -1);
-        assert_eq!(shortcut_address(&e, 6).unwrap(), 0x43788a + 65_535 * 80 + 6);
-        assert_eq!(e.b(0x437a6c).unwrap(), 0x7f);
-    }
 }

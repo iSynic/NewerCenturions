@@ -1,0 +1,162 @@
+use crate::prelude::*;
+use crate::support::assert_bytes;
+
+#[test]
+fn spell_resolution_matches_original_ordered_party_and_monster_records() {
+    let fixture: serde_json::Value = crate::support::fixture("spell-bodies.json");
+    assert_resolution(&fixture);
+}
+
+#[test]
+fn additional_spells_match_original_ordered_party_and_monster_records() {
+    let fixture: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../evidence/fixtures/additional-spells.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_resolution(&fixture);
+}
+
+fn assert_resolution(fixture: &serde_json::Value) {
+    for (index, case) in fixture.array("cases").iter().enumerate() {
+        let warriors = crate::support::warriors(&case.bytes("warriors_before"));
+        let enemies = crate::support::monsters(&case.bytes("enemies_before"));
+        let mask = crate::support::words(&case.bytes("mask"));
+        let packet = case.bytes("packet");
+        let mut random = RandomState::new(case.n::<u32>("seed_before"));
+        let result = resolve_bodies(
+            &warriors,
+            &enemies,
+            &mask,
+            &DirectSpell {
+                packet: &packet,
+                level: (case.n::<i64>("spell_id") % 1000 / 100 - 1) as i16,
+                count: case.n::<i16>("count"),
+                armor_filter: false,
+                weapon_sound: 0,
+            },
+            &mut random,
+        )
+        .unwrap();
+        let actual = crate::support::record_bytes(&result.warriors);
+        assert_bytes(
+            &actual,
+            &case.bytes("warriors_after"),
+            &format!("case {index} party"),
+        );
+        let actual = crate::support::record_bytes(&result.enemies);
+        crate::support::native_expect! {
+        bytes actual => &case["enemies_after"], &format!("case {index} enemies");
+        scalar random.seed => &case["seed_after"], "binary_spell_bodies";
+        scalar random.draws => &case["rng_draws"], "binary_spell_bodies";
+        scalar (result
+                        .sounds
+                        .iter()
+                        .copied()
+                        .chain(
+                            result
+                                .targets
+                                .iter()
+                                .flat_map(|(_, r)| r.sounds.iter().copied()),
+                        )
+                        .collect::<Vec<_>>()) => &case["sounds"], "binary_spell_bodies";
+        }
+    }
+}
+
+#[test]
+fn enemy_firearms_match_original_scientist_records_sounds_and_randomness() {
+    use centurions_core::combat::{firearm::PreparedFirearm, spells::resolve_enemy_firearm_body};
+    let fixture: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../evidence/fixtures/enemy-firearm-bodies.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for (index, case) in fixture.array("cases").iter().enumerate() {
+        let caster = MonsterRecord {
+            bytes: case.bytes("caster_before"),
+        };
+        let mut target = MonsterRecord {
+            bytes: case.bytes("target_before"),
+        };
+        let prepared = PreparedFirearm {
+            packet: case.bytes("packet"),
+            shots: case.n::<i16>("shots"),
+            sound: case.n::<i16>("weapon_sound"),
+            slot: 0,
+            rounds: 0,
+            weight: 0,
+            armor_filter: false,
+        };
+
+        let mut random = RandomState::new(case.n::<u32>("seed_before"));
+        let result =
+            resolve_enemy_firearm_body(&mut target, &caster, &prepared, 0, &mut random).unwrap();
+        crate::support::native_expect! {
+        bytes target.bytes => &case["target_after"], &format!("firearm case {index}");
+        bytes caster.bytes => &case["caster_after"], &format!("firearm caster {index}");
+        scalar random.seed => &case["seed_after"], "binary_spell_bodies";
+        scalar random.draws => &case["rng_draws"], "binary_spell_bodies";
+        scalar (result.sounds) => &case["sounds"], "binary_spell_bodies";
+        }
+    }
+}
+
+#[test]
+fn global_spell_masks_match_original_faction_and_living_body_rules() {
+    use centurions_core::combat::{
+        Combat, EnemySetup, SquadPlacement, TacticalMap, spells::global_targets,
+    };
+    let fixture: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../evidence/fixtures/additional-spells.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for (index, case) in fixture.array("mask_cases").iter().enumerate() {
+        let warriors = crate::support::warriors(&case.bytes("warriors"));
+        let enemies = crate::support::monsters(&case.bytes("enemies_before"));
+        let combat = Combat {
+            map: TacticalMap {
+                tiles: vec![],
+                shift: (0, 0),
+                edge_word: 0,
+            },
+            squad: SquadPlacement {
+                positions: vec![],
+                under_tiles: vec![],
+            },
+            enemies: EnemySetup {
+                records: enemies,
+                positions: vec![],
+            },
+            order: vec![],
+            cursor: 0,
+            ..crate::support::battle()
+        };
+        let packet = case.bytes("packet");
+        let result = global_targets(&combat, &warriors, 0, &packet).unwrap();
+        let actual = crate::support::word_bytes(&result.mask);
+        assert_bytes(
+            &actual,
+            &case.bytes("mask"),
+            &format!("global mask {index}"),
+        );
+        let mut actual = combat.enemies.records.clone();
+        actual[0] = result.caster;
+        let actual = crate::support::record_bytes(&actual);
+        assert_bytes(
+            &actual,
+            &case.bytes("enemies_after"),
+            &format!("global records {index}"),
+        );
+    }
+}

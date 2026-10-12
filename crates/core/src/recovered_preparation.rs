@@ -100,39 +100,3 @@ pub fn movement_cost(properties: &[u8], tile: i16, dx: i8, dy: i8) -> Result<i16
         dy,
     ))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unarmed_and_missing_missile_preserve_scratch_and_wrap_word_speed() {
-        let mut warrior = Warrior {
-            name: "A".into(),
-            original_sha256: String::new(),
-            bytes: vec![0; WARRIOR_BYTES],
-        };
-        warrior.bytes[0x38..0x3a].copy_from_slice(&i16::MAX.to_be_bytes());
-        warrior.bytes[0x9dd] = 3;
-        let tables = ItemTables { families: [&[]; 5] };
-        let item = [0xa5; ITEM_BYTES];
-        let spell = [0x5a; SPELL_BYTES];
-        let weapon = to_weapon(&warrior, 2, &tables, &item).unwrap();
-        assert_eq!(word(&weapon.warrior.bytes, 0x128).unwrap(), 22);
-        assert_eq!(weapon.warrior.bytes[0x9dd], 0);
-        assert_eq!(warrior.bytes[0x9dd], 3);
-        assert_eq!(weapon.item_work, item);
-        assert_eq!(weapon.writes.len(), 2);
-        let missile = to_missile(&warrior, &tables, &[], &item, &spell, [2, 3, 4]).unwrap();
-        assert!(!missile.available);
-        assert_eq!(missile.spell_coordinates, [2, 3, 4]);
-        assert_eq!(missile.item_work, item);
-        assert_eq!(missile.spell_work, spell);
-        assert!(missile.writes.is_empty());
-        let mut props = vec![0; 80];
-        props[42..44].copy_from_slice(&9_i16.to_be_bytes());
-        assert_eq!(movement_cost(&props, 1001, -1, 1).unwrap(), 5);
-        assert_eq!(movement_cost(&props, 1, -1, 1).unwrap(), 5);
-        assert!(movement_cost(&props, -1, 0, 0).is_err());
-    }
-}

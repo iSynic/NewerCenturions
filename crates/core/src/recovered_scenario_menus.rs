@@ -76,7 +76,7 @@ impl MenuExecution {
         vertical: i16,
         wait: i16,
         sound: i16,
-        services: &impl ScenarioMenuServices,
+        services: &(impl ScenarioMenuServices + ?Sized),
     ) -> Result<(), RuleError> {
         let e = &mut self.storage;
         e.lw(
@@ -125,7 +125,7 @@ pub fn update_map_menu(
     memory: &RenderingMemory,
     frame: u32,
     limits: StorageLimits,
-    services: &mut impl ScenarioMenuServices,
+    services: &mut (impl ScenarioMenuServices + ?Sized),
 ) -> Result<ScenarioMenuPlan, RuleError> {
     let mut result = MenuExecution::new(memory, limits, Some(0));
     let e = &mut result.storage;
@@ -179,7 +179,7 @@ fn indexed_address(index: i16) -> u32 {
 fn menu_label(
     e: &mut Execution,
     old_count: i16,
-    services: &impl ScenarioMenuServices,
+    services: &(impl ScenarioMenuServices + ?Sized),
 ) -> Result<(), RuleError> {
     let menu = e.long(0x438722)?;
     if old_count < e.word(0x439cf8)? {
@@ -197,7 +197,7 @@ fn menu_label(
 fn metadata(
     e: &mut Execution,
     frame: u32,
-    services: &impl ScenarioMenuServices,
+    services: &(impl ScenarioMenuServices + ?Sized),
 ) -> Result<(), RuleError> {
     e.lw(frame.wrapping_add(12), 0x4389a4)?;
     e.lw(frame.wrapping_add(8), 0x4026ca)?;
@@ -241,7 +241,7 @@ pub fn update_monster_menu(
     memory: &RenderingMemory,
     frame: u32,
     limits: StorageLimits,
-    services: &mut impl ScenarioMenuServices,
+    services: &mut (impl ScenarioMenuServices + ?Sized),
 ) -> Result<ScenarioMenuPlan, RuleError> {
     let mut result = MenuExecution::new(memory, limits, Some(0));
     loop {
@@ -420,7 +420,7 @@ pub fn display_mission_name(
     memory: &RenderingMemory,
     frame: u32,
     limits: StorageLimits,
-    services: &mut impl ScenarioMenuServices,
+    services: &mut (impl ScenarioMenuServices + ?Sized),
 ) -> Result<ScenarioMenuPlan, RuleError> {
     let mut result = MenuExecution::new(memory, limits, Some(0));
     let e = &mut result.storage;
@@ -449,7 +449,7 @@ pub fn get_word(
     memory: &RenderingMemory,
     frame: u32,
     limits: StorageLimits,
-    services: &mut impl ScenarioMenuServices,
+    services: &mut (impl ScenarioMenuServices + ?Sized),
 ) -> Result<ScenarioMenuPlan, RuleError> {
     let mut result = MenuExecution::new(memory, limits, None);
     let e = &mut result.storage;
@@ -600,7 +600,7 @@ pub fn fast_plot_map(
     memory: &RenderingMemory,
     frame: u32,
     limits: StorageLimits,
-    services: &mut impl ScenarioMenuServices,
+    services: &mut (impl ScenarioMenuServices + ?Sized),
 ) -> Result<ScenarioMenuPlan, RuleError> {
     let mut result = MenuExecution::new(memory, limits, Some(0));
     let e = &mut result.storage;
@@ -643,217 +643,4 @@ pub fn fast_plot_map(
         )?;
     }
     Ok(result.finish())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recovered_storage::test_support::*;
-    use std::collections::VecDeque;
-
-    #[test]
-    fn map_menu_rereads_enable_flag_and_input_dialog_restores_port() {
-        let memory = fixture();
-        let mut services = Services {
-            toggle_menu_flag: true,
-            ..Services::default()
-        };
-        let result = update_map_menu(&memory, FRAME, LIMITS, &mut services).unwrap();
-        assert_eq!(result.native_return, Some(0));
-        assert!(matches!(
-            &services.loads.borrow()[0],
-            LoadRequest::GetIndexedString {
-                resource: -101,
-                index: 1,
-                ..
-            }
-        ));
-        assert!(services.loads.borrow().iter().any(|request| matches!(request, LoadRequest::Toolbox { opcode: 0xa939, arguments, .. } if arguments == &vec![L(0), W(4)])));
-        assert_eq!(services.menu.borrow().len(), 22);
-        let mut services = Services::default();
-        let result = get_word(&memory, FRAME, LIMITS, &mut services).unwrap();
-        assert_eq!(result.native_return, None);
-        assert_eq!(
-            (
-                result.memory.byte(0x438aa4).unwrap(),
-                result.memory.byte(0x438aa5).unwrap()
-            ),
-            (4, b'W')
-        );
-        assert!(services.loads.borrow().contains(&LoadRequest::Toolbox {
-            opcode: 0xa873,
-            selector: None,
-            arguments: vec![L(123)]
-        }));
-        assert!(
-            services
-                .requests
-                .borrow()
-                .contains(&StorageRequest::MoveWindow {
-                    window: 77,
-                    horizontal: 30,
-                    vertical: 110,
-                    front: 0
-                })
-        );
-        assert!(
-            result
-                .effects
-                .iter()
-                .any(|effect| matches!(effect, ScenarioMenuEffect::Feedback(_)))
-        );
-    }
-    #[test]
-    fn bestiary_build_sorts_actual_strings_and_restarts_after_cache_write() {
-        let mut memory = fixture();
-        word(&mut memory, FRAME + 8, 7);
-        word(&mut memory, 0x4042c8, -1);
-        let mut services = Services {
-            cache_ready_handle: Some(11),
-            ..Services::default()
-        };
-        services.opens.borrow_mut().extend([0, 9, 10, 11]);
-        let mut records = VecDeque::new();
-        for name in [b"Zulu".as_slice(), b"Alpha".as_slice()] {
-            let mut record = vec![0; 288];
-            record[..2].copy_from_slice(&1_i16.to_be_bytes());
-            record[218] = name.len() as u8;
-            record[219..219 + name.len()].copy_from_slice(name);
-            records.push_back(ReadReply {
-                value: 1,
-                bytes: record,
-            });
-        }
-        let mut terminator = vec![0; 288];
-        terminator[..2].copy_from_slice(&255_i16.to_be_bytes());
-        records.push_back(ReadReply {
-            value: 1,
-            bytes: terminator,
-        });
-        services.reads.borrow_mut().insert(9, records);
-        services.reads.borrow_mut().insert(
-            11,
-            VecDeque::from([ReadReply {
-                value: 1,
-                bytes: vec![],
-            }]),
-        );
-        let result = update_monster_menu(&memory, FRAME, LIMITS, &mut services).unwrap();
-        assert_eq!(
-            *services.menu.borrow(),
-            [b"Alpha".to_vec(), b"Zulu".to_vec()]
-        );
-        assert_eq!(result.memory.word(0x4395a8).unwrap(), 2);
-        assert_eq!(result.memory.word(0x4395aa).unwrap(), 1);
-        assert_eq!(result.memory.word(0x4042c8).unwrap(), 7);
-        assert_eq!(result.memory.word(0x439cf8).unwrap(), 0);
-        assert!(services.requests.borrow().contains(&StorageRequest::Write {
-            handle: 10,
-            source: 0x4395a6,
-            size: 502,
-            count: 1
-        }));
-        assert!(
-            services
-                .requests
-                .borrow()
-                .contains(&StorageRequest::SetFileInfo {
-                    name: 0x4389a4,
-                    volume: 0,
-                    info: 0x439cfc
-                })
-        );
-        assert_eq!(
-            services
-                .loads
-                .borrow()
-                .iter()
-                .filter(|request| matches!(request, LoadRequest::Open { .. }))
-                .count(),
-            4
-        );
-    }
-    #[test]
-    fn mission_sign_extends_fields_and_map_tiles_keep_zero_and_negative_paths() {
-        let mut memory = fixture();
-        word(&mut memory, FRAME + 8, 1);
-        word(&mut memory, 0x41d1c4 + 464, -2);
-        word(&mut memory, 0x41d1c4 + 466, -3);
-        word(&mut memory, 0x41d1c4 + 468, 4);
-        memory.insert_region(0x41d1c4 + 470, &[4, b'N', b'a', b'm', b'e', 0]);
-        let mut services = Services::default();
-        let result = display_mission_name(&memory, FRAME, LIMITS, &mut services).unwrap();
-        assert_eq!(result.memory.long(0x442774).unwrap(), 4);
-        assert_eq!(result.memory.long(0x442778).unwrap(), 0xfffffffe);
-        assert_eq!(result.memory.long(0x44277c).unwrap(), 0xfffffffd);
-        assert!(
-            services
-                .loads
-                .borrow()
-                .contains(&LoadRequest::PascalToC(0x479ed8))
-        );
-        memory.insert_region(FRAME + 10, &[0, 1, 0, 2, 0, 3, 0, 4]);
-        word(&mut memory, FRAME + 8, 0);
-        let mut services = Services::default();
-        let zero = fast_plot_map(&memory, FRAME, LIMITS, &mut services).unwrap();
-        assert_eq!(
-            zero.memory.rect(0x4434ba).unwrap(),
-            crate::recovered_geometry::BodyRect {
-                top: 0,
-                left: -32,
-                bottom: 32,
-                right: 0
-            }
-        );
-        assert!(services.loads.borrow().contains(&LoadRequest::Toolbox {
-            opcode: 0xa8ec,
-            selector: None,
-            arguments: vec![P(2), P(2), P(0x4434ba), P(FRAME + 10), W(0), L(0)]
-        }));
-        word(&mut memory, FRAME + 8, -7);
-        memory.insert_region(0x402f43, &[255]);
-        word(&mut memory, 0x435506, 20);
-        let mut services = Services::default();
-        let negative = fast_plot_map(&memory, FRAME, LIMITS, &mut services).unwrap();
-        assert_eq!(negative.memory.word(0x4434b6).unwrap(), 19);
-        assert_eq!(negative.memory.long(0x439598).unwrap(), 0);
-        assert!(negative.effects.iter().any(|effect| matches!(
-            effect,
-            ScenarioMenuEffect::Drawing(DrawingEffect::CopyBits { mode: 0, .. })
-        )));
-        word(&mut memory, 0x435506, 23000);
-        long(&mut memory, 0x41c220, 0x500000);
-        memory.insert_region(0x500010, &[0, 0, 0, 0, 0, 64, 0, 64]);
-        memory.insert_region(0x4471f2, &[0, 100, 0, 200, 0, 132, 0, 232]);
-        long(&mut memory, 0x4386bc, 0x600000);
-        let building = fast_plot_map(&memory, FRAME, LIMITS, &mut Services::default()).unwrap();
-        assert!(building.effects.iter().any(|effect| matches!(
-            effect,
-            ScenarioMenuEffect::Drawing(DrawingEffect::CopyBits {
-                source_bitmap: 0x500002,
-                destination_bitmap: 0x600002,
-                source: crate::recovered_geometry::BodyRect {
-                    top: 0,
-                    left: 0,
-                    bottom: 64,
-                    right: 64
-                },
-                destination: crate::recovered_geometry::BodyRect {
-                    top: 68,
-                    left: 168,
-                    bottom: 132,
-                    right: 232
-                },
-                mode: 36,
-                mask: 0
-            })
-        )));
-        let before = memory.clone();
-        let mut services = Services {
-            fail_read: true,
-            ..Services::default()
-        };
-        assert!(display_mission_name(&memory, FRAME, LIMITS, &mut services).is_err());
-        assert_eq!(memory, before);
-    }
 }

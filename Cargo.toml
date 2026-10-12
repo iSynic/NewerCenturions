@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/content", "crates/core", "crates/tools", "crates/desktop"]
+members = ["crates/content", "crates/core", "crates/tools", "crates/desktop", "crates/translated-gameplay", "crates/translated-system", "crates/translated-application", "crates/translated"]
 resolver = "2"
 exclude = ["vendor/miniquad"]
 
@@ -18,3 +18,23 @@ centurions-core = { path = "crates/core" }
 
 [patch.crates-io]
 miniquad = { path = "vendor/miniquad" }
+
+[profile.release.package.centurions-translated-gameplay]
+opt-level = 1
+codegen-units = 256
+incremental = true
+
+[profile.release.package.centurions-translated-system]
+opt-level = 1
+codegen-units = 256
+incremental = true
+
+[profile.release.package.centurions-translated-application]
+opt-level = 1
+codegen-units = 256
+incremental = true
+
+[profile.release.package.centurions-translated]
+opt-level = 1
+codegen-units = 256
+incremental = true

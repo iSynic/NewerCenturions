@@ -67,7 +67,7 @@ fn literal(result: &mut EquipmentUiPlan, address: u32) -> Result<(), RuleError> 
 fn number(
     result: &mut EquipmentUiPlan,
     value: i16,
-    services: &mut impl EquipmentUiServices,
+    services: &mut (impl EquipmentUiServices + ?Sized),
 ) -> Result<(), RuleError> {
     let mut context = TextContext::default();
     let effects = recovered_text::string(&mut context, value, services)?;
@@ -128,7 +128,7 @@ fn icon(
     result: &mut EquipmentUiPlan,
     id: i16,
     rect: BodyRect,
-    services: &mut impl EquipmentUiServices,
+    services: &mut (impl EquipmentUiServices + ?Sized),
 ) -> Result<(), RuleError> {
     let child = recovered_drawing::ploticon3(&mut icon_context(rect), id, rect, services)?;
     for effect in child.effects {
@@ -164,7 +164,7 @@ fn copy_record(
 fn plot_item(
     result: &mut EquipmentUiPlan,
     id: i16,
-    services: &mut impl EquipmentUiServices,
+    services: &mut (impl EquipmentUiServices + ?Sized),
 ) -> Result<(), RuleError> {
     let backing = item_tables(&result.memory, id)?;
     let tables = ItemTables {
@@ -226,7 +226,7 @@ fn plot_item(
 pub fn show_charge(
     memory: &RenderingMemory,
     frame: u32,
-    services: &mut impl EquipmentUiServices,
+    services: &mut (impl EquipmentUiServices + ?Sized),
 ) -> Result<EquipmentUiPlan, RuleError> {
     let mut result = plan(memory);
     let ammunition = sw(&result.memory, frame.wrapping_add(10))?;
@@ -283,7 +283,7 @@ fn copied_node(result: &EquipmentUiPlan, row: i16) -> Result<u32, RuleError> {
 pub fn update_items(
     memory: &RenderingMemory,
     frame: u32,
-    services: &mut impl EquipmentUiServices,
+    services: &mut (impl EquipmentUiServices + ?Sized),
 ) -> Result<EquipmentUiPlan, RuleError> {
     let mut result = plan(memory);
     let first = sw(&result.memory, frame.wrapping_add(8))?;
@@ -373,85 +373,4 @@ pub fn update_items(
     let member = sb(&result.memory, 0x44273f)? as u16;
     copy_record(&mut result, 0x44721c, member_address(member), WARRIOR_BYTES)?;
     Ok(result)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recovered_equipment::test_support::*;
-
-    #[test]
-    fn charge_rereads_quantity_after_getpen_and_composes_ammo_stats() {
-        let mut memory = fixture();
-        let address = item(&mut memory, 200, 0);
-        put_word(&mut memory, address + 10, 99);
-        put_word(&mut memory, address + 64, 4);
-        put_word(&mut memory, 0x41fc4c, 200);
-        put_word(&mut memory, FRAME + 8, 2);
-        put_word(&mut memory, FRAME + 10, 200);
-        let mut services = Services::default();
-        services.pen_quantity = Some(7);
-        let result = show_charge(&memory, FRAME, &mut services).unwrap();
-        assert_eq!(services.numbers, [7, 4]);
-        assert_eq!(services.icons, [99]);
-        assert_eq!(result.memory.word(FRAME + 8).unwrap(), 7);
-        assert_eq!(
-            result.memory.rect(FRAME - 8).unwrap(),
-            BodyRect {
-                top: 2,
-                left: 104,
-                bottom: 18,
-                right: 120
-            }
-        );
-        assert_eq!(result.memory.word(0x45367c).unwrap(), 4);
-        assert_eq!(
-            result
-                .effects
-                .iter()
-                .filter(|effect| matches!(effect, EquipmentUiEffect::GetPen { .. }))
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn list_uses_selection_base_and_empty_count_clamp_then_copies_back() {
-        let mut memory = fixture();
-        let address = item(&mut memory, 203, 0);
-        put_word(&mut memory, address + 10, 99);
-        put_word(&mut memory, member_address(0) + 0x132, 203);
-        put_word(&mut memory, 0x4471e8, 1234);
-        put_long(&mut memory, 0x439404, 1);
-        put_long(&mut memory, 0x4393fc, 2);
-        put_word(&mut memory, FRAME + 8, 0);
-        put_word(&mut memory, FRAME + 10, 0);
-        let mut services = Services::default();
-        let result = update_items(&memory, FRAME, &mut services).unwrap();
-        assert_eq!(services.indexed, [(201, 4)]);
-        assert_eq!(result.memory.word(0x4471e8).unwrap(), 200);
-        assert_eq!(
-            read(&result.memory, member_address(0), WARRIOR_BYTES).unwrap(),
-            read(&result.memory, 0x44721c, WARRIOR_BYTES).unwrap()
-        );
-        assert_eq!(result.memory.word(0x41fc48).unwrap(), 203);
-
-        put_word(&mut memory, member_address(0) + 0x132, 0);
-        put_word(&mut memory, member_address(0) + 0x1a, 0);
-        put_word(&mut memory, 0x4471aa, 8);
-        let mut services = Services::default();
-        let empty = update_items(&memory, FRAME, &mut services).unwrap();
-        assert_eq!(empty.memory.word(0x4471aa).unwrap(), 0);
-        assert_eq!(empty.memory.word(0x4471ac).unwrap(), 11);
-        assert_eq!(empty.memory.word(0x4471b0).unwrap(), 51);
-        assert_eq!(services.icons, [174, 173, 174]);
-        assert!(empty.effects.iter().any(|effect| matches!(
-            effect,
-            EquipmentUiEffect::Drawing(DrawingEffect::EraseRect(BodyRect {
-                left: 10,
-                right: 284,
-                ..
-            }))
-        )));
-    }
 }

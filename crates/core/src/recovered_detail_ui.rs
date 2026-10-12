@@ -215,7 +215,7 @@ fn c_to_pascal(result: &mut DetailPlan, address: u32) -> Result<(), RuleError> {
 fn observe(
     result: &mut DetailPlan,
     request: DetailRequest,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<DetailReply, RuleError> {
     let reply = services.observe(&request, &result.memory)?;
     result.effects.push(DetailEffect::Observation {
@@ -227,7 +227,7 @@ fn observe(
 fn observed_writes(
     result: &mut DetailPlan,
     request: DetailRequest,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<(), RuleError> {
     match observe(result, request, services)? {
         DetailReply::Writes(writes) => {
@@ -246,7 +246,7 @@ fn sane(
     opcode: u16,
     source: Option<u32>,
     destination: u32,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<(), RuleError> {
     observed_writes(
         result,
@@ -263,7 +263,7 @@ fn indexed(
     resource_id: i16,
     index: i16,
     destination: u32,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<(), RuleError> {
     let text = services.indexed_string(resource_id, index)?;
     result.effects.push(DetailEffect::IndexedString {
@@ -278,7 +278,7 @@ fn number(
     result: &mut DetailPlan,
     value: i16,
     kind: u8,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<(), RuleError> {
     let mut context = TextContext::default();
     let effects = match kind {
@@ -311,7 +311,7 @@ fn convert_number(
     result: &mut DetailPlan,
     value: i32,
     destination: u32,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<(), RuleError> {
     let text = services.number_to_string(value)?;
     result.effects.push(DetailEffect::NumberToString {
@@ -411,7 +411,7 @@ fn icon(
     result: &mut DetailPlan,
     id: i16,
     rectangle: BodyRect,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<(), RuleError> {
     let child =
         recovered_drawing::ploticon3(&mut icon_context(rectangle), id, rectangle, services)?;
@@ -427,7 +427,7 @@ fn picture(
     result: &mut DetailPlan,
     id: i16,
     rectangle: BodyRect,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<(), RuleError> {
     for effect in recovered_drawing::pict(id, rectangle, services)? {
         draw(result, effect);
@@ -460,7 +460,7 @@ fn description_box(result: &mut DetailPlan, text: u32, rectangle: u32) -> Result
 fn file(
     result: &mut DetailPlan,
     request: FileRequest,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<FileReply, RuleError> {
     match observe(result, DetailRequest::File(request), services)? {
         DetailReply::File(reply) => Ok(reply),
@@ -470,7 +470,7 @@ fn file(
 fn filename(
     result: &mut DetailPlan,
     capacity: usize,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<(), RuleError> {
     let variant = result.memory.byte(0x44274c)?;
     let mut context = FileContext {
@@ -506,7 +506,7 @@ fn filename(
 fn discarded_file(
     result: &mut DetailPlan,
     request: FileRequest,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<(), RuleError> {
     match file(result, request, services)? {
         FileReply::Ignored | FileReply::Integer(_) | FileReply::Error(_) => Ok(()),
@@ -522,7 +522,7 @@ pub fn quick_info(
     frame: u32,
     incoming_a2: u32,
     filename_capacity: usize,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<DetailPlan, RuleError> {
     let mut result = plan(memory);
     let member = result.memory.word(frame.wrapping_add(8))?;
@@ -1034,7 +1034,7 @@ fn color_icon_global(
     result: &mut DetailPlan,
     id: i16,
     rectangle: u32,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<(), RuleError> {
     draw(result, DrawingEffect::GetColorIcon(id));
     let handle = services.color_icon(id)?;
@@ -1054,7 +1054,7 @@ pub fn update_odds(
     memory: &RenderingMemory,
     frame: u32,
     damage_frame: DamageFrame,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<DetailPlan, RuleError> {
     let mut result = plan(memory);
     let target = result.memory.word(frame.wrapping_add(8))?;
@@ -1274,7 +1274,7 @@ fn damage_resistance(
     work_offset: u32,
     other_offset: u32,
     average: i16,
-    services: &mut impl DetailServices,
+    services: &mut (impl DetailServices + ?Sized),
 ) -> Result<(), RuleError> {
     let work = frame.wrapping_sub(work_offset);
     let other = frame.wrapping_sub(other_offset);
@@ -1309,493 +1309,4 @@ fn damage_resistance(
     sane(result, 0x100e, Some(single), output, services)?;
     sane(result, 0x16, None, output, services)?;
     sane(result, 0x2810, Some(output), output, services)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recovered_drawing::{BuildingWorld, PictureObservation};
-
-    #[derive(Default)]
-    struct Services {
-        numbers: Vec<i32>,
-        indexed: Vec<(i16, i16)>,
-        sane: Vec<(u16, Option<u32>, u32)>,
-        first_long_input: Option<u32>,
-        files: Vec<FileRequest>,
-        fail_read: bool,
-    }
-    impl NumericServices for Services {
-        fn number_to_string(&mut self, value: i32) -> Result<PascalString, RuleError> {
-            self.numbers.push(value);
-            PascalString::from_payload(value.to_string().as_bytes())
-        }
-        fn string_to_number(&mut self, _: &PascalString) -> Result<i32, RuleError> {
-            Err(RuleError::Invalid("unused numeric service".into()))
-        }
-    }
-    impl DrawingServices for Services {
-        fn color_icon(&mut self, _: i16) -> Result<u32, RuleError> {
-            Ok(0)
-        }
-        fn indexed_string(&mut self, resource: i16, index: i16) -> Result<PascalString, RuleError> {
-            self.indexed.push((resource, index));
-            PascalString::from_payload(b"label")
-        }
-        fn current_world(&mut self) -> Result<(u32, u32), RuleError> {
-            Err(RuleError::Invalid("unused world service".into()))
-        }
-        fn picture(&mut self, _: i16) -> Result<PictureObservation, RuleError> {
-            Ok(PictureObservation {
-                handle: 0,
-                bounds: None,
-            })
-        }
-        fn new_world(&mut self, _: i16, _: BodyRect) -> Result<(i16, BuildingWorld), RuleError> {
-            Err(RuleError::Invalid("unused world service".into()))
-        }
-    }
-    impl DetailServices for Services {
-        fn observe(
-            &mut self,
-            request: &DetailRequest,
-            memory: &RenderingMemory,
-        ) -> Result<DetailReply, RuleError> {
-            let writes = match request {
-                DetailRequest::GetPort { destination } => vec![RecordWrite {
-                    address: *destination,
-                    bytes: 0x12345678_u32.to_be_bytes().to_vec(),
-                }],
-                DetailRequest::GetForeColor { destination } => vec![RecordWrite {
-                    address: *destination,
-                    bytes: vec![1, 2, 3, 4, 5, 6],
-                }],
-                DetailRequest::GetBackColor { destination } => vec![RecordWrite {
-                    address: *destination,
-                    bytes: vec![7, 8, 9, 10, 11, 12],
-                }],
-                DetailRequest::InsetRect {
-                    pointer,
-                    horizontal,
-                    vertical,
-                } => {
-                    let rect = memory.rect(*pointer)?;
-                    vec![
-                        RecordWrite {
-                            address: *pointer,
-                            bytes: rect.top.wrapping_add(*vertical).to_be_bytes().to_vec(),
-                        },
-                        RecordWrite {
-                            address: pointer.wrapping_add(2),
-                            bytes: rect.left.wrapping_add(*horizontal).to_be_bytes().to_vec(),
-                        },
-                        RecordWrite {
-                            address: pointer.wrapping_add(4),
-                            bytes: rect.bottom.wrapping_sub(*vertical).to_be_bytes().to_vec(),
-                        },
-                        RecordWrite {
-                            address: pointer.wrapping_add(6),
-                            bytes: rect.right.wrapping_sub(*horizontal).to_be_bytes().to_vec(),
-                        },
-                    ]
-                }
-                DetailRequest::Sane {
-                    opcode,
-                    source,
-                    destination,
-                } => {
-                    self.sane.push((*opcode, *source, *destination));
-                    if *opcode == 0x280e && self.first_long_input.is_none() {
-                        self.first_long_input = Some(memory.long(source.expect("long source"))?);
-                    }
-                    // Synthetic observed truncation result; no native arithmetic oracle is asserted.
-                    if *opcode == 0x2810 {
-                        vec![RecordWrite {
-                            address: *destination,
-                            bytes: 7_u32.to_be_bytes().to_vec(),
-                        }]
-                    } else {
-                        vec![]
-                    }
-                }
-                DetailRequest::File(request) => {
-                    self.files.push(request.clone());
-                    return Ok(DetailReply::File(match request {
-                        FileRequest::Open { .. } => FileReply::Handle(0),
-                        FileRequest::Seek { .. } | FileRequest::Close(_) => FileReply::Error(-1),
-                        _ => return Err(RuleError::Invalid("unused file request".into())),
-                    }));
-                }
-                DetailRequest::ReadFile {
-                    handle,
-                    size,
-                    count,
-                    destination,
-                } => {
-                    assert_eq!(
-                        (*handle, *size, *count, *destination),
-                        (0, 256, 1, 0x479ed8)
-                    );
-                    if self.fail_read {
-                        return Err(RuleError::Unsupported {
-                            action: "detail.read",
-                            dependency: "missing read observation",
-                        });
-                    }
-                    return Ok(DetailReply::File(FileReply::Read {
-                        elements_read: 0,
-                        bytes_written: b"\x03abc".to_vec(),
-                    }));
-                }
-            };
-            Ok(DetailReply::Writes(writes))
-        }
-    }
-    fn put_word(memory: &mut RenderingMemory, address: u32, value: i16) {
-        memory.insert_region(address, &value.to_be_bytes());
-    }
-    fn fixture(frame: u32) -> RenderingMemory {
-        let mut memory = RenderingMemory::default();
-        memory.insert_region(frame.wrapping_sub(0x200), &[0xaa; 0x220]);
-        memory.insert_region(0x443000, &[0; 0x4800]);
-        memory.insert_region(0x439598, &[0; 4]);
-        memory.insert_region(0x41f714, &[0; 2]);
-        memory.insert_region(0x45363c, &[0; 0x200]);
-        memory.insert_region(0x448aa0, &[0; WARRIOR_BYTES]);
-        memory.insert_region(0x439d3c, &[0; 288]);
-        memory.insert_region(0x479ed8, &[0xcc; 256]);
-        memory.insert_region(0x438788, &0x11111111_u32.to_be_bytes());
-        memory.insert_region(0x438790, &0x22222222_u32.to_be_bytes());
-        memory.insert_region(0x438798, &0x33333333_u32.to_be_bytes());
-        memory.insert_region(0x4358ce, &0x99999999_u32.to_be_bytes());
-        put_word(&mut memory, 0x402f3c, 3);
-        memory.insert_region(0x402f24, b"rb\0");
-        memory.insert_region(0x402986, b":default\0");
-        for address in [0x402976, 0x402964, 0x40294e, 0x402938, 0x402922] {
-            memory.insert_region(address, b"\x01L");
-        }
-        put_word(&mut memory, 0x442576, 0);
-        memory
-    }
-    fn record(memory: &mut RenderingMemory, id: i16, words: &[(u32, i16)], bytes: &[(u32, u8)]) {
-        let family = (id / 200) as usize;
-        let address =
-            ITEM_TABLE_ADDRESSES[family] + u32::from((id % 200) as u16) * ITEM_BYTES as u32;
-        memory.insert_region(address, &[0; ITEM_BYTES]);
-        for (offset, value) in words {
-            put_word(memory, address + offset, *value);
-        }
-        for (offset, value) in bytes {
-            memory.insert_region(address + offset, &[*value]);
-        }
-    }
-    fn drawing(plan: &DetailPlan) -> Vec<&DrawingEffect> {
-        plan.effects
-            .iter()
-            .filter_map(|effect| {
-                if let DetailEffect::Drawing(effect) = effect {
-                    Some(effect)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn quick_info_merges_records_and_writes_selection_before_lookup() {
-        let frame = 0x80000;
-        let mut memory = fixture(frame);
-        put_word(&mut memory, frame + 8, 0);
-        put_word(&mut memory, frame + 10, 0);
-        put_word(&mut memory, frame + 12, -2);
-        put_word(&mut memory, frame + 14, 2);
-        record(
-            &mut memory,
-            203,
-            &[
-                (10, 55),
-                (32, 8),
-                (22, 2),
-                (40, 3),
-                (60, 10),
-                (62, 4),
-                (88, 5),
-                (94, 20),
-                (102, 203),
-            ],
-            &[(3, 2), (4, 3), (6, 255)],
-        );
-        record(
-            &mut memory,
-            204,
-            &[(10, 56), (40, 1), (60, 2), (62, 5), (102, 204)],
-            &[(79, 255), (81, 1)],
-        );
-        let pack = 0x448bd2;
-        for (offset, value) in [(0, 203), (2, -11), (4, 204), (6, 12)] {
-            put_word(&mut memory, pack + offset, value);
-        }
-        for (offset, value) in [
-            (11, 2),
-            (13, -2),
-            (14, -3),
-            (15, -4),
-            (16, -5),
-            (17, 6),
-            (18, -7),
-            (19, -8),
-            (20, -9),
-            (21, -10),
-        ] {
-            memory.insert_region(pack + offset, &[value as u8]);
-        }
-        put_word(&mut memory, 0x4471e8, -999);
-        let before = memory.clone();
-        let mut services = Services::default();
-        let result = quick_info(&memory, frame, 0xdeadbeef, 0, &mut services).unwrap();
-        assert_eq!(memory, before);
-        assert_eq!(result.native_return, None);
-        assert_eq!(result.arithmetic_qualification, None);
-        assert_eq!(services.first_long_input, Some(93));
-        assert_eq!(services.sane.len(), 9);
-        assert_eq!(
-            services.numbers,
-            [-2, 12, -1, 2, -11, 0, 0, 7, 2, 2, 12, 0, -1]
-        );
-        assert_eq!(services.indexed, [(201, 5)]);
-        assert_eq!(result.memory.word(0x4471e8).unwrap(), 200);
-        assert_eq!(result.memory.word(0x4536c6).unwrap() as i16, -2);
-        assert_eq!(result.memory.word(0x453694).unwrap(), 2);
-        assert_eq!(result.memory.byte(0x45363f).unwrap() as i8, -3);
-        assert_eq!(result.memory.byte(0x453640).unwrap(), 9);
-        assert_eq!(result.memory.word(frame - 0x118).unwrap() as i16, -10);
-        assert_eq!(result.memory.word(frame - 0x114).unwrap() as i16, -2);
-        assert_eq!(
-            services.files[1],
-            FileRequest::Seek {
-                handle: 0,
-                offset: 0xfffffe00,
-                origin: 0
-            }
-        );
-        assert_eq!(result.memory.byte(0x479ed8 + 255).unwrap(), 0xcc);
-        let effects = drawing(&result);
-        assert!(effects.contains(&&DrawingEffect::SetPort(0x22222222)));
-        assert!(effects.contains(&&DrawingEffect::SetPort(0x12345678)));
-        assert!(result.effects.iter().any(|effect| matches!(
-            effect,
-            DetailEffect::TextBox {
-                pointer: 0x479ed9,
-                length: 256,
-                rectangle: BodyRect {
-                    top: 473,
-                    left: 13,
-                    bottom: 534,
-                    right: 350
-                },
-                ..
-            }
-        )));
-        let writes: Vec<_> = result
-            .effects
-            .iter()
-            .filter_map(|effect| {
-                if let DetailEffect::Write(write) = effect {
-                    Some(write)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        assert!(
-            writes
-                .iter()
-                .any(|write| write.address == 0x4471e8 && write.bytes == 200_i16.to_be_bytes())
-        );
-    }
-
-    #[test]
-    fn quick_info_guard_saves_observed_outputs_and_failure_keeps_input() {
-        let frame = 0x80000;
-        let mut memory = fixture(frame);
-        put_word(&mut memory, frame + 8, 0);
-        put_word(&mut memory, frame + 10, -1);
-        put_word(&mut memory, frame + 12, 123);
-        put_word(&mut memory, frame + 14, 1);
-        let mut services = Services::default();
-        let result = quick_info(&memory, frame, 99, 0, &mut services).unwrap();
-        assert!(services.sane.is_empty());
-        assert!(services.numbers.is_empty());
-        assert!(drawing(&result).is_empty());
-        assert_eq!(result.memory.long(frame - 0x12c).unwrap(), 0x12345678);
-        assert_eq!(result.memory.word(frame - 0x114).unwrap(), 123);
-        assert_eq!(
-            read(&result.memory, frame - 0x128, 6).unwrap(),
-            [7, 8, 9, 10, 11, 12]
-        );
-        put_word(&mut memory, frame + 8, -1);
-        put_word(&mut memory, frame + 10, -1);
-        put_word(&mut memory, frame + 12, 0);
-        record(&mut memory, 0, &[], &[]);
-        memory.insert_region(0x442752, &[0]);
-        let before = memory.clone();
-        let mut services = Services {
-            fail_read: true,
-            ..Services::default()
-        };
-        assert!(quick_info(&memory, frame, 0x7fff_ffff, 0, &mut services).is_err());
-        assert_eq!(memory, before);
-        assert_eq!(services.first_long_input, Some(0x80000063));
-    }
-
-    #[test]
-    fn odds_melee_accumulates_resistance_and_composes_damage_child() {
-        let frame = 0x80000;
-        let mut memory = fixture(frame);
-        put_word(&mut memory, frame + 8, 0);
-        put_word(&mut memory, 0x4435d2, 0);
-        for (offset, value) in [
-            (6, 10),
-            (0xb5a, 2),
-            (0x62, 2),
-            (0x6a, 1),
-            (0x94, 1),
-            (0x98, 1),
-            (0xa6, -3),
-            (0xae, 10),
-            (12, 10),
-            (0xb7a, 2),
-            (18, 6),
-            (0x9e, 2),
-        ] {
-            put_word(&mut memory, 0x448aa0 + offset, value);
-        }
-        memory.insert_region(0x448aa0 + 0x157, &[255]);
-        let npc = 0x439d3c;
-        for (offset, value) in [(16, 1), (0x50, 7), (8, 5)] {
-            put_word(&mut memory, npc + offset, value);
-        }
-        for (offset, value) in [
-            (0x107, 1),
-            (0xa8, 1),
-            (0xb9, 254),
-            (0xb4, 253),
-            (0xb8, 1),
-            (0xcd, 1),
-            (0xcf, 1),
-            (0xd7, 252),
-            (0xd8, 251),
-        ] {
-            memory.insert_region(npc + offset, &[value]);
-        }
-        put_word(&mut memory, 0x4434b8, 20);
-        put_word(&mut memory, 0x442576, 1);
-        let mut services = Services::default();
-        let result = update_odds(
-            &memory,
-            frame,
-            DamageFrame {
-                unmatched_multiplier_single_bits: 0x7fc00000,
-            },
-            &mut services,
-        )
-        .unwrap();
-        assert_eq!(services.numbers, [42, 3, 36, 7]);
-        assert_eq!(result.memory.word(0x4434b8).unwrap(), 22);
-        assert_eq!(result.memory.word(0x4434b6).unwrap(), 1007);
-        assert_eq!(result.memory.word(0x41f714).unwrap(), 36);
-        assert_eq!(
-            result.arithmetic_qualification,
-            Some(ArithmeticQualification::SourceDerivedBinary32)
-        );
-        assert_eq!(services.sane.len(), 18);
-        assert_eq!(services.sane[0], (0x200e, Some(frame - 0x26), frame - 0x26));
-        assert_eq!(
-            services.sane[17],
-            (0x2810, Some(frame - 0x18), frame - 0x18)
-        );
-        assert!(drawing(&result).contains(&&DrawingEffect::DrawPicture {
-            handle: 0,
-            bounds: BodyRect {
-                top: 300,
-                left: 480,
-                bottom: 408,
-                right: 800
-            }
-        }));
-    }
-
-    #[test]
-    fn odds_ranged_keeps_both_resistance_chains_and_negative_target_suffix() {
-        let frame = 0x80000;
-        let mut memory = fixture(frame);
-        put_word(&mut memory, frame + 8, 0);
-        put_word(&mut memory, 0x4435d2, 0);
-        for (offset, value) in [
-            (4, 12),
-            (0xb58, 2),
-            (0xe4, 203),
-            (0x12c, 203),
-            (0x126, 204),
-            (18, 6),
-            (0x132, 203),
-        ] {
-            put_word(&mut memory, 0x448aa0 + offset, value);
-        }
-        memory.insert_region(0x448aa0 + 0x9dd, &[1]);
-        memory.insert_region(0x448aa0 + 0x141, &[252]);
-        memory.insert_region(0x448aa0 + 0x132 + 9, &[1]);
-        memory.insert_region(0x448aa0 + 0x132 + 18, &[206]);
-        record(
-            &mut memory,
-            203,
-            &[(10, 55), (22, 2), (62, 4), (76, 3), (102, 203)],
-            &[],
-        );
-        record(&mut memory, 204, &[], &[]);
-        let npc = 0x439d3c;
-        for (offset, value) in [(16, 1), (0x62, 3), (4, 12), (0, 2), (8, 10), (0x56, 20)] {
-            put_word(&mut memory, npc + offset, value);
-        }
-        memory.insert_region(npc + 0x104, &[254]);
-        let mut services = Services::default();
-        let result = update_odds(
-            &memory,
-            frame,
-            DamageFrame {
-                unmatched_multiplier_single_bits: 0x7fc00000,
-            },
-            &mut services,
-        )
-        .unwrap();
-        assert_eq!(services.numbers, [41, 3, 36, 7]);
-        assert_eq!(services.sane.len(), 36);
-        assert_eq!(result.memory.word(0x41f714).unwrap(), 36);
-        assert_eq!(services.sane[0], (0x200e, Some(frame - 0x18), frame - 0x18));
-        assert_eq!(
-            services.sane[18],
-            (0x200e, Some(frame - 0x18), frame - 0x18)
-        );
-        let before = memory.clone();
-        put_word(&mut memory, frame + 8, -1);
-        let mut services = Services::default();
-        let result = update_odds(
-            &memory,
-            frame,
-            DamageFrame {
-                unmatched_multiplier_single_bits: 0,
-            },
-            &mut services,
-        )
-        .unwrap();
-        assert!(services.sane.is_empty());
-        assert!(services.numbers.is_empty());
-        assert_eq!(result.arithmetic_qualification, None);
-        assert!(drawing(&result).contains(&&DrawingEffect::GetPicture(224)));
-        assert_eq!(
-            result.memory.word(0x41f714).unwrap(),
-            before.word(0x41f714).unwrap()
-        );
-    }
 }

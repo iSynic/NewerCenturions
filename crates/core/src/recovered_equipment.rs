@@ -72,30 +72,26 @@ fn plan(memory: &RenderingMemory, random: &RandomState) -> EquipmentPlan {
         native_return: EquipmentReturn::long(0),
     }
 }
-pub(crate) fn read(
-    memory: &RenderingMemory,
-    address: u32,
-    length: usize,
-) -> Result<Vec<u8>, RuleError> {
+pub fn read(memory: &RenderingMemory, address: u32, length: usize) -> Result<Vec<u8>, RuleError> {
     (0..length)
         .map(|i| memory.byte(address.wrapping_add(i as u32)))
         .collect()
 }
-pub(crate) fn sw(memory: &RenderingMemory, address: u32) -> Result<i16, RuleError> {
+pub fn sw(memory: &RenderingMemory, address: u32) -> Result<i16, RuleError> {
     Ok(memory.word(address)? as i16)
 }
-pub(crate) fn sb(memory: &RenderingMemory, address: u32) -> Result<i16, RuleError> {
+pub fn sb(memory: &RenderingMemory, address: u32) -> Result<i16, RuleError> {
     Ok(i16::from(memory.byte(address)? as i8))
 }
-pub(crate) fn member_address(member: u16) -> u32 {
+pub fn member_address(member: u16) -> u32 {
     0x448aa0_u32.wrapping_add(u32::from(member) * WARRIOR_BYTES as u32)
 }
-pub(crate) fn node_address(member: u16, slot: u16) -> u32 {
+pub fn node_address(member: u16, slot: u16) -> u32 {
     member_address(member)
         .wrapping_add(u32::from(slot) * 22)
         .wrapping_add(0x132)
 }
-pub(crate) fn indexed(base: u32, index: i16) -> u32 {
+pub fn indexed(base: u32, index: i16) -> u32 {
     base.wrapping_add((i32::from(index) * 2) as u32)
 }
 fn step(remaining: &mut usize) -> Result<(), RuleError> {
@@ -131,7 +127,7 @@ fn clamp_negative(result: &mut EquipmentPlan, address: u32) -> Result<(), RuleEr
     }
     Ok(())
 }
-pub(crate) fn item_tables(memory: &RenderingMemory, id: i16) -> Result<[Vec<u8>; 5], RuleError> {
+pub fn item_tables(memory: &RenderingMemory, id: i16) -> Result<[Vec<u8>; 5], RuleError> {
     let mut backing: [Vec<u8>; 5] = std::array::from_fn(|_| vec![]);
     let absolute = id.wrapping_abs();
     if let Ok(family) = usize::try_from(absolute / 200)
@@ -191,7 +187,7 @@ fn copy_record(
 fn sound(
     result: &mut EquipmentPlan,
     id: i16,
-    services: &impl EquipmentServices,
+    services: &(impl EquipmentServices + ?Sized),
 ) -> Result<(), RuleError> {
     let child = recovered_feedback::sound(&result.memory, id, services)?;
     result.memory = child.memory;
@@ -205,7 +201,7 @@ fn warn(
     frame: u32,
     message: i16,
     limits: EquipmentLimits,
-    services: &impl EquipmentServices,
+    services: &(impl EquipmentServices + ?Sized),
 ) -> Result<(), RuleError> {
     let child = recovered_feedback::warn(
         &result.memory,
@@ -227,7 +223,7 @@ fn remove(
     slot: u16,
     forced: bool,
     limits: EquipmentLimits,
-    services: &impl EquipmentServices,
+    services: &(impl EquipmentServices + ?Sized),
 ) -> Result<u32, RuleError> {
     write(
         result,
@@ -287,7 +283,7 @@ fn update_items(
     frame: u32,
     first: i16,
     last: i16,
-    services: &mut impl EquipmentServices,
+    services: &mut (impl EquipmentServices + ?Sized),
 ) -> Result<(), RuleError> {
     word(result, frame.wrapping_add(10), last)?;
     word(result, frame.wrapping_add(8), first)?;
@@ -305,7 +301,7 @@ pub fn dropitem(
     random: &RandomState,
     frame: u32,
     limits: EquipmentLimits,
-    services: &mut impl EquipmentServices,
+    services: &mut (impl EquipmentServices + ?Sized),
 ) -> Result<EquipmentPlan, RuleError> {
     drop_body(memory, random, frame, limits, services, false)
 }
@@ -315,7 +311,7 @@ pub fn forcedropitem(
     random: &RandomState,
     frame: u32,
     limits: EquipmentLimits,
-    services: &mut impl EquipmentServices,
+    services: &mut (impl EquipmentServices + ?Sized),
 ) -> Result<EquipmentPlan, RuleError> {
     drop_body(memory, random, frame, limits, services, true)
 }
@@ -324,7 +320,7 @@ fn drop_body(
     random: &RandomState,
     frame: u32,
     limits: EquipmentLimits,
-    services: &mut impl EquipmentServices,
+    services: &mut (impl EquipmentServices + ?Sized),
     forced: bool,
 ) -> Result<EquipmentPlan, RuleError> {
     let mut result = plan(memory, random);
@@ -387,7 +383,7 @@ fn can_use(
     race: i16,
     caste: i16,
     limits: EquipmentLimits,
-    services: &mut impl EquipmentServices,
+    services: &mut (impl EquipmentServices + ?Sized),
 ) -> Result<u32, RuleError> {
     word(result, frame.wrapping_add(12), caste)?;
     word(result, frame.wrapping_add(10), race)?;
@@ -427,7 +423,7 @@ fn strength_message(
     required: i16,
     emit: i16,
     limits: EquipmentLimits,
-    services: &mut impl EquipmentServices,
+    services: &mut (impl EquipmentServices + ?Sized),
 ) -> Result<(), RuleError> {
     let text = frame.wrapping_sub(0x108);
     let source = c_string(&result.memory, 0x400548)?;
@@ -508,7 +504,7 @@ fn wear_warning(
     message: i16,
     upper: Option<u16>,
     limits: EquipmentLimits,
-    services: &impl EquipmentServices,
+    services: &(impl EquipmentServices + ?Sized),
 ) -> Result<Option<u16>, RuleError> {
     if emit != 0 {
         warn(result, frame.wrapping_sub(0x126), message, limits, services)?;
@@ -553,7 +549,7 @@ pub fn wear(
     random: &RandomState,
     frame: u32,
     limits: EquipmentLimits,
-    services: &mut impl EquipmentServices,
+    services: &mut (impl EquipmentServices + ?Sized),
 ) -> Result<EquipmentPlan, RuleError> {
     let mut result = plan(memory, random);
     let mut remaining = limits.maximum_steps;
@@ -565,7 +561,7 @@ fn wear_body(
     frame: u32,
     limits: EquipmentLimits,
     remaining: &mut usize,
-    services: &mut impl EquipmentServices,
+    services: &mut (impl EquipmentServices + ?Sized),
 ) -> Result<(), RuleError> {
     let member = result.memory.word(frame.wrapping_add(8))?;
     let slot = result.memory.word(frame.wrapping_add(10))?;
@@ -920,7 +916,7 @@ fn call_wear(
     slot: u16,
     limits: EquipmentLimits,
     remaining: &mut usize,
-    services: &mut impl EquipmentServices,
+    services: &mut (impl EquipmentServices + ?Sized),
 ) -> Result<(), RuleError> {
     word(result, frame.wrapping_add(12), 1)?;
     word(result, frame.wrapping_add(10), slot as i16)?;
@@ -930,7 +926,7 @@ fn call_wear(
 fn refill_sound(
     result: &mut EquipmentPlan,
     silent: i16,
-    services: &impl EquipmentServices,
+    services: &(impl EquipmentServices + ?Sized),
 ) -> Result<(), RuleError> {
     if silent == 0 {
         let mut context = RuntimeContext::new(result.random.clone(), 1);
@@ -980,7 +976,7 @@ fn refill_energy(
     remove_first: bool,
     limits: EquipmentLimits,
     remaining: &mut usize,
-    services: &mut impl EquipmentServices,
+    services: &mut (impl EquipmentServices + ?Sized),
 ) -> Result<(), RuleError> {
     let node = node_address(member, slot);
     if result.memory.byte(node.wrapping_add(10))? == 20 {
@@ -1022,7 +1018,7 @@ fn refresh_refill(
     result: &mut EquipmentPlan,
     frame: u32,
     slot: i16,
-    services: &mut impl EquipmentServices,
+    services: &mut (impl EquipmentServices + ?Sized),
 ) -> Result<(), RuleError> {
     if result.memory.byte(0x442750)? != 0 {
         update_items(result, frame.wrapping_sub(36), slot, slot, services)?;
@@ -1036,7 +1032,7 @@ pub fn refit(
     random: &RandomState,
     frame: u32,
     limits: EquipmentLimits,
-    services: &mut impl EquipmentServices,
+    services: &mut (impl EquipmentServices + ?Sized),
 ) -> Result<EquipmentPlan, RuleError> {
     let mut result = plan(memory, random);
     let member = result.memory.word(frame.wrapping_add(8))?;
@@ -1197,464 +1193,4 @@ pub fn refit(
     }
     result.native_return = EquipmentReturn::long(0);
     Ok(result)
-}
-
-#[cfg(test)]
-pub(crate) mod test_support {
-    use super::*;
-    use crate::recovered_audio::{
-        AudioContext, AudioObservation, AudioReply, AudioRequest, SoundCommand,
-    };
-    use crate::recovered_drawing::{BuildingWorld, DrawingServices, PictureObservation};
-    use crate::recovered_feedback::{
-        FeedbackArg, FeedbackMemory, FeedbackObservation, FeedbackRequest, FeedbackServices,
-    };
-    use crate::recovered_geometry::BodyRect;
-    use crate::recovered_inventory_rules::SaneRequest;
-    use crate::recovered_item_ui::{ItemUiReply, ItemUiRequest, ItemUiServices};
-    use crate::recovered_text::{NumericServices, PascalString};
-    use std::cell::{Cell, RefCell};
-
-    pub const FRAME: u32 = 0x800000;
-    pub const LIMITS: EquipmentLimits = EquipmentLimits {
-        maximum_steps: 400,
-        maximum_polls: 4,
-        filename_capacity: 256,
-    };
-
-    #[derive(Default)]
-    pub struct Services {
-        pub sounds: RefCell<Vec<i16>>,
-        pub warnings: RefCell<Vec<i16>>,
-        pub numbers: Vec<i32>,
-        pub icons: Vec<i16>,
-        pub indexed: Vec<(i16, i16)>,
-        pub pen_quantity: Option<i16>,
-        ticks: Cell<u32>,
-    }
-    impl FeedbackServices for Services {
-        fn observe(
-            &self,
-            request: &FeedbackRequest,
-            memory: &FeedbackMemory,
-        ) -> Result<FeedbackObservation, RuleError> {
-            let mut next = memory.clone();
-            let value = match request {
-                FeedbackRequest::TickCount => {
-                    let value = self.ticks.get();
-                    self.ticks.set(value.wrapping_add(100));
-                    value
-                }
-                FeedbackRequest::Toolbox { opcode: 0xa860, .. } => {
-                    next.insert_region(0x44720a, &1_u16.to_be_bytes());
-                    1
-                }
-                FeedbackRequest::Toolbox {
-                    opcode: 0xa874,
-                    arguments,
-                } => {
-                    if let [FeedbackArg::Pointer(pointer)] = arguments.as_slice() {
-                        next.insert_region(*pointer, &123_u32.to_be_bytes());
-                    }
-                    0
-                }
-                FeedbackRequest::GetIndexedString {
-                    destination, index, ..
-                } => {
-                    self.warnings.borrow_mut().push(*index);
-                    next.insert_region(*destination, &[1, b'W']);
-                    0
-                }
-                FeedbackRequest::BlockMove {
-                    source,
-                    destination,
-                    count,
-                } => {
-                    let bytes = read(memory, *source, *count as usize)?;
-                    next.insert_region(*destination, &bytes);
-                    0
-                }
-                FeedbackRequest::CToPascal(pointer) => {
-                    let mut bytes = vec![];
-                    while bytes.len() < 255
-                        && memory.byte(pointer.wrapping_add(bytes.len() as u32))? != 0
-                    {
-                        bytes.push(memory.byte(pointer.wrapping_add(bytes.len() as u32))?);
-                    }
-                    next.insert_region(*pointer, PascalString::from_payload(&bytes)?.raw());
-                    0
-                }
-                _ => 0,
-            };
-            Ok(FeedbackObservation {
-                value,
-                d0: 0x12340000,
-                memory: next,
-            })
-        }
-        fn sound_observations(
-            &self,
-            id: i16,
-            context: &AudioContext,
-            _: &FeedbackMemory,
-        ) -> Result<Vec<AudioObservation>, RuleError> {
-            self.sounds.borrow_mut().push(id);
-            let mut slot = context.queue_index.wrapping_add(1);
-            if slot > context.last_channel {
-                slot = 2;
-            }
-            let channel = context.channels[slot as usize];
-            let mut observations = vec![
-                AudioObservation {
-                    request: AudioRequest::ChannelStatus { channel, bytes: 24 },
-                    reply: AudioReply::ChannelStatus {
-                        bytes: [0; 24],
-                        error: 0,
-                    },
-                },
-                AudioObservation {
-                    request: AudioRequest::UnlockHandle(context.resource_handles[slot as usize]),
-                    reply: AudioReply::Ignored,
-                },
-                AudioObservation {
-                    request: AudioRequest::GetResource {
-                        resource_type: *b"snd ",
-                        id: id.wrapping_abs(),
-                    },
-                    reply: AudioReply::Handle(700),
-                },
-                AudioObservation {
-                    request: AudioRequest::LockHandle(700),
-                    reply: AudioReply::Ignored,
-                },
-            ];
-            for code in [4, 3] {
-                observations.push(AudioObservation {
-                    request: AudioRequest::Immediate {
-                        channel,
-                        command: SoundCommand {
-                            code,
-                            param1: 0,
-                            param2: 0,
-                        },
-                    },
-                    reply: AudioReply::Error(0),
-                });
-            }
-            observations.push(AudioObservation {
-                request: AudioRequest::Play {
-                    channel,
-                    handle: 700,
-                    asynchronous: id > 0,
-                },
-                reply: AudioReply::Ignored,
-            });
-            Ok(observations)
-        }
-    }
-    impl InventoryServices for Services {
-        fn sane(
-            &self,
-            _: &SaneRequest,
-            _: &RenderingMemory,
-        ) -> Result<Vec<RecordWrite>, RuleError> {
-            Err(RuleError::Invalid("unexpected SANE request".into()))
-        }
-    }
-    impl NumericServices for Services {
-        fn number_to_string(&mut self, value: i32) -> Result<PascalString, RuleError> {
-            self.numbers.push(value);
-            PascalString::from_payload(value.to_string().as_bytes())
-        }
-        fn string_to_number(&mut self, _: &PascalString) -> Result<i32, RuleError> {
-            Err(RuleError::Invalid("unexpected numeric parse".into()))
-        }
-    }
-    impl DrawingServices for Services {
-        fn color_icon(&mut self, id: i16) -> Result<u32, RuleError> {
-            self.icons.push(id);
-            Ok(0)
-        }
-        fn indexed_string(&mut self, resource: i16, index: i16) -> Result<PascalString, RuleError> {
-            self.indexed.push((resource, index));
-            PascalString::from_payload(b"Label")
-        }
-        fn current_world(&mut self) -> Result<(u32, u32), RuleError> {
-            Err(RuleError::Invalid("unexpected GWorld".into()))
-        }
-        fn picture(&mut self, _: i16) -> Result<PictureObservation, RuleError> {
-            Ok(PictureObservation {
-                handle: 0,
-                bounds: None,
-            })
-        }
-        fn new_world(&mut self, _: i16, _: BodyRect) -> Result<(i16, BuildingWorld), RuleError> {
-            Err(RuleError::Invalid("unexpected GWorld allocation".into()))
-        }
-    }
-    impl ItemUiServices for Services {
-        fn observe(
-            &mut self,
-            _: &ItemUiRequest,
-            _: &RenderingMemory,
-        ) -> Result<ItemUiReply, RuleError> {
-            Err(RuleError::Invalid("unexpected item UI request".into()))
-        }
-    }
-    impl EquipmentUiServices for Services {
-        fn pen_position(
-            &mut self,
-            destination: u32,
-            _: &RenderingMemory,
-        ) -> Result<Vec<RecordWrite>, RuleError> {
-            let mut writes = vec![
-                RecordWrite {
-                    address: destination,
-                    bytes: 0_i16.to_be_bytes().to_vec(),
-                },
-                RecordWrite {
-                    address: destination + 2,
-                    bytes: 100_i16.to_be_bytes().to_vec(),
-                },
-            ];
-            if let Some(quantity) = self.pen_quantity {
-                writes.push(RecordWrite {
-                    address: destination + 20,
-                    bytes: quantity.to_be_bytes().to_vec(),
-                });
-            }
-            Ok(writes)
-        }
-    }
-    impl EquipmentServices for Services {
-        fn profile_observations(
-            &mut self,
-            _: i16,
-            _: i16,
-            _: &RenderingMemory,
-        ) -> Result<Vec<FileObservation>, RuleError> {
-            Err(RuleError::Invalid("unexpected profile load".into()))
-        }
-    }
-    pub fn put_word(memory: &mut RenderingMemory, address: u32, value: i16) {
-        memory.insert_region(address, &value.to_be_bytes());
-    }
-    pub fn put_long(memory: &mut RenderingMemory, address: u32, value: u32) {
-        memory.insert_region(address, &value.to_be_bytes());
-    }
-    pub fn fixture() -> RenderingMemory {
-        let mut memory = RenderingMemory::default();
-        for (address, length) in [
-            (0x3fe200, 0x200),
-            (0x400000, 0x2000),
-            (0x402f00, 0x100),
-            (0x408560, 16),
-            (0x41d1c0, 8),
-            (0x41f700, 0x900),
-            (0x42dbe4, 800),
-            (0x435500, 0x150),
-            (0x435650, (0x448aa0 - 0x435650) as usize + WARRIOR_BYTES * 2),
-            (0x45363c, 0x200),
-            (0x4781ee, ITEM_BYTES),
-            (0x479ed8, 512),
-            (FRAME - 1600, 1640),
-        ] {
-            memory.insert_region(address, &vec![0; length]);
-        }
-        put_long(&mut memory, 0x3fe302, 0x438700);
-        put_long(&mut memory, 0x439570, 1);
-        put_word(&mut memory, 0x439576, 2);
-        put_word(&mut memory, 0x402f3a, 1);
-        memory.insert_region(0x435663, &[10]);
-        memory.insert_region(0x41fbac, &[0x80]);
-        memory.insert_region(0x41f9aa, &[0x80]);
-        memory.insert_region(0x400548, b"Strength \0");
-        memory.insert_region(0x401152, &[1, b'Q']);
-        for offset in [
-            4, 6, 8, 10, 0x22, 0x24, 0x26, 0x28, 0x2a, 0x2c, 0x3a, 0x9e2, 0x9e8,
-        ] {
-            put_word(&mut memory, member_address(0) + offset, 10);
-        }
-        put_word(&mut memory, member_address(0) + 0x1a, 1);
-        put_word(&mut memory, FRAME + 12, 1);
-        item(&mut memory, 0, 0);
-        memory
-    }
-    pub fn item(memory: &mut RenderingMemory, id: i16, kind: i16) -> u32 {
-        let address =
-            ITEM_TABLE_ADDRESSES[(id / 200) as usize] + (id % 200) as u32 * ITEM_BYTES as u32;
-        memory.insert_region(address, &[0; ITEM_BYTES]);
-        put_word(memory, address + 26, kind);
-        put_word(memory, address + 102, id);
-        memory.insert_region(address + 128, &[0x80]);
-        address
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::test_support::*;
-    use super::*;
-
-    #[test]
-    fn wear_keeps_type_two_power_source_and_backup_order() {
-        let mut memory = fixture();
-        let address = item(&mut memory, 1, 2);
-        memory.insert_region(address, &[3]);
-        memory.insert_region(0x41fc53, &[2]);
-        memory.insert_region(0x41fc57, &[7]);
-        put_word(&mut memory, node_address(0, 0), 1);
-        let result = wear(
-            &memory,
-            &RandomState::new(7),
-            FRAME,
-            LIMITS,
-            &mut Services::default(),
-        )
-        .unwrap();
-        assert_eq!(result.native_return.low_word, 1);
-        assert_eq!(result.memory.word(member_address(0) + 6).unwrap(), 12);
-        assert_eq!(result.memory.word(member_address(0) + 0x9e2).unwrap(), 13);
-        assert_eq!(result.memory.word(0x447e5e + 6).unwrap(), 10);
-        assert_eq!(result.memory.word(0x447e5e + 0x9e2).unwrap(), 10);
-        assert_eq!(result.memory.byte(0x447e5e + 0x132 + 9).unwrap(), 1);
-        assert_eq!(result.random, RandomState::new(7));
-    }
-
-    #[test]
-    fn replacement_restarts_with_selected_record_after_real_removal() {
-        let mut memory = fixture();
-        item(&mut memory, 1, 2);
-        item(&mut memory, 2, 2);
-        put_word(&mut memory, node_address(0, 0), 1);
-        put_word(&mut memory, node_address(0, 1), 2);
-        memory.insert_region(node_address(0, 1) + 9, &[1]);
-        put_word(&mut memory, member_address(0) + 0x1a, 2);
-        put_word(&mut memory, member_address(0) + 0xca, 2);
-        let result = wear(
-            &memory,
-            &RandomState::new(7),
-            FRAME,
-            LIMITS,
-            &mut Services::default(),
-        )
-        .unwrap();
-        assert_eq!(result.memory.byte(node_address(0, 1) + 9).unwrap(), 0);
-        assert_eq!(result.memory.byte(node_address(0, 0) + 9).unwrap(), 1);
-        assert_eq!(result.memory.word(member_address(0) + 0xca).unwrap(), 1);
-        assert_eq!(result.memory.word(0x4536a2).unwrap(), 1);
-        assert!(
-            result
-                .effects
-                .iter()
-                .any(|effect| matches!(effect, EquipmentEffect::Inventory(_)))
-        );
-    }
-
-    #[test]
-    fn forced_drop_bypasses_energy_rejection_then_shifts_and_fills() {
-        let mut memory = fixture();
-        let address = item(&mut memory, 1, 20);
-        put_word(&mut memory, address + 36, 3);
-        put_word(&mut memory, address + 16, 2);
-        put_word(&mut memory, node_address(0, 0), 1);
-        put_word(&mut memory, node_address(0, 0) + 2, 2);
-        memory.insert_region(node_address(0, 0) + 9, &[1]);
-        put_word(&mut memory, node_address(0, 1), 77);
-        put_word(&mut memory, member_address(0) + 0x1a, 2);
-        put_word(&mut memory, member_address(0) + 0xe0, 1);
-        put_word(&mut memory, member_address(0) + 0x9d6, 100);
-        put_word(&mut memory, FRAME + 10, 1);
-        put_word(&mut memory, FRAME + 12, 0);
-        let mut services = Services::default();
-        let rejected =
-            dropitem(&memory, &RandomState::new(7), FRAME, LIMITS, &mut services).unwrap();
-        assert_eq!(*services.warnings.borrow(), [145]);
-        assert_eq!(rejected.memory.word(member_address(0) + 0x1a).unwrap(), 2);
-        assert_eq!(
-            rejected.memory.word(member_address(0) + 0x9d6).unwrap(),
-            100
-        );
-        let forced = forcedropitem(
-            &memory,
-            &RandomState::new(7),
-            FRAME,
-            LIMITS,
-            &mut Services::default(),
-        )
-        .unwrap();
-        assert_eq!(forced.memory.word(member_address(0) + 0x1a).unwrap(), 1);
-        assert_eq!(forced.memory.word(member_address(0) + 0x9d6).unwrap(), 92);
-        assert_eq!(forced.memory.word(node_address(0, 0)).unwrap(), 77);
-        assert_eq!(
-            read(&forced.memory, node_address(0, 99), 22).unwrap(),
-            vec![0; 22]
-        );
-        assert_eq!(forced.random, RandomState::new(7));
-    }
-
-    #[test]
-    fn refill_retains_resource_quirks_rng_and_atomic_budget_failure() {
-        let mut memory = fixture();
-        item(&mut memory, 200, 0);
-        memory.insert_region(node_address(0, 0) + 9, &[1]);
-        put_word(&mut memory, node_address(0, 0) + 2, 1);
-        put_word(&mut memory, node_address(0, 0) + 4, 200);
-        put_word(&mut memory, node_address(0, 0) + 6, 10);
-        put_word(&mut memory, FRAME + 10, 0);
-        put_long(&mut memory, ammunition_address(0), 0x10002);
-        let random = RandomState::new(7);
-        let mut services = Services::default();
-        let short = refit(&memory, &random, FRAME, LIMITS, &mut services).unwrap();
-        assert_eq!(short.memory.word(node_address(0, 0) + 2).unwrap(), 3);
-        assert_eq!(short.memory.long(ammunition_address(0)).unwrap(), 0x10002);
-        assert_eq!(short.random.draws, 1);
-        assert_eq!(services.sounds.borrow().len(), 1);
-        assert!((404..=405).contains(&services.sounds.borrow()[0]));
-        put_long(&mut memory, ammunition_address(0), 0x1000a);
-        put_word(&mut memory, FRAME + 14, 1);
-        put_word(&mut memory, 0x453656, 2);
-        let enough = refit(&memory, &random, FRAME, LIMITS, &mut Services::default()).unwrap();
-        assert_eq!(enough.memory.word(node_address(0, 0) + 2).unwrap(), 10);
-        assert_eq!(enough.memory.long(ammunition_address(0)).unwrap(), 0x10001);
-        assert_eq!(enough.native_return.known_long(), Some(1));
-
-        put_word(&mut memory, FRAME + 14, 0);
-        put_word(&mut memory, node_address(0, 0) + 2, 0);
-        put_word(&mut memory, node_address(0, 0) + 4, 0);
-        put_word(&mut memory, node_address(0, 0), 1);
-        let address = item(&mut memory, 1, 2);
-        put_word(&mut memory, address + 32, 9);
-        item(&mut memory, 205, 0);
-        put_word(&mut memory, ITEM_TABLE_ADDRESSES[1] + 5 * 150 + 34, 9);
-        put_long(&mut memory, ammunition_address(0), 0);
-        put_long(&mut memory, ammunition_address(5), 2);
-        let searched = refit(&memory, &random, FRAME, LIMITS, &mut Services::default()).unwrap();
-        assert_eq!(searched.memory.word(node_address(0, 0) + 4).unwrap(), 200);
-        assert_eq!(searched.memory.long(ammunition_address(5)).unwrap(), 2);
-        assert_eq!(searched.random.draws, 1);
-
-        put_long(&mut memory, ammunition_address(0), 2);
-        put_long(&mut memory, ammunition_address(5), 0);
-        put_word(&mut memory, ITEM_TABLE_ADDRESSES[1] + 34, 9);
-        memory.insert_region(node_address(0, 0) + 10, &[20]);
-        let before = memory.clone();
-        let mut services = Services::default();
-        assert!(
-            refit(
-                &memory,
-                &random,
-                FRAME,
-                EquipmentLimits {
-                    maximum_steps: 3,
-                    ..LIMITS
-                },
-                &mut services
-            )
-            .is_err()
-        );
-        assert_eq!(services.sounds.borrow().len(), 1);
-        assert_eq!(memory, before);
-        assert_eq!(random, RandomState::new(7));
-    }
 }

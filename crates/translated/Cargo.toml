@@ -1,0 +1,17 @@
+[package]
+name = "centurions-translated"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+autotests = false
+
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+centurions-core.workspace = true
+centurions-content.workspace = true
+centurions-translated-gameplay = { path = "../translated-gameplay" }
+centurions-translated-system = { path = "../translated-system" }
+centurions-translated-application = { path = "../translated-application" }

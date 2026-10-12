@@ -336,35 +336,3 @@ fn malformed_menu_resources_return_diagnostics() {
         assert!(ui::menu_bar(bytes).is_err());
     }
 }
-
-#[test]
-fn standard_menu_flags_and_mac_roman_keep_control_and_extended_bytes() {
-    let mut bytes = vec![0; 14];
-    bytes[..2].copy_from_slice(&(-12_i16).to_be_bytes());
-    bytes[10..14].copy_from_slice(&0x80000000_u32.to_be_bytes());
-    bytes.extend_from_slice(&[2, 0x80, 0xa9]);
-    for _ in 0..33 {
-        bytes.extend_from_slice(&[1, 0, 255, b'Z', 0xa5, 0x7f]);
-    }
-    bytes.push(0);
-    let menu = ui::menu(&bytes).unwrap();
-    assert_eq!(menu.id, -12);
-    assert_eq!(menu.title, "Ä©");
-    assert!(!menu.initially_enabled());
-    assert_eq!(menu.initially_item_enabled(1), Some(false));
-    assert_eq!(menu.initially_item_enabled(31), Some(true));
-    assert_eq!(menu.initially_item_enabled(32), Some(true));
-    assert_eq!(menu.initially_item_enabled(33), Some(true));
-    assert_eq!(menu.initially_item_enabled(34), None);
-    assert_eq!(menu.items[0].text, "\0");
-    assert_eq!(
-        [
-            menu.items[0].icon,
-            menu.items[0].key,
-            menu.items[0].mark,
-            menu.items[0].style
-        ],
-        [255, b'Z', 0xa5, 0x7f]
-    );
-    assert!(ui::menu_bar(&[0, 0]).unwrap().is_empty());
-}

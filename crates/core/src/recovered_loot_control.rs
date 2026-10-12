@@ -105,7 +105,7 @@ pub struct LootControlPlan {
 pub enum LootControlQualification {
     SourcePortWithObservedBoundariesAndCapturedChildren,
 }
-struct Execution<'a, S> {
+struct Execution<'a, S: ?Sized> {
     plan: LootControlPlan,
     services: &'a mut S,
     limits: LootControlLimits,
@@ -123,7 +123,7 @@ struct Modal {
     registers: LootRegisters,
     d4: i16,
 }
-impl<S: LootControlServices> Execution<'_, S> {
+impl<S: LootControlServices + ?Sized> Execution<'_, S> {
     fn bytes(&self, a: u32, n: usize) -> Result<Vec<u8>, RuleError> {
         read(&self.plan.state.memory, a, n)
     }
@@ -511,7 +511,7 @@ impl<S: LootControlServices> Execution<'_, S> {
         Ok(())
     }
 }
-fn execution<'a, S>(
+fn execution<'a, S: ?Sized>(
     state: &LootControlState,
     frame: u32,
     limits: LootControlLimits,
@@ -553,7 +553,7 @@ struct LootPreparation {
     money: u32,
     count: i16,
 }
-fn prepare<S: LootControlServices>(
+fn prepare<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     f: u32,
 ) -> Result<Option<LootPreparation>, RuleError> {
@@ -922,7 +922,9 @@ fn prepare<S: LootControlServices>(
     }
     Ok(Some(LootPreparation { money, count }))
 }
-fn mark_survivors<S: LootControlServices>(e: &mut Execution<'_, S>) -> Result<(), RuleError> {
+fn mark_survivors<S: LootControlServices + ?Sized>(
+    e: &mut Execution<'_, S>,
+) -> Result<(), RuleError> {
     let mut n = 0_i16;
     while n <= i16::from(e.b(0x44273a)? as i8) {
         e.step()?;
@@ -955,7 +957,7 @@ const REWARDS: [(i16, i16); 21] = [
     (5700, 75),
 ];
 
-impl<S: LootControlServices> Execution<'_, S> {
+impl<S: LootControlServices + ?Sized> Execution<'_, S> {
     fn character(&mut self, entry: u32, frame: u32) -> Result<(), RuleError> {
         self.step()?;
         let child = match entry {
@@ -1169,7 +1171,7 @@ impl<S: LootControlServices> Execution<'_, S> {
     }
 }
 
-fn flat<S: LootControlServices>(
+fn flat<S: LootControlServices + ?Sized>(
     e: &Execution<'_, S>,
     row: i16,
     column: i16,
@@ -1193,7 +1195,7 @@ fn control(value: Option<u32>, register: &str) -> Result<u32, RuleError> {
         ))
     })
 }
-fn display_cell<S: LootControlServices>(
+fn display_cell<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     m: &mut Modal,
     f: u32,
@@ -1293,7 +1295,7 @@ fn display_cell<S: LootControlServices>(
     e.show_pack(slot, markers, f.wrapping_sub(8), s)?;
     Ok(())
 }
-fn grid<S: LootControlServices>(
+fn grid<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     m: &mut Modal,
     f: u32,
@@ -1380,7 +1382,7 @@ fn grid<S: LootControlServices>(
     e.lw(f.wrapping_sub(0x24), e.l(f.wrapping_sub(4))?)?;
     Ok(())
 }
-fn portrait_rows<S: LootControlServices>(
+fn portrait_rows<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     f: u32,
 ) -> Result<(), RuleError> {
@@ -1404,7 +1406,7 @@ fn portrait_rows<S: LootControlServices>(
     }
     Ok(())
 }
-fn summary_text<S: LootControlServices>(
+fn summary_text<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     f: u32,
     count: i16,
@@ -1436,7 +1438,10 @@ fn summary_text<S: LootControlServices>(
     Ok(())
 }
 
-fn open_window<S: LootControlServices>(e: &mut Execution<'_, S>, f: u32) -> Result<(), RuleError> {
+fn open_window<S: LootControlServices + ?Sized>(
+    e: &mut Execution<'_, S>,
+    f: u32,
+) -> Result<(), RuleError> {
     let handle = e.trap(0xaa46, vec![W(130), L(0), L(u32::MAX)])?;
     e.lw(0x438790, handle)?;
     e.trap(0xa873, vec![L(e.l(0x438790)?)])?;
@@ -1497,7 +1502,7 @@ fn open_window<S: LootControlServices>(e: &mut Execution<'_, S>, f: u32) -> Resu
     }
     Ok(())
 }
-fn side_numbers<S: LootControlServices>(
+fn side_numbers<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     f: u32,
     count: i16,
@@ -1538,7 +1543,7 @@ fn side_numbers<S: LootControlServices>(
     let _ = f;
     Ok(())
 }
-fn footer<S: LootControlServices>(
+fn footer<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     m: &mut Modal,
     f: u32,
@@ -1625,7 +1630,7 @@ fn signed_div_word(n: i32, d: i16) -> Result<i16, RuleError> {
         .ok_or_else(|| RuleError::Invalid("native loot WORD division exception".into()))?;
     i16::try_from(q).map_err(|_| RuleError::Invalid("native loot WORD division overflow".into()))
 }
-fn value_word<S: LootControlServices>(
+fn value_word<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     sp: &mut u32,
     entry: u32,
@@ -1635,7 +1640,7 @@ fn value_word<S: LootControlServices>(
     *sp = sp.wrapping_sub(2);
     Ok(())
 }
-fn hover<S: LootControlServices>(
+fn hover<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     m: &mut Modal,
     f: u32,
@@ -1994,7 +1999,7 @@ fn hover<S: LootControlServices>(
     }
     Ok(())
 }
-fn detail_rect<S: LootControlServices>(
+fn detail_rect<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     f: u32,
     top: i16,
@@ -2008,7 +2013,9 @@ fn detail_rect<S: LootControlServices>(
     e.ww(0x4434c0, e.w(0x4434bc)?.wrapping_add(width))?;
     Ok(())
 }
-fn draw_current_icon<S: LootControlServices>(e: &mut Execution<'_, S>) -> Result<(), RuleError> {
+fn draw_current_icon<S: LootControlServices + ?Sized>(
+    e: &mut Execution<'_, S>,
+) -> Result<(), RuleError> {
     if e.l(0x439598)? != 0 {
         e.trap(0xaa1f, vec![P(0x4434ba), L(e.l(0x439598)?)])?;
         e.trap(0xaa25, vec![L(e.l(0x439598)?)])?;
@@ -2016,7 +2023,7 @@ fn draw_current_icon<S: LootControlServices>(e: &mut Execution<'_, S>) -> Result
     Ok(())
 }
 
-impl<S: LootControlServices> Execution<'_, S> {
+impl<S: LootControlServices + ?Sized> Execution<'_, S> {
     fn move_calc(&mut self, member: u16, stack: u32) -> Result<(), RuleError> {
         self.ww(stack.wrapping_sub(2), member as i16)?;
         let a = if member == u16::MAX {
@@ -2303,7 +2310,10 @@ impl<S: LootControlServices> Execution<'_, S> {
         Ok(())
     }
 }
-fn finish<S: LootControlServices>(e: &mut Execution<'_, S>, f: u32) -> Result<(), RuleError> {
+fn finish<S: LootControlServices + ?Sized>(
+    e: &mut Execution<'_, S>,
+    f: u32,
+) -> Result<(), RuleError> {
     e.ww(0x443314, 0)?;
     let mut n = 0_i16;
     while n <= i16::from(e.b(0x44273a)? as i8) {
@@ -2391,7 +2401,7 @@ enum Continuation {
     Finished,
     RetryItem,
 }
-fn copy_bits<S: LootControlServices>(
+fn copy_bits<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     source: u32,
     destination: u32,
@@ -2411,7 +2421,7 @@ fn copy_bits<S: LootControlServices>(
     )?;
     Ok(())
 }
-fn inspect_backdrop<S: LootControlServices>(
+fn inspect_backdrop<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     f: u32,
     offset: bool,
@@ -2446,7 +2456,7 @@ fn inspect_backdrop<S: LootControlServices>(
         0x4471b4,
     )
 }
-fn restore_backdrop<S: LootControlServices>(
+fn restore_backdrop<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     f: u32,
 ) -> Result<(), RuleError> {
@@ -2462,7 +2472,7 @@ fn restore_backdrop<S: LootControlServices>(
         f.wrapping_sub(0x18),
     )
 }
-fn pickup_sound<S: LootControlServices>(
+fn pickup_sound<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     stack: u32,
 ) -> Result<(), RuleError> {
@@ -2476,7 +2486,7 @@ fn pickup_sound<S: LootControlServices>(
     }
     Ok(())
 }
-fn collection<S: LootControlServices>(
+fn collection<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     _m: &mut Modal,
     f: u32,
@@ -2657,18 +2667,21 @@ fn collection<S: LootControlServices>(
     }
     collection_clear(e, f, count)
 }
-fn encumbrance<S: LootControlServices>(e: &Execution<'_, S>, body: u32) -> Result<u16, RuleError> {
+fn encumbrance<S: LootControlServices + ?Sized>(
+    e: &Execution<'_, S>,
+    body: u32,
+) -> Result<u16, RuleError> {
     Ok(e.w(0x45364c)?
         .wrapping_add(e.w(body + 0x9d6)?)
         .wrapping_add(e.w(0x453650)?.wrapping_mul(e.w(0x453660)?)) as u16)
 }
-fn modifier<S: LootControlServices>(
+fn modifier<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     mask: u32,
 ) -> Result<bool, RuleError> {
     Ok(e.trap(0xa858, vec![L(u32::from(e.w(0x447218)? as u16)), L(mask)])? != 0)
 }
-fn collection_clear<S: LootControlServices>(
+fn collection_clear<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     f: u32,
     count: i16,
@@ -2690,7 +2703,7 @@ fn collection_clear<S: LootControlServices>(
     Ok(Continuation::Poll)
 }
 
-fn press_control<S: LootControlServices>(
+fn press_control<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     handle: u32,
     kind: i16,
@@ -2700,7 +2713,7 @@ fn press_control<S: LootControlServices>(
     let rectangle = e.l(handle)?.wrapping_add(8);
     e.press(e.stack, kind, phase, sound, rectangle)
 }
-fn take_all<S: LootControlServices>(
+fn take_all<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     m: &mut Modal,
     f: u32,
@@ -2747,7 +2760,7 @@ fn take_all<S: LootControlServices>(
     finish(e, f)?;
     Ok(Continuation::Finished)
 }
-fn drop_member_item<S: LootControlServices>(
+fn drop_member_item<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     member: i16,
     item: i16,
@@ -2778,7 +2791,7 @@ fn drop_member_item<S: LootControlServices>(
         .extend(child.effects.into_iter().map(LootControlEffect::Equipment));
     Ok(())
 }
-fn member_control<S: LootControlServices>(
+fn member_control<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     m: &mut Modal,
     f: u32,
@@ -2879,7 +2892,7 @@ fn member_control<S: LootControlServices>(
     e.trap(0xa887, vec![W(e.w(0x402f44)? as u16)])?;
     Ok(Continuation::Poll)
 }
-fn scroll_control<S: LootControlServices>(
+fn scroll_control<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     m: &mut Modal,
     f: u32,
@@ -2943,7 +2956,7 @@ fn scroll_control<S: LootControlServices>(
     press_control(e, handle, 2, 1, 0)?;
     Ok(())
 }
-fn select_portrait<S: LootControlServices>(
+fn select_portrait<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     f: u32,
 ) -> Result<(), RuleError> {
@@ -2974,7 +2987,7 @@ fn select_portrait<S: LootControlServices>(
     Ok(())
 }
 
-fn mouse_control<S: LootControlServices>(
+fn mouse_control<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     m: &mut Modal,
     f: u32,
@@ -3023,7 +3036,7 @@ fn mouse_control<S: LootControlServices>(
         _ => Ok(Continuation::Poll),
     }
 }
-fn refresh<S: LootControlServices>(
+fn refresh<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     f: u32,
     count: i16,
@@ -3065,7 +3078,7 @@ fn refresh<S: LootControlServices>(
     e.prompt(0x12382a, e.stack.wrapping_sub(12))?;
     Ok(())
 }
-fn update_event<S: LootControlServices>(
+fn update_event<S: LootControlServices + ?Sized>(
     e: &mut Execution<'_, S>,
     f: u32,
 ) -> Result<Continuation, RuleError> {
@@ -3112,7 +3125,7 @@ pub fn booty(
     frame: u32,
     registers: LootRegisters,
     limits: LootControlLimits,
-    services: &mut impl LootControlServices,
+    services: &mut (impl LootControlServices + ?Sized),
 ) -> Result<LootControlPlan, RuleError> {
     let mut e = execution(state, frame, limits, services);
     let Some(prepared) = prepare(&mut e, frame)? else {
@@ -3195,7 +3208,7 @@ pub fn booty(
     }
 }
 
-impl<S: LootControlServices> Execution<'_, S> {
+impl<S: LootControlServices + ?Sized> Execution<'_, S> {
     fn quiet(&mut self, selector: i16, stack: u32) -> Result<(), RuleError> {
         self.ww(stack.wrapping_sub(2), selector)?;
         let last = self.w(0x439576)?;
@@ -3426,369 +3439,5 @@ impl DrawingServices for FixedDrawing {
     }
     fn new_world(&mut self, _: i16, _: BodyRect) -> Result<(i16, BuildingWorld), RuleError> {
         Err(RuleError::Invalid("unused loot allocation".into()))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recovered_shop_ui::NpcNameServices;
-    use crate::recovered_spell_ui::{DialogItemObservation, SpellUiServices};
-    use crate::recovered_timing::TimingServices;
-    use interaction::tests::Observed;
-
-    const FRAME: u32 = 0x10000;
-    fn unused() -> RuleError {
-        RuleError::Invalid("unexpected loot fixture observation".into())
-    }
-    impl TimingServices for Observed {
-        fn tick_count(&mut self) -> Result<u32, RuleError> {
-            Err(unused())
-        }
-        fn button(&mut self) -> Result<bool, RuleError> {
-            Err(unused())
-        }
-    }
-    impl NpcNameServices for Observed {
-        fn copy_name(&self, _: u32, _: &[u8]) -> Result<PascalString, RuleError> {
-            Err(unused())
-        }
-    }
-    impl SpellUiServices for Observed {
-        fn dialog_item(&mut self, _: u32, _: i16) -> Result<DialogItemObservation, RuleError> {
-            Err(unused())
-        }
-        fn string_width(&mut self, _: &PascalString) -> Result<i16, RuleError> {
-            Err(unused())
-        }
-        fn color_cursor(&mut self, _: i16) -> Result<u32, RuleError> {
-            Err(unused())
-        }
-        fn square_root_extended(&mut self, _: [u8; 10]) -> Result<[u8; 10], RuleError> {
-            Err(unused())
-        }
-        fn truncate_extended(&mut self, _: [u8; 10]) -> Result<i32, RuleError> {
-            Err(unused())
-        }
-    }
-    impl SelectionControlServices for Observed {}
-    impl LootControlServices for Observed {}
-    impl crate::recovered_inventory_interaction::ItemsServices for Observed {}
-    impl crate::recovered_native_services::NativeServices for Observed {
-        fn observe_native(
-            &mut self,
-            request: &crate::recovered_native_services::NativeRequest,
-            memory: &RenderingMemory,
-        ) -> Result<crate::recovered_native_services::NativeObservation, RuleError> {
-            use crate::recovered_native_services::{NativeCall, NativeObservation};
-            let cleanup = match request.call {
-                NativeCall::Toolbox(0xa93c) => 4,
-                NativeCall::Toolbox(0xa935) => 6,
-                NativeCall::Toolbox(0xa937 | 0xa032) => 0,
-                _ => return Err(unused()),
-            };
-            Ok(NativeObservation {
-                memory: memory.clone(),
-                data: [None; 8],
-                address: [None; 8],
-                ccr: None,
-                stack_after: request.stack.wrapping_add(cleanup),
-                flow: LoadFlow::Returned,
-            })
-        }
-    }
-    #[test]
-    fn application_event_loop_enforces_budget_through_native_menu_setup() {
-        use crate::recovered_application_control::{
-            ApplicationControlLimits, ApplicationRegisters,
-        };
-        let mut state = PromptControlState {
-            memory: RenderingMemory::default(),
-            random: crate::RandomState::new(12),
-        };
-        state.memory.insert_region(FRAME - 64, &[0xaa; 80]);
-        for (at, value) in [(0x4427ba, 11_u32), (0x43871a, 22), (0x438716, 33)] {
-            state.memory.insert_region(at, &value.to_be_bytes());
-        }
-        let before = state.clone();
-        let base = limits();
-        let limit = ApplicationControlLimits {
-            maximum_steps: 15,
-            prompt: base.prompt,
-            equipment: base.equipment,
-            maximum_random_draws: 0,
-            maximum_call_depth: 8,
-        };
-        let error = crate::recovered_system_control::main_loop(
-            &state,
-            FRAME,
-            ApplicationRegisters::default(),
-            limit,
-            &mut Observed::new(),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(error, RuleError::Invalid(message) if message.contains("processing budget"))
-        );
-        assert_eq!(state, before);
-    }
-
-    impl crate::recovered_startup::StartupServices for Observed {
-        fn observe_startup(
-            &self,
-            _: &crate::recovered_startup::StartupRequest,
-            _: &RenderingMemory,
-        ) -> Result<crate::recovered_startup::StartupObservation, RuleError> {
-            Err(unused())
-        }
-        fn preference_inputs(
-            &self,
-            _: &RenderingMemory,
-        ) -> Result<crate::recovered_startup::PreferenceInputs, RuleError> {
-            Err(unused())
-        }
-    }
-    impl crate::recovered_combat_results::CombatResultServices for Observed {
-        fn graphics_dispatch(
-            &mut self,
-            _: &crate::recovered_combat_results::GraphicsDispatchRequest,
-            _: &RenderingMemory,
-        ) -> Result<FeedbackObservation, RuleError> {
-            Err(unused())
-        }
-    }
-    #[test]
-    fn application_items_transaction_keeps_symbolic_entry_and_failures_atomic() {
-        use crate::recovered_application_control::ApplicationControlLimits;
-        use crate::recovered_inventory_interaction::{self as inventory, ItemsRegisters};
-        let mut state = PromptControlState {
-            memory: RenderingMemory::default(),
-            random: crate::RandomState::new(12),
-        };
-        state.memory.insert_region(FRAME - 256, &[0xaa; 272]);
-        let before = state.clone();
-        let base = limits();
-        let mut limits = ApplicationControlLimits {
-            maximum_steps: 4,
-            prompt: base.prompt,
-            equipment: base.equipment,
-            maximum_random_draws: 0,
-            maximum_call_depth: 8,
-        };
-        let error = inventory::items(
-            &state,
-            FRAME,
-            &ItemsRegisters::default(),
-            limits,
-            &mut Observed::new(),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(error, RuleError::Invalid(message) if message.contains("processing budget"))
-        );
-        assert_eq!(state, before);
-        limits.maximum_steps = 100;
-        assert!(
-            inventory::items(
-                &state,
-                FRAME,
-                &ItemsRegisters::default(),
-                limits,
-                &mut Observed::new()
-            )
-            .is_err()
-        );
-        assert_eq!(state, before);
-    }
-    #[test]
-    fn application_queue_transaction_commits_only_after_complete_bounded_traversal() {
-        use crate::recovered_application_control::{
-            self as application, ApplicationControlLimits, ApplicationRegisters,
-        };
-        let mut state = PromptControlState {
-            memory: RenderingMemory::default(),
-            random: crate::RandomState::new(12),
-        };
-        state.memory.insert_region(FRAME - 256, &[0; 272]);
-        state.memory.insert_region(0x437a94, &[0x55; 28]);
-        state.memory.insert_region(0x438584, &[0]);
-        word(&mut state, 0x43800c, 2);
-        word(&mut state, 0x437a90, 9);
-        for n in 0..2 {
-            word(&mut state, 0x437a98 + n * 14, 0);
-        }
-        let base = limits();
-        let limits = ApplicationControlLimits {
-            maximum_steps: 100,
-            prompt: base.prompt,
-            equipment: base.equipment,
-            maximum_random_draws: 0,
-            maximum_call_depth: 8,
-        };
-        let before = state.clone();
-        let result = application::execute(
-            &state,
-            0x121524,
-            FRAME,
-            ApplicationRegisters::default(),
-            limits,
-            &mut Observed::new(),
-        )
-        .unwrap();
-        assert_eq!(state, before);
-        assert_eq!(result.state.memory.word(0x43800c).unwrap(), 0);
-        assert_eq!(result.state.memory.word(0x437a90).unwrap(), 0);
-        assert_eq!(result.state.memory.byte(0x438584).unwrap(), 0);
-        assert_eq!(result.state.random, before.random);
-        assert_eq!(result.native_return, PromptReturn::Full(0));
-        let mut exhausted = limits;
-        exhausted.maximum_steps = 1;
-        assert!(
-            application::execute(
-                &state,
-                0x121524,
-                FRAME,
-                ApplicationRegisters::default(),
-                exhausted,
-                &mut Observed::new()
-            )
-            .is_err()
-        );
-        assert_eq!(state, before);
-        // The second active row reaches a child after the first row was processed.
-        word(&mut state, 0x437aa6, 1);
-        let before = state.clone();
-        assert!(
-            application::execute(
-                &state,
-                0x121524,
-                FRAME,
-                ApplicationRegisters::default(),
-                limits,
-                &mut Observed::new()
-            )
-            .is_err()
-        );
-        assert_eq!(state, before);
-    }
-    #[test]
-    fn native_pascal_children_return_status_and_fail_atomically_after_a_child_write() {
-        use crate::recovered_application_control::{
-            self as application, ApplicationControlLimits, ApplicationRegisters,
-        };
-        let mut state = PromptControlState {
-            memory: RenderingMemory::default(),
-            random: crate::RandomState::new(12),
-        };
-        state.memory.insert_region(FRAME - 256, &[0; 512]);
-        state.memory.insert_region(FRAME + 8, &[1]);
-        // A null monitor list avoids any imported device or disposal service.
-        state.memory.insert_region(FRAME + 10, &[0; 4]);
-        let base = limits();
-        let limits = ApplicationControlLimits {
-            maximum_steps: 100,
-            prompt: base.prompt,
-            equipment: base.equipment,
-            maximum_random_draws: 0,
-            maximum_call_depth: 8,
-        };
-        let before = state.clone();
-        // 124242 calls actual 124576 and 1245cc bodies. The latter writes -109
-        // into its Pascal return slot and pops four argument bytes with RTD.
-        let result = application::execute(
-            &state,
-            0x124242,
-            FRAME,
-            ApplicationRegisters::default(),
-            limits,
-            &mut Observed::new(),
-        )
-        .unwrap();
-        assert_eq!(result.native_return, PromptReturn::Full(0xff93));
-        assert_eq!(result.state.memory.word(FRAME - 2).unwrap(), 0xff93);
-        assert_eq!(result.native_registers.address[7].value, FRAME + 14);
-        assert_eq!(result.state.random, before.random);
-        assert_eq!(state, before);
-        let mut exhausted = limits;
-        exhausted.maximum_steps = 20;
-        assert!(
-            application::execute(
-                &state,
-                0x124242,
-                FRAME,
-                ApplicationRegisters::default(),
-                exhausted,
-                &mut Observed::new(),
-            )
-            .is_err()
-        );
-        assert_eq!(state, before);
-    }
-    fn limits() -> LootControlLimits {
-        let base = interaction::tests::limits();
-        LootControlLimits {
-            maximum_steps: 10000,
-            prompt: base.prompt,
-            equipment: base.equipment,
-            maximum_random_draws: 10,
-        }
-    }
-    fn word(state: &mut LootControlState, a: u32, value: u16) {
-        state.memory.insert_region(a, &value.to_be_bytes());
-    }
-    #[test]
-    fn abort_prepares_all_loot_slots_and_returns_without_opening_modal() {
-        let mut state = interaction::tests::fixture();
-        state
-            .memory
-            .insert_region(0x41fc32, &[0x55; INVENTORY_BYTES]);
-        state.memory.insert_region(0x41fc74, &[0x99; 22000]);
-        state.memory.insert_region(0x42df04, &[0xff; 1000]);
-        state.memory.insert_region(0x442bd6, &[0x77; 1200]);
-        state.memory.insert_region(0x44273a, &[0xff]);
-        word(&mut state, FRAME + 8, 2);
-        word(&mut state, 0x408578, 1);
-        word(&mut state, 0x44257c, 0);
-        for n in 0..100_i16 {
-            word(&mut state, npc(n) + 0x5a, 0xffff);
-        }
-        let before = state.clone();
-        let result = booty(
-            &state,
-            FRAME,
-            LootRegisters::default(),
-            limits(),
-            &mut Observed::new(),
-        )
-        .unwrap();
-        assert_eq!(state, before);
-        assert_eq!(result.native_return, PromptReturn::Full(0));
-        assert_eq!(result.flow, LoadFlow::Returned);
-        assert_eq!(result.state.random, state.random);
-        for n in 0..1000_i16 {
-            assert_eq!(result.state.memory.word(pack(n)).unwrap(), 0);
-            assert_eq!(result.state.memory.byte(pack(n) + 2).unwrap(), 0x55);
-            assert_eq!(result.state.memory.byte(0x42df04 + n as u32).unwrap(), 0);
-        }
-        assert!(!result.effects.iter().any(|effect| matches!(
-            effect,
-            LootControlEffect::Feedback(FeedbackEffect::Service {
-                request: FeedbackRequest::Toolbox { opcode: 0xaa46, .. },
-                ..
-            })
-        )));
-        state.memory.bytes.remove(&0x41fc32);
-        let missing = state.clone();
-        assert!(
-            booty(
-                &state,
-                FRAME,
-                LootRegisters::default(),
-                limits(),
-                &mut Observed::new()
-            )
-            .is_err()
-        );
-        assert_eq!(state, missing);
     }
 }

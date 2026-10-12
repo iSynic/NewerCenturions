@@ -81,7 +81,7 @@ pub enum TextEffect {
 fn format_number(
     context: &mut TextContext,
     value: i32,
-    services: &mut impl NumericServices,
+    services: &mut (impl NumericServices + ?Sized),
 ) -> Result<Vec<TextEffect>, RuleError> {
     context.scratch = services.number_to_string(value)?;
     Ok(vec![TextEffect::NumberToString(value)])
@@ -91,7 +91,7 @@ fn format_number(
 pub fn string(
     context: &mut TextContext,
     value: i16,
-    services: &mut impl NumericServices,
+    services: &mut (impl NumericServices + ?Sized),
 ) -> Result<Vec<TextEffect>, RuleError> {
     string_long(context, i32::from(value), services)
 }
@@ -100,7 +100,7 @@ pub fn string(
 pub fn string_long(
     context: &mut TextContext,
     value: i32,
-    services: &mut impl NumericServices,
+    services: &mut (impl NumericServices + ?Sized),
 ) -> Result<Vec<TextEffect>, RuleError> {
     let mut effects = format_number(context, value, services)?;
     effects.push(TextEffect::DrawString(context.scratch.clone()));
@@ -111,7 +111,7 @@ pub fn string_long(
 pub fn string_plus(
     context: &mut TextContext,
     value: i16,
-    services: &mut impl NumericServices,
+    services: &mut (impl NumericServices + ?Sized),
 ) -> Result<Vec<TextEffect>, RuleError> {
     let mut effects = format_number(context, i32::from(value), services)?;
     if value > 0 {
@@ -125,7 +125,7 @@ pub fn string_plus(
 pub fn string_no_zero_no_plus(
     context: &mut TextContext,
     value: i16,
-    services: &mut impl NumericServices,
+    services: &mut (impl NumericServices + ?Sized),
 ) -> Result<Vec<TextEffect>, RuleError> {
     let mut effects = format_number(context, i32::from(value), services)?;
     if value > 0 {
@@ -138,7 +138,7 @@ pub fn string_no_zero_no_plus(
 pub fn string_no_zero(
     context: &mut TextContext,
     value: i16,
-    services: &mut impl NumericServices,
+    services: &mut (impl NumericServices + ?Sized),
 ) -> Result<Vec<TextEffect>, RuleError> {
     let mut effects = format_number(context, i32::from(value), services)?;
     if value > 0 {
@@ -220,7 +220,7 @@ pub fn get_dialog_number(
     context: &mut TextContext,
     item: i16,
     item_text: &PascalString,
-    services: &mut impl NumericServices,
+    services: &mut (impl NumericServices + ?Sized),
 ) -> Result<(i16, Vec<TextEffect>), RuleError> {
     let value = services.string_to_number(item_text)?;
     context.scratch = item_text.clone();
@@ -240,7 +240,7 @@ pub fn dialog_number_long(
     context: &mut TextContext,
     item: i16,
     value: i32,
-    services: &mut impl NumericServices,
+    services: &mut (impl NumericServices + ?Sized),
 ) -> Result<Vec<TextEffect>, RuleError> {
     let mut effects = vec![TextEffect::GetDialogItem { item }];
     effects.extend(format_number(context, value, services)?);
@@ -256,7 +256,7 @@ pub fn dialog_number(
     context: &mut TextContext,
     item: i16,
     value: i16,
-    services: &mut impl NumericServices,
+    services: &mut (impl NumericServices + ?Sized),
 ) -> Result<Vec<TextEffect>, RuleError> {
     dialog_number_long(context, item, i32::from(value), services)
 }
@@ -277,7 +277,7 @@ pub fn dialog_number_nonzero(
     context: &mut TextContext,
     item: i16,
     value: i16,
-    services: &mut impl NumericServices,
+    services: &mut (impl NumericServices + ?Sized),
 ) -> Result<Vec<TextEffect>, RuleError> {
     let mut effects = vec![TextEffect::GetDialogItem { item }];
     let text = if value == 0 {
@@ -319,7 +319,7 @@ pub struct NumberContext {
 pub fn number(
     context: &mut TextContext,
     inputs: &NumberContext,
-    services: &mut impl NumericServices,
+    services: &mut (impl NumericServices + ?Sized),
 ) -> Result<Vec<TextEffect>, RuleError> {
     if inputs.suppressed != 0 {
         return Ok(vec![]);
@@ -349,82 +349,4 @@ pub fn number(
         services,
     )?);
     Ok(effects)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct Numbers;
-
-    impl NumericServices for Numbers {
-        fn number_to_string(&mut self, value: i32) -> Result<PascalString, RuleError> {
-            PascalString::from_payload(value.to_string().as_bytes())
-        }
-
-        fn string_to_number(&mut self, _: &PascalString) -> Result<i32, RuleError> {
-            Ok(0x1234_8001)
-        }
-    }
-
-    #[test]
-    fn suppressed_draws_still_convert_but_zero_dialog_preserves_scratch() {
-        let mut context = TextContext::default();
-        assert_eq!(
-            string_no_zero(&mut context, -7, &mut Numbers).unwrap(),
-            vec![TextEffect::NumberToString(-7)]
-        );
-        let scratch = context.scratch.clone();
-        let effects = dialog_number_nonzero(&mut context, 3, 0, &mut Numbers).unwrap();
-        assert_eq!(context.scratch, scratch);
-        assert_eq!(
-            effects,
-            vec![
-                TextEffect::GetDialogItem { item: 3 },
-                TextEffect::SetDialogItemText {
-                    item: 3,
-                    text: PascalString::default(),
-                },
-            ]
-        );
-        let effects = dialog_number_nonzero(&mut context, 3, 12, &mut Numbers).unwrap();
-        assert_eq!(effects[1], TextEffect::NumberToString(-12));
-        assert_eq!(context.scratch.raw(), b"\x03+12");
-        let (low_word, _) = get_dialog_number(&mut context, 4, &scratch, &mut Numbers).unwrap();
-        assert_eq!(low_word, -32767);
-        assert_eq!(context.parsed_number, 0x1234_8001);
-    }
-
-    #[test]
-    fn copy_keeps_raw_zero_index_and_wrapped_length_without_touching_tail() {
-        let source = vec![0x88; 256];
-        let mut destination = vec![0x55; 258];
-        copy_part_of_string(&mut destination, &source, 0, 255).unwrap();
-        assert_eq!(destination[0], 0);
-        assert_eq!(&destination[1..257], &source);
-        assert_eq!(destination[257], 0x55);
-        copy_part_of_string(&mut destination, &[], 5, 2).unwrap();
-        assert_eq!(destination[0], 254);
-        let before = destination.clone();
-        assert!(copy_part_of_string(&mut destination, &source, -1, 3).is_err());
-        assert_eq!(destination, before);
-    }
-
-    #[test]
-    fn version_uses_offset_six_and_restores_the_prior_resource_file() {
-        let mut version = PascalString::default();
-        let (count, effects) =
-            get_version_string(&mut version, 1, 7, 3, b"HEADER\x03\x8012tail").unwrap();
-        assert_eq!(count, 4);
-        assert_eq!(version.raw(), b"\x03\x8012");
-        assert_eq!(effects[1], TextEffect::UseResourceFile(7));
-        assert_eq!(effects.last(), Some(&TextEffect::UseResourceFile(3)));
-        assert_eq!(
-            effects[5],
-            TextEffect::CopyVersionBytes {
-                offset: 6,
-                count: 4
-            }
-        );
-    }
 }

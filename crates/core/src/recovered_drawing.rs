@@ -167,7 +167,7 @@ fn icon(
     id: i16,
     rect: BodyRect,
     effects: &mut Vec<DrawingEffect>,
-    services: &mut impl DrawingServices,
+    services: &mut (impl DrawingServices + ?Sized),
 ) -> Result<(), RuleError> {
     context.icon_handle = 0;
     write(effects, 0x439598, &0u32.to_be_bytes());
@@ -186,7 +186,7 @@ fn icon(
 pub fn ploticon2(
     context: &mut DrawingContext,
     id: i16,
-    services: &mut impl DrawingServices,
+    services: &mut (impl DrawingServices + ?Sized),
 ) -> Result<DrawingPlan, RuleError> {
     let mut candidate = context.clone();
     let mut effects = Vec::new();
@@ -208,7 +208,7 @@ pub fn ploticon3(
     context: &mut DrawingContext,
     id: i16,
     rect: BodyRect,
-    services: &mut impl DrawingServices,
+    services: &mut (impl DrawingServices + ?Sized),
 ) -> Result<DrawingPlan, RuleError> {
     let mut candidate = context.clone();
     let mut effects = Vec::new();
@@ -233,7 +233,7 @@ pub fn ploticon(
     context: &mut DrawingContext,
     tables: &ItemTables<'_>,
     id: i16,
-    services: &mut impl DrawingServices,
+    services: &mut (impl DrawingServices + ?Sized),
 ) -> Result<DrawingPlan, RuleError> {
     let mut candidate = context.clone();
     let loaded = loaditemnotype(tables, &candidate.item_work, id)?;
@@ -322,7 +322,7 @@ fn allocate(
     context: &mut DrawingContext,
     index: i16,
     effects: &mut Vec<DrawingEffect>,
-    services: &mut impl DrawingServices,
+    services: &mut (impl DrawingServices + ?Sized),
 ) -> Result<i32, RuleError> {
     let slot = building_index(context, index)?;
     if context.buildings[slot].pointer != 0 {
@@ -369,7 +369,7 @@ fn allocate(
 pub fn allocatebuilding(
     context: &mut DrawingContext,
     index: i16,
-    services: &mut impl DrawingServices,
+    services: &mut (impl DrawingServices + ?Sized),
 ) -> Result<DrawingPlan, RuleError> {
     let mut candidate = context.clone();
     let mut effects = Vec::new();
@@ -386,7 +386,7 @@ fn copy_building(
     index: i16,
     destination: BodyRect,
     effects: &mut Vec<DrawingEffect>,
-    services: &mut impl DrawingServices,
+    services: &mut (impl DrawingServices + ?Sized),
 ) -> Result<(), RuleError> {
     let slot = building_index(context, index)?;
     if context.buildings[slot].pointer == 0 {
@@ -414,7 +414,7 @@ pub fn gcopy(
     context: &mut DrawingContext,
     index: i16,
     destination: BodyRect,
-    services: &mut impl DrawingServices,
+    services: &mut (impl DrawingServices + ?Sized),
 ) -> Result<DrawingPlan, RuleError> {
     let mut candidate = context.clone();
     let mut effects = Vec::new();
@@ -433,7 +433,7 @@ pub fn fastplot(
     destination: BodyRect,
     mode: i8,
     copy: i8,
-    services: &mut impl DrawingServices,
+    services: &mut (impl DrawingServices + ?Sized),
 ) -> Result<DrawingPlan, RuleError> {
     let mut candidate = context.clone();
     let mut effects = Vec::new();
@@ -596,7 +596,7 @@ pub fn drawspell(
 pub fn pict(
     id: i16,
     rect: BodyRect,
-    services: &mut impl DrawingServices,
+    services: &mut (impl DrawingServices + ?Sized),
 ) -> Result<Vec<DrawingEffect>, RuleError> {
     let picture = services.picture(id)?;
     Ok(vec![
@@ -697,345 +697,4 @@ pub fn updatebootymoney(
             effects,
         },
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::VecDeque;
-
-    struct Observations {
-        icons: VecDeque<u32>,
-        picture: PictureObservation,
-        world: BuildingWorld,
-    }
-
-    impl DrawingServices for Observations {
-        fn color_icon(&mut self, _: i16) -> Result<u32, RuleError> {
-            self.icons
-                .pop_front()
-                .ok_or_else(|| missing("icon test input"))
-        }
-        fn indexed_string(
-            &mut self,
-            resource_id: i16,
-            index: i16,
-        ) -> Result<PascalString, RuleError> {
-            assert_eq!((resource_id, index), (201, 4));
-            PascalString::from_payload(b"Tool")
-        }
-        fn current_world(&mut self) -> Result<(u32, u32), RuleError> {
-            Ok((700, 701))
-        }
-        fn picture(&mut self, _: i16) -> Result<PictureObservation, RuleError> {
-            Ok(self.picture.clone())
-        }
-        fn new_world(
-            &mut self,
-            depth: i16,
-            _: BodyRect,
-        ) -> Result<(i16, BuildingWorld), RuleError> {
-            assert_eq!(depth, -8);
-            Ok((-1, self.world.clone()))
-        }
-    }
-
-    impl TierServices for Observations {
-        fn dialog_item(
-            &mut self,
-            dialog: u32,
-            item: i16,
-        ) -> Result<(i16, u32, BodyRect), RuleError> {
-            assert_eq!((dialog, item), (13, 47));
-            Ok((5, 20, rect(32760, -3, 99, 100)))
-        }
-    }
-
-    impl NumericServices for Observations {
-        fn number_to_string(&mut self, value: i32) -> Result<PascalString, RuleError> {
-            assert_eq!(value, i32::MIN);
-            PascalString::from_payload(b"-2147483648")
-        }
-        fn string_to_number(&mut self, _: &PascalString) -> Result<i32, RuleError> {
-            Err(missing("unused numeric parse"))
-        }
-    }
-
-    fn rect(top: i16, left: i16, bottom: i16, right: i16) -> BodyRect {
-        BodyRect {
-            top,
-            left,
-            bottom,
-            right,
-        }
-    }
-
-    fn setup() -> (DrawingContext, Observations) {
-        let context = DrawingContext {
-            rect: rect(32760, 32760, 1, 2),
-            banner_rect: rect(1, 2, 3, 4),
-            source_rect: rect(5, 6, 7, 8),
-            source_row: 9,
-            source_column: 10,
-            icon_handle: 99,
-            item_work: [0; ITEM_BYTES],
-            text_work: PascalString::default(),
-            window: 1,
-            item_window: 1,
-            half_width_input: -3,
-            active_member: 0,
-            omit_banner: 0,
-            show_item_background: 1,
-            text_in_other_port: 1,
-            erase_pattern: 100,
-            default_font: 4,
-            selection: 200,
-            map_port: 200,
-            text_port: 300,
-            secondary_port: 400,
-            backing_port: 500,
-            tile_port: 600,
-            depth: -8,
-            old_world: 0,
-            old_device: 0,
-            buildings: vec![BuildingWorld {
-                pointer: 0,
-                bounds: None,
-            }],
-        };
-        let observations = Observations {
-            icons: [0, 11, 12].into(),
-            picture: PictureObservation {
-                handle: 77,
-                bounds: Some(rect(0, 0, 64, 96)),
-            },
-            world: BuildingWorld {
-                pointer: 900,
-                bounds: Some(rect(0, 0, 64, 96)),
-            },
-        };
-        (context, observations)
-    }
-
-    #[test]
-    fn icon_rectangle_wrap_nil_lifetime_and_missing_observation_are_atomic() {
-        let (mut context, mut service) = setup();
-        let plan = ploticon2(&mut context, 7, &mut service).unwrap();
-        assert_eq!(context.rect, rect(32760, 32760, -32744, -32744));
-        assert_eq!(context.icon_handle, 0);
-        assert!(
-            !plan
-                .effects
-                .iter()
-                .any(|e| matches!(e, DrawingEffect::DisposeColorIcon(_)))
-        );
-        let global_rect = context.rect;
-        let plan = ploticon3(&mut context, 8, rect(10, 20, 30, 40), &mut service).unwrap();
-        assert_eq!(context.rect, global_rect);
-        assert_eq!(context.icon_handle, 11);
-        assert_eq!(
-            &plan.effects[3..],
-            &[
-                DrawingEffect::PlotColorIcon {
-                    handle: 11,
-                    rect: rect(10, 20, 30, 40)
-                },
-                DrawingEffect::DisposeColorIcon(11),
-            ]
-        );
-        service.icons.clear();
-        let before = context.clone();
-        assert!(ploticon2(&mut context, 9, &mut service).is_err());
-        assert_eq!(context, before);
-    }
-
-    #[test]
-    fn item_background_selection_and_erase_extent_follow_native_order() {
-        let (mut context, mut service) = setup();
-        let mut table = vec![0; 200 * ITEM_BYTES];
-        let record = &mut table[203usize % 200 * ITEM_BYTES..][..ITEM_BYTES];
-        record[10..12].copy_from_slice(&55i16.to_be_bytes());
-        record[26..28].copy_from_slice(&(-1i16).to_be_bytes());
-        record[102..104].copy_from_slice(&203i16.to_be_bytes());
-        let tables = ItemTables {
-            families: [&[], &table, &[], &[], &[]],
-        };
-        let plan = ploticon(&mut context, &tables, 203, &mut service).unwrap();
-        assert_eq!(context.rect.left, 389);
-        assert_eq!(context.rect.right, 421);
-        assert!(
-            plan.effects
-                .contains(&DrawingEffect::EraseRect(rect(32760, 389, -32744, 662)))
-        );
-        let ids: Vec<_> = plan
-            .effects
-            .iter()
-            .filter_map(|e| match e {
-                DrawingEffect::GetColorIcon(id) => Some(*id),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(ids, [174, 131, 55]);
-        assert_eq!(context.text_work.payload(), b"Tool");
-        assert_eq!(context.icon_handle, 12);
-        assert_eq!(
-            &plan.effects[plan.effects.len() - 2..],
-            &[DrawingEffect::TextFont(4), DrawingEffect::TextFace(0)]
-        );
-    }
-
-    #[test]
-    fn tile_and_building_paths_preserve_distinct_rectangles_and_modes() {
-        let (mut context, mut service) = setup();
-        let before = context.clone();
-        assert!(
-            fastplot(&mut context, -1, rect(0, 0, 0, 0), -1, 0, &mut service)
-                .unwrap()
-                .effects
-                .is_empty()
-        );
-        assert_eq!(context, before);
-        let destination = rect(10, 20, 30, 40);
-        let plan = fastplot(&mut context, 0, destination, -128, 1, &mut service).unwrap();
-        assert_eq!(context.source_rect, rect(0, -32, 32, 0));
-        assert_eq!(
-            plan.effects.last(),
-            Some(&DrawingEffect::CopyBits {
-                source_bitmap: 602,
-                destination_bitmap: 402,
-                source: rect(0, -32, 32, 0),
-                destination,
-                mode: -128,
-                mask: 0,
-            })
-        );
-        context.rect = rect(20, 30, 84, 126);
-        let plan = fastplot(&mut context, 23000, destination, 7, 0, &mut service).unwrap();
-        assert_eq!(context.source_rect, rect(20, 30, 84, 126));
-        assert_eq!(
-            plan.effects.last(),
-            Some(&DrawingEffect::CopyBits {
-                source_bitmap: 902,
-                destination_bitmap: 502,
-                source: rect(0, 0, 64, 96),
-                destination: rect(20, 30, 84, 126),
-                mode: 36,
-                mask: 0,
-            })
-        );
-        assert!(plan.effects.contains(&DrawingEffect::SetWorld {
-            world: 700,
-            device: 701
-        }));
-        let (mut nil_context, mut nil_service) = setup();
-        nil_service.picture.handle = 0;
-        let plan = allocatebuilding(&mut nil_context, 0, &mut nil_service).unwrap();
-        assert_eq!(plan.native_return, 0);
-        assert!(
-            !plan
-                .effects
-                .iter()
-                .any(|e| matches!(e, DrawingEffect::SetWorld { .. }))
-        );
-        let before = nil_context.clone();
-        assert!(gcopy(&mut nil_context, 0, destination, &mut nil_service).is_err());
-        assert_eq!(nil_context, before);
-    }
-
-    #[test]
-    fn spell_gate_skips_position_read_and_picture_keeps_nil_draw_request() {
-        let (context, mut service) = setup();
-        let disabled = SpellDrawingInput {
-            combat_type: 5,
-            enabled: 1,
-            selected_warrior: -1,
-            warrior_positions: &[],
-            end_position: [3, 4],
-            mask_port: 80,
-            source_rect: rect(0, 0, 1, 1),
-            destination_rect: rect(1, 2, 3, 4),
-        };
-        assert!(drawspell(&context, disabled).unwrap().effects.is_empty());
-        let active = SpellDrawingInput {
-            combat_type: 0,
-            enabled: 1,
-            selected_warrior: 0,
-            warrior_positions: &[[1024, -1]],
-            end_position: [3, 4],
-            mask_port: 80,
-            source_rect: rect(0, 0, 1, 1),
-            destination_rect: rect(1, 2, 3, 4),
-        };
-        let plan = drawspell(&context, active).unwrap();
-        assert_eq!(
-            plan.effects[1],
-            DrawingEffect::MoveTo {
-                horizontal: -32752,
-                vertical: -16
-            }
-        );
-        assert_eq!(
-            plan.effects[2],
-            DrawingEffect::LineTo {
-                horizontal: 112,
-                vertical: 144
-            }
-        );
-        service.picture.handle = 0;
-        assert_eq!(
-            pict(8, rect(1, 2, 3, 4), &mut service).unwrap(),
-            [
-                DrawingEffect::GetPicture(8),
-                DrawingEffect::DrawPicture {
-                    handle: 0,
-                    bounds: rect(1, 2, 3, 4)
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn tier_and_money_helpers_compose_icon_picture_and_full_long_text() {
-        let (mut context, mut services) = setup();
-        services.icons = [77].into();
-        let mut tier = TierContext {
-            dialog: 13,
-            selected_tier: 1,
-            item_type: 0,
-            item_handle: 0,
-            rect: rect(0, 0, 0, 0),
-        };
-        let global_rect = context.rect;
-        let plan = updatetier(&mut context, &mut tier, 2, &mut services).unwrap();
-        assert_eq!(tier.rect, rect(32760, 84, -32758, 102));
-        assert_eq!(context.rect, global_rect);
-        assert!(plan.effects.contains(&DrawingEffect::OffsetRect {
-            rect: rect(32760, -3, -32758, 15),
-            horizontal: 87,
-            vertical: 0
-        }));
-        assert!(plan.effects.contains(&DrawingEffect::GetColorIcon(157)));
-        assert!(plan.effects.contains(&DrawingEffect::PlotColorIcon {
-            handle: 77,
-            rect: tier.rect
-        }));
-        let (argument, plan) = updatebootymoney(
-            &mut context,
-            15,
-            rect(32760, 32760, 200, 0),
-            i32::MIN,
-            &mut services,
-        )
-        .unwrap();
-        assert_eq!(argument, rect(32760, 32760, 200, -32136));
-        assert!(plan.effects.contains(&DrawingEffect::MoveTo {
-            horizontal: -32756,
-            vertical: -32730
-        }));
-        assert_eq!(context.text_work.payload(), b"-2147483648");
-        assert_eq!(
-            plan.effects.last(),
-            Some(&DrawingEffect::DrawString(context.text_work.clone()))
-        );
-    }
 }

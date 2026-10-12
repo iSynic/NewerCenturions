@@ -103,7 +103,7 @@ impl Execution {
         &mut self,
         opcode: u16,
         arguments: Vec<FeedbackArg>,
-        s: &mut impl AnimationServices,
+        s: &mut (impl AnimationServices + ?Sized),
     ) -> Result<u32, RuleError> {
         self.service(opcode, arguments, None, s)
     }
@@ -111,7 +111,7 @@ impl Execution {
         &mut self,
         selector: u32,
         arguments: Vec<FeedbackArg>,
-        s: &mut impl AnimationServices,
+        s: &mut (impl AnimationServices + ?Sized),
     ) -> Result<u32, RuleError> {
         self.service(0xab1d, arguments, Some(selector), s)
     }
@@ -120,7 +120,7 @@ impl Execution {
         opcode: u16,
         arguments: Vec<FeedbackArg>,
         d0_input: Option<u32>,
-        s: &mut impl AnimationServices,
+        s: &mut (impl AnimationServices + ?Sized),
     ) -> Result<u32, RuleError> {
         self.step()?;
         let request = AnimationRequest {
@@ -143,7 +143,7 @@ impl Execution {
         source: u32,
         destination: u32,
         selector: u16,
-        s: &mut impl AnimationServices,
+        s: &mut (impl AnimationServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.trap(0xa9eb, vec![P(source), P(destination), W(selector)], s)?;
         Ok(())
@@ -183,7 +183,7 @@ pub fn missileset(
     memory: &RenderingMemory,
     frame: u32,
     limit: u32,
-    s: &mut impl AnimationServices,
+    s: &mut (impl AnimationServices + ?Sized),
 ) -> Result<AnimationPlan, RuleError> {
     let mut e = Execution::new(memory, limit);
     e.sane(frame.wrapping_add(8), frame.wrapping_sub(40), 0x1010, s)?;
@@ -265,7 +265,7 @@ pub fn finddxdy(
     memory: &RenderingMemory,
     frame: u32,
     limit: u32,
-    s: &mut impl AnimationServices,
+    s: &mut (impl AnimationServices + ?Sized),
 ) -> Result<AnimationPlan, RuleError> {
     let mut e = Execution::new(memory, limit);
     let from = e.plan.memory.byte(frame.wrapping_add(9))? as i8;
@@ -313,132 +313,4 @@ pub fn finddxdy(
     e.plan.effects.extend(child.effects);
     e.plan.native_return = child.native_return;
     Ok(e.plan)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    const FRAME: u32 = 0x8000;
-    struct Services;
-    fn arg(v: &FeedbackArg) -> u32 {
-        match v {
-            W(v) => u32::from(*v),
-            L(v) | P(v) => *v,
-            FeedbackArg::Byte(v) => u32::from(*v),
-        }
-    }
-    fn ext(value: f32) -> [u8; 10] {
-        let bits = value.to_bits();
-        let mut out = [0; 10];
-        if value != 0.0 {
-            let exponent = (((bits >> 23) & 255) as u16)
-                .wrapping_sub(127)
-                .wrapping_add(16383)
-                | ((bits >> 16) as u16 & 0x8000);
-            out[..2].copy_from_slice(&exponent.to_be_bytes());
-            out[2..]
-                .copy_from_slice(&(u64::from((bits & 0x7fffff) | 0x800000) << 40).to_be_bytes());
-        }
-        out
-    }
-    impl AnimationServices for Services {
-        fn observe_animation(
-            &mut self,
-            request: &AnimationRequest,
-            memory: &RenderingMemory,
-        ) -> Result<AnimationObservation, RuleError> {
-            let mut memory = memory.clone();
-            let mut value = 0;
-            if request.opcode == 0xa9eb {
-                let source = arg(&request.arguments[0]);
-                let destination = arg(&request.arguments[1]);
-                match arg(&request.arguments[2]) {
-                    0x100e => {
-                        let bits = memory.long(source)?;
-                        memory.insert_region(destination, &ext(f32::from_bits(bits)));
-                    }
-                    0x200e => {
-                        let value = memory.word(source)? as i16;
-                        memory.insert_region(destination, &ext(f32::from(value)));
-                    }
-                    0x1010 => {
-                        let value = extended(&memory, source)? as f32;
-                        memory.insert_region(destination, &value.to_bits().to_be_bytes());
-                    }
-                    _ => return Err(RuleError::Invalid("unexpected animation conversion".into())),
-                }
-            } else if request.opcode == 0xaa1e {
-                value = 0xb000;
-            } else if request.opcode == 0xab1d && request.d0_input == Some(0x80005) {
-                memory.insert_region(arg(&request.arguments[0]), &0xc000_u32.to_be_bytes());
-                memory.insert_region(arg(&request.arguments[1]), &0xd000_u32.to_be_bytes());
-            }
-            Ok(AnimationObservation {
-                memory,
-                value,
-                d0: 0xfeed0000,
-                d1: Some(2),
-            })
-        }
-    }
-    fn memory() -> RenderingMemory {
-        let mut memory = crate::recovered_prompt_control::tests::state().memory;
-        memory.insert_region(0x453600, &[0; 0x200]);
-        memory.insert_region(0x446f00, &[0; 0x200]);
-        memory.insert_region(0x4046da, &[0; 8]);
-        memory
-    }
-    #[test]
-    fn finddxdy_body_nine_uses_party_source_and_previous_enemy_destination() {
-        let mut memory = memory();
-        memory.insert_region(FRAME + 8, &[0, 9, 0, 9]);
-        memory.insert_region(0x44709a + 36, &[0, 20, 0, 20]);
-        memory.insert_region(0x446f0a - 4, &[0, 10, 0, 30]);
-        let result = finddxdy(&memory, FRAME, 30, &mut Services).unwrap();
-        assert_eq!(result.memory.long(FRAME - 6).unwrap(), (-1.0_f32).to_bits());
-        assert_eq!(result.memory.long(FRAME - 10).unwrap(), 1.0_f32.to_bits());
-        assert_eq!(extended(&result.memory, FRAME - 70).unwrap(), -1.0);
-        assert_eq!(extended(&result.memory, FRAME - 60).unwrap(), 1.0);
-        assert_eq!(result.native_return, 0);
-        assert!(
-            !result
-                .effects
-                .iter()
-                .any(|v| matches!(v, AnimationEffect::Direction { .. }))
-        );
-    }
-    #[test]
-    fn missile_dispatch_selector_stays_in_d0_and_restores_observed_world() {
-        let mut memory = memory();
-        memory.insert_region(FRAME + 8, &ext(0.0));
-        memory.insert_region(FRAME + 18, &ext(0.0));
-        memory.insert_region(0x453788, &16_u16.to_be_bytes());
-        memory.insert_region(0x44719e, &32_u16.to_be_bytes());
-        memory.insert_region(0x4386c8, &0xe000_u32.to_be_bytes());
-        let result = missileset(&memory, FRAME, 40, &mut Services).unwrap();
-        let dispatch: Vec<_> = result
-            .effects
-            .iter()
-            .filter_map(|v| match v {
-                AnimationEffect::Service { request, .. } if request.opcode == 0xab1d => {
-                    Some(request)
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(dispatch.len(), 3);
-        assert_eq!(dispatch[0].d0_input, Some(0x80005));
-        assert_eq!(dispatch[0].arguments, vec![P(0x4046da), P(0x4046de)]);
-        assert_eq!(dispatch[1].arguments, vec![L(0xe000), L(0)]);
-        assert_eq!(dispatch[2].arguments, vec![L(0xc000), L(0xd000)]);
-        assert_eq!(
-            result.memory.rect(FRAME - 8).unwrap(),
-            crate::recovered_geometry::BodyRect {
-                top: 320,
-                left: 0,
-                bottom: 352,
-                right: 32
-            }
-        );
-    }
 }

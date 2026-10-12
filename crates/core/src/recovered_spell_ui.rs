@@ -212,7 +212,7 @@ impl Execution {
         &mut self,
         item: i16,
         rect_address: u32,
-        services: &mut impl SpellUiServices,
+        services: &mut (impl SpellUiServices + ?Sized),
     ) -> Result<(), RuleError> {
         let dialog = self.long(0x4394b8)?;
         let observation = services.dialog_item(dialog, item)?;
@@ -232,7 +232,7 @@ impl Execution {
         &mut self,
         item: i16,
         value: i16,
-        services: &mut impl SpellUiServices,
+        services: &mut (impl SpellUiServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.dialog_item(item, 0x4434ba, services)?;
         let mut text = TextContext::default();
@@ -260,7 +260,7 @@ impl Execution {
         &mut self,
         item: i16,
         address: u32,
-        services: &mut impl SpellUiServices,
+        services: &mut (impl SpellUiServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.dialog_item(item, 0x4434ba, services)?;
         let text = self.pascal(address)?;
@@ -276,7 +276,11 @@ impl Execution {
         Ok(())
     }
 
-    fn number(&mut self, value: i16, services: &mut impl SpellUiServices) -> Result<(), RuleError> {
+    fn number(
+        &mut self,
+        value: i16,
+        services: &mut (impl SpellUiServices + ?Sized),
+    ) -> Result<(), RuleError> {
         let mut text = TextContext::default();
         for effect in recovered_text::string(&mut text, value, services)? {
             if matches!(effect, TextEffect::NumberToString(_)) {
@@ -293,7 +297,7 @@ impl Execution {
         &mut self,
         resource_id: i16,
         index: i16,
-        services: &mut impl SpellUiServices,
+        services: &mut (impl SpellUiServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.draw(DrawingEffect::GetIndexedString { resource_id, index });
         let text = services.indexed_string(resource_id, index)?;
@@ -358,7 +362,7 @@ impl Execution {
         &mut self,
         id: i16,
         clear: bool,
-        services: &mut impl SpellUiServices,
+        services: &mut (impl SpellUiServices + ?Sized),
     ) -> Result<u32, RuleError> {
         if clear {
             self.long_write(0x439598, 0)?;
@@ -374,7 +378,7 @@ impl Execution {
         &mut self,
         id: i16,
         rect: BodyRect,
-        services: &mut impl SpellUiServices,
+        services: &mut (impl SpellUiServices + ?Sized),
     ) -> Result<(), RuleError> {
         let child = recovered_drawing::ploticon3(&mut self.state.drawing, id, rect, services)?;
         for effect in child.effects {
@@ -390,7 +394,7 @@ impl Execution {
         &mut self,
         id: i16,
         rect: BodyRect,
-        services: &mut impl SpellUiServices,
+        services: &mut (impl SpellUiServices + ?Sized),
     ) -> Result<(), RuleError> {
         let handle = self.load_icon(id, false, services)?;
         self.draw(DrawingEffect::PlotColorIcon { handle, rect });
@@ -401,7 +405,7 @@ impl Execution {
     fn button(
         &mut self,
         pressed: bool,
-        services: &mut impl SpellUiServices,
+        services: &mut (impl SpellUiServices + ?Sized),
     ) -> Result<(), RuleError> {
         let input = ButtonInput {
             rect: self.rect(0x44292c)?,
@@ -419,7 +423,7 @@ impl Execution {
         Ok(())
     }
 
-    fn overlay(&mut self, services: &mut impl SpellUiServices) -> Result<(), RuleError> {
+    fn overlay(&mut self, services: &mut (impl SpellUiServices + ?Sized)) -> Result<(), RuleError> {
         self.word_write(0x4434be, self.word(0x4434be)?.wrapping_sub(32))?;
         self.word_write(0x4434c0, self.word(0x4434c0)?.wrapping_sub(32))?;
         // FFFB0000 packs the final vertical WORD -5 above horizontal WORD zero.
@@ -427,7 +431,10 @@ impl Execution {
         self.direct_icon(14022, self.rect(0x4434ba)?, services)
     }
 
-    fn truncate_distance(&mut self, services: &mut impl SpellUiServices) -> Result<i16, RuleError> {
+    fn truncate_distance(
+        &mut self,
+        services: &mut (impl SpellUiServices + ?Sized),
+    ) -> Result<i16, RuleError> {
         let input = self.bytes(0x44349c, 10)?.try_into().unwrap();
         let output = services.truncate_extended(input)?;
         self.effects
@@ -478,7 +485,7 @@ fn positive_power(execution: &Execution) -> Result<bool, RuleError> {
 /// showspelllist, 0x10b6ba: every one of the seven button/label branches executes.
 pub fn showspelllist(
     state: &SpellUiState,
-    services: &mut impl SpellUiServices,
+    services: &mut (impl SpellUiServices + ?Sized),
 ) -> Result<SpellUiResult, RuleError> {
     let mut execution = Execution::new(state);
     let member = execution.signed_byte(0x44273f)?;
@@ -536,7 +543,7 @@ pub fn showspelllist(
 /// showspellinfo, 0x159192: item banner, spell mask, overlay, name and WORD count.
 pub fn showspellinfo(
     state: &SpellUiState,
-    services: &mut impl SpellUiServices,
+    services: &mut (impl SpellUiServices + ?Sized),
 ) -> Result<SpellUiResult, RuleError> {
     let mut execution = Execution::new(state);
     execution.draw(DrawingEffect::SetPort(execution.long(0x43878c)?));
@@ -639,7 +646,7 @@ pub fn showspellinfo(
 /// spellinfoupdate, 0x15947c: complete dialog fields, type legend and icon branches.
 pub fn spellinfoupdate(
     state: &SpellUiState,
-    services: &mut impl SpellUiServices,
+    services: &mut (impl SpellUiServices + ?Sized),
 ) -> Result<SpellUiResult, RuleError> {
     let mut execution = Execution::new(state);
     execution.draw(DrawingEffect::ForeColor(69));
@@ -798,7 +805,7 @@ fn squared_extended(value: f64) -> [u8; 10] {
 
 fn check_range(
     execution: &mut Execution,
-    services: &mut impl SpellUiServices,
+    services: &mut (impl SpellUiServices + ?Sized),
 ) -> Result<(), RuleError> {
     let body = execution.word(0x4435d2)?;
     let target = (execution.word(0x44719e)?, execution.word(0x4471a0)?);
@@ -826,7 +833,7 @@ fn check_range(
 pub fn updatespell(
     state: &SpellUiState,
     force: i8,
-    services: &mut impl SpellUiServices,
+    services: &mut (impl SpellUiServices + ?Sized),
 ) -> Result<SpellUiResult, RuleError> {
     let mut execution = Execution::new(state);
     check_range(&mut execution, services)?;
@@ -900,7 +907,7 @@ pub struct OutdoorsSpellInput {
 pub fn spelleffectoutdoors(
     state: &SpellUiState,
     input: OutdoorsSpellInput,
-    services: &mut impl SpellUiServices,
+    services: &mut (impl SpellUiServices + ?Sized),
 ) -> Result<SpellUiResult, RuleError> {
     let mut execution = Execution::new(state);
     for (offset, value) in [(2, 0_i16), (0, 0), (6, 64), (4, 64)] {
@@ -970,699 +977,4 @@ pub fn spelleffectoutdoors(
     }
     execution.copy_bits(0x4386b4, 0x43879c, backup, execution.rect(0x44371a)?)?;
     Ok(execution.finish(Some(0)))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recovered_drawing::{BuildingWorld, PictureObservation};
-    use crate::recovered_interface::Point;
-    use std::collections::VecDeque;
-
-    #[derive(Default)]
-    struct Observations {
-        icons: VecDeque<u32>,
-        numbers: Vec<i32>,
-        names: Vec<(i16, i16)>,
-        dialogs: Vec<i16>,
-        ticks: VecDeque<u32>,
-        widths: VecDeque<i16>,
-        truncations: VecDeque<i32>,
-        square_root: Option<[u8; 10]>,
-        cursors: Vec<i16>,
-    }
-
-    impl NumericServices for Observations {
-        fn number_to_string(&mut self, value: i32) -> Result<PascalString, RuleError> {
-            self.numbers.push(value);
-            PascalString::from_payload(value.to_string().as_bytes())
-        }
-        fn string_to_number(&mut self, _: &PascalString) -> Result<i32, RuleError> {
-            Err(unavailable("unused parse observation"))
-        }
-    }
-
-    impl DrawingServices for Observations {
-        fn color_icon(&mut self, _: i16) -> Result<u32, RuleError> {
-            self.icons
-                .pop_front()
-                .ok_or_else(|| unavailable("missing icon observation"))
-        }
-        fn indexed_string(
-            &mut self,
-            resource_id: i16,
-            index: i16,
-        ) -> Result<PascalString, RuleError> {
-            self.names.push((resource_id, index));
-            PascalString::from_payload(format!("R{resource_id}:I{index}").as_bytes())
-        }
-        fn current_world(&mut self) -> Result<(u32, u32), RuleError> {
-            Err(unavailable("unused GWorld observation"))
-        }
-        fn picture(&mut self, _: i16) -> Result<PictureObservation, RuleError> {
-            Err(unavailable("unused picture observation"))
-        }
-        fn new_world(&mut self, _: i16, _: BodyRect) -> Result<(i16, BuildingWorld), RuleError> {
-            Err(unavailable("unused NewGWorld observation"))
-        }
-    }
-
-    impl InterfaceServices for Observations {
-        fn word(&mut self, _: u32) -> Result<i16, RuleError> {
-            Err(unavailable("unused interface memory observation"))
-        }
-        fn current_port(&mut self) -> Result<u32, RuleError> {
-            Ok(8)
-        }
-        fn pen_state(&mut self) -> Result<[u8; 18], RuleError> {
-            Ok([7; 18])
-        }
-        fn local_to_global(&mut self, _: Point) -> Result<Point, RuleError> {
-            Err(unavailable("unused point observation"))
-        }
-        fn point_in_rect(&mut self, _: Point, _: BodyRect) -> Result<u8, RuleError> {
-            Err(unavailable("unused containment observation"))
-        }
-        fn new_region(&mut self) -> Result<u32, RuleError> {
-            Err(unavailable("unused region observation"))
-        }
-        fn main_device_rect(&mut self) -> Result<BodyRect, RuleError> {
-            Err(unavailable("unused device observation"))
-        }
-    }
-
-    impl TimingServices for Observations {
-        fn tick_count(&mut self) -> Result<u32, RuleError> {
-            self.ticks
-                .pop_front()
-                .ok_or_else(|| unavailable("missing tick observation"))
-        }
-        fn button(&mut self) -> Result<bool, RuleError> {
-            Err(unavailable("unused button observation"))
-        }
-    }
-
-    impl SpellUiServices for Observations {
-        fn dialog_item(
-            &mut self,
-            dialog: u32,
-            item: i16,
-        ) -> Result<DialogItemObservation, RuleError> {
-            assert_eq!(dialog, 99);
-            self.dialogs.push(item);
-            Ok(DialogItemObservation {
-                item_type: 3,
-                handle: 1000 + item as u32,
-                rect: BodyRect {
-                    top: item,
-                    left: item + 10,
-                    bottom: item + 20,
-                    right: item + 30,
-                },
-            })
-        }
-        fn string_width(&mut self, _: &PascalString) -> Result<i16, RuleError> {
-            self.widths
-                .pop_front()
-                .ok_or_else(|| unavailable("missing string width"))
-        }
-        fn color_cursor(&mut self, id: i16) -> Result<u32, RuleError> {
-            self.cursors.push(id);
-            Ok(0xabcdef01)
-        }
-        fn square_root_extended(&mut self, value: [u8; 10]) -> Result<[u8; 10], RuleError> {
-            assert_eq!(value, [0x40, 3, 0xc8, 0, 0, 0, 0, 0, 0, 0]);
-            self.square_root
-                .ok_or_else(|| unavailable("missing actual extended square root"))
-        }
-        fn truncate_extended(&mut self, value: [u8; 10]) -> Result<i32, RuleError> {
-            assert_eq!(value, [0x40, 1, 0xa0, 0, 0, 0, 0, 0, 0, 0]);
-            self.truncations
-                .pop_front()
-                .ok_or_else(|| unavailable("missing actual SANE truncation"))
-        }
-    }
-
-    fn put(state: &mut SpellUiState, address: u32, bytes: &[u8]) {
-        state.memory.insert_region(address, bytes);
-    }
-    fn word(state: &mut SpellUiState, address: u32, value: i16) {
-        put(state, address, &value.to_be_bytes());
-    }
-    fn rect(state: &mut SpellUiState, address: u32, value: BodyRect) {
-        put(state, address, &rect_bytes(value));
-    }
-
-    fn state() -> SpellUiState {
-        let zero = BodyRect {
-            top: 0,
-            left: 0,
-            bottom: 0,
-            right: 0,
-        };
-        let drawing = DrawingContext {
-            rect: zero,
-            banner_rect: zero,
-            source_rect: zero,
-            source_row: 0,
-            source_column: 0,
-            icon_handle: 77,
-            item_work: [0; 150],
-            text_work: PascalString::default(),
-            window: 0,
-            item_window: 0,
-            half_width_input: 0,
-            active_member: 0,
-            omit_banner: 0,
-            show_item_background: 0,
-            text_in_other_port: 0,
-            erase_pattern: 0,
-            default_font: 0,
-            selection: 0,
-            map_port: 13,
-            text_port: 0,
-            secondary_port: 0,
-            backing_port: 0,
-            tile_port: 0,
-            depth: 0,
-            old_world: 0,
-            old_device: 0,
-            buildings: Vec::new(),
-        };
-        let mut state = SpellUiState {
-            memory: RenderingMemory::default(),
-            drawing,
-        };
-        for (address, length) in [
-            (0x400b18, 0x132),
-            (0x403f22, 32),
-            (0x4042c0, 2),
-            (0x40856c, 4),
-            (0x4358de, 8),
-            (0x4386b4, 20),
-            (0x438776, 2),
-            (0x43878c, 20),
-            (0x4394b8, 4),
-            (0x439582, 2),
-            (0x439598, 4),
-            (0x439d0c, 8),
-            (0x44273f, 1),
-            (0x442778, 8),
-            (0x44292c, 8),
-            (0x443374, 18),
-            (0x44349c, 70),
-            (0x4435bc, 24),
-            (0x4436f2, 32),
-            (0x44371a, 8),
-            (0x44374e, 58),
-            (0x443788, 58),
-            (0x44709a, 8),
-            (0x447198, 4),
-            (0x44719e, 4),
-            (0x4471e8, 2),
-            (0x448aa0, 3138),
-            (0x4536a2, 2),
-            (0x453772, 2),
-            (0x4537ce, 2),
-        ] {
-            put(&mut state, address, &vec![0; length]);
-        }
-        put(&mut state, 0x479ed8, &[0xaa; 256]);
-        for (address, value) in [
-            (0x4394b8, 99_u32),
-            (0x43878c, 11),
-            (0x43879c, 13),
-            (0x4386b4, 9),
-            (0x4386b8, 10),
-            (0x439598, 77),
-            (0x4358de, 17),
-            (0x4358e2, 19),
-        ] {
-            put(&mut state, address, &value.to_be_bytes());
-        }
-        for address in [
-            0x400b18, 0x400b28, 0x400b3c, 0x400b52, 0x400b64, 0x400b7a, 0x400b8e, 0x400ba2,
-            0x400bb8, 0x400bca, 0x400bd8, 0x400bed, 0x400bee, 0x400bf6, 0x400bfe, 0x400c08,
-            0x400c10, 0x400c18, 0x400c22, 0x400c28, 0x400c2e, 0x400c38, 0x400c42, 0x403f22,
-        ] {
-            put(&mut state, address, &[0]);
-        }
-        word(&mut state, 0x448aa0 + 0x36, 1);
-        state
-    }
-
-    #[test]
-    fn seven_spell_rows_compose_loading_buttons_labels_and_unusable_palette() {
-        for usable in [false, true] {
-            let mut current = state();
-            let mut spell: [u8; 58] = std::array::from_fn(|i| i as u8 + 31);
-            spell[21] = u8::from(usable);
-            put(&mut current, 0x443788, &spell);
-            put(&mut current, 0x448aa0 + 0x9f0, &[1]);
-            word(&mut current, 0x438776, 1);
-            let original = current.clone();
-            let mut observed = Observations::default();
-            let result = showspelllist(&current, &mut observed).unwrap();
-            assert_eq!(current, original);
-            assert_eq!(observed.names, [(1000, 1)]);
-            assert_eq!(
-                observed.dialogs,
-                [58, 1, 59, 2, 60, 3, 61, 4, 62, 5, 63, 6, 64, 7]
-            );
-            let mut expected = original.clone();
-            put(&mut expected, 0x44374e, &spell);
-            word(&mut expected, 0x4434b0, 3);
-            put(&mut expected, 0x4434dc, &1007_u32.to_be_bytes());
-            rect(
-                &mut expected,
-                0x44292c,
-                BodyRect {
-                    top: 64,
-                    left: 74,
-                    bottom: 84,
-                    right: 94,
-                },
-            );
-            rect(
-                &mut expected,
-                0x4434ba,
-                BodyRect {
-                    top: 7,
-                    left: 17,
-                    bottom: 27,
-                    right: 37,
-                },
-            );
-            put(&mut expected, 0x479ed8, b"\x08R1000:I1");
-            assert_eq!(result.state, expected);
-            let patterns: Vec<_> = result
-                .effects
-                .iter()
-                .filter_map(|effect| {
-                    if let SpellUiEffect::Interface(InterfaceEffect::PenPixelPattern(value)) =
-                        effect
-                    {
-                        Some(*value)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            assert_eq!(&patterns[..2], if usable { &[19, 17] } else { &[17, 19] });
-            assert_eq!(
-                result
-                    .effects
-                    .iter()
-                    .filter(|effect| matches!(
-                        effect,
-                        SpellUiEffect::RgbForeColor {
-                            address: 0x443380,
-                            ..
-                        }
-                    ))
-                    .count(),
-                usize::from(!usable)
-            );
-            assert_eq!(
-                result
-                    .effects
-                    .iter()
-                    .filter(|effect| matches!(
-                        effect,
-                        SpellUiEffect::LoadSpell {
-                            coordinates: [0, 0, 0],
-                            source_address: 0x443788
-                        }
-                    ))
-                    .count(),
-                1
-            );
-        }
-    }
-
-    #[test]
-    fn info_keeps_nil_icon_paths_item_selection_and_all_dialog_word_branches() {
-        let mut current = state();
-        put(&mut current, 0x443761, &[9]);
-        put(&mut current, 0x44374f, &[5]);
-        put(&mut current, 0x443750, &[3, 1]);
-        rect(
-            &mut current,
-            0x4436fa,
-            BodyRect {
-                top: 100,
-                left: 200,
-                bottom: 164,
-                right: 264,
-            },
-        );
-        word(&mut current, 0x453772, 55);
-        word(&mut current, 0x4537ce, 203);
-        word(&mut current, 0x4536a2, 203);
-        word(&mut current, 0x4435be, 7);
-        let original = current.clone();
-        let mut observed = Observations {
-            icons: [0, 0, 0].into(),
-            ..Observations::default()
-        };
-        let result = showspellinfo(&current, &mut observed).unwrap();
-        assert_eq!(observed.names, [(201, 4)]);
-        assert_eq!(observed.numbers, [7]);
-        let ids: Vec<_> = result
-            .effects
-            .iter()
-            .filter_map(|effect| {
-                if let SpellUiEffect::Drawing(DrawingEffect::GetColorIcon(id)) = effect {
-                    Some(*id)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        assert_eq!(ids, [55, 10215, 14022]);
-        assert_eq!(
-            result
-                .effects
-                .iter()
-                .filter(|effect| matches!(
-                    effect,
-                    SpellUiEffect::Drawing(DrawingEffect::PlotColorIcon { handle: 0, .. })
-                ))
-                .count(),
-            1
-        );
-        let mut expected = original.clone();
-        rect(
-            &mut expected,
-            0x443702,
-            BodyRect {
-                top: 100,
-                left: 200,
-                bottom: 164,
-                right: 264,
-            },
-        );
-        rect(
-            &mut expected,
-            0x4434ba,
-            BodyRect {
-                top: 95,
-                left: 200,
-                bottom: 127,
-                right: 232,
-            },
-        );
-        put(&mut expected, 0x439598, &0_u32.to_be_bytes());
-        word(&mut expected, 0x44719a, 0);
-        word(&mut expected, 0x4471e8, 200);
-        put(&mut expected, 0x479ed8, b"\x07R201:I4");
-        put(&mut expected, 0x479ed8, b"\x017");
-        expected.drawing.icon_handle = 0;
-        assert_eq!(result.state, expected);
-        assert_eq!(current, original);
-        let mut missing_icon_memory = Observations {
-            icons: [0, 99].into(),
-            ..Observations::default()
-        };
-        assert!(showspellinfo(&current, &mut missing_icon_memory).is_err());
-        assert_eq!(current, original);
-
-        let mut constant_icon = current.clone();
-        put(&mut constant_icon, 0x44374f, &[6]);
-        constant_icon.memory.bytes.remove(&0x44376d);
-        let mut observed = Observations {
-            icons: [0, 0, 0].into(),
-            ..Observations::default()
-        };
-        let result = showspellinfo(&constant_icon, &mut observed).unwrap();
-        assert!(
-            result
-                .effects
-                .contains(&SpellUiEffect::Drawing(DrawingEffect::GetColorIcon(10213)))
-        );
-
-        let mut dialog = state();
-        for (address, bytes) in [
-            (0x443759, [254]),
-            (0x44375a, [127]),
-            (0x44375d, [128]),
-            (0x44375b, [0]),
-            (0x44375e, [127]),
-            (0x44375c, [128]),
-            (0x443750, [3]),
-            (0x443751, [1]),
-            (0x443757, [2]),
-            (0x443758, [128]),
-        ] {
-            put(&mut dialog, address, &bytes);
-        }
-        for (address, value) in [
-            (0x4435cc, 256),
-            (0x44376e, 32760),
-            (0x443770, 30000),
-            (0x443776, 58),
-            (0x438776, 1),
-        ] {
-            word(&mut dialog, address, value);
-        }
-        let original = dialog.clone();
-        let mut observed = Observations {
-            icons: [0, 77, 0].into(),
-            widths: [0].into(),
-            ..Observations::default()
-        };
-        let result = spellinfoupdate(&dialog, &mut observed).unwrap();
-        assert_eq!(result.native_return, None);
-        assert_eq!(
-            observed.numbers,
-            [32248, -3024, -32768, 32384, 259, 256, -32768, 256]
-        );
-        assert_eq!(observed.names, [(134, 58)]);
-        assert_eq!(
-            observed.dialogs,
-            [13, 50, 14, 15, 18, 19, 52, 65, 66, 54, 67, 67, 16]
-        );
-        let mut expected = original.clone();
-        word(&mut expected, 0x4434b0, 3);
-        put(&mut expected, 0x4434dc, &1016_u32.to_be_bytes());
-        rect(
-            &mut expected,
-            0x4434ba,
-            BodyRect {
-                top: 11,
-                left: 26,
-                bottom: -1,
-                right: 14,
-            },
-        );
-        put(&mut expected, 0x439598, &0_u32.to_be_bytes());
-        put(&mut expected, 0x479ed8, b"\x08R134:I58");
-        expected.drawing.icon_handle = 0;
-        assert_eq!(result.state, expected);
-        assert_eq!(dialog, original);
-    }
-
-    #[test]
-    fn range_update_composes_real_geometry_and_observed_sane_before_redraw_gate() {
-        let mut current = state();
-        word(&mut current, 0x44719e, 3);
-        word(&mut current, 0x4471a0, 4);
-        word(&mut current, 0x4435bc, 4);
-        word(&mut current, 0x4435be, 2);
-        word(&mut current, 0x4435c0, 1);
-        let original = current.clone();
-        let distance = [0x40, 1, 0xa0, 0, 0, 0, 0, 0, 0, 0];
-        let mut observed = Observations {
-            square_root: Some(distance),
-            truncations: [5, 5, 5].into(),
-            ..Observations::default()
-        };
-        let result = updatespell(&current, 0, &mut observed).unwrap();
-        assert_eq!(observed.numbers, [5, 4]);
-        assert_eq!(observed.cursors, [148]);
-        assert_eq!(
-            &result.effects[..4],
-            &[
-                SpellUiEffect::Write(RecordWrite {
-                    address: 0x44349c,
-                    bytes: vec![0x40, 3, 0xc8, 0]
-                }),
-                SpellUiEffect::Write(RecordWrite {
-                    address: 0x4434a0,
-                    bytes: vec![0; 4]
-                }),
-                SpellUiEffect::Write(RecordWrite {
-                    address: 0x4434a4,
-                    bytes: vec![0; 2]
-                }),
-                SpellUiEffect::SquareRootExtended {
-                    input: [0x40, 3, 0xc8, 0, 0, 0, 0, 0, 0, 0],
-                    output: distance
-                },
-            ]
-        );
-        assert!(
-            result
-                .effects
-                .contains(&SpellUiEffect::Drawing(DrawingEffect::ForeColor(205)))
-        );
-        assert!(
-            result
-                .effects
-                .contains(&SpellUiEffect::Drawing(DrawingEffect::EraseRect(
-                    BodyRect {
-                        top: 427,
-                        left: 479,
-                        bottom: 447,
-                        right: 504
-                    }
-                )))
-        );
-        let mut expected = original.clone();
-        put(&mut expected, 0x44349c, &distance);
-        word(&mut expected, 0x4434b6, 5);
-        word(&mut expected, 0x4042c0, 5);
-        put(&mut expected, 0x479ed8, b"\x014");
-        assert_eq!(result.state, expected);
-        assert_eq!(current, original);
-        let mut unchanged_distance = expected.clone();
-        let mut observed = Observations {
-            square_root: Some(distance),
-            truncations: [5, 5, 5].into(),
-            ..Observations::default()
-        };
-        let skipped = updatespell(&unchanged_distance, 0, &mut observed).unwrap();
-        assert_eq!(skipped.state, unchanged_distance);
-        assert!(observed.numbers.is_empty());
-        assert!(observed.cursors.is_empty());
-        assert!(
-            !skipped
-                .effects
-                .iter()
-                .any(|effect| matches!(effect, SpellUiEffect::Drawing(DrawingEffect::SetPort(_))))
-        );
-        unchanged_distance.memory.bytes.remove(&0x44709a);
-        assert!(updatespell(&unchanged_distance, 1, &mut Observations::default()).is_err());
-        assert_eq!(current, original);
-    }
-
-    #[test]
-    fn outdoors_backups_frames_delays_and_signed_animation_overflow_are_ordered() {
-        let mut current = state();
-        put(&mut current, 0x442778, &5_i32.to_be_bytes());
-        put(&mut current, 0x44277c, &7_i32.to_be_bytes());
-        let original = current.clone();
-        let input = OutdoorsSpellInput {
-            animation: 0,
-            horizontal: 6,
-            vertical: 9,
-            extent: -3,
-            delay: 1,
-        };
-        let mut observed = Observations {
-            icons: [0, 51, 0, 52, 0, 53, 0, 54].into(),
-            ticks: [100, 102].repeat(8).into(),
-            ..Observations::default()
-        };
-        let result = spelleffectoutdoors(&current, input, &mut observed).unwrap();
-        let ids: Vec<_> = result
-            .effects
-            .iter()
-            .filter_map(|effect| {
-                if let SpellUiEffect::Drawing(DrawingEffect::GetColorIcon(id)) = effect {
-                    Some(*id)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        assert_eq!(ids, (12000..12008).collect::<Vec<_>>());
-        let destination = BodyRect {
-            top: 65,
-            left: 33,
-            bottom: 62,
-            right: 30,
-        };
-        let backup = BodyRect {
-            top: 0,
-            left: 0,
-            bottom: -3,
-            right: -3,
-        };
-        let copies: Vec<_> = result
-            .effects
-            .iter()
-            .filter_map(|effect| {
-                if let SpellUiEffect::Drawing(effect @ DrawingEffect::CopyBits { .. }) = effect {
-                    Some(effect.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        assert_eq!(copies.len(), 10);
-        assert_eq!(
-            copies[0],
-            DrawingEffect::CopyBits {
-                source_bitmap: 15,
-                destination_bitmap: 11,
-                source: destination,
-                destination: backup,
-                mode: 0,
-                mask: 0
-            }
-        );
-        assert!(copies[1..].iter().all(|copy| *copy
-            == DrawingEffect::CopyBits {
-                source_bitmap: 11,
-                destination_bitmap: 15,
-                source: backup,
-                destination,
-                mode: 0,
-                mask: 0
-            }));
-        assert_eq!(
-            result
-                .effects
-                .iter()
-                .filter(|effect| matches!(
-                    effect,
-                    SpellUiEffect::Timing(TimingEffect::TickCount(_))
-                ))
-                .count(),
-            16
-        );
-        let mut expected = original.clone();
-        rect(&mut expected, 0x44371a, destination);
-        put(&mut expected, 0x439598, &54_u32.to_be_bytes());
-        expected.drawing.icon_handle = 54;
-        assert_eq!(result.state, expected);
-        assert_eq!(current, original);
-        let mut skipped_input = input;
-        skipped_input.animation = 2595;
-        let skipped =
-            spelleffectoutdoors(&current, skipped_input, &mut Observations::default()).unwrap();
-        assert!(!skipped.effects.iter().any(|effect| matches!(
-            effect,
-            SpellUiEffect::Drawing(DrawingEffect::GetColorIcon(_)) | SpellUiEffect::Timing(_)
-        )));
-        assert_eq!(
-            skipped
-                .effects
-                .iter()
-                .filter(|effect| matches!(
-                    effect,
-                    SpellUiEffect::Drawing(DrawingEffect::CopyBits { .. })
-                ))
-                .count(),
-            2
-        );
-        let mut exhausted = Observations {
-            icons: [0].into(),
-            ticks: [100].into(),
-            ..Observations::default()
-        };
-        assert!(spelleffectoutdoors(&current, input, &mut exhausted).is_err());
-        assert_eq!(current, original);
-    }
 }

@@ -90,7 +90,7 @@ fn write(effects: &mut Vec<InterfaceEffect>, address: u32, bytes: &[u8]) {
 pub fn inwindow(
     body: i8,
     height: i16,
-    services: &mut impl InterfaceServices,
+    services: &mut (impl InterfaceServices + ?Sized),
 ) -> Result<InterfacePlan, RuleError> {
     let rect = BodyRect {
         top: 1,
@@ -118,7 +118,9 @@ pub fn inwindow(
 }
 
 /// centercursor, 0x131564: LocalToGlobal changes the point before low-memory writes.
-pub fn centercursor(services: &mut impl InterfaceServices) -> Result<InterfacePlan, RuleError> {
+pub fn centercursor(
+    services: &mut (impl InterfaceServices + ?Sized),
+) -> Result<InterfacePlan, RuleError> {
     let local = Point {
         vertical: 176,
         horizontal: 176,
@@ -154,7 +156,7 @@ fn button(
     input: ButtonInput,
     switch_port: i8,
     pressed: bool,
-    services: &mut impl InterfaceServices,
+    services: &mut (impl InterfaceServices + ?Sized),
 ) -> Result<InterfacePlan, RuleError> {
     let port = services.current_port()?;
     let pen = services.pen_state()?;
@@ -214,7 +216,7 @@ fn button(
 pub fn downbutton(
     input: ButtonInput,
     switch_port: i8,
-    services: &mut impl InterfaceServices,
+    services: &mut (impl InterfaceServices + ?Sized),
 ) -> Result<InterfacePlan, RuleError> {
     button(input, switch_port, true, services)
 }
@@ -223,7 +225,7 @@ pub fn downbutton(
 pub fn upbutton(
     input: ButtonInput,
     switch_port: i8,
-    services: &mut impl InterfaceServices,
+    services: &mut (impl InterfaceServices + ?Sized),
 ) -> Result<InterfacePlan, RuleError> {
     button(input, switch_port, false, services)
 }
@@ -239,7 +241,7 @@ pub struct MenuBarContext {
 /// hideMenuBar, 0x14ee9e. Both new regions are retained by the native body.
 pub fn hide_menu_bar(
     context: &mut MenuBarContext,
-    services: &mut impl InterfaceServices,
+    services: &mut (impl InterfaceServices + ?Sized),
 ) -> Result<InterfacePlan, RuleError> {
     let mut candidate = context.clone();
     let mut effects = Vec::new();
@@ -316,7 +318,7 @@ pub struct LightInput {
 /// The native void return is represented as effects without an invented D0.
 pub fn updatelight(
     input: LightInput,
-    services: &mut impl InterfaceServices,
+    services: &mut (impl InterfaceServices + ?Sized),
 ) -> Result<Vec<InterfaceEffect>, RuleError> {
     let top = i16::from(input.member).wrapping_mul(50).wrapping_add(9);
     let left = input.width_input.wrapping_add(387);
@@ -347,189 +349,4 @@ pub fn updatelight(
         InterfaceEffect::SetPort(input.port),
         InterfaceEffect::DrawPicture { handle, rect },
     ])
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::VecDeque;
-
-    struct Observations {
-        words: VecDeque<i16>,
-        read_addresses: Vec<u32>,
-        regions: VecDeque<u32>,
-        device: Option<BodyRect>,
-    }
-    impl InterfaceServices for Observations {
-        fn word(&mut self, address: u32) -> Result<i16, RuleError> {
-            self.read_addresses.push(address);
-            self.words
-                .pop_front()
-                .ok_or_else(|| RuleError::Invalid("missing test word".into()))
-        }
-        fn current_port(&mut self) -> Result<u32, RuleError> {
-            Ok(80)
-        }
-        fn pen_state(&mut self) -> Result<[u8; 18], RuleError> {
-            Ok([7; 18])
-        }
-        fn local_to_global(&mut self, point: Point) -> Result<Point, RuleError> {
-            assert_eq!(
-                point,
-                Point {
-                    vertical: 176,
-                    horizontal: 176
-                }
-            );
-            Ok(Point {
-                vertical: -1,
-                horizontal: 32767,
-            })
-        }
-        fn point_in_rect(&mut self, point: Point, rect: BodyRect) -> Result<u8, RuleError> {
-            assert_eq!(
-                point,
-                Point {
-                    vertical: 5,
-                    horizontal: 4
-                }
-            );
-            assert_eq!(
-                rect,
-                BodyRect {
-                    top: 1,
-                    left: 1,
-                    bottom: -32760,
-                    right: -24568
-                }
-            );
-            Ok(255)
-        }
-        fn new_region(&mut self) -> Result<u32, RuleError> {
-            self.regions
-                .pop_front()
-                .ok_or_else(|| RuleError::Invalid("missing test region".into()))
-        }
-        fn main_device_rect(&mut self) -> Result<BodyRect, RuleError> {
-            self.device
-                .ok_or_else(|| RuleError::Invalid("missing device bounds".into()))
-        }
-    }
-    fn setup() -> Observations {
-        Observations {
-            words: [4, 5].into(),
-            read_addresses: Vec::new(),
-            regions: [100, 101].into(),
-            device: Some(BodyRect {
-                top: 0,
-                left: 0,
-                bottom: 640,
-                right: 480,
-            }),
-        }
-    }
-
-    #[test]
-    fn cursor_uses_transformed_point_and_body_nine_uses_negative_enemy_slot() {
-        let mut services = setup();
-        let plan = centercursor(&mut services).unwrap();
-        assert_eq!(
-            &plan.effects[1..],
-            &[
-                InterfaceEffect::Write(RecordWrite {
-                    address: 0x82c,
-                    bytes: vec![255, 255, 127, 255]
-                }),
-                InterfaceEffect::Write(RecordWrite {
-                    address: 0x828,
-                    bytes: vec![255, 255, 127, 255]
-                }),
-                InterfaceEffect::Write(RecordWrite {
-                    address: 0x8ce,
-                    bytes: vec![255, 255]
-                }),
-            ]
-        );
-        assert_eq!(inwindow(9, 8192, &mut services).unwrap().native_return, 1);
-        assert_eq!(services.read_addresses, [0x446f06, 0x446f08]);
-    }
-
-    #[test]
-    fn region_plans_are_atomic_and_light_keeps_unsigned_record_addressing() {
-        let mut context = MenuBarContext {
-            height: 20,
-            saved_height: 10,
-            saved_region: 50,
-            desktop_region: 60,
-        };
-        let original = context.clone();
-        let mut services = setup();
-        services.device = None;
-        assert!(hide_menu_bar(&mut context, &mut services).is_err());
-        assert_eq!(context, original);
-        services = setup();
-        let hidden = hide_menu_bar(&mut context, &mut services).unwrap();
-        assert_eq!(
-            (context.height, context.saved_height, context.saved_region),
-            (0, 20, 100)
-        );
-        assert_eq!(
-            hidden.effects.last(),
-            Some(&InterfaceEffect::PaintOne {
-                window: 0,
-                region: 100
-            })
-        );
-        assert!(hidden.effects.contains(&InterfaceEffect::UnionRegion {
-            source_a: 100,
-            source_b: 101,
-            destination: 60,
-        }));
-        let shown = show_menu_bar(&mut context);
-        assert_eq!(context.height, 20);
-        assert_eq!(
-            &shown.effects[1..],
-            &[
-                InterfaceEffect::SectRegion {
-                    source_a: 100,
-                    source_b: 60,
-                    destination: 60
-                },
-                InterfaceEffect::DrawMenuBar,
-            ]
-        );
-        let input = LightInput {
-            member: -1,
-            override_picture: 0,
-            port: 90,
-            width_input: 32767,
-            threshold: 3,
-            ordinary_picture: 10,
-            override_handle: 20,
-            low_picture: 30,
-        };
-        services.words = [4, -1].into();
-        let effects = updatelight(input, &mut services).unwrap();
-        assert_eq!(
-            services.read_addresses,
-            [0x448aa0 + 65535 * 0xc42 + 0x20; 2]
-        );
-        assert_eq!(
-            effects[1],
-            InterfaceEffect::DrawPicture {
-                handle: 30,
-                rect: BodyRect {
-                    top: -41,
-                    left: -32382,
-                    bottom: -32,
-                    right: -32373
-                }
-            }
-        );
-        let mut override_input = input;
-        override_input.override_picture = 1;
-        services.words.clear();
-        assert!(updatelight(override_input, &mut services).is_ok());
-        assert_eq!(services.read_addresses.len(), 2);
-    }
 }

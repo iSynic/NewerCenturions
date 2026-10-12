@@ -90,13 +90,13 @@ pub struct InventoryEditPlan {
 pub enum InventoryEditQualification {
     SourcePortWithObservedBoundariesAndCapturedChildren,
 }
-struct Runner<'a, S> {
+struct Runner<'a, S: ?Sized> {
     plan: InventoryEditPlan,
     services: &'a mut S,
     limits: InventoryEditLimits,
     remaining: u32,
 }
-impl<S: InventoryEditServices> Runner<'_, S> {
+impl<S: InventoryEditServices + ?Sized> Runner<'_, S> {
     fn step(&mut self) -> Result<(), RuleError> {
         self.remaining = self
             .remaining
@@ -564,7 +564,7 @@ fn icon_context(rect: crate::recovered_geometry::BodyRect) -> DrawingContext {
         buildings: vec![],
     }
 }
-fn runner<'a, S: InventoryEditServices>(
+fn runner<'a, S: InventoryEditServices + ?Sized>(
     memory: &RenderingMemory,
     random: &RandomState,
     limits: InventoryEditLimits,
@@ -592,7 +592,7 @@ pub fn change(
     random: &RandomState,
     frame: u32,
     limits: InventoryEditLimits,
-    services: &mut impl InventoryEditServices,
+    services: &mut (impl InventoryEditServices + ?Sized),
 ) -> Result<InventoryEditPlan, RuleError> {
     let mut e = runner(memory, random, limits, services);
     let deferred = e.w(frame.wrapping_add(10))?;
@@ -760,7 +760,7 @@ pub fn edit_items(
     random: &RandomState,
     frame: u32,
     limits: InventoryEditLimits,
-    services: &mut impl InventoryEditServices,
+    services: &mut (impl InventoryEditServices + ?Sized),
 ) -> Result<InventoryEditPlan, RuleError> {
     let mut e = runner(memory, random, limits, services);
     let mut member = e.w(frame.wrapping_add(8))?;
@@ -967,7 +967,7 @@ pub fn plus(
     random: &RandomState,
     frame: u32,
     limits: InventoryEditLimits,
-    services: &mut impl InventoryEditServices,
+    services: &mut (impl InventoryEditServices + ?Sized),
 ) -> Result<InventoryEditPlan, RuleError> {
     let mut e = runner(memory, random, limits, services);
     let source = e.l(frame.wrapping_add(8))?;
@@ -1016,7 +1016,7 @@ pub fn minus(
     random: &RandomState,
     frame: u32,
     limits: InventoryEditLimits,
-    services: &mut impl InventoryEditServices,
+    services: &mut (impl InventoryEditServices + ?Sized),
 ) -> Result<InventoryEditPlan, RuleError> {
     let mut e = runner(memory, random, limits, services);
     let source = e.l(frame.wrapping_add(8))?;
@@ -1079,7 +1079,7 @@ pub fn add_initial_items(
     random: &RandomState,
     frame: u32,
     limits: InventoryEditLimits,
-    services: &mut impl InventoryEditServices,
+    services: &mut (impl InventoryEditServices + ?Sized),
 ) -> Result<InventoryEditPlan, RuleError> {
     let mut e = runner(memory, random, limits, services);
     let mut index = 0i16;
@@ -1174,589 +1174,4 @@ pub fn add_initial_items(
     e.ww(0x447bf6, e.w(0x41fb78)?)?;
     e.plan.native_return = Some(0);
     Ok(e.plan)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recovered_audio::{AudioContext, AudioObservation};
-    use crate::recovered_character_panels::{
-        CharacterPanelObservation, CharacterPanelRequest, PanelArgument,
-    };
-    use crate::recovered_drawing::{BuildingWorld, DrawingServices, PictureObservation};
-    use crate::recovered_equipment::test_support::{self as eq, FRAME, put_long, put_word};
-    use crate::recovered_equipment_ui::EquipmentUiServices;
-    use crate::recovered_feedback::{
-        FeedbackMemory, FeedbackObservation, FeedbackRequest, FeedbackServices,
-    };
-    use crate::recovered_files::{FileObservation, FileReply, FileRequest};
-    use crate::recovered_gamma::{
-        GammaError, GammaMemory, GammaObservation, GammaRequest, GammaServices,
-    };
-    use crate::recovered_gamma_control::{GammaControlRequest, GammaControlServices};
-    use crate::recovered_geometry::BodyRect;
-    use crate::recovered_interface::{InterfaceServices, Point};
-    use crate::recovered_inventory_rules::{InventoryServices, SaneRequest};
-    use crate::recovered_item_ui::{ItemUiReply, ItemUiRequest, ItemUiServices};
-    use crate::recovered_load_control::{LoadObservation, LoadRequest, VersionInputs};
-    use crate::recovered_runtime::{RuntimeObservation, RuntimeReply, RuntimeRequest};
-    use crate::recovered_storage::test_support as storage;
-    use crate::recovered_text::NumericServices;
-    use std::collections::VecDeque;
-
-    #[derive(Default)]
-    struct Services {
-        base: storage::Services,
-        requests: Vec<InventoryEditRequest>,
-        opens: VecDeque<u32>,
-        names: VecDeque<Vec<u8>>,
-        lengths: VecDeque<u32>,
-        compares: VecDeque<u32>,
-        dialogs: VecDeque<i16>,
-        writes: Vec<(u32, Vec<u8>)>,
-        portrait_ports: Vec<u32>,
-    }
-    fn unused<T>() -> Result<T, RuleError> {
-        Err(RuleError::Invalid(
-            "unused synthetic inventory service".into(),
-        ))
-    }
-    impl FeedbackServices for Services {
-        fn observe(
-            &self,
-            r: &FeedbackRequest,
-            m: &FeedbackMemory,
-        ) -> Result<FeedbackObservation, RuleError> {
-            FeedbackServices::observe(&self.base, r, m)
-        }
-        fn sound_observations(
-            &self,
-            id: i16,
-            c: &AudioContext,
-            m: &FeedbackMemory,
-        ) -> Result<Vec<AudioObservation>, RuleError> {
-            FeedbackServices::sound_observations(&self.base, id, c, m)
-        }
-    }
-    impl GammaServices for Services {
-        fn observe(
-            &self,
-            r: &GammaRequest,
-            m: &GammaMemory,
-        ) -> Result<GammaObservation, GammaError> {
-            GammaServices::observe(&self.base, r, m)
-        }
-    }
-    impl GammaControlServices for Services {
-        fn observe_control(
-            &self,
-            r: &GammaControlRequest,
-            m: &GammaMemory,
-        ) -> Result<GammaObservation, GammaError> {
-            self.base.observe_control(r, m)
-        }
-    }
-    impl LoadServices for Services {
-        fn observe_load(
-            &self,
-            r: &LoadRequest,
-            m: &RenderingMemory,
-        ) -> Result<LoadObservation, RuleError> {
-            self.base.observe_load(r, m)
-        }
-        fn version_inputs(
-            &self,
-            id: i16,
-            file: i16,
-            m: &RenderingMemory,
-        ) -> Result<VersionInputs, RuleError> {
-            self.base.version_inputs(id, file, m)
-        }
-        fn filename_number(&self, v: u8, m: &RenderingMemory) -> Result<PascalString, RuleError> {
-            self.base.filename_number(v, m)
-        }
-    }
-    impl InventoryServices for Services {
-        fn sane(
-            &self,
-            r: &SaneRequest,
-            m: &RenderingMemory,
-        ) -> Result<Vec<RecordWrite>, RuleError> {
-            InventoryServices::sane(&self.base.base, r, m)
-        }
-    }
-    impl NumericServices for Services {
-        fn number_to_string(&mut self, v: i32) -> Result<PascalString, RuleError> {
-            self.base.base.number_to_string(v)
-        }
-        fn string_to_number(&mut self, v: &PascalString) -> Result<i32, RuleError> {
-            self.base.base.string_to_number(v)
-        }
-    }
-    impl DrawingServices for Services {
-        fn color_icon(&mut self, id: i16) -> Result<u32, RuleError> {
-            self.base.color_icon(id)
-        }
-        fn indexed_string(&mut self, r: i16, i: i16) -> Result<PascalString, RuleError> {
-            self.base.indexed_string(r, i)
-        }
-        fn current_world(&mut self) -> Result<(u32, u32), RuleError> {
-            self.base.current_world()
-        }
-        fn picture(&mut self, id: i16) -> Result<PictureObservation, RuleError> {
-            self.base.picture(id)
-        }
-        fn new_world(&mut self, d: i16, r: BodyRect) -> Result<(i16, BuildingWorld), RuleError> {
-            self.base.new_world(d, r)
-        }
-    }
-    impl ItemUiServices for Services {
-        fn observe(
-            &mut self,
-            r: &ItemUiRequest,
-            _: &RenderingMemory,
-        ) -> Result<ItemUiReply, RuleError> {
-            match r {
-                ItemUiRequest::GetDialogItem {
-                    item_type,
-                    handle,
-                    rectangle,
-                    ..
-                } => Ok(ItemUiReply::Writes(vec![
-                    RecordWrite {
-                        address: *item_type,
-                        bytes: 4i16.to_be_bytes().to_vec(),
-                    },
-                    RecordWrite {
-                        address: *handle,
-                        bytes: 7u32.to_be_bytes().to_vec(),
-                    },
-                    RecordWrite {
-                        address: *rectangle,
-                        bytes: vec![0; 8],
-                    },
-                ])),
-                ItemUiRequest::ReadFile { .. } => Ok(ItemUiReply::File(FileReply::Read {
-                    bytes_written: vec![1, b'D'],
-                    elements_read: 1,
-                })),
-                ItemUiRequest::File(FileRequest::Open { .. }) => {
-                    Ok(ItemUiReply::File(FileReply::Handle(8)))
-                }
-                ItemUiRequest::File(_) => Ok(ItemUiReply::File(FileReply::Ignored)),
-                _ => unused(),
-            }
-        }
-    }
-    impl EquipmentUiServices for Services {
-        fn pen_position(
-            &mut self,
-            d: u32,
-            m: &RenderingMemory,
-        ) -> Result<Vec<RecordWrite>, RuleError> {
-            self.base.base.pen_position(d, m)
-        }
-    }
-    impl EquipmentServices for Services {
-        fn profile_observations(
-            &mut self,
-            r: i16,
-            c: i16,
-            m: &RenderingMemory,
-        ) -> Result<Vec<FileObservation>, RuleError> {
-            if r == 0 && c == 0 {
-                Ok(vec![])
-            } else {
-                self.base.base.profile_observations(r, c, m)
-            }
-        }
-    }
-    impl InterfaceServices for Services {
-        fn word(&mut self, _: u32) -> Result<i16, RuleError> {
-            unused()
-        }
-        fn current_port(&mut self) -> Result<u32, RuleError> {
-            unused()
-        }
-        fn pen_state(&mut self) -> Result<[u8; 18], RuleError> {
-            unused()
-        }
-        fn local_to_global(&mut self, _: Point) -> Result<Point, RuleError> {
-            unused()
-        }
-        fn point_in_rect(&mut self, _: Point, _: BodyRect) -> Result<u8, RuleError> {
-            unused()
-        }
-        fn new_region(&mut self) -> Result<u32, RuleError> {
-            unused()
-        }
-        fn main_device_rect(&mut self) -> Result<BodyRect, RuleError> {
-            unused()
-        }
-    }
-    impl CharacterPanelServices for Services {
-        fn panel_observe(
-            &mut self,
-            r: &CharacterPanelRequest,
-            m: &RenderingMemory,
-        ) -> Result<CharacterPanelObservation, RuleError> {
-            let convert = |a: &PanelArgument| match *a {
-                PanelArgument::Byte(v) => FeedbackArg::Byte(v),
-                PanelArgument::Word(v) => FeedbackArg::Word(v),
-                PanelArgument::Long(v) => FeedbackArg::Long(v),
-                PanelArgument::Pointer(v) => FeedbackArg::Pointer(v),
-            };
-            let r = match r {
-                CharacterPanelRequest::Toolbox {
-                    selector,
-                    arguments,
-                } => InventoryEditRequest::Toolbox {
-                    opcode: *selector,
-                    arguments: arguments.iter().map(convert).collect(),
-                    d0_input: None,
-                },
-                CharacterPanelRequest::RuntimeString { entry, arguments } => {
-                    InventoryEditRequest::Imported {
-                        address: *entry,
-                        arguments: arguments.iter().map(convert).collect(),
-                    }
-                }
-            };
-            let o = self.observe_edit(&r, m)?;
-            Ok(CharacterPanelObservation {
-                value: o.value,
-                memory: o.memory,
-            })
-        }
-        fn runtime_observations(
-            &mut self,
-            _: u32,
-            m: &RenderingMemory,
-        ) -> Result<Vec<RuntimeObservation>, RuleError> {
-            let mut o = vec![];
-            for a in [0x4386d8, 0x4386e0, 0x4386e4, 0x4386e8, 0x4386dc] {
-                o.push(RuntimeObservation {
-                    request: RuntimeRequest::UnlockPixels(m.long(a)?),
-                    reply: RuntimeReply::Ignored,
-                });
-            }
-            o.push(RuntimeObservation {
-                request: RuntimeRequest::MaxMem,
-                reply: RuntimeReply::MaxMem { d0: 100, a0: 200 },
-            });
-            for (i, a) in [0x4386b4, 0x4386bc, 0x4386c0, 0x4386c4, 0x4386b8]
-                .into_iter()
-                .enumerate()
-            {
-                let v = 0x9500 + i as u32;
-                o.push(RuntimeObservation {
-                    request: RuntimeRequest::GetGWorldPixMap(m.long(a)?),
-                    reply: RuntimeReply::Pointer(v),
-                });
-                o.push(RuntimeObservation {
-                    request: RuntimeRequest::LockPixels(v),
-                    reply: RuntimeReply::LockPixels {
-                        boolean: 1,
-                        native_d0: 0x43210000,
-                    },
-                });
-            }
-            Ok(o)
-        }
-    }
-    fn cstring(m: &RenderingMemory, a: u32) -> Result<Vec<u8>, RuleError> {
-        let mut b = vec![];
-        for i in 0..256 {
-            let v = m.byte(a + i)?;
-            if v == 0 {
-                return Ok(b);
-            }
-            b.push(v);
-        }
-        unused()
-    }
-    fn argument(a: &FeedbackArg) -> u32 {
-        match *a {
-            FeedbackArg::Word(v) => u32::from(v),
-            FeedbackArg::Byte(v) => u32::from(v),
-            FeedbackArg::Long(v) | FeedbackArg::Pointer(v) => v,
-        }
-    }
-    impl InventoryEditServices for Services {
-        fn observe_edit(
-            &mut self,
-            r: &InventoryEditRequest,
-            m: &RenderingMemory,
-        ) -> Result<InventoryEditObservation, RuleError> {
-            self.requests.push(r.clone());
-            let mut m = m.clone();
-            let mut value = 0;
-            let mut d0 = 0x12345678;
-            match r {
-                InventoryEditRequest::Toolbox {
-                    opcode, arguments, ..
-                } => match opcode {
-                    0xa874 => {
-                        let a = argument(&arguments[0]);
-                        self.portrait_ports.push(a);
-                        let v = m.long(0x3fe302)?;
-                        put_long(&mut m, a, v);
-                    }
-                    0xaa19 | 0xaa1a => m.insert_region(argument(&arguments[0]), &[0; 6]),
-                    0xa97c => value = 0x8888,
-                    0xa873 => put_long(&mut m, 0x3fe302, argument(&arguments[0])),
-                    0xaa1e => value = 0x9000,
-                    0xa98d => {
-                        put_word(&mut m, argument(&arguments[2]), 4);
-                        put_long(&mut m, argument(&arguments[3]), 7);
-                        m.insert_region(argument(&arguments[4]), &[0; 8]);
-                    }
-                    0xa991 => put_word(
-                        &mut m,
-                        argument(&arguments[1]),
-                        self.dialogs.pop_front().unwrap_or(1),
-                    ),
-                    _ => (),
-                },
-                InventoryEditRequest::Imported { address, arguments } => {
-                    let a: Vec<u32> = arguments.iter().map(argument).collect();
-                    match address {
-                        0x400070 => value = self.opens.pop_front().unwrap_or(99),
-                        0x400090 => {
-                            let mut b = cstring(&m, a[0])?;
-                            b.push(0);
-                            m.insert_region(a[1], &b);
-                        }
-                        0x400098 => {
-                            let mut b = cstring(&m, a[1])?;
-                            b.extend(cstring(&m, a[0])?);
-                            b.push(0);
-                            m.insert_region(a[1], &b);
-                        }
-                        0x400048 => {
-                            value = 1;
-                            if a[2] == 30 {
-                                let mut b = self.names.pop_front().unwrap_or_default();
-                                b.resize(30, 0);
-                                m.insert_region(a[3], &b);
-                            } else {
-                                m.insert_region(a[3], &0x4321u16.to_be_bytes());
-                            }
-                        }
-                        0x400050 => {
-                            self.writes
-                                .push((a[3], equipment::read(&m, a[3], a[2] as usize)?));
-                            value = 1;
-                        }
-                        0x400088 => value = self.lengths.pop_front().unwrap_or(0),
-                        0x4000a8 => value = self.compares.pop_front().unwrap_or(0),
-                        0x400068 => d0 = 0xbeef5678,
-                        0x400188 => {
-                            let b = cstring(&m, a[0])?;
-                            m.insert_region(a[0], PascalString::from_payload(&b)?.raw());
-                        }
-                        0x400180 => {
-                            let n = usize::from(m.byte(a[0])?);
-                            let mut b = equipment::read(&m, a[0] + 1, n)?;
-                            b.push(0);
-                            m.insert_region(a[0], &b);
-                        }
-                        _ => (),
-                    }
-                }
-            }
-            Ok(InventoryEditObservation {
-                value,
-                d0,
-                memory: m,
-            })
-        }
-    }
-    const LIMITS: InventoryEditLimits = InventoryEditLimits {
-        maximum_steps: 300,
-        equipment: eq::LIMITS,
-        maximum_random_draws: 2,
-    };
-    fn fixture() -> RenderingMemory {
-        let mut m = storage::fixture();
-        m.insert_region(FRAME - 0x6000, &vec![0; 0x6040]);
-        put_word(&mut m, 0x438776, 0);
-        put_word(&mut m, 0x439582, 0);
-        put_word(&mut m, 0x439584, 0);
-        m.insert_region(0x44273a, &[0xff]);
-        put_word(&mut m, record(0) + 0x1a, 0);
-        put_word(&mut m, 0x447236, 0);
-        put_word(&mut m, 0x44724e, 0);
-        put_word(&mut m, 0x447250, 0);
-        put_long(&mut m, 0x9000, 0x9100);
-        put_word(&mut m, 0x914a, 32);
-        m.insert_region(record(0) + 0xa21, b"NAME\0");
-        m.insert_region(0x9000, &0x9100u32.to_be_bytes());
-        m.insert_region(0x9010, &[0; 30]);
-        m.insert_region(0x401a71, &[0]);
-        m.insert_region(0x401a66, b"Warriors:\0");
-        m.insert_region(0x403ef8, &[0]);
-        m.insert_region(0x402986, b":Data Files:Data ID DES\0");
-        m
-    }
-    #[test]
-    fn plus_fallback_scans_low_word_lengths_and_writes_caller_payload() {
-        let mut m = fixture();
-        put_long(&mut m, FRAME + 8, 0x9010);
-        put_word(&mut m, FRAME + 12, 5);
-        m.insert_region(0x9010, b"NEW\0");
-        let mut s = Services {
-            opens: VecDeque::from([0, 99]),
-            names: VecDeque::from([b"occupied\0".to_vec(), vec![]]),
-            lengths: VecDeque::from([8, 0x10000]),
-            ..Services::default()
-        };
-        let result = plus(&m, &RandomState::new(7), FRAME, LIMITS, &mut s).unwrap();
-        assert_eq!(s.writes.len(), 2);
-        assert_eq!(s.writes[0].0, 0x9010);
-        assert_eq!(s.writes[0].1.len(), 30);
-        assert_eq!(s.writes[1], (FRAME + 12, vec![0, 5]));
-        assert!(s.requests.iter().any(|r| *r
-            == InventoryEditRequest::Imported {
-                address: 0x400078,
-                arguments: vec![w(0), l(32), l(99)]
-            }));
-        assert_eq!(result.native_return, Some(0xbeef5678));
-        assert_eq!(result.random, RandomState::new(7));
-    }
-    #[test]
-    fn minus_preserves_payload_and_stale_name_tail_after_matching_low_word() {
-        let mut m = fixture();
-        put_long(&mut m, FRAME + 8, 0x9010);
-        m.insert_region(0x9010, b"OLD\0");
-        m.insert_region(FRAME + 13, &[0]);
-        let mut s = Services {
-            names: VecDeque::from([b"OLDtail\0".to_vec()]),
-            compares: VecDeque::from([0x10000]),
-            ..Services::default()
-        };
-        let result = minus(&m, &RandomState::new(7), FRAME, LIMITS, &mut s).unwrap();
-        assert_eq!(
-            &s.writes[0].1[..8],
-            &[0, b'L', b'D', b't', b'a', b'i', b'l', 0]
-        );
-        assert_eq!(s.writes[1], (FRAME - 32, vec![0x43, 0x21]));
-        assert!(s.requests.iter().any(|r| matches!(
-            r,
-            InventoryEditRequest::Imported {
-                address: 0x400058,
-                ..
-            }
-        )));
-        assert_eq!(result.native_return, Some(0xbeef5678));
-    }
-    #[test]
-    fn edit_all_modifier_cases_keep_byte_clamps_word_charges_and_portrait_frame() {
-        let mut m = fixture();
-        put_word(&mut m, FRAME + 8, 0);
-        put_word(&mut m, FRAME + 10, 0);
-        put_word(&mut m, 0x4046ea, 1);
-        let address = node(0, 0);
-        put_word(&mut m, address, 0);
-        put_word(&mut m, address + 2, 9);
-        put_word(&mut m, address + 6, 9);
-        let mut s = Services {
-            dialogs: (40..=63).chain([1]).collect(),
-            ..Services::default()
-        };
-        let result = edit_items(&m, &RandomState::new(7), FRAME, LIMITS, &mut s).unwrap();
-        assert_eq!(result.memory.byte(address + 13).unwrap(), 2);
-        assert_eq!(result.memory.word(address + 6).unwrap(), 9);
-        assert_eq!(result.memory.word(address + 2).unwrap(), 8);
-        assert_eq!(
-            result
-                .effects
-                .iter()
-                .filter(|e| matches!(e, InventoryEditEffect::Pin { .. }))
-                .count(),
-            24 * 11
-        );
-        assert!(s.portrait_ports.contains(&(FRAME - 0x49cc - 294)));
-        assert_eq!(result.native_return, Some(0));
-        assert_eq!(result.random, RandomState::new(7));
-        assert_eq!(
-            &equipment::read(&result.memory, record(0) + 0xa21, 5).unwrap(),
-            b"NAME\0"
-        );
-    }
-    #[test]
-    fn change_copies_weighted_player_and_executes_warehouse_display() {
-        let mut m = fixture();
-        put_word(&mut m, FRAME + 8, 0);
-        put_word(&mut m, FRAME + 10, 1);
-        m.insert_region(0x44273d, &[0]);
-        m.insert_region(0x44273e, &[0xff]);
-        put_long(&mut m, 0x439404, 1);
-        put_long(&mut m, 0x439420, 1);
-        put_long(&mut m, 0x4393fc, 20);
-        put_word(&mut m, 0x43875a, 1);
-        let mut s = Services::default();
-        let result = change(&m, &RandomState::new(7), FRAME, LIMITS, &mut s).unwrap();
-        assert_eq!(result.memory.long(0x439404).unwrap(), 20);
-        assert_eq!(result.memory.word(0x43875c).unwrap(), 1);
-        assert_eq!(result.memory.word(0x447bf2).unwrap(), 0);
-        assert_eq!(result.memory.byte(0x4427b1).unwrap(), 0);
-        assert_eq!(result.native_return, Some(0));
-        let caller_arguments: Vec<_> = result
-            .effects
-            .iter()
-            .filter_map(|effect| match effect {
-                InventoryEditEffect::Write(write)
-                    if write.address == FRAME - 18 || write.address == FRAME - 20 =>
-                {
-                    Some((write.address, write.bytes.clone()))
-                }
-                _ => None,
-            })
-            .take(2)
-            .collect();
-        assert_eq!(
-            caller_arguments,
-            vec![(FRAME - 18, vec![0xff, 0xff]), (FRAME - 20, vec![0, 0])]
-        );
-        assert!(
-            result
-                .effects
-                .iter()
-                .any(|e| matches!(e, InventoryEditEffect::Character(_)))
-        );
-    }
-    #[test]
-    fn initial_items_execute_complete_random_child_and_fail_atomically_on_draw_limit() {
-        let mut m = fixture();
-        let old = m.bytes.clone();
-        m.insert_region(0x4046e6, &vec![0; (0x478288 - 0x4046e6) as usize]);
-        m.bytes.extend(old);
-        put_word(&mut m, 0x41fb7a, 1);
-        put_word(&mut m, 0x447bf4, 100);
-        put_word(&mut m, 0x4046e6, 1);
-        put_word(&mut m, 0x41fb78, 77);
-        eq::item(&mut m, 1, 26);
-        let before = m.clone();
-        let random = RandomState::new(12);
-        let mut s = Services::default();
-        let result = add_initial_items(&m, &random, FRAME, LIMITS, &mut s).unwrap();
-        assert_eq!(result.random.draws, 1);
-        assert_eq!(
-            result
-                .effects
-                .iter()
-                .filter(|e| matches!(e, InventoryEditEffect::Install(RandomItemEffect::Random(_))))
-                .count(),
-            1
-        );
-        assert_eq!(result.memory.word(0x44734e).unwrap(), 1);
-        assert_eq!(result.memory.word(0x448bd2).unwrap(), 1);
-        assert_eq!(result.memory.word(0x447bf6).unwrap(), 77);
-        let mut limited = LIMITS;
-        limited.maximum_random_draws = 0;
-        assert!(add_initial_items(&m, &random, FRAME, limited, &mut Services::default()).is_err());
-        assert_eq!(m, before);
-        assert_eq!(random, RandomState::new(12));
-    }
 }

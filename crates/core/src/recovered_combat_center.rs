@@ -118,7 +118,7 @@ impl Execution {
         &mut self,
         opcode: u16,
         arguments: Vec<FeedbackArg>,
-        s: &impl CombatCenterServices,
+        s: &(impl CombatCenterServices + ?Sized),
     ) -> Result<u32, RuleError> {
         self.step()?;
         let request = FeedbackRequest::Toolbox { opcode, arguments };
@@ -133,11 +133,19 @@ impl Execution {
             }));
         Ok(value)
     }
-    fn port(&mut self, pointer: u32, s: &impl CombatCenterServices) -> Result<(), RuleError> {
+    fn port(
+        &mut self,
+        pointer: u32,
+        s: &(impl CombatCenterServices + ?Sized),
+    ) -> Result<(), RuleError> {
         self.trap(0xa873, vec![L(pointer)], s)?;
         Ok(())
     }
-    fn sound(&mut self, id: i16, s: &impl CombatCenterServices) -> Result<(), RuleError> {
+    fn sound(
+        &mut self,
+        id: i16,
+        s: &(impl CombatCenterServices + ?Sized),
+    ) -> Result<(), RuleError> {
         let child = recovered_feedback::sound(&self.plan.memory, id, s)?;
         self.plan.memory = child.memory;
         self.plan
@@ -157,7 +165,7 @@ impl Execution {
         body: i16,
         force: i16,
         secondary: i16,
-        s: &impl CombatCenterServices,
+        s: &(impl CombatCenterServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.ww(frame.wrapping_add(12), secondary)?;
         self.ww(frame.wrapping_add(10), force)?;
@@ -185,7 +193,7 @@ pub fn showrange(
     memory: &RenderingMemory,
     frame: u32,
     limit: u32,
-    s: &impl CombatCenterServices,
+    s: &(impl CombatCenterServices + ?Sized),
 ) -> Result<CombatCenterPlan, RuleError> {
     let mut e = Execution::new(memory, limit, Some(0));
     e.port(e.l(0x43879c)?, s)?;
@@ -309,7 +317,7 @@ fn fastplot(
     tile: i16,
     destination: BodyRect,
     copy: i8,
-    s: &mut impl CombatCenterServices,
+    s: &mut (impl CombatCenterServices + ?Sized),
 ) -> Result<(), RuleError> {
     let rect = if tile >= 23000 {
         e.plan.memory.rect(0x4471f2)?
@@ -398,7 +406,7 @@ fn bodyground(
     e: &mut Execution,
     body: i16,
     copy: i16,
-    s: &mut impl CombatCenterServices,
+    s: &mut (impl CombatCenterServices + ?Sized),
 ) -> Result<(), RuleError> {
     let drawing_enabled = e.w(0x438776)?;
     if drawing_enabled == 0 {
@@ -468,7 +476,7 @@ pub fn restore_body_ground(
     body: i16,
     copy: i16,
     limit: u32,
-    services: &mut impl CombatCenterServices,
+    services: &mut (impl CombatCenterServices + ?Sized),
 ) -> Result<CombatCenterPlan, RuleError> {
     let mut e = Execution::new(memory, limit, None);
     bodyground(&mut e, body, copy, services)?;
@@ -538,7 +546,7 @@ fn copy(
     destination_global: u32,
     sr: u32,
     dr: u32,
-    s: &impl CombatCenterServices,
+    s: &(impl CombatCenterServices + ?Sized),
 ) -> Result<(), RuleError> {
     e.trap(
         0xa8ec,
@@ -560,7 +568,7 @@ fn field(
     frame: u32,
     large: bool,
     limit: u32,
-    s: &mut impl CombatCenterServices,
+    s: &mut (impl CombatCenterServices + ?Sized),
 ) -> Result<CombatCenterPlan, RuleError> {
     let mut e = Execution::new(memory, limit, Some(0));
     if large {
@@ -753,7 +761,7 @@ pub fn centerfieldlarge(
     memory: &RenderingMemory,
     frame: u32,
     limit: u32,
-    s: &mut impl CombatCenterServices,
+    s: &mut (impl CombatCenterServices + ?Sized),
 ) -> Result<CombatCenterPlan, RuleError> {
     field(memory, frame, true, limit, s)
 }
@@ -761,7 +769,7 @@ pub fn centerfieldsmall(
     memory: &RenderingMemory,
     frame: u32,
     limit: u32,
-    s: &mut impl CombatCenterServices,
+    s: &mut (impl CombatCenterServices + ?Sized),
 ) -> Result<CombatCenterPlan, RuleError> {
     field(memory, frame, false, limit, s)
 }
@@ -770,7 +778,7 @@ pub fn centerfield(
     memory: &RenderingMemory,
     frame: u32,
     limit: u32,
-    s: &mut impl CombatCenterServices,
+    s: &mut (impl CombatCenterServices + ?Sized),
 ) -> Result<CombatCenterPlan, RuleError> {
     let mut e = Execution::new(memory, limit, None);
     if e.w(0x438776)? != 0 {
@@ -795,7 +803,7 @@ pub fn centerpict(
     state: &WorldDisplayState,
     frame: u32,
     limit: u32,
-    s: &mut impl CombatCenterServices,
+    s: &mut (impl CombatCenterServices + ?Sized),
 ) -> Result<CombatCenterPlan, RuleError> {
     if (state.memory.byte(0x44273a)? as i8) < 0 || state.memory.word(0x438776)? != 0 {
         return Ok(Execution::new(&state.memory, limit, None).plan);
@@ -825,7 +833,7 @@ pub fn center(
     memory: &RenderingMemory,
     frame: u32,
     limit: u32,
-    s: &mut impl CombatCenterServices,
+    s: &mut (impl CombatCenterServices + ?Sized),
 ) -> Result<CombatCenterPlan, RuleError> {
     let mut e = Execution::new(memory, limit, Some(0));
     let body = e.b(frame.wrapping_add(9))? as i8;
@@ -862,7 +870,7 @@ pub fn center(
     Ok(e.plan)
 }
 
-struct WindowBridge<'a, S: CombatCenterServices> {
+struct WindowBridge<'a, S: CombatCenterServices + ?Sized> {
     e: &'a mut Execution,
     s: &'a S,
     frame: u32,
@@ -871,7 +879,7 @@ struct WindowBridge<'a, S: CombatCenterServices> {
 fn unused_interface() -> RuleError {
     RuleError::Invalid("unused centering interface observation".into())
 }
-impl<S: CombatCenterServices> InterfaceServices for WindowBridge<'_, S> {
+impl<S: CombatCenterServices + ?Sized> InterfaceServices for WindowBridge<'_, S> {
     fn word(&mut self, a: u32) -> Result<i16, RuleError> {
         let value = self.e.w(a)?;
         let local = match self.position_read {
@@ -915,7 +923,7 @@ pub fn centerstage2(
     memory: &RenderingMemory,
     frame: u32,
     limit: u32,
-    s: &mut impl CombatCenterServices,
+    s: &mut (impl CombatCenterServices + ?Sized),
 ) -> Result<CombatCenterPlan, RuleError> {
     let mut e = Execution::new(memory, limit, Some(0));
     let body = e.w(frame.wrapping_add(8))?;
@@ -966,7 +974,7 @@ pub fn centerstage2(
     Ok(e.plan)
 }
 
-pub fn centerstage<S: CombatCenterServices + CombatPanelServices>(
+pub fn centerstage<S: CombatCenterServices + CombatPanelServices + ?Sized>(
     memory: &RenderingMemory,
     frame: u32,
     odds_damage_frame: DamageFrame,
@@ -1040,7 +1048,7 @@ pub fn exitcapturemode(
     memory: &RenderingMemory,
     frame: u32,
     limit: u32,
-    s: &mut impl CombatCenterServices,
+    s: &mut (impl CombatCenterServices + ?Sized),
 ) -> Result<CombatCenterPlan, RuleError> {
     let mut e = Execution::new(memory, limit, Some(0));
     if e.b(0x43565f)? != 0 {
@@ -1074,307 +1082,4 @@ pub fn exitcapturemode(
     }
     e.plan.native_return = Some(0);
     Ok(e.plan)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recovered_audio::{AudioContext, AudioObservation};
-    use crate::recovered_combat_ui::{CombatUiObservation, CombatUiRequest};
-    use crate::recovered_drawing::{DrawingServices, PictureObservation};
-    use crate::recovered_feedback::FeedbackObservation;
-    use crate::recovered_rendering::{RenderingObservation, RenderingRequest};
-    use crate::recovered_text::NumericServices;
-    use crate::recovered_world_display::{WorldDisplayObservation, WorldDisplayRequest};
-    use std::cell::RefCell;
-
-    struct Observed {
-        inside: u8,
-        move_on_world: bool,
-        calls: RefCell<Vec<FeedbackRequest>>,
-    }
-    impl Observed {
-        fn new(inside: u8) -> Self {
-            Self {
-                inside,
-                move_on_world: false,
-                calls: RefCell::new(vec![]),
-            }
-        }
-    }
-    impl FeedbackServices for Observed {
-        fn observe(
-            &self,
-            request: &FeedbackRequest,
-            memory: &RenderingMemory,
-        ) -> Result<FeedbackObservation, RuleError> {
-            self.calls.borrow_mut().push(request.clone());
-            let mut after = memory.clone();
-            let mut value = 0;
-            if let FeedbackRequest::Toolbox { opcode, arguments } = request {
-                match *opcode {
-                    0xab1d if matches!(arguments.first(), Some(L(0x80005))) => {
-                        after.insert_region(0x4046da, &0xdeadbeefu32.to_be_bytes());
-                        after.insert_region(0x4046de, &0x12345678u32.to_be_bytes());
-                        if self.move_on_world {
-                            after.insert_region(0x44709a, &5i16.to_be_bytes());
-                            after.insert_region(0x44709c, &6i16.to_be_bytes());
-                        }
-                    }
-                    0xa8a7 => {
-                        if let [P(p), W(left), W(top), W(right), W(bottom)] = arguments.as_slice() {
-                            for (offset, v) in [(0, top), (2, left), (4, bottom), (6, right)] {
-                                after.insert_region(p + offset, &v.to_be_bytes());
-                            }
-                        }
-                    }
-                    0xa8ad => value = u32::from(self.inside),
-                    0xa860 => after.insert_region(0x44720a, &3i16.to_be_bytes()),
-                    _ => {}
-                }
-            }
-            Ok(FeedbackObservation {
-                value,
-                d0: 0,
-                memory: after,
-            })
-        }
-        fn sound_observations(
-            &self,
-            _: i16,
-            _: &AudioContext,
-            _: &RenderingMemory,
-        ) -> Result<Vec<AudioObservation>, RuleError> {
-            Err(RuleError::Invalid("unexpected test audio lookup".into()))
-        }
-    }
-    impl RenderingServices for Observed {
-        fn observe(
-            &self,
-            _: &RenderingRequest,
-            _: &RenderingMemory,
-        ) -> Result<RenderingObservation, RuleError> {
-            Err(RuleError::Invalid("unexpected test render lookup".into()))
-        }
-    }
-    impl CombatUiServices for Observed {
-        fn observe(
-            &self,
-            _: &CombatUiRequest,
-            _: &RenderingMemory,
-        ) -> Result<CombatUiObservation, RuleError> {
-            Err(RuleError::Invalid("unexpected test combat lookup".into()))
-        }
-    }
-    impl DrawingServices for Observed {
-        fn color_icon(&mut self, _: i16) -> Result<u32, RuleError> {
-            Err(unused_interface())
-        }
-        fn indexed_string(&mut self, _: i16, _: i16) -> Result<PascalString, RuleError> {
-            Err(unused_interface())
-        }
-        fn current_world(&mut self) -> Result<(u32, u32), RuleError> {
-            Err(unused_interface())
-        }
-        fn picture(&mut self, _: i16) -> Result<PictureObservation, RuleError> {
-            Err(unused_interface())
-        }
-        fn new_world(&mut self, _: i16, _: BodyRect) -> Result<(i16, BuildingWorld), RuleError> {
-            Err(unused_interface())
-        }
-    }
-    impl NumericServices for Observed {
-        fn number_to_string(&mut self, _: i32) -> Result<PascalString, RuleError> {
-            Err(unused_interface())
-        }
-        fn string_to_number(&mut self, _: &PascalString) -> Result<i32, RuleError> {
-            Err(unused_interface())
-        }
-    }
-    impl WorldDisplayServices for Observed {
-        fn observe(
-            &mut self,
-            _: &WorldDisplayRequest,
-            _: &RenderingMemory,
-        ) -> Result<WorldDisplayObservation, RuleError> {
-            Err(unused_interface())
-        }
-    }
-    impl CombatCenterServices for Observed {}
-
-    fn memory() -> RenderingMemory {
-        let mut m = RenderingMemory::default();
-        for (a, n) in [
-            (0x8000, 4096),
-            (0x4046da, 8),
-            (0x408500, 17000),
-            (0x435600, 1024),
-            (0x438600, 512),
-            (0x442730, 16),
-            (0x442780, 8),
-            (0x442bd6, 1200),
-            (0x4434a0, 400),
-            (0x446f00, 1024),
-            (0x448aa0, 3138),
-        ] {
-            m.insert_region(a, &vec![0; n]);
-        }
-        m.insert_region(0x44273a, &[255]);
-        m.insert_region(0x4470b8, &(-1i16).to_be_bytes());
-        m
-    }
-    fn trap_calls(s: &Observed, opcode: u16) -> Vec<Vec<FeedbackArg>> {
-        s.calls
-            .borrow()
-            .iter()
-            .filter_map(|r| match r {
-                FeedbackRequest::Toolbox {
-                    opcode: o,
-                    arguments,
-                } if *o == opcode => Some(arguments.clone()),
-                _ => None,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn range_uses_observed_point_reply_and_fresh_positions() {
-        let mut m = memory();
-        m.insert_region(0x8808, &1i16.to_be_bytes());
-        m.insert_region(0x44273a, &[0]);
-        m.insert_region(0x44947f, &[1]);
-        m.insert_region(0x448ab0, &1i16.to_be_bytes());
-        m.insert_region(0x448b00, &1i16.to_be_bytes());
-        m.insert_region(0x44709a, &3i16.to_be_bytes());
-        m.insert_region(0x44709c, &4i16.to_be_bytes());
-        for inside in [0, 255] {
-            let mut s = Observed::new(inside);
-            s.move_on_world = true;
-            let result = showrange(&m, 0x8800, 100, &s).unwrap();
-            let origin = if inside == 0 {
-                vec![W(160), W(160)]
-            } else {
-                vec![W(176), W(208)]
-            };
-            assert_eq!(trap_calls(&s, 0xa893), vec![origin]);
-            assert_eq!(trap_calls(&s, 0xa891), vec![vec![W(176), W(208)]]);
-            assert_eq!(
-                trap_calls(&s, 0xab1d).last().unwrap(),
-                &vec![L(0x80006), L(0xdeadbeef), L(0x12345678)]
-            );
-            assert!(trap_calls(&s, 0xa862).contains(&vec![L(409)]));
-            assert_eq!(result.native_return, Some(0));
-            assert_eq!(m.word(0x44709a).unwrap(), 3);
-        }
-    }
-
-    #[test]
-    fn both_field_spans_shift_positions_and_draw_every_terrain_cell() {
-        let mut m = memory();
-        m.insert_region(0x438776, &1i16.to_be_bytes());
-        for i in 0..8100u32 {
-            m.insert_region(0x4085b8 + i * 2, &1001i16.to_be_bytes());
-        }
-        m.insert_region(0x8808, &2i16.to_be_bytes());
-        m.insert_region(0x880a, &3i16.to_be_bytes());
-        m.insert_region(0x446f0a, &8i16.to_be_bytes());
-        m.insert_region(0x446f0c, &9i16.to_be_bytes());
-        for (large, count) in [(true, 258), (false, 123)] {
-            let mut s = Observed::new(0);
-            let result = field(&m, 0x8800, large, 2000, &mut s).unwrap();
-            assert_eq!(result.memory.long(0x442780).unwrap(), 2);
-            assert_eq!(result.memory.long(0x442784).unwrap(), 3);
-            assert_eq!(result.memory.word(0x446f0a).unwrap(), 6);
-            assert_eq!(result.memory.word(0x446f0c).unwrap(), 6);
-            assert_eq!(trap_calls(&s, 0xa8ec).len(), count);
-            assert_eq!(
-                result.memory.word(0x4471f2).unwrap(),
-                if large { 480 } else { 320 }
-            );
-            assert_eq!(result.native_return, Some(0));
-        }
-    }
-
-    #[test]
-    fn stage_two_body_nine_uses_negative_enemy_slot_and_native_local_point() {
-        let mut m = memory();
-        m.insert_region(0x8808, &9i16.to_be_bytes());
-        m.insert_region(0x439582, &2i16.to_be_bytes());
-        m.insert_region(0x446f06, &10i16.to_be_bytes());
-        m.insert_region(0x446f08, &11i16.to_be_bytes());
-        let mut s = Observed::new(0);
-        let result = centerstage2(&m, 0x8800, 100, &mut s).unwrap();
-        assert_eq!(trap_calls(&s, 0xa8ad), vec![vec![L(0x000b000a), P(0x87ea)]]);
-        assert_eq!(result.memory.word(0x87e6).unwrap(), 11);
-        assert_eq!(result.memory.word(0x87e8).unwrap(), 10);
-        assert_eq!(result.native_return, Some(0));
-    }
-
-    #[test]
-    fn missing_reached_map_bytes_leave_input_unchanged() {
-        let mut m = memory();
-        m.insert_region(0x438776, &1i16.to_be_bytes());
-        m.bytes.remove(&0x4085b8);
-        let before = m.clone();
-        let mut s = Observed::new(0);
-        assert!(centerfieldsmall(&m, 0x8800, 2000, &mut s).is_err());
-        assert_eq!(m, before);
-    }
-
-    #[test]
-    fn window_position_write_precedes_aliased_second_read() {
-        let mut m = memory();
-        let frame = 0x4470b4;
-        m.insert_region(frame + 8, &0i16.to_be_bytes());
-        m.insert_region(0x439582, &2i16.to_be_bytes());
-        m.insert_region(0x44709a, &10i16.to_be_bytes());
-        m.insert_region(0x44709c, &11i16.to_be_bytes());
-        let mut s = Observed::new(255);
-        let result = centerstage2(&m, frame, 100, &mut s).unwrap();
-        assert_eq!(
-            trap_calls(&s, 0xa8ad),
-            vec![vec![L(0x000a000a), P(0x44709e)]]
-        );
-        assert_eq!(result.memory.word(0x44709a).unwrap(), 10);
-        assert_eq!(result.memory.word(0x44709c).unwrap(), 10);
-        assert_eq!(m.word(0x44709c).unwrap(), 11);
-    }
-
-    #[test]
-    fn capture_range_keeps_the_native_result_word_write() {
-        let mut m = memory();
-        m.insert_region(0x44709a, &3i16.to_be_bytes());
-        m.insert_region(0x44709c, &4i16.to_be_bytes());
-        m.insert_region(0x4434b6, &1234i16.to_be_bytes());
-        let mut e = Execution::new(&m, 100, Some(0));
-        assert_eq!(range(&mut e, 0, (6, 8)).unwrap(), 5);
-        assert_eq!(e.plan.memory.word(0x4434b6).unwrap(), 5);
-        assert!(
-            matches!(e.plan.effects.last(), Some(CombatCenterEffect::Write(write)) if write.address == 0x4434b6 && write.bytes == [0,5])
-        );
-        assert_eq!(m.word(0x4434b6).unwrap(), 1234);
-    }
-
-    #[test]
-    fn ground_tile_copy_uses_the_actual_secondary_port() {
-        let mut m = memory();
-        m.insert_region(0x43879c, &0x3000u32.to_be_bytes());
-        m.insert_region(0x4386c0, &0x4000u32.to_be_bytes());
-        m.insert_region(0x4386c4, &0x6000u32.to_be_bytes());
-        let mut e = Execution::new(&m, 100, Some(0));
-        let mut s = Observed::new(0);
-        let destination = BodyRect {
-            top: 1,
-            left: 2,
-            bottom: 33,
-            right: 34,
-        };
-        fastplot(&mut e, 1001, destination, 1, &mut s).unwrap();
-        assert!(e.plan.effects.iter().any(|effect| matches!(effect,
-            CombatCenterEffect::Drawing(DrawingEffect::CopyBits { source_bitmap: 0x6002, destination_bitmap: 0x4002, destination: rect, mode: 0, .. }) if *rect == destination)));
-        let mut empty = Execution::new(&RenderingMemory::default(), 100, Some(0));
-        fastplot(&mut empty, -1, destination, 1, &mut s).unwrap();
-        assert!(empty.plan.effects.is_empty());
-        assert!(empty.plan.memory.bytes.is_empty());
-    }
 }

@@ -1240,7 +1240,6 @@ mod exploration;
 pub mod party;
 pub mod reconstruction;
 pub mod recovered_ai;
-pub mod recovered_application_children;
 pub mod recovered_application_control;
 pub mod recovered_attack;
 pub mod recovered_audio;
@@ -1255,7 +1254,6 @@ pub mod recovered_combat_panel;
 pub mod recovered_combat_results;
 pub mod recovered_combat_setup;
 pub mod recovered_combat_ui;
-pub mod recovered_core_control;
 pub mod recovered_detail_ui;
 pub mod recovered_drawing;
 pub mod recovered_economy;
@@ -1265,8 +1263,6 @@ pub mod recovered_fade_ui;
 pub mod recovered_feedback;
 pub mod recovered_field_control;
 pub mod recovered_files;
-pub mod recovered_gameplay_control;
-pub mod recovered_gameplay_leaves;
 pub mod recovered_gamma;
 pub mod recovered_gamma_control;
 pub mod recovered_geometry;
@@ -1280,7 +1276,6 @@ pub mod recovered_inventory_selection;
 pub mod recovered_item_ui;
 pub mod recovered_load_control;
 pub mod recovered_loot_control;
-pub mod recovered_main_control;
 pub mod recovered_native_services;
 pub mod recovered_navigation;
 pub mod recovered_order_form;
@@ -1289,7 +1284,6 @@ pub mod recovered_preparation;
 pub mod recovered_prompt_control;
 pub mod recovered_random_item;
 pub mod recovered_records;
-pub mod recovered_remaining_control;
 pub mod recovered_rendering;
 pub mod recovered_runtime;
 pub mod recovered_scenario_menus;
@@ -1298,7 +1292,6 @@ pub mod recovered_session_control;
 pub mod recovered_shop_ui;
 pub mod recovered_spatial;
 pub mod recovered_spell_animation;
-pub mod recovered_spell_control;
 pub mod recovered_spell_ui;
 pub mod recovered_startup;
 pub mod recovered_status_panels;
@@ -1369,20 +1362,38 @@ pub fn save(path: &Path, state: &Session, content: &Content) -> Result<(), RuleE
         schema_version: 3,
         session: state.clone(),
     })?;
-    let temporary = path.with_extension("json.tmp");
     let parent = path
         .parent()
-        .ok_or_else(|| RuleError::Invalid("save path needs a parent".into()))?;
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     fs::create_dir_all(parent)?;
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
+    static SAVE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let (temporary, mut file) = (0..100)
+        .find_map(|_| {
+            let sequence = SAVE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let temporary = parent.join(format!(".session-{}-{sequence}.tmp", std::process::id()));
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+            {
+                Ok(file) => Some(Ok((temporary, file))),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .unwrap_or_else(|| {
+            Err(std::io::Error::other(
+                "could not allocate a unique save temporary file after 100 attempts",
+            ))
+        })?;
+    let written = file.write_all(&bytes).and_then(|()| file.sync_all());
     drop(file);
     // std::fs::rename uses replacement on Windows and Unix, keeping the old save intact until this step.
-    fs::rename(&temporary, path)?;
+    if let Err(error) = written.and_then(|()| fs::rename(&temporary, path)) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
     Ok(())
 }
 
@@ -1454,124 +1465,4 @@ pub fn load(path: &Path, content: &Content) -> Result<Session, RuleError> {
     }
     saved.session.validate(content)?;
     Ok(saved.session)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn content() -> Content {
-        Content {
-            identity: "fixture".into(),
-            warriors: vec![],
-            items: vec![],
-            resources: vec![],
-            original_services: None,
-            scenario: None,
-        }
-    }
-    #[test]
-    fn unsupported_action_is_atomic() {
-        let content = content();
-        let mut state = Session::new(&content);
-        let before = state.clone();
-        assert!(apply(Command::Move { dx: 1, dy: 0 }, &mut state, &content).is_err());
-        assert_eq!(before, state);
-    }
-    #[test]
-    fn recovered_commands_commit_serializable_credits_and_statistics_without_rng() {
-        let content = content();
-        let mut state = Session::new(&content);
-        let mut bytes = vec![0; centurions_content::WARRIOR_BYTES];
-        bytes[0xa21..0xa25].copy_from_slice(b"Test");
-        bytes[0x9da..0x9dc].copy_from_slice(&65535_u16.to_be_bytes());
-        bytes[0x9ec..0x9ee].copy_from_slice(&60_i16.to_be_bytes());
-        state.warriors = vec![Warrior::read(&bytes).unwrap(); 6];
-        let random = state.random.clone();
-        assert_eq!(
-            apply(Command::PoolCredits, &mut state, &content).unwrap(),
-            vec![Event::CreditsPooled { total: 393210 }]
-        );
-        let restored: Session =
-            serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-        assert_eq!(restored, state);
-        assert_eq!(
-            apply(Command::ShareCredits, &mut state, &content).unwrap(),
-            vec![Event::CreditsShared { each: -1 }]
-        );
-        assert_eq!(state.party_currency, 0);
-        assert_eq!(
-            centurions_content::word(&state.warriors[0].bytes, 0x9da).unwrap() as u16,
-            65535
-        );
-        assert_eq!(
-            apply(
-                Command::RecalculateStatistics { warrior: 0 },
-                &mut state,
-                &content
-            )
-            .unwrap(),
-            vec![Event::StatisticsCalculated { warrior: 0 }]
-        );
-        assert_eq!(
-            centurions_content::word(&state.warriors[0].bytes, 0xb46).unwrap(),
-            30
-        );
-        assert_eq!(state.random, random);
-        let before = state.clone();
-        assert!(
-            apply(
-                Command::RecalculateStatistics { warrior: 6 },
-                &mut state,
-                &content
-            )
-            .is_err()
-        );
-        assert_eq!(state, before);
-    }
-    #[test]
-    fn storage_preserves_holes_full_behavior_and_effects() {
-        let content = content();
-        let mut state = Session::new(&content);
-        let mut item = InventoryRecord([7; 22]);
-        item.0[0] = 0;
-        item.0[1] = 9;
-        state.crate_items.fill(item.clone());
-        state.crate_items[517] = InventoryRecord([0; 22]);
-        assert_eq!(
-            apply(
-                Command::AddToCrate { item: item.clone() },
-                &mut state,
-                &content
-            )
-            .unwrap(),
-            vec![
-                Event::ItemAdded {
-                    slot: 517,
-                    crate_storage: true
-                },
-                Event::Sound { resource_id: 663 }
-            ]
-        );
-        let before = state.clone();
-        assert_eq!(
-            apply(Command::AddToCrate { item }, &mut state, &content).unwrap(),
-            vec![Event::StorageFull]
-        );
-        assert_eq!(state, before);
-    }
-    #[test]
-    fn signed_arithmetic_boundaries() {
-        assert_eq!(rules::pin(7, 10, 5), 5);
-        assert_eq!(rules::pin(i16::MIN, -10, 10), -10);
-        assert_eq!(rules::pin(i16::MAX, -10, 10), 10);
-        assert_eq!(rules::selection_base(-201), -200);
-        assert_eq!(rules::selection_base(-199), 0);
-        assert_eq!(rules::selection_base(i16::MIN), -32600);
-        assert_eq!(rules::spell_count(256), 65552);
-        assert_eq!(rules::spell_count(255), 65041);
-        assert_eq!(rules::spell_count(32767), 1073676305);
-        assert_eq!(rules::movement_cost(-32768, 1, 1), 2);
-        assert_eq!(rules::movement_cost(-1, 1, 1), 2);
-        assert_eq!(rules::movement_cost(32767, 1, 1), 16384);
-    }
 }

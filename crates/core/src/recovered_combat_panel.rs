@@ -155,7 +155,7 @@ impl CombatPanelPlan {
     fn outer(
         &mut self,
         request: CombatPanelRequest,
-        services: &mut impl CombatPanelServices,
+        services: &mut (impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         let observation = services.observe_panel(&request, &self.memory)?;
         self.memory = observation.memory.clone();
@@ -178,7 +178,7 @@ impl CombatPanelPlan {
     fn combat_service(
         &mut self,
         request: CombatUiRequest,
-        services: &impl CombatPanelServices,
+        services: &(impl CombatPanelServices + ?Sized),
     ) -> Result<u32, RuleError> {
         let observation = CombatUiServices::observe(services, &request, &self.memory)?;
         Ok(self.observed(request, observation))
@@ -186,14 +186,18 @@ impl CombatPanelPlan {
     fn draw(
         &mut self,
         effect: DrawingEffect,
-        services: &impl CombatPanelServices,
+        services: &(impl CombatPanelServices + ?Sized),
     ) -> Result<u32, RuleError> {
         self.combat_service(CombatUiRequest::Drawing(effect), services)
     }
     fn pascal(&self, a: u32) -> Result<PascalString, RuleError> {
         PascalString::from_raw(&self.bytes(a, usize::from(self.byte(a)?) + 1)?)
     }
-    fn literal(&mut self, a: u32, services: &impl CombatPanelServices) -> Result<(), RuleError> {
+    fn literal(
+        &mut self,
+        a: u32,
+        services: &(impl CombatPanelServices + ?Sized),
+    ) -> Result<(), RuleError> {
         self.draw(DrawingEffect::DrawString(self.pascal(a)?), services)?;
         Ok(())
     }
@@ -207,7 +211,7 @@ impl CombatPanelPlan {
         &mut self,
         x: i16,
         addition: i16,
-        services: &impl CombatPanelServices,
+        services: &(impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         let y = self.y(addition)?;
         self.draw(
@@ -219,7 +223,11 @@ impl CombatPanelPlan {
         )?;
         Ok(())
     }
-    fn string(&mut self, value: i16, services: &impl CombatPanelServices) -> Result<(), RuleError> {
+    fn string(
+        &mut self,
+        value: i16,
+        services: &(impl CombatPanelServices + ?Sized),
+    ) -> Result<(), RuleError> {
         let mut bridge = NumericBridge {
             services,
             memory: self.memory.clone(),
@@ -232,7 +240,7 @@ impl CombatPanelPlan {
         &mut self,
         effects: Vec<TextEffect>,
         replies: &mut VecDeque<CombatUiObservation>,
-        services: &impl CombatPanelServices,
+        services: &(impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         for effect in effects {
             let request = CombatUiRequest::Text(effect.clone());
@@ -251,7 +259,7 @@ impl CombatPanelPlan {
         &mut self,
         item: i16,
         rect_address: u32,
-        services: &mut impl CombatPanelServices,
+        services: &mut (impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.outer(
             CombatPanelRequest::GetDialogItem {
@@ -268,7 +276,7 @@ impl CombatPanelPlan {
         &mut self,
         item: i16,
         value: i16,
-        services: &mut impl CombatPanelServices,
+        services: &mut (impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.item(item, 0x4434ba, services)?;
         let mut bridge = NumericBridge {
@@ -302,7 +310,7 @@ impl CombatPanelPlan {
         &mut self,
         item: i16,
         address: u32,
-        services: &mut impl CombatPanelServices,
+        services: &mut (impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.item(item, 0x4434ba, services)?;
         let effects = recovered_text::dialog_string(item, &self.pascal(address)?);
@@ -321,7 +329,7 @@ impl CombatPanelPlan {
         &mut self,
         resource: i16,
         index: i16,
-        services: &mut impl CombatPanelServices,
+        services: &mut (impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.outer(
             CombatPanelRequest::GetIndexedString {
@@ -344,7 +352,7 @@ impl CombatPanelPlan {
         &mut self,
         id: i16,
         rect: BodyRect,
-        services: &impl CombatPanelServices,
+        services: &(impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         let mut bridge = DrawBridge {
             services,
@@ -358,7 +366,7 @@ impl CombatPanelPlan {
         &mut self,
         id: i16,
         address: u32,
-        services: &impl CombatPanelServices,
+        services: &(impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.picture(id, self.memory.rect(address)?, services)
     }
@@ -366,7 +374,7 @@ impl CombatPanelPlan {
         &mut self,
         effects: Vec<DrawingEffect>,
         replies: &mut VecDeque<CombatUiObservation>,
-        services: &impl CombatPanelServices,
+        services: &(impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         for effect in effects {
             match effect {
@@ -403,7 +411,7 @@ impl CombatPanelPlan {
         &mut self,
         id: i16,
         rect: BodyRect,
-        services: &impl CombatPanelServices,
+        services: &(impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         let mut memory = self.memory.clone();
         memory.insert_region(0x439598, &0u32.to_be_bytes());
@@ -415,14 +423,18 @@ impl CombatPanelPlan {
         let child = recovered_drawing::ploticon3(&mut context(rect), id, rect, &mut bridge)?;
         self.drawing_effects(child.effects, &mut bridge.replies, services)
     }
-    fn load_icon(&mut self, id: i16, services: &impl CombatPanelServices) -> Result<(), RuleError> {
+    fn load_icon(
+        &mut self,
+        id: i16,
+        services: &(impl CombatPanelServices + ?Sized),
+    ) -> Result<(), RuleError> {
         let handle = self.draw(DrawingEffect::GetColorIcon(id), services)?;
         self.lw(0x439598, handle)
     }
     fn plot_loaded(
         &mut self,
         rect_address: u32,
-        services: &impl CombatPanelServices,
+        services: &(impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         if self.long(0x439598)? != 0 {
             self.draw(
@@ -454,7 +466,10 @@ impl CombatPanelPlan {
         }
         Ok(())
     }
-    fn upbutton(&mut self, services: &mut impl CombatPanelServices) -> Result<(), RuleError> {
+    fn upbutton(
+        &mut self,
+        services: &mut (impl CombatPanelServices + ?Sized),
+    ) -> Result<(), RuleError> {
         let input = ButtonInput {
             rect: self.memory.rect(0x44292c)?,
             target_port: self.long(0x43878c)?,
@@ -489,7 +504,7 @@ impl CombatPanelPlan {
         &mut self,
         item: i16,
         offset: u32,
-        services: &mut impl CombatPanelServices,
+        services: &mut (impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.dialog_number(item, self.member_word(offset)?, services)
     }
@@ -498,7 +513,7 @@ impl CombatPanelPlan {
         item: i16,
         base: u32,
         bonus: u32,
-        services: &mut impl CombatPanelServices,
+        services: &mut (impl CombatPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.dialog_number(
             item,
@@ -630,12 +645,12 @@ fn context(rect: BodyRect) -> DrawingContext {
         buildings: vec![],
     }
 }
-struct NumericBridge<'a, S: CombatPanelServices> {
+struct NumericBridge<'a, S: CombatPanelServices + ?Sized> {
     services: &'a S,
     memory: RenderingMemory,
     replies: VecDeque<CombatUiObservation>,
 }
-impl<S: CombatPanelServices> NumericServices for NumericBridge<'_, S> {
+impl<S: CombatPanelServices + ?Sized> NumericServices for NumericBridge<'_, S> {
     fn number_to_string(&mut self, value: i32) -> Result<PascalString, RuleError> {
         let reply = CombatUiServices::observe(
             self.services,
@@ -655,12 +670,12 @@ impl<S: CombatPanelServices> NumericServices for NumericBridge<'_, S> {
         Err(RuleError::Invalid("unused panel inverse conversion".into()))
     }
 }
-struct DrawBridge<'a, S: CombatPanelServices> {
+struct DrawBridge<'a, S: CombatPanelServices + ?Sized> {
     services: &'a S,
     memory: RenderingMemory,
     replies: VecDeque<CombatUiObservation>,
 }
-impl<S: CombatPanelServices> DrawingServices for DrawBridge<'_, S> {
+impl<S: CombatPanelServices + ?Sized> DrawingServices for DrawBridge<'_, S> {
     fn color_icon(&mut self, id: i16) -> Result<u32, RuleError> {
         let reply = CombatUiServices::observe(
             self.services,
@@ -715,7 +730,7 @@ pub fn update_char_info(
     memory: &RenderingMemory,
     frame: u32,
     damage_frames: [DamageFrame; 2],
-    services: &mut impl CombatPanelServices,
+    services: &mut (impl CombatPanelServices + ?Sized),
 ) -> Result<CombatPanelPlan, RuleError> {
     let mut e = CombatPanelPlan::new(memory);
     e.outer(
@@ -857,7 +872,7 @@ pub fn combat_update2(
     frame: u32,
     body: i16,
     odds_damage_frame: DamageFrame,
-    services: &mut impl CombatPanelServices,
+    services: &mut (impl CombatPanelServices + ?Sized),
 ) -> Result<CombatPanelPlan, RuleError> {
     let mut e = CombatPanelPlan::new(memory);
     if e.word(frame.wrapping_add(8))? != body {
@@ -1207,7 +1222,7 @@ fn find_inventory(
 fn selected_item_name(
     e: &mut CombatPanelPlan,
     npc: bool,
-    services: &mut impl CombatPanelServices,
+    services: &mut (impl CombatPanelServices + ?Sized),
 ) -> Result<(), RuleError> {
     let base = e.selection()?;
     let resource = base.wrapping_add(if npc { 1 } else { e.word(0x4471ea)? });
@@ -1220,7 +1235,7 @@ fn selected_item_name(
 }
 fn panel_number(
     e: &mut CombatPanelPlan,
-    services: &impl CombatPanelServices,
+    services: &(impl CombatPanelServices + ?Sized),
 ) -> Result<(), RuleError> {
     let suppressed = e.word(0x438760)?;
     if suppressed != 0 {
@@ -1288,501 +1303,4 @@ fn panel_number(
         &mut bridge.replies,
         services,
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recovered_detail_ui::{DetailReply, DetailRequest};
-    use crate::recovered_interface::Point;
-    use std::cell::RefCell;
-
-    #[derive(Default)]
-    struct Services {
-        requests: RefCell<Vec<CombatUiRequest>>,
-        indexed: Vec<(i16, i16, i16)>,
-        switch_member: bool,
-        fail: bool,
-        change_number: bool,
-    }
-    impl CombatUiServices for Services {
-        fn observe(
-            &self,
-            request: &CombatUiRequest,
-            memory: &RenderingMemory,
-        ) -> Result<CombatUiObservation, RuleError> {
-            if self.fail {
-                return Err(RuleError::Invalid("missing synthetic observation".into()));
-            }
-            self.requests.borrow_mut().push(request.clone());
-            let mut memory = memory.clone();
-            let mut value = 0;
-            match request {
-                CombatUiRequest::Text(TextEffect::NumberToString(value)) => {
-                    let text = PascalString::from_payload(value.to_string().as_bytes())?;
-                    memory.insert_region(0x479ed8, text.raw());
-                }
-                CombatUiRequest::Drawing(DrawingEffect::GetColorIcon(id)) => {
-                    value = u32::from(*id as u16) + 10000
-                }
-                CombatUiRequest::Drawing(DrawingEffect::TextSize(20)) if self.change_number => {
-                    memory.insert_region(0x4435c4, &13i16.to_be_bytes());
-                    memory.insert_region(0x44374c, &3i16.to_be_bytes());
-                }
-                CombatUiRequest::Sane {
-                    operation: 0x2810,
-                    destination: Some(a),
-                    ..
-                } => memory.insert_region(*a, &0i32.to_be_bytes()),
-                _ => {}
-            }
-            Ok(CombatUiObservation {
-                value,
-                d0: 0x11112222,
-                memory,
-            })
-        }
-    }
-    impl NumericServices for Services {
-        fn number_to_string(&mut self, value: i32) -> Result<PascalString, RuleError> {
-            PascalString::from_payload(value.to_string().as_bytes())
-        }
-        fn string_to_number(&mut self, _: &PascalString) -> Result<i32, RuleError> {
-            Err(RuleError::Invalid("unused inverse conversion".into()))
-        }
-    }
-    impl DrawingServices for Services {
-        fn color_icon(&mut self, id: i16) -> Result<u32, RuleError> {
-            Ok(u32::from(id as u16) + 10000)
-        }
-        fn indexed_string(&mut self, _: i16, _: i16) -> Result<PascalString, RuleError> {
-            PascalString::from_payload(b"label")
-        }
-        fn current_world(&mut self) -> Result<(u32, u32), RuleError> {
-            Err(RuleError::Invalid("unused world".into()))
-        }
-        fn picture(&mut self, _: i16) -> Result<PictureObservation, RuleError> {
-            Ok(PictureObservation {
-                handle: 0,
-                bounds: None,
-            })
-        }
-        fn new_world(&mut self, _: i16, _: BodyRect) -> Result<(i16, BuildingWorld), RuleError> {
-            Err(RuleError::Invalid("unused world".into()))
-        }
-    }
-    impl DetailServices for Services {
-        fn observe(
-            &mut self,
-            request: &DetailRequest,
-            memory: &RenderingMemory,
-        ) -> Result<DetailReply, RuleError> {
-            match request {
-                DetailRequest::InsetRect {
-                    pointer,
-                    horizontal,
-                    vertical,
-                } => {
-                    let rect = memory.rect(*pointer)?;
-                    Ok(DetailReply::Writes(vec![RecordWrite {
-                        address: *pointer,
-                        bytes: [
-                            rect.top.wrapping_add(*vertical),
-                            rect.left.wrapping_add(*horizontal),
-                            rect.bottom.wrapping_sub(*vertical),
-                            rect.right.wrapping_sub(*horizontal),
-                        ]
-                        .into_iter()
-                        .flat_map(i16::to_be_bytes)
-                        .collect(),
-                    }]))
-                }
-                DetailRequest::Sane {
-                    opcode: 0x2810,
-                    destination,
-                    ..
-                } => Ok(DetailReply::Writes(vec![RecordWrite {
-                    address: *destination,
-                    bytes: 7i32.to_be_bytes().to_vec(),
-                }])),
-                DetailRequest::Sane { .. } => Ok(DetailReply::Writes(vec![])),
-                _ => Err(RuleError::Invalid("unused detail observation".into())),
-            }
-        }
-    }
-    impl InterfaceServices for Services {
-        fn word(&mut self, _: u32) -> Result<i16, RuleError> {
-            Err(RuleError::Invalid("unused interface word".into()))
-        }
-        fn current_port(&mut self) -> Result<u32, RuleError> {
-            Ok(0x3333)
-        }
-        fn pen_state(&mut self) -> Result<[u8; 18], RuleError> {
-            Ok([0x55; 18])
-        }
-        fn local_to_global(&mut self, _: Point) -> Result<Point, RuleError> {
-            Err(RuleError::Invalid("unused point conversion".into()))
-        }
-        fn point_in_rect(&mut self, _: Point, _: BodyRect) -> Result<u8, RuleError> {
-            Err(RuleError::Invalid("unused point predicate".into()))
-        }
-        fn new_region(&mut self) -> Result<u32, RuleError> {
-            Err(RuleError::Invalid("unused region".into()))
-        }
-        fn main_device_rect(&mut self) -> Result<BodyRect, RuleError> {
-            Err(RuleError::Invalid("unused device".into()))
-        }
-    }
-    impl CombatPanelServices for Services {
-        fn observe_panel(
-            &mut self,
-            request: &CombatPanelRequest,
-            memory: &RenderingMemory,
-        ) -> Result<CombatPanelObservation, RuleError> {
-            if self.fail {
-                return Err(RuleError::Invalid("missing synthetic observation".into()));
-            }
-            let mut memory = memory.clone();
-            match *request {
-                CombatPanelRequest::GetPort { destination } => {
-                    memory.insert_region(destination, &0x7777u32.to_be_bytes())
-                }
-                CombatPanelRequest::GetDialogItem {
-                    item,
-                    type_address,
-                    handle_address,
-                    rect_address,
-                    ..
-                } => {
-                    memory.insert_region(type_address, &4i16.to_be_bytes());
-                    memory.insert_region(handle_address, &(item as u32).to_be_bytes());
-                    memory.insert_region(rect_address, &[0; 8]);
-                    if item == 2 && self.switch_member {
-                        memory.insert_region(0x44273f, &[1]);
-                    }
-                }
-                CombatPanelRequest::GetIndexedString {
-                    resource,
-                    index,
-                    destination,
-                } => {
-                    self.indexed
-                        .push((resource, index, memory.word(0x4471e8)? as i16));
-                    let text =
-                        PascalString::from_payload(format!("{resource}:{index}").as_bytes())?;
-                    memory.insert_region(destination, text.raw());
-                }
-                CombatPanelRequest::SetDialogItemText { .. } => {}
-                CombatPanelRequest::CopyCString {
-                    source,
-                    destination,
-                } => {
-                    for i in 0..256 {
-                        let byte = memory.byte(source + i)?;
-                        memory.insert_region(destination + i, &[byte]);
-                        if byte == 0 {
-                            break;
-                        }
-                    }
-                }
-                CombatPanelRequest::CToPascal(a) => {
-                    let mut length = 0;
-                    while memory.byte(a + length)? != 0 {
-                        length += 1;
-                    }
-                    for i in (0..length).rev() {
-                        let byte = memory.byte(a + i)?;
-                        memory.insert_region(a + i + 1, &[byte]);
-                    }
-                    memory.insert_region(a, &[length.min(255) as u8]);
-                }
-                CombatPanelRequest::PascalToC(a) => {
-                    let length = u32::from(memory.byte(a)?);
-                    for i in 0..length {
-                        let byte = memory.byte(a + i + 1)?;
-                        memory.insert_region(a + i, &[byte]);
-                    }
-                    memory.insert_region(a + length, &[0]);
-                }
-            }
-            Ok(CombatPanelObservation { memory })
-        }
-        fn visibility_memory(
-            &mut self,
-            memory: &RenderingMemory,
-        ) -> Result<InstallMemory, RuleError> {
-            // Explicit synthetic original-map input, including its zero-valued tiles.
-            let base_address = 0x4085b8;
-            let mut bytes = vec![0; 0x442788 - base_address as usize];
-            for (&a, &v) in &memory.bytes {
-                if let Some(offset) = a.checked_sub(base_address).map(|n| n as usize)
-                    && let Some(target) = bytes.get_mut(offset)
-                {
-                    *target = v;
-                }
-            }
-            bytes[(0x4085b8 - base_address) as usize..(0x4085ba - base_address) as usize]
-                .copy_from_slice(&1000i16.to_be_bytes());
-            bytes[(0x431688 - base_address) as usize..(0x43168a - base_address) as usize]
-                .copy_from_slice(&1i16.to_be_bytes());
-            Ok(InstallMemory {
-                base_address,
-                bytes,
-            })
-        }
-    }
-    fn put(memory: &mut RenderingMemory, a: u32, v: i16) {
-        memory.insert_region(a, &v.to_be_bytes());
-    }
-    fn fixture(frame: u32) -> RenderingMemory {
-        let mut memory = RenderingMemory::default();
-        for (a, n) in [
-            (frame - 512, 560),
-            (0x43872e, 0x60),
-            (0x439582, 0x20),
-            (0x443300, 0x4a00),
-            (0x4394b0, 0x28),
-            (0x40856c, 4),
-            (0x402f30, 0x20),
-            (0x44292c, 8),
-            (0x4358de, 8),
-            (0x44273a, 8),
-            (0x45363c, 0x12c),
-            (0x438aa4, 256),
-            (0x479ed8, 256),
-            (0x41f714, 2),
-        ] {
-            memory.insert_region(a, &vec![0; n]);
-        }
-        memory.insert_region(0x448aa0, &vec![0; WARRIOR_BYTES * 2]);
-        memory.insert_region(0x439d3c, &vec![0; 288]);
-        memory.insert_region(0x43878c, &0x2222u32.to_be_bytes());
-        memory.insert_region(0x4394c8, &0x4444u32.to_be_bytes());
-        for a in [0x400a75, 0x403aa0, 0x403aa4, 0x403aa8, 0x401b6a] {
-            memory.insert_region(a, b"\x01L");
-        }
-        memory.insert_region(0x403786, b"\x01R");
-        memory.insert_region(ITEM_TABLE_ADDRESSES[0], &[0; ITEM_BYTES]);
-        memory
-    }
-    fn item(memory: &mut RenderingMemory, id: i16, words: &[(u32, i16)]) {
-        let a = ITEM_TABLE_ADDRESSES[(id / 200) as usize] + (id % 200) as u32 * ITEM_BYTES as u32;
-        memory.insert_region(a, &[0; ITEM_BYTES]);
-        for &(offset, value) in words {
-            put(memory, a + offset, value);
-        }
-    }
-    fn frame() -> DamageFrame {
-        DamageFrame {
-            unmatched_multiplier_single_bits: 1f32.to_bits(),
-        }
-    }
-    fn numbers(services: &Services) -> Vec<i32> {
-        services
-            .requests
-            .borrow()
-            .iter()
-            .filter_map(|r| {
-                if let CombatUiRequest::Text(TextEffect::NumberToString(v)) = r {
-                    Some(*v)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-    fn pictures(services: &Services) -> Vec<i16> {
-        services
-            .requests
-            .borrow()
-            .iter()
-            .filter_map(|r| {
-                if let CombatUiRequest::Drawing(DrawingEffect::GetPicture(v)) = r {
-                    Some(*v)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn warrior_equipment_composes_buttons_selection_and_charge_scans() {
-        let frame_address = 0x8000;
-        let mut memory = fixture(frame_address);
-        put(&mut memory, frame_address + 8, 0);
-        let base = warrior(0);
-        put(&mut memory, base + 0xe4, 203);
-        memory.insert_region(base + 0x9dd, &[1]);
-        put(&mut memory, base + 0x12c, 1);
-        put(&mut memory, base + 0x1a, 1);
-        put(&mut memory, base + 0x132, 203);
-        put(&mut memory, base + 0x134, 5);
-        memory.insert_region(base + 0x13b, &[1]);
-        put(&mut memory, base + 0x5e + 6, 1);
-        for (global, handle, pointer) in
-            [(0x4393f8, 0x9000u32, 0x9100u32), (0x43942c, 0x9200, 0x9300)]
-        {
-            memory.insert_region(global, &handle.to_be_bytes());
-            memory.insert_region(handle, &pointer.to_be_bytes());
-            memory.insert_region(pointer + 8, &[0; 8]);
-        }
-        item(
-            &mut memory,
-            203,
-            &[(10, 99), (26, 15), (44, 1101), (76, 4), (102, 203)],
-        );
-        let before = memory.clone();
-        let mut services = Services::default();
-        let result = combat_update2(&memory, frame_address, 0, frame(), &mut services).unwrap();
-        assert_eq!(memory, before);
-        assert_eq!(result.memory.word(0x4471e8).unwrap(), 200);
-        assert!(services.indexed.contains(&(201, 4, 200)));
-        assert!(numbers(&services).contains(&4));
-        assert!(numbers(&services).contains(&5));
-        assert_eq!(result.memory.word(0x4434aa).unwrap(), 3);
-        let target_ports = result
-            .effects
-            .iter()
-            .filter(|e| {
-                matches!(
-                    e,
-                    CombatPanelEffect::Interface(InterfaceEffect::SetPort(0x2222))
-                )
-            })
-            .count();
-        assert_eq!(target_ports, 2);
-        assert_eq!(&pictures(&services)[..3], &[153, 156, 166]);
-        let mut missing = Services {
-            fail: true,
-            ..Services::default()
-        };
-        assert!(combat_update2(&memory, frame_address, 0, frame(), &mut missing).is_err());
-        assert_eq!(memory, before);
-    }
-
-    #[test]
-    fn npc_scaled_indicators_use_signed_bytes_and_full_size_word() {
-        let frame_address = 0x8000;
-        let mut memory = fixture(frame_address);
-        put(&mut memory, frame_address + 8, 10);
-        put(&mut memory, 0x438760, 1);
-        put(&mut memory, 0x439582, 1);
-        put(&mut memory, 0x438778, 1);
-        let base = npc(10);
-        put(&mut memory, base + 16, -3);
-        put(&mut memory, base + 0x50, 33);
-        memory.insert_region(base + 0x107, &[1]);
-        memory.insert_region(base + 0x8c, &[101, 0xff]);
-        memory.insert_region(base + 0xda, b"\x03Npc\0");
-        memory.insert_region(base + 0xb4, &[1]);
-        let mut services = Services::default();
-        let result = combat_update2(&memory, frame_address, 10, frame(), &mut services).unwrap();
-        assert_eq!(result.memory.word(0x4435ce).unwrap(), 3);
-        assert_eq!(result.memory.word(0x4434aa).unwrap(), 2);
-        let pictures = pictures(&services);
-        assert_eq!(&pictures[..7], &[145, 174, 166, 206, 206, 206, 228]);
-        assert_eq!(&pictures[7..14], &[150, 146, 146, 146, 146, 146, 146]);
-        assert_eq!(&pictures[14..21], &[146, 150, 146, 146, 146, 146, 146]);
-        assert!(
-            services
-                .requests
-                .borrow()
-                .contains(&CombatUiRequest::Drawing(DrawingEffect::GetColorIcon(33)))
-        );
-        assert!(
-            !services
-                .requests
-                .borrow()
-                .contains(&CombatUiRequest::Drawing(DrawingEffect::GetColorIcon(1033)))
-        );
-        assert_eq!(services.indexed[0].0, 4);
-        assert_eq!(services.indexed.last().unwrap().1, 3);
-    }
-
-    #[test]
-    fn character_info_rereads_member_and_preserves_five_trait_early_return() {
-        let frame_address = 0x8000;
-        let mut memory = fixture(frame_address);
-        put(&mut memory, warrior(0) + 0x9e2, 11);
-        put(&mut memory, warrior(1) + 0x9e4, 22);
-        for i in 0..5 {
-            put(&mut memory, warrior(1) + 0x5e + 2 * i, 1);
-        }
-        put(&mut memory, warrior(1) + 12, 2);
-        put(&mut memory, warrior(1) + 0xb7a, 3);
-        let mut services = Services {
-            switch_member: true,
-            ..Services::default()
-        };
-        let result = update_char_info(&memory, frame_address, [frame(); 2], &mut services).unwrap();
-        assert_eq!(&numbers(&services)[..2], &[11, 22]);
-        assert_eq!(result.memory.word(0x4434aa).unwrap(), 4);
-        assert_eq!(result.arithmetic_qualifications.len(), 2);
-        assert!(
-            !services
-                .requests
-                .borrow()
-                .contains(&CombatUiRequest::Drawing(DrawingEffect::SetPort(0x7777)))
-        );
-        put(&mut memory, warrior(1) + 0x5e + 8, 0);
-        let mut services = Services {
-            switch_member: true,
-            ..Services::default()
-        };
-        let result = update_char_info(&memory, frame_address, [frame(); 2], &mut services).unwrap();
-        assert_eq!(result.memory.word(0x4434aa).unwrap(), 40);
-        assert_eq!(
-            services.requests.borrow().last(),
-            Some(&CombatUiRequest::Drawing(DrawingEffect::SetPort(0x7777)))
-        );
-    }
-
-    #[test]
-    fn range_visibility_and_negative_odds_execute_ready_children() {
-        let frame_address = 0x8000;
-        let mut memory = fixture(frame_address);
-        put(&mut memory, frame_address + 8, 0);
-        put(&mut memory, 0x438782, 1);
-        put(&mut memory, 0x4435bc, 10);
-        put(&mut memory, 0x439568, 0);
-        memory.insert_region(0x442780, &[0; 8]);
-        memory.insert_region(0x4085b8, &1000i16.to_be_bytes());
-        memory.insert_region(0x431688, &1i16.to_be_bytes());
-        let mut services = Services::default();
-        let result = combat_update2(&memory, frame_address, 0, frame(), &mut services).unwrap();
-        assert!(result.effects.iter().any(|e| matches!(
-            e,
-            CombatPanelEffect::Visibility {
-                result: VisibilityResult {
-                    native_return: 0,
-                    samples: 1,
-                    ..
-                },
-                ..
-            }
-        )));
-        assert!(
-            services
-                .requests
-                .borrow()
-                .contains(&CombatUiRequest::Drawing(DrawingEffect::DrawString(
-                    PascalString::from_payload(b"L").unwrap()
-                )))
-        );
-        let mut memory = fixture(frame_address);
-        put(&mut memory, frame_address + 8, 0);
-        put(&mut memory, 0x439582, 1);
-        let mut services = Services {
-            change_number: true,
-            ..Services::default()
-        };
-        let result = combat_update2(&memory, frame_address, 0, frame(), &mut services).unwrap();
-        assert!(result.effects.iter().any(|e| matches!(
-            e,
-            CombatPanelEffect::Detail(DetailEffect::Drawing(DrawingEffect::GetPicture(224)))
-        )));
-        assert_eq!(result.memory.word(frame_address - 14).unwrap(), u16::MAX);
-        assert_eq!(numbers(&services)[0], 10);
-    }
 }

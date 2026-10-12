@@ -16,6 +16,7 @@ pub enum Inspection {
 }
 #[derive(Default)]
 pub struct UiState {
+    pub movement: crate::input::MovementInput,
     pub selected: usize,
     pub inspection: Option<Inspection>,
     pub page: usize,

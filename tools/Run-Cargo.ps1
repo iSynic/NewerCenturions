@@ -1,6 +1,6 @@
 #requires -Version 7.0
 param(
-    [ValidateSet('Test', 'Check', 'Clippy', 'Build')][string]$Action = 'Test',
+    [ValidateSet('Test', 'Check', 'Clippy', 'Build', 'Rustc')][string]$Action = 'Test',
     [string]$Package,
     [string]$Filter,
     [string]$TestTarget,
@@ -10,13 +10,20 @@ param(
     [switch]$Library,
     [switch]$AllTargets,
     [switch]$Release,
-    [ValidateRange(1, 64)][int]$BuildJobs = 1,
-    [switch]$AllowCompilerParallelism,
+    [ValidateRange(1, 64)][int]$BuildJobs = [Math]::Min(64, [Environment]::ProcessorCount),
+    [switch]$AllowCompilerParallelism = $true,
     [switch]$Timings,
+    [switch]$JsonDiagnostics,
+    [switch]$CompilerPhaseDiagnostics,
+    [string[]]$CompilerArguments = @(),
+    [ValidateRange(1, 3600)][int]$MaximumBuildSeconds = 600,
+    [ValidateRange(512, 65536)][int]$MaximumCompilerMemoryMiB = 16384,
+    [string]$MetricsPath,
     [ValidateRange(16, 4096)][int]$MaximumMemoryMiB = 512,
     [ValidateRange(1, 600)][int]$MaximumTestSeconds = 60
 )
 $ErrorActionPreference = 'Stop'
+if ($CompilerPhaseDiagnostics -and $Action -ne 'Rustc') { throw 'Compiler phase diagnostics require -Action Rustc.' }
 if ($Filter -and $Action -ne 'Test') { throw 'A test filter requires -Action Test.' }
 if ($TestTarget -and ($Action -ne 'Test' -or $Library)) { throw 'A named test target requires -Action Test without -Library.' }
 $taskRoot = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
@@ -29,6 +36,10 @@ $startInfo.RedirectStandardOutput = $true
 $startInfo.RedirectStandardError = $true
 foreach ($argument in @($Action.ToLowerInvariant(), '--jobs', $BuildJobs.ToString())) { $startInfo.ArgumentList.Add($argument) }
 if ($Timings) { $startInfo.ArgumentList.Add('--timings') }
+if ($JsonDiagnostics) {
+    $startInfo.ArgumentList.Add('--message-format')
+    $startInfo.ArgumentList.Add('json')
+}
 if ($ManifestPath) {
     $startInfo.ArgumentList.Add('--manifest-path')
     $startInfo.ArgumentList.Add($ManifestPath)
@@ -58,6 +69,12 @@ if ($Action -eq 'Test') {
     foreach ($argument in @('--', '--test-threads=1', '--nocapture')) { $startInfo.ArgumentList.Add($argument) }
 } elseif ($Action -eq 'Clippy') {
     foreach ($argument in @('--', '-D', 'warnings')) { $startInfo.ArgumentList.Add($argument) }
+}
+if ($CompilerArguments.Count -and $Action -ne 'Rustc') { throw 'Compiler arguments require -Action Rustc.' }
+if ($CompilerPhaseDiagnostics -or $CompilerArguments.Count) {
+    $startInfo.ArgumentList.Add('--')
+    if ($CompilerPhaseDiagnostics) { $startInfo.ArgumentList.Add('-Ztime-passes') }
+    foreach ($argument in $CompilerArguments) { $startInfo.ArgumentList.Add($argument) }
 }
 
 # The wrapper cannot start Cargo until it belongs to the invocation's job.
@@ -90,6 +107,7 @@ foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCom
     $bootstrapInfo.ArgumentList.Add($argument)
 }
 $bootstrapInfo.Environment['CENTURIONS_GUARD_CARGO_PATH'] = $cargoPath
+if ($CompilerPhaseDiagnostics) { $bootstrapInfo.Environment['RUSTC_BOOTSTRAP'] = '1' }
 $bootstrapInfo.Environment['CENTURIONS_GUARD_CARGO_ARGUMENTS'] = ConvertTo-Json -InputObject @($startInfo.ArgumentList) -Compress
 
 if (-not ('CenturionsBuild.CargoJob' -as [type])) {
@@ -226,6 +244,8 @@ $elapsed = [Diagnostics.Stopwatch]::StartNew()
 $lastProgressSeconds = 0
 $testStarted = @{}
 $peakResidentBytes = 0L
+$peakCompilerBytes = 0L
+$completed = $false
 $failure = $null
 try {
     $job = [CenturionsBuild.CargoJob]::new()
@@ -252,8 +272,13 @@ try {
     $guardProcess.StandardInput.Close()
     Write-Output "Starting Cargo $Action; jobs=$BuildJobs; compiler parallelism=$AllowCompilerParallelism."
     while (-not $guardProcess.HasExited) {
+        if ($elapsed.Elapsed.TotalSeconds -gt $MaximumBuildSeconds) {
+            $failure = "Cargo $Action exceeded the $MaximumBuildSeconds second build budget."
+            break
+        }
         foreach ($stream in $streams) { Receive-CargoOutput $stream }
         $activeProcesses = [Collections.Generic.HashSet[string]]::new()
+        $compilerBytes = 0L
         foreach ($processId in $job.ProcessIds()) {
             $ownedProcess = Get-Process -Id $processId -ErrorAction SilentlyContinue
             if (-not $ownedProcess) { continue }
@@ -263,6 +288,10 @@ try {
                 if (-not $job.Contains($ownedProcess.Handle)) { continue }
                 $null = $activeProcesses.Add($ownedProcess.ProcessName)
                 $ownedProcess.PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal
+                if ($ownedProcess.ProcessName -in @('rustc', 'rustdoc', 'clippy-driver', 'rust-lld', 'link', 'lld-link', 'cl', 'clang', 'gcc')) {
+                    $ownedProcess.Refresh()
+                    $compilerBytes += $ownedProcess.WorkingSet64
+                }
                 if (-not $AllowCompilerParallelism) { $ownedProcess.ProcessorAffinity = [IntPtr]1 }
                 $executable = $ownedProcess.MainModule.FileName
                 if ($executable -notmatch '[\\/]deps[\\/][^\\/]+\.exe$' -and
@@ -289,6 +318,11 @@ try {
             if ($failure) { break }
         }
         if ($failure) { break }
+        $peakCompilerBytes = [Math]::Max($peakCompilerBytes, $compilerBytes)
+        if ($compilerBytes -gt ([long]$MaximumCompilerMemoryMiB * 1MB)) {
+            $failure = "Compilers exceeded $MaximumCompilerMemoryMiB MiB of aggregate resident memory."
+            break
+        }
         if ($elapsed.Elapsed.TotalSeconds - $lastProgressSeconds -ge 30) {
             Write-Output ("Cargo {0}: {1:N0}s elapsed; active: {2}" -f $Action, $elapsed.Elapsed.TotalSeconds, (($activeProcesses | Sort-Object) -join ', '))
             $lastProgressSeconds = $elapsed.Elapsed.TotalSeconds
@@ -298,7 +332,8 @@ try {
     }
     if ($failure) { throw $failure }
     $guardProcess.WaitForExit()
-    if ($guardProcess.ExitCode -ne 0) { throw "Cargo $Action failed with exit code $($guardProcess.ExitCode)." }
+    if ($guardProcess.ExitCode -ne 0) { $failure = "Cargo $Action failed with exit code $($guardProcess.ExitCode)."; throw $failure }
+    $completed = $true
 } finally {
     try {
         # Closing the invocation's job also kills surviving descendants when
@@ -317,6 +352,18 @@ try {
             if ($stream.Task) { Write-Warning 'Output stream did not close within five seconds after process cleanup.' }
         }
         Write-Output ("Cargo {0} duration: {1:N1}s." -f $Action, $elapsed.Elapsed.TotalSeconds)
+        if ($MetricsPath) {
+            $metricsFile = [IO.Path]::GetFullPath($MetricsPath)
+            $null = New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($metricsFile)) -Force
+            @{
+                action = $Action; completed = $completed; failure = $failure
+                elapsed_seconds = $elapsed.Elapsed.TotalSeconds
+                compiler_peak_bytes = $peakCompilerBytes; test_peak_bytes = $peakResidentBytes
+                build_jobs = $BuildJobs; compiler_parallelism = [bool]$AllowCompilerParallelism
+                maximum_build_seconds = $MaximumBuildSeconds; maximum_compiler_memory_mib = $MaximumCompilerMemoryMiB
+                arguments = @($startInfo.ArgumentList)
+            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $metricsFile
+        }
         if ($testStarted.Count) {
             Write-Output ("Observed test peak: {0:N1} MiB; memory ceiling: {1} MiB; one logical CPU." -f ($peakResidentBytes / 1MB), $MaximumMemoryMiB)
         }

@@ -1,8 +1,6 @@
 //! Provisional combat setup and turn advancement from mapped CODE 1.
 
-use crate::recovered_application_control::{
-    self as application, ApplicationControlServices, Execution, RegisterBits,
-};
+use crate::recovered_application_control::{self as application, Execution, RegisterBits};
 use crate::recovered_character_upgrade::UpgradeSaneRequest;
 use crate::recovered_feedback::FeedbackArg;
 use FeedbackArg::{Long as L, Pointer as P, Word as W};
@@ -16,24 +14,17 @@ fn monster(n: u16) -> u32 {
 fn indexed(base: u32, n: i16, stride: u32) -> u32 {
     base.wrapping_add((n as i32 as u32).wrapping_mul(stride))
 }
-fn turn<S: ApplicationControlServices>(e: &Execution<'_, S>) -> application::Result<i16> {
+fn turn(e: &Execution<'_>) -> application::Result<i16> {
     e.sw(indexed(0x4470b8, e.sw(0x447194)?, 2))
 }
-fn current_warrior<S: ApplicationControlServices>(
-    e: &Execution<'_, S>,
-) -> application::Result<u32> {
+fn current_warrior(e: &Execution<'_>) -> application::Result<u32> {
     Ok(warrior(e.w(0x4435d2)?))
 }
-fn current_monster<S: ApplicationControlServices>(
-    e: &Execution<'_, S>,
-) -> application::Result<u32> {
+fn current_monster(e: &Execution<'_>) -> application::Result<u32> {
     Ok(monster(e.w(0x447196)?))
 }
 
-fn push(
-    arg: &FeedbackArg,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
-) -> application::Result<()> {
+fn push(arg: &FeedbackArg, e: &mut Execution<'_>) -> application::Result<()> {
     match *arg {
         W(v) => {
             e.stack = e.stack.wrapping_sub(2);
@@ -56,7 +47,7 @@ fn call(
     next: u32,
     args: &[FeedbackArg],
     cleanup: u32,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
+    e: &mut Execution<'_>,
 ) -> application::Result<()> {
     for arg in args {
         push(arg, e)?;
@@ -73,7 +64,7 @@ fn library(
     next: u32,
     args: &[FeedbackArg],
     cleanup: u32,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
+    e: &mut Execution<'_>,
 ) -> application::Result<u32> {
     for arg in args {
         push(arg, e)?;
@@ -88,17 +79,12 @@ fn absolute(
     value: i16,
     next: u32,
     cleanup: u32,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
+    e: &mut Execution<'_>,
 ) -> application::Result<u16> {
     library(0x400038, next, &[W(value as u16)], cleanup, e)?;
     e.d0_word()
 }
-fn seek(
-    file: u32,
-    offset: u32,
-    next: u32,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
-) -> application::Result<()> {
+fn seek(file: u32, offset: u32, next: u32, e: &mut Execution<'_>) -> application::Result<()> {
     let origin = e.w(e.stack)?;
     push(&L(offset), e)?;
     push(&L(file), e)?;
@@ -106,20 +92,12 @@ fn seek(
     e.lib(0x400078, vec![W(origin), L(offset), L(file)])?;
     Ok(())
 }
-fn random(
-    bound: i16,
-    next: u32,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
-) -> application::Result<i16> {
+fn random(bound: i16, next: u32, e: &mut Execution<'_>) -> application::Result<i16> {
     // Rand, CODE 1 entry 0x153ca4, projects through the existing runtime port.
     e.long(e.stack.wrapping_sub(6), next)?;
     e.rand(bound, e.stack)
 }
-fn sane(
-    pointers: &[u32],
-    selector: u16,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
-) -> application::Result<u8> {
+fn sane(pointers: &[u32], selector: u16, e: &mut Execution<'_>) -> application::Result<u8> {
     let mut args: Vec<_> = pointers.iter().copied().map(P).collect();
     args.push(W(selector));
     let stack = e.stack;
@@ -143,7 +121,7 @@ fn pascal(
     opcode: u16,
     args: &[FeedbackArg],
     result_bytes: u32,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
+    e: &mut Execution<'_>,
 ) -> application::Result<u32> {
     let stack = e.stack;
     e.stack = e.stack.wrapping_sub(result_bytes);
@@ -159,10 +137,7 @@ fn pascal(
     e.stack = stack;
     Ok(value)
 }
-fn clear_collisions(
-    register: usize,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
-) -> application::Result<()> {
+fn clear_collisions(register: usize, e: &mut Execution<'_>) -> application::Result<()> {
     e.registers.data[register] = RegisterBits::full(0);
     for n in 0..60u16 {
         e.step()?;
@@ -171,10 +146,7 @@ fn clear_collisions(
     }
     Ok(())
 }
-fn finish_turn(
-    frame: u32,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
-) -> application::Result<()> {
+fn finish_turn(frame: u32, e: &mut Execution<'_>) -> application::Result<()> {
     e.word(0x438786, 1)?;
     call(frame, 0x13154c, 0x1270a2, &[W(0x28)], 0, e)?;
     push(&L(0xffff), e)?;
@@ -186,10 +158,7 @@ fn finish_turn(
     Ok(())
 }
 
-fn advance_round(
-    frame: u32,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
-) -> application::Result<()> {
+fn advance_round(frame: u32, e: &mut Execution<'_>) -> application::Result<()> {
     call(frame, 0x13154c, 0x125df6, &[W(0x24)], 0, e)?;
     call(frame, 0x14de04, 0x125dfc, &[], 0, e)?;
     call(frame, 0x13154c, 0x125e06, &[W(0x25)], 4, e)?;
@@ -412,10 +381,7 @@ fn advance_round(
     Ok(())
 }
 
-pub(crate) fn get_up_body<S: ApplicationControlServices>(
-    e: &mut Execution<'_, S>,
-    frame: u32,
-) -> application::Result<()> {
+pub fn get_up_body(e: &mut Execution<'_>, frame: u32) -> application::Result<()> {
     e.stack = frame.wrapping_sub(0x36);
     e.long(frame.wrapping_sub(4), 0)?;
     call(frame, 0x13154c, 0x125a50, &[W(0x22)], 0, e)?;
@@ -883,10 +849,10 @@ pub(crate) fn get_up_body<S: ApplicationControlServices>(
     }
 }
 
-fn setup_monster<S: ApplicationControlServices>(e: &Execution<'_, S>) -> application::Result<u32> {
+fn setup_monster(e: &Execution<'_>) -> application::Result<u32> {
     Ok(monster(e.w(0x43874a)?))
 }
-fn encounter_cell<S: ApplicationControlServices>(e: &Execution<'_, S>) -> application::Result<u32> {
+fn encounter_cell(e: &Execution<'_>) -> application::Result<u32> {
     Ok(0x43979cu32
         .wrapping_add(u32::from(e.w(0x4434aa)?).wrapping_mul(52))
         .wrapping_add((e.sw(0x4434ac)? as i32 as u32).wrapping_mul(2)))
@@ -899,26 +865,19 @@ fn extended(
     first: u32,
     second: u32,
     last: u16,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
+    e: &mut Execution<'_>,
 ) -> application::Result<()> {
     e.long(address, first)?;
     e.long(address.wrapping_add(4), second)?;
     e.word(address.wrapping_add(8), last)
 }
-fn retained_random(
-    bound: i16,
-    next: u32,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
-) -> application::Result<i16> {
+fn retained_random(bound: i16, next: u32, e: &mut Execution<'_>) -> application::Result<i16> {
     let value = random(bound, next, e)?;
     e.stack = e.stack.wrapping_sub(2);
     Ok(value)
 }
 
-fn setup_orientation(
-    frame: u32,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
-) -> application::Result<()> {
+fn setup_orientation(frame: u32, e: &mut Execution<'_>) -> application::Result<()> {
     let ext = frame_at(frame, 0x186);
     let work = frame_at(frame, 0x17c);
     let other = frame_at(frame, 0x16e);
@@ -1027,10 +986,7 @@ fn setup_orientation(
     Ok(())
 }
 
-fn monster_terrain(
-    seeded: bool,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
-) -> application::Result<Option<u32>> {
+fn monster_terrain(seeded: bool, e: &mut Execution<'_>) -> application::Result<Option<u32>> {
     let reject = if seeded { 0x11e0c0 } else { 0x11e53c };
     if e.sw(setup_monster(e)? + 0x11e)? <= 999 {
         return Ok(Some(reject));
@@ -1106,7 +1062,7 @@ enum PlacementCompletion {
 fn place_setup_monster(
     frame: u32,
     mut seeded: bool,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
+    e: &mut Execution<'_>,
 ) -> application::Result<PlacementCompletion> {
     e.word(frame_at(frame, 0x124), 0xffff)?;
     e.word(setup_monster(e)? + 0x10c, 0xffff)?;
@@ -1237,10 +1193,7 @@ fn place_setup_monster(
     }
 }
 
-fn setup_monster_stats(
-    frame: u32,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
-) -> application::Result<()> {
+fn setup_monster_stats(frame: u32, e: &mut Execution<'_>) -> application::Result<()> {
     e.byte(setup_monster(e)? + 0x107, 1)?;
     e.byte(setup_monster(e)? + 0x108, 1)?;
     if e.w(setup_monster(e)? + 8)? != 0 {
@@ -1383,10 +1336,7 @@ fn setup_monster_stats(
     Ok(())
 }
 
-fn place_party(
-    frame: u32,
-    e: &mut Execution<'_, impl ApplicationControlServices>,
-) -> application::Result<()> {
+fn place_party(frame: u32, e: &mut Execution<'_>) -> application::Result<()> {
     e.word(0x4434aa, 0)?;
     while e.sw(0x4434aa)? <= i16::from(e.sb(0x44273a)?) {
         e.step()?;
@@ -1530,10 +1480,7 @@ fn place_party(
     Ok(())
 }
 
-pub(crate) fn combat_setup_body<S: ApplicationControlServices>(
-    e: &mut Execution<'_, S>,
-    frame: u32,
-) -> application::Result<()> {
+pub fn combat_setup_body(e: &mut Execution<'_>, frame: u32) -> application::Result<()> {
     e.stack = frame.wrapping_sub(0x19e);
     e.registers.address[2] = RegisterBits::full(0);
     e.byte(frame_at(frame, 0x127), 1)?;

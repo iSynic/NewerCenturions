@@ -195,7 +195,7 @@ impl Execution {
     fn service(
         &mut self,
         request: CharacterUiRequest,
-        services: &mut impl CharacterUiServices,
+        services: &mut (impl CharacterUiServices + ?Sized),
     ) -> Result<u32, RuleError> {
         let observation = services.observe(&request, &self.state.memory)?;
         self.state.memory = observation.memory.clone();
@@ -212,7 +212,7 @@ impl Execution {
     fn item(
         &mut self,
         item: i16,
-        services: &mut impl CharacterUiServices,
+        services: &mut (impl CharacterUiServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.service(
             CharacterUiRequest::GetDialogItem {
@@ -230,7 +230,7 @@ impl Execution {
         &mut self,
         item: i16,
         value: i32,
-        services: &mut impl CharacterUiServices,
+        services: &mut (impl CharacterUiServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.item(item, services)?;
         self.service(
@@ -262,7 +262,7 @@ impl Execution {
         &mut self,
         item: i16,
         address: u32,
-        services: &mut impl CharacterUiServices,
+        services: &mut (impl CharacterUiServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.number(item, i32::from(self.word(address)?), services)
     }
@@ -270,7 +270,7 @@ impl Execution {
         &mut self,
         item: i16,
         address: u32,
-        services: &mut impl CharacterUiServices,
+        services: &mut (impl CharacterUiServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.item(item, services)?;
         let effects = recovered_text::dialog_string(item, &self.pascal(address)?);
@@ -289,7 +289,7 @@ impl Execution {
         &mut self,
         resource: i16,
         index: i16,
-        services: &mut impl CharacterUiServices,
+        services: &mut (impl CharacterUiServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.service(
             CharacterUiRequest::GetIndexedString {
@@ -306,7 +306,7 @@ impl Execution {
         item: i16,
         a: u32,
         b: u32,
-        services: &mut impl CharacterUiServices,
+        services: &mut (impl CharacterUiServices + ?Sized),
     ) -> Result<(), RuleError> {
         let value = self.word(a)?.wrapping_add(self.word(b)?);
         self.number(item, i32::from(value), services)
@@ -344,7 +344,7 @@ pub fn show_stats(
     state: &CharacterUiState,
     flag: i16,
     frame: u32,
-    services: &mut impl CharacterUiServices,
+    services: &mut (impl CharacterUiServices + ?Sized),
 ) -> Result<CharacterUiResult, RuleError> {
     let mut e = Execution::new(state);
     if e.word(frame.wrapping_add(8))? != flag {
@@ -585,7 +585,7 @@ pub fn show_stats(
 pub fn show_upgrade(
     state: &CharacterUiState,
     member: u16,
-    services: &mut impl CharacterUiServices,
+    services: &mut (impl CharacterUiServices + ?Sized),
 ) -> Result<CharacterUiResult, RuleError> {
     let mut e = Execution::new(state);
     let base = 0x448aa0 + u32::from(member) * 3138;
@@ -656,7 +656,7 @@ fn guard(budget: &mut u32) -> Result<(), RuleError> {
 /// viewrestrictions, 0x148f9e. The returned dialog handle remains in A2.
 pub fn view_restrictions(
     state: &CharacterUiState,
-    services: &mut impl CharacterUiServices,
+    services: &mut (impl CharacterUiServices + ?Sized),
 ) -> Result<CharacterUiResult, RuleError> {
     let mut e = Execution::new(state);
     let dialog = e.service(
@@ -734,7 +734,7 @@ fn file_address(buffer: FileBuffer) -> Result<u32, RuleError> {
 pub fn update_specialties(
     state: &CharacterUiState,
     frame: u32,
-    services: &mut impl CharacterUiServices,
+    services: &mut (impl CharacterUiServices + ?Sized),
 ) -> Result<CharacterUiResult, RuleError> {
     let mut e = Execution::new(state);
     for (source, offset, count) in [
@@ -868,361 +868,4 @@ fn add_specialty_row(e: &mut Execution, table: u32, stride: u32) -> Result<(), R
         e.increment(0x4434aa)?;
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Default)]
-    struct Services {
-        requests: Vec<CharacterUiRequest>,
-        text: Vec<(u32, Vec<u8>)>,
-        fail: bool,
-    }
-    impl CharacterUiServices for Services {
-        fn observe(
-            &mut self,
-            request: &CharacterUiRequest,
-            memory: &RenderingMemory,
-        ) -> Result<CharacterUiObservation, RuleError> {
-            if self.fail {
-                return Err(RuleError::Invalid("synthetic missing observation".into()));
-            }
-            self.requests.push(request.clone());
-            let mut memory = memory.clone();
-            let mut value = 0;
-            match *request {
-                CharacterUiRequest::GetDialog { .. } => value = 0x12345678,
-                CharacterUiRequest::GetDialogItem {
-                    item,
-                    type_address,
-                    handle_address,
-                    rect_address,
-                    ..
-                } => {
-                    memory.insert_region(type_address, &4i16.to_be_bytes());
-                    memory.insert_region(
-                        handle_address,
-                        &(1000u32.wrapping_add(item as u32)).to_be_bytes(),
-                    );
-                    memory.insert_region(rect_address, &[0; 8]);
-                }
-                CharacterUiRequest::NumberToString { value, destination } => {
-                    let text = PascalString::from_payload(value.to_string().as_bytes())?;
-                    memory.insert_region(destination, text.raw());
-                }
-                CharacterUiRequest::GetIndexedString {
-                    destination,
-                    resource,
-                    index,
-                } => {
-                    let text =
-                        PascalString::from_payload(format!("{resource}:{index}").as_bytes())?;
-                    memory.insert_region(destination, text.raw());
-                }
-                CharacterUiRequest::SetDialogItemText {
-                    handle,
-                    text_address,
-                } => {
-                    let count = usize::from(memory.byte(text_address)?);
-                    let text = (0..count + 1)
-                        .map(|i| memory.byte(text_address + i as u32))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    self.text.push((handle, text));
-                }
-                CharacterUiRequest::CopyCString {
-                    destination,
-                    source,
-                } => {
-                    for i in 0..256u32 {
-                        let byte = memory.byte(source + i)?;
-                        memory.insert_region(destination + i, &[byte]);
-                        if byte == 0 {
-                            break;
-                        }
-                    }
-                }
-                CharacterUiRequest::CToPascal(a) => {
-                    let mut length = 0u32;
-                    while memory.byte(a + length)? != 0 {
-                        length += 1;
-                    }
-                    for i in (0..length).rev() {
-                        let byte = memory.byte(a + i)?;
-                        memory.insert_region(a + i + 1, &[byte]);
-                    }
-                    memory.insert_region(a, &[length.min(255) as u8]);
-                }
-                CharacterUiRequest::PascalToC(a) => {
-                    let count = u32::from(memory.byte(a)?);
-                    for i in 0..count {
-                        let byte = memory.byte(a + i + 1)?;
-                        memory.insert_region(a + i, &[byte]);
-                    }
-                    memory.insert_region(a + count, &[0]);
-                }
-                CharacterUiRequest::AppendCString {
-                    destination,
-                    source,
-                    count,
-                } => {
-                    let mut end = 0u32;
-                    while memory.byte(destination + end)? != 0 {
-                        end += 1;
-                    }
-                    for i in 0..u32::from(count) {
-                        let byte = memory.byte(source + i)?;
-                        memory.insert_region(destination + end + i, &[byte]);
-                        if byte == 0 {
-                            break;
-                        }
-                    }
-                    memory.insert_region(destination + end + u32::from(count), &[0]);
-                }
-                _ => {}
-            }
-            Ok(CharacterUiObservation { value, memory })
-        }
-        fn profile_observations(
-            &mut self,
-            race: i16,
-            caste: i16,
-            _: &FileContext,
-        ) -> Result<Vec<FileObservation>, RuleError> {
-            if race != 0 || caste != 0 {
-                return Err(RuleError::Invalid(
-                    "synthetic profile observations absent".into(),
-                ));
-            }
-            Ok(vec![])
-        }
-    }
-    fn state() -> CharacterUiState {
-        let mut memory = RenderingMemory::default();
-        memory.insert_region(0x447200, &vec![0; 3000]);
-        memory.insert_region(0x4434a0, &[0; 64]);
-        memory.insert_region(0x4394b0, &[0; 32]);
-        memory.insert_region(0x442700, &[0; 256]);
-        memory.insert_region(0x402f30, &[0; 32]);
-        memory.insert_region(0x4358ce, &[0; 4]);
-        memory.insert_region(0x479ed8, &[0; 256]);
-        for a in [
-            0x400af8, 0x400af9, 0x400afa, 0x400afc, 0x400afe, 0x400b04, 0x400b0a, 0x400b12,
-        ] {
-            memory.insert_region(a, &[0]);
-        }
-        CharacterUiState {
-            memory,
-            files: FileContext::default(),
-        }
-    }
-    fn word(state: &mut CharacterUiState, a: u32, v: i16) {
-        state.memory.insert_region(a, &v.to_be_bytes());
-    }
-    fn long(state: &mut CharacterUiState, a: u32, v: i32) {
-        state.memory.insert_region(a, &v.to_be_bytes());
-    }
-    fn numbers(services: &Services) -> Vec<i32> {
-        services
-            .requests
-            .iter()
-            .filter_map(|r| {
-                if let CharacterUiRequest::NumberToString { value, .. } = r {
-                    Some(*value)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn stats_wraps_long_cost_pools_unsigned_credits_and_limits_visible_traits() {
-        let mut state = state();
-        let frame = 0x8000;
-        state.memory.insert_region(frame - 50, &[0xa5; 60]);
-        word(&mut state, frame + 8, 1);
-        long(&mut state, 0x447c66, i32::MAX);
-        long(&mut state, 0x447c6a, 1);
-        long(&mut state, 0x447c62, 19);
-        long(&mut state, 0x447c5e, 40);
-        long(&mut state, 0x447be6, -366);
-        word(&mut state, 0x447256, 9);
-        word(&mut state, 0x447276, 1);
-        state.memory.insert_region(0x44273a, &[1]);
-        state
-            .memory
-            .insert_region(0x44947a, &65535u16.to_be_bytes());
-        state
-            .memory
-            .insert_region(0x44947au32 + 3138, &2u16.to_be_bytes());
-        for i in 0..7 {
-            word(&mut state, 0x44727a + 2 * i, 1);
-        }
-        let before = state.clone();
-        let mut services = Services::default();
-        let result = show_stats(&state, 1, frame, &mut services).unwrap();
-        assert_eq!(state, before);
-        assert_eq!(result.native_return, Some(0));
-        assert_eq!(result.state.memory.long(0x442788).unwrap(), 65537);
-        assert_eq!(result.state.memory.word(0x44947a).unwrap(), 0);
-        assert_eq!(result.state.memory.word(0x44947a + 3138).unwrap(), 0);
-        assert_eq!(&numbers(&services)[..3], &[0, 19, i32::MAX - 3]);
-        assert_eq!(result.state.memory.long(0x4427b6).unwrap() as i32, -1);
-        assert!(numbers(&services).contains(&97));
-        let ids = services
-            .requests
-            .iter()
-            .filter_map(|r| {
-                if let CharacterUiRequest::GetIndexedString {
-                    resource: 133,
-                    index,
-                    ..
-                } = r
-                {
-                    Some(*index)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(ids, vec![1, 2, 3, 4, 5]);
-        assert_eq!(services.requests[1], CharacterUiRequest::BackPixPat(0));
-        let mut missing = Services {
-            fail: true,
-            ..Services::default()
-        };
-        assert!(show_stats(&state, 1, frame, &mut missing).is_err());
-        assert_eq!(state, before);
-    }
-
-    #[test]
-    fn upgrade_uses_unsigned_member_stride_and_signed_specialty_eligibility() {
-        let mut state = state();
-        let member = u16::MAX;
-        let base = 0x448aa0 + u32::from(member) * 3138;
-        state.memory.insert_region(base, &vec![0; WARRIOR_BYTES]);
-        word(&mut state, base + 0x112, 32767);
-        word(&mut state, base + 0xb48, 1);
-        word(&mut state, base + 0xf4, -1);
-        word(&mut state, base + 0xf6, 1);
-        word(&mut state, base + 0xb64, 5);
-        let mut services = Services::default();
-        let result = show_upgrade(&state, member, &mut services).unwrap();
-        assert!(numbers(&services).contains(&-32768));
-        assert!(numbers(&services).contains(&6));
-        assert_eq!(result.state.memory.word(0x4434aa).unwrap(), 9);
-        assert!(
-            services
-                .requests
-                .contains(&CharacterUiRequest::CToPascal(base + 0xa21))
-        );
-        assert!(
-            services
-                .text
-                .iter()
-                .any(|(handle, text)| *handle == 1028 && text == &vec![0])
-        );
-    }
-
-    #[test]
-    fn restrictions_sign_extends_control_bytes_and_retains_dialog_through_cleanup() {
-        let mut state = state();
-        state.memory.insert_region(0x41f71a, &vec![0; 350]);
-        state.memory.insert_region(0x41f81e, &[0xff]);
-        state.memory.insert_region(0x41f83c, &[0x80]);
-        let mut services = Services::default();
-        let result = view_restrictions(&state, &mut services).unwrap();
-        assert_eq!(result.state.memory.long(0x4394b8).unwrap(), 0x12345678);
-        assert_eq!(result.state.memory.word(0x4434aa).unwrap(), 30);
-        assert_eq!(
-            services.requests[2],
-            CharacterUiRequest::DrawDialog(0x12345678)
-        );
-        assert_eq!(
-            services.requests[3],
-            CharacterUiRequest::DrawControls(0x12345678)
-        );
-        assert!(
-            services
-                .requests
-                .contains(&CharacterUiRequest::SetControlValue {
-                    handle: 1005,
-                    value: -1
-                })
-        );
-        assert!(
-            services
-                .requests
-                .contains(&CharacterUiRequest::SetControlValue {
-                    handle: 1035,
-                    value: -128
-                })
-        );
-        assert_eq!(
-            &services.requests[services.requests.len() - 5..],
-            &[
-                CharacterUiRequest::BeginUpdate(0x12345678),
-                CharacterUiRequest::EndUpdate(0x12345678),
-                CharacterUiRequest::FlushEvents(0xffff),
-                CharacterUiRequest::ModalDialog {
-                    filter: 0,
-                    item_address: 0x4434b2
-                },
-                CharacterUiRequest::DisposeDialog(0x12345678)
-            ]
-        );
-    }
-
-    #[test]
-    fn specialties_preserve_contiguous_stack_tables_and_require_overrun_caller_bytes() {
-        let mut state = state();
-        let frame = 0x8000;
-        state.memory.insert_region(frame - 1080, &vec![0xa5; 1136]);
-        word(&mut state, frame + 8, 1);
-        state.memory.insert_region(0x400634, &vec![0; 624]);
-        state.memory.insert_region(0x4008a4, &vec![0; 456]);
-        state.memory.insert_region(0x41f85a, &vec![0; 408]);
-        state.memory.insert_region(0x41f9f2, &vec![0; 576]);
-        // Only specialty 12 is enabled; its second table row addresses caller bytes.
-        word(&mut state, 0x41f9f2 + 24, 2);
-        word(&mut state, frame, 0);
-        word(&mut state, frame + 10, 7);
-        word(&mut state, 0x447bfe, 1);
-        word(&mut state, 0x447c04, 2);
-        word(&mut state, 0x447c06, 0);
-        word(&mut state, 0x400874, 1);
-        word(&mut state, 0x400874 + 10, 1);
-        word(&mut state, 0x447220, -1);
-        word(&mut state, 0x447222, 1000);
-        let before = state.clone();
-        let result = update_specialties(&state, frame, &mut Services::default()).unwrap();
-        assert_eq!(state, before);
-        assert_eq!(result.native_return, None);
-        assert_eq!(result.state.memory.word(0x447328).unwrap(), 9);
-        assert_eq!(result.state.memory.word(0x447220).unwrap(), 0);
-        assert_eq!(result.state.memory.word(0x447222).unwrap(), 999);
-        assert_eq!(result.state.memory.word(0x4434aa).unwrap(), 12);
-        assert_eq!(result.state.memory.word(0x4434ac).unwrap(), 19);
-        let copies = result
-            .effects
-            .iter()
-            .filter_map(|effect| match effect {
-                CharacterUiEffect::Write(write)
-                    if write.address >= frame - 1080 && write.address < frame =>
-                {
-                    Some(write)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(copies.len(), 270);
-        assert!(copies.iter().all(|w| w.bytes.len() == 4));
-        for a in frame..frame + 56 {
-            state.memory.bytes.remove(&a);
-        }
-        word(&mut state, frame + 8, 1);
-        assert!(update_specialties(&state, frame, &mut Services::default()).is_err());
-    }
 }

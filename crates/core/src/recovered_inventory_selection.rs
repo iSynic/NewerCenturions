@@ -92,14 +92,14 @@ pub struct InventorySelectionPlan {
 pub enum InventorySelectionQualification {
     SourcePortWithObservedBoundariesAndCapturedChildren,
 }
-struct Execution<'a, S> {
+struct Execution<'a, S: ?Sized> {
     plan: InventorySelectionPlan,
     services: &'a mut S,
     limits: InventorySelectionLimits,
     remaining: u32,
     d0: Option<u32>,
 }
-impl<S: InventorySelectionServices> Execution<'_, S> {
+impl<S: InventorySelectionServices + ?Sized> Execution<'_, S> {
     fn step(&mut self) -> Result<(), RuleError> {
         self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
             RuleError::Invalid("inventory selection processing budget exhausted".into())
@@ -933,7 +933,7 @@ fn node(member: u16, slot: u16) -> u32 {
 fn half(value: i16) -> i16 {
     value.wrapping_add(((value as u16) >> 15) as i16) >> 1
 }
-fn execution<'a, S>(
+fn execution<'a, S: ?Sized>(
     state: &InventorySelectionState,
     limits: InventorySelectionLimits,
     services: &'a mut S,
@@ -959,7 +959,7 @@ pub fn check_for_item(
     state: &InventorySelectionState,
     frame: u32,
     limits: InventorySelectionLimits,
-    services: &mut impl InventorySelectionServices,
+    services: &mut (impl InventorySelectionServices + ?Sized),
 ) -> Result<InventorySelectionPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let item = e.sw(frame.wrapping_add(8))?;
@@ -1026,7 +1026,7 @@ pub fn check_for_do_auto(
     state: &InventorySelectionState,
     frame: u32,
     limits: InventorySelectionLimits,
-    services: &mut impl InventorySelectionServices,
+    services: &mut (impl InventorySelectionServices + ?Sized),
 ) -> Result<InventorySelectionPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let mut selected = 0_i16;
@@ -1077,7 +1077,7 @@ pub fn order(
     state: &InventorySelectionState,
     frame: u32,
     limits: InventorySelectionLimits,
-    services: &mut impl InventorySelectionServices,
+    services: &mut (impl InventorySelectionServices + ?Sized),
 ) -> Result<InventorySelectionPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let textbox = frame.wrapping_sub(0x49a4);
@@ -1159,7 +1159,7 @@ pub fn update_booty(
     state: &InventorySelectionState,
     frame: u32,
     limits: InventorySelectionLimits,
-    services: &mut impl InventorySelectionServices,
+    services: &mut (impl InventorySelectionServices + ?Sized),
 ) -> Result<InventorySelectionPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let member = e.w(frame.wrapping_add(8))?;
@@ -1256,7 +1256,7 @@ pub fn update_fat(
     state: &InventorySelectionState,
     frame: u32,
     limits: InventorySelectionLimits,
-    services: &mut impl InventorySelectionServices,
+    services: &mut (impl InventorySelectionServices + ?Sized),
 ) -> Result<InventorySelectionPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let delta = e.sw(frame.wrapping_add(10))?;
@@ -1309,7 +1309,7 @@ pub fn update_fat(
     Ok(e.plan)
 }
 
-fn fat_rect<S: InventorySelectionServices>(
+fn fat_rect<S: InventorySelectionServices + ?Sized>(
     e: &mut Execution<'_, S>,
     top: u16,
     bottom: u16,
@@ -1338,7 +1338,7 @@ pub fn action_picker(
     state: &InventorySelectionState,
     frame: u32,
     limits: InventorySelectionLimits,
-    services: &mut impl InventorySelectionServices,
+    services: &mut (impl InventorySelectionServices + ?Sized),
 ) -> Result<InventorySelectionPlan, RuleError> {
     let mut e = execution(state, limits, services);
     e.long(frame.wrapping_sub(12), 0)?;
@@ -1477,7 +1477,7 @@ pub fn action_picker(
     Ok(e.plan)
 }
 
-fn cursor<S: InventorySelectionServices>(
+fn cursor<S: InventorySelectionServices + ?Sized>(
     e: &mut Execution<'_, S>,
     id: u16,
 ) -> Result<(), RuleError> {
@@ -1492,7 +1492,7 @@ pub fn show_items(
     state: &InventorySelectionState,
     frame: u32,
     limits: InventorySelectionLimits,
-    services: &mut impl InventorySelectionServices,
+    services: &mut (impl InventorySelectionServices + ?Sized),
 ) -> Result<InventorySelectionPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let mode = e.w(frame.wrapping_add(8))?;
@@ -1671,7 +1671,7 @@ pub fn show_condition(
     state: &InventorySelectionState,
     frame: u32,
     limits: InventorySelectionLimits,
-    services: &mut impl InventorySelectionServices,
+    services: &mut (impl InventorySelectionServices + ?Sized),
 ) -> Result<InventorySelectionPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let selected = e.w(frame.wrapping_add(16))?;
@@ -1964,7 +1964,7 @@ pub fn scan_select(
     state: &InventorySelectionState,
     frame: u32,
     limits: InventorySelectionLimits,
-    services: &mut impl InventorySelectionServices,
+    services: &mut (impl InventorySelectionServices + ?Sized),
 ) -> Result<InventorySelectionPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let cost_table = frame.wrapping_sub(0x16);
@@ -2211,7 +2211,7 @@ fn learned(base: u32, level: u16, column: i16) -> u32 {
     base.wrapping_add(u32::from(level) * 7)
         .wrapping_add(i32::from(column) as u32)
 }
-fn scan_rows<S: InventorySelectionServices>(
+fn scan_rows<S: InventorySelectionServices + ?Sized>(
     e: &mut Execution<'_, S>,
     dialog: u32,
     frame: u32,
@@ -2251,7 +2251,7 @@ fn scan_rows<S: InventorySelectionServices>(
     }
     Ok(())
 }
-fn scan_mark<S: InventorySelectionServices>(
+fn scan_mark<S: InventorySelectionServices + ?Sized>(
     e: &mut Execution<'_, S>,
     rectangle: u32,
     selected: bool,
@@ -2282,7 +2282,7 @@ fn scan_mark<S: InventorySelectionServices>(
     Ok(())
 }
 
-fn new_control<S: InventorySelectionServices>(
+fn new_control<S: InventorySelectionServices + ?Sized>(
     e: &mut Execution<'_, S>,
     resource: u16,
     address: u32,
@@ -2299,152 +2299,4 @@ fn new_control<S: InventorySelectionServices>(
         ],
     )?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recovered_combat_panel::{CombatPanelObservation, CombatPanelRequest};
-    use crate::recovered_detail_ui::{DetailReply, DetailRequest, DetailServices};
-    use crate::recovered_files::FileObservation;
-    use crate::recovered_inventory_edit::{InventoryEditObservation, InventoryEditRequest};
-    use crate::recovered_prompt_control::tests::{FRAME, Observed};
-
-    fn unused() -> RuleError {
-        RuleError::Invalid("unexpected selection test boundary".into())
-    }
-    impl equipment::EquipmentServices for Observed {
-        fn profile_observations(
-            &mut self,
-            _: i16,
-            _: i16,
-            _: &RenderingMemory,
-        ) -> Result<Vec<FileObservation>, RuleError> {
-            Err(unused())
-        }
-    }
-    impl InventoryEditServices for Observed {
-        fn observe_edit(
-            &mut self,
-            _: &InventoryEditRequest,
-            _: &RenderingMemory,
-        ) -> Result<InventoryEditObservation, RuleError> {
-            Err(unused())
-        }
-    }
-    impl DetailServices for Observed {
-        fn observe(
-            &mut self,
-            _: &DetailRequest,
-            _: &RenderingMemory,
-        ) -> Result<DetailReply, RuleError> {
-            Err(unused())
-        }
-    }
-    impl CombatPanelServices for Observed {
-        fn observe_panel(
-            &mut self,
-            _: &CombatPanelRequest,
-            _: &RenderingMemory,
-        ) -> Result<CombatPanelObservation, RuleError> {
-            Err(unused())
-        }
-        fn visibility_memory(&mut self, _: &RenderingMemory) -> Result<InstallMemory, RuleError> {
-            Err(unused())
-        }
-    }
-    impl InventorySelectionServices for Observed {}
-    fn limits() -> InventorySelectionLimits {
-        InventorySelectionLimits {
-            maximum_steps: 100,
-            prompt: prompt::tests::limits(),
-            equipment: EquipmentLimits {
-                maximum_steps: 100,
-                maximum_polls: 20,
-                filename_capacity: 64,
-            },
-            maximum_random_draws: 100,
-        }
-    }
-    fn word(state: &mut InventorySelectionState, address: u32, value: u16) {
-        state.memory.insert_region(address, &value.to_be_bytes());
-    }
-    fn arguments(state: &mut InventorySelectionState, item: u16, consume: u16, member: u16) {
-        word(state, FRAME + 8, item);
-        word(state, FRAME + 10, consume);
-        word(state, FRAME + 12, member);
-    }
-    #[test]
-    fn first_matching_empty_quantity_does_not_continue_to_later_supply() {
-        let mut state = prompt::tests::state();
-        arguments(&mut state, 17, 1, u16::MAX);
-        word(&mut state, record(0) + 0x1a, 2);
-        word(&mut state, node(0, 0), 17);
-        word(&mut state, node(0, 0) + 2, 0);
-        word(&mut state, node(0, 1), 17);
-        word(&mut state, node(0, 1) + 2, 8);
-        let result = check_for_item(&state, FRAME, limits(), &mut Observed::new()).unwrap();
-        assert_eq!(result.native_return, PromptReturn::LowWord(0));
-        assert_eq!(result.state.memory.word(0x438748).unwrap(), 0);
-        assert_eq!(result.state.memory.word(node(0, 1) + 2).unwrap(), 8);
-        assert_eq!(result.state.random, state.random);
-    }
-    #[test]
-    fn explicit_member_overrides_party_boundary_and_search_ignores_quantity() {
-        let mut state = prompt::tests::state();
-        state
-            .memory
-            .insert_region(record(1), &vec![0; WARRIOR_BYTES]);
-        state.memory.insert_region(0x44273a, &[0xff]);
-        arguments(&mut state, 17, 0, 1);
-        word(&mut state, record(1) + 0x1a, 1);
-        word(&mut state, node(1, 0), 17);
-        word(&mut state, node(1, 0) + 2, 0xffff);
-        let result = check_for_item(&state, FRAME, limits(), &mut Observed::new()).unwrap();
-        assert_eq!(result.native_return, PromptReturn::LowWord(2));
-        assert_eq!(result.state.memory.word(node(1, 0) + 2).unwrap(), 0xffff);
-        assert_eq!(result.state.memory.word(FRAME - 4).unwrap(), 1);
-        assert_eq!(result.state.memory.word(FRAME - 2).unwrap(), 1);
-    }
-    #[test]
-    fn consuming_last_quantity_subtracts_weight_without_invented_drop() {
-        let mut state = prompt::tests::state();
-        arguments(&mut state, 1, 1, u16::MAX);
-        word(&mut state, record(0) + 0x1a, 1);
-        word(&mut state, node(0, 0), 1);
-        word(&mut state, node(0, 0) + 2, 1);
-        word(&mut state, record(0) + 0x9d6, 2);
-        state.memory.insert_region(0x45363c, &[0; ITEM_BYTES]);
-        let item = records::ITEM_TABLE_ADDRESSES[0] + ITEM_BYTES as u32;
-        state.memory.insert_region(item, &[0; ITEM_BYTES]);
-        word(&mut state, item + 36, 4);
-        let result = check_for_item(&state, FRAME, limits(), &mut Observed::new()).unwrap();
-        assert_eq!(result.native_return, PromptReturn::LowWord(1));
-        assert_eq!(result.state.memory.word(node(0, 0) + 2).unwrap(), 0);
-        assert_eq!(result.state.memory.word(node(0, 0)).unwrap(), 1);
-        assert_eq!(result.state.memory.word(record(0) + 0x9d6).unwrap(), 0xfffe);
-        assert_eq!(result.state.random, state.random);
-        let original = state.clone();
-        state.memory.bytes.remove(&node(0, 0));
-        assert!(check_for_item(&state, FRAME, limits(), &mut Observed::new()).is_err());
-        assert_eq!(
-            state.memory.word(record(0) + 0x9d6).unwrap(),
-            original.memory.word(record(0) + 0x9d6).unwrap()
-        );
-    }
-    #[test]
-    fn rejected_fatigue_window_preserves_memory_and_empty_control_scan_returns_zero() {
-        let mut state = prompt::tests::state();
-        word(&mut state, FRAME + 14, 0);
-        word(&mut state, 0x442578, 50);
-        word(&mut state, FRAME + 10, 20);
-        let result = update_fat(&state, FRAME, limits(), &mut Observed::new()).unwrap();
-        assert_eq!(result.state, state);
-        assert_eq!(result.effects.len(), 2);
-        state.memory.insert_region(0x439404, &1_u32.to_be_bytes());
-        let result = check_for_do_auto(&state, FRAME, limits(), &mut Observed::new()).unwrap();
-        assert_eq!(result.native_return, PromptReturn::Full(0));
-        assert_eq!(result.state, state);
-        assert!(result.effects.is_empty());
-    }
 }

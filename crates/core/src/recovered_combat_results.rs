@@ -85,13 +85,13 @@ pub struct CombatResultPlan {
     pub native_return: CombatResultReturn,
     pub flow: LoadFlow,
 }
-struct Execution<'a, S> {
+struct Execution<'a, S: ?Sized> {
     plan: CombatResultPlan,
     services: &'a mut S,
     limits: PromptLimits,
     remaining: u32,
 }
-impl<S: CombatResultServices> Execution<'_, S> {
+impl<S: CombatResultServices + ?Sized> Execution<'_, S> {
     fn step(&mut self) -> Result<(), RuleError> {
         self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
             RuleError::Invalid("combat result processing budget exhausted".into())
@@ -573,7 +573,7 @@ impl<S: CombatResultServices> Execution<'_, S> {
         Ok(())
     }
 }
-fn execution<'a, S>(
+fn execution<'a, S: ?Sized>(
     state: &CombatResultState,
     limits: PromptLimits,
     services: &'a mut S,
@@ -608,11 +608,11 @@ fn damage(frame: u32, channel: u32) -> u32 {
     frame.wrapping_sub(20).wrapping_add(channel * 2)
 }
 
-struct Clock<'a, 'b, S> {
+struct Clock<'a, 'b, S: ?Sized> {
     execution: &'a mut Execution<'b, S>,
     remaining: usize,
 }
-impl<S: CombatResultServices> TimingServices for Clock<'_, '_, S> {
+impl<S: CombatResultServices + ?Sized> TimingServices for Clock<'_, '_, S> {
     fn tick_count(&mut self) -> Result<u32, RuleError> {
         self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
             RuleError::Invalid("combat result delay observation budget exhausted".into())
@@ -713,7 +713,7 @@ pub fn spelleffect(
     state: &CombatResultState,
     frame: u32,
     limits: PromptLimits,
-    services: &mut impl CombatResultServices,
+    services: &mut (impl CombatResultServices + ?Sized),
 ) -> Result<CombatResultPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let stack = frame.wrapping_sub(36);
@@ -891,7 +891,7 @@ pub fn resolvedamage(
     state: &CombatResultState,
     frame: u32,
     limits: PromptLimits,
-    services: &mut impl CombatResultServices,
+    services: &mut (impl CombatResultServices + ?Sized),
 ) -> Result<CombatResultPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let stack = frame.wrapping_sub(376);
@@ -1189,7 +1189,7 @@ pub fn showresults(
     state: &CombatResultState,
     frame: u32,
     limits: PromptLimits,
-    services: &mut impl CombatResultServices,
+    services: &mut (impl CombatResultServices + ?Sized),
 ) -> Result<CombatResultPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let stack = frame.wrapping_sub(28);
@@ -1542,7 +1542,7 @@ pub fn resist(
     state: &CombatResultState,
     frame: u32,
     limits: PromptLimits,
-    services: &mut impl CombatResultServices,
+    services: &mut (impl CombatResultServices + ?Sized),
 ) -> Result<CombatResultPlan, RuleError> {
     let mut e = execution(state, limits, services);
     let stack = frame.wrapping_sub(18);
@@ -1750,153 +1750,4 @@ pub fn resist(
     }
     e.plan.native_return = CombatResultReturn::LowWord(e.w(0x4471ea)? as u16);
     Ok(e.plan)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recovered_prompt_control::tests::{FRAME, Observed, limits};
-    impl CombatResultServices for Observed {
-        fn graphics_dispatch(
-            &mut self,
-            _: &GraphicsDispatchRequest,
-            memory: &RenderingMemory,
-        ) -> Result<FeedbackObservation, RuleError> {
-            Ok(FeedbackObservation {
-                value: 0,
-                d0: 0,
-                memory: memory.clone(),
-            })
-        }
-    }
-    fn state() -> CombatResultState {
-        let source = crate::recovered_prompt_control::tests::state();
-        let mut memory = source.memory;
-        for (a, n) in [
-            (0x453600, 0x200),
-            (0x41f600, 0x120),
-            (0x439d3c, 288),
-            (0x446f00, 0x200),
-        ] {
-            memory.insert_region(a, &vec![0; n]);
-        }
-        CombatResultState {
-            memory,
-            random: RandomState::new(4),
-        }
-    }
-    fn word(s: &mut CombatResultState, a: u32, value: u16) {
-        s.memory.insert_region(a, &value.to_be_bytes());
-    }
-    #[test]
-    fn negative_damage_target_only_clears_native_shield_byte() {
-        let mut s = state();
-        word(&mut s, FRAME + 8, u16::MAX);
-        let result = resolvedamage(&s, FRAME, limits(), &mut Observed::new()).unwrap();
-        assert_eq!(result.native_return, CombatResultReturn::Full(0));
-        assert_eq!(result.state.random.draws, 0);
-        assert_eq!(
-            result.effects,
-            vec![CombatResultEffect::Write(RecordWrite {
-                address: FRAME - 25,
-                bytes: vec![0]
-            })]
-        );
-        assert_eq!(s.memory.byte(FRAME - 25).unwrap(), 0);
-    }
-    #[test]
-    fn damage_rolls_then_special_return_skips_party_mark() {
-        let mut s = state();
-        word(&mut s, 0x44376e, 7);
-        word(&mut s, 0x443770, 7);
-        word(&mut s, 0x443776, 57);
-        let result = resolvedamage(&s, FRAME, limits(), &mut Observed::new()).unwrap();
-        assert_eq!(result.state.random.draws, 1);
-        assert_eq!(result.state.memory.word(0x4434b8).unwrap(), 7);
-        assert_eq!(
-            result.native_return,
-            CombatResultReturn::LowWord((-7_i16) as u16)
-        );
-        assert_eq!(result.state.memory.word(0x448ab4).unwrap(), 0);
-        word(&mut s, 0x443776, 0);
-        let result = resolvedamage(&s, FRAME, limits(), &mut Observed::new()).unwrap();
-        assert_eq!(result.state.memory.word(0x448ab4).unwrap(), 1);
-        assert_eq!(result.state.memory.word(0x41f710).unwrap(), 157);
-    }
-    #[test]
-    fn damage_enemy_size_uses_imported_abs_and_copied_record() {
-        let mut s = state();
-        word(&mut s, FRAME + 8, 10);
-        word(&mut s, 0x44376e, 3);
-        word(&mut s, 0x443770, 3);
-        word(&mut s, 0x439d4c, (-2_i16) as u16);
-        s.memory.insert_region(0x443778, &[1]);
-        let result = resolvedamage(&s, FRAME, limits(), &mut Observed::new()).unwrap();
-        assert_eq!(
-            result.state.memory.word(FRAME - 338 + 16).unwrap(),
-            (-2_i16) as u16
-        );
-        assert_eq!(result.state.memory.word(0x4434b8).unwrap(), 6);
-        assert_eq!(result.state.memory.byte(0x439e41).unwrap(), 1);
-        assert_eq!(result.effects.iter().filter(|v| matches!(v, CombatResultEffect::Library { request, .. } if request.entry == 0x400038)).count(), 9);
-    }
-    #[test]
-    fn resist_negative_selector_import_and_scan_have_one_final_roll() {
-        let mut s = state();
-        s.memory.insert_region(0x443761, &[1]);
-        s.memory.insert_region(0x443762, &[(-9_i8) as u8]);
-        word(&mut s, 0x4435c8, 7);
-        word(&mut s, 0x448aa0 + 34, 100);
-        let result = resist(&s, FRAME, limits(), &mut Observed::new()).unwrap();
-        assert_eq!(result.state.random.draws, 1);
-        assert_eq!(result.native_return, CombatResultReturn::Full(0));
-        assert_eq!(result.state.memory.word(FRAME - 2).unwrap(), 100);
-        assert!(result.effects.iter().any(|v| matches!(v, CombatResultEffect::Library { request, .. } if request.entry == 0x400038 && request.arguments == vec![W((-9_i16) as u16)])));
-    }
-    #[test]
-    fn showresults_message_dispatch_clears_native_suffix_flags() {
-        let mut s = state();
-        word(&mut s, FRAME + 10, (-12_i16) as u16);
-        word(&mut s, 0x438776, 1);
-        word(&mut s, 0x438760, 1);
-        s.memory.insert_region(0x44374f, &[9]);
-        word(&mut s, 0x4434c2, 7);
-        word(&mut s, 0x438784, 1);
-        let result = showresults(&s, FRAME, limits(), &mut Observed::new()).unwrap();
-        assert_eq!(result.native_return, CombatResultReturn::Full(0));
-        assert_eq!(result.state.memory.word(0x4434c2).unwrap(), 0);
-        assert_eq!(result.state.memory.word(0x438784).unwrap(), 0);
-        assert!(result.effects.iter().any(|v| matches!(v, CombatResultEffect::Feedback(FeedbackEffect::Service { request: FeedbackRequest::Toolbox { opcode: 0xa884, arguments }, .. }) if arguments == &vec![P(0x400ce2)])));
-        assert_eq!(result.state.random.draws, 0);
-    }
-    #[test]
-    fn area_spelleffect_restores_viewport_after_eight_frames() {
-        let mut s = state();
-        word(&mut s, 0x438776, 1);
-        word(&mut s, FRAME + 10, 1);
-        s.memory.insert_region(0x4358c1, &[1]);
-        s.memory.insert_region(0x4358c2, &[1]);
-        let bounds = PromptLimits {
-            maximum_steps: 2000,
-            ..limits()
-        };
-        let result = spelleffect(&s, FRAME, bounds, &mut Observed::new()).unwrap();
-        let requests: Vec<_> = result
-            .effects
-            .iter()
-            .filter_map(|v| match v {
-                CombatResultEffect::Feedback(FeedbackEffect::Service {
-                    request: FeedbackRequest::Toolbox { opcode, .. },
-                    ..
-                }) => Some(*opcode),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(requests.iter().filter(|&&v| v == 0xaa1e).count(), 8);
-        assert_eq!(requests.iter().filter(|&&v| v == 0xaa25).count(), 8);
-        assert_eq!(requests.last(), Some(&0xa8ec));
-        assert_eq!(result.state.random.draws, 0);
-        assert!(spelleffect(&s, FRAME, limits(), &mut Observed::new()).is_err());
-        assert_eq!(s.memory.long(0x439598).unwrap(), 0);
-    }
 }

@@ -82,13 +82,13 @@ pub struct StoragePlan {
     pub flow: LoadFlow,
     pub native_return: Option<u32>,
 }
-pub(crate) struct Execution {
+pub struct Execution {
     pub plan: StoragePlan,
     pub limits: StorageLimits,
     remaining: usize,
 }
 impl Execution {
-    pub(crate) fn new(
+    pub fn new(
         memory: &RenderingMemory,
         limits: StorageLimits,
         native_return: Option<u32>,
@@ -104,7 +104,7 @@ impl Execution {
             remaining: limits.maximum_iterations,
         }
     }
-    pub(crate) fn step(&mut self) -> Result<(), RuleError> {
+    pub fn step(&mut self) -> Result<(), RuleError> {
         self.remaining = self
             .remaining
             .checked_sub(1)
@@ -114,21 +114,21 @@ impl Execution {
             })?;
         Ok(())
     }
-    pub(crate) fn bytes(&self, address: u32, length: usize) -> Result<Vec<u8>, RuleError> {
+    pub fn bytes(&self, address: u32, length: usize) -> Result<Vec<u8>, RuleError> {
         (0..length)
             .map(|i| self.plan.memory.byte(address.wrapping_add(i as u32)))
             .collect()
     }
-    pub(crate) fn word(&self, address: u32) -> Result<i16, RuleError> {
+    pub fn word(&self, address: u32) -> Result<i16, RuleError> {
         Ok(self.plan.memory.word(address)? as i16)
     }
-    pub(crate) fn long(&self, address: u32) -> Result<u32, RuleError> {
+    pub fn long(&self, address: u32) -> Result<u32, RuleError> {
         self.plan.memory.long(address)
     }
-    pub(crate) fn byte(&self, address: u32) -> Result<u8, RuleError> {
+    pub fn byte(&self, address: u32) -> Result<u8, RuleError> {
         self.plan.memory.byte(address)
     }
-    pub(crate) fn write(&mut self, address: u32, bytes: &[u8]) -> Result<(), RuleError> {
+    pub fn write(&mut self, address: u32, bytes: &[u8]) -> Result<(), RuleError> {
         self.bytes(address, bytes.len())?;
         self.plan.memory.insert_region(address, bytes);
         self.plan.effects.push(StorageEffect::Write(RecordWrite {
@@ -137,16 +137,16 @@ impl Execution {
         }));
         Ok(())
     }
-    pub(crate) fn ww(&mut self, address: u32, value: i16) -> Result<(), RuleError> {
+    pub fn ww(&mut self, address: u32, value: i16) -> Result<(), RuleError> {
         self.write(address, &value.to_be_bytes())
     }
-    pub(crate) fn lw(&mut self, address: u32, value: u32) -> Result<(), RuleError> {
+    pub fn lw(&mut self, address: u32, value: u32) -> Result<(), RuleError> {
         self.write(address, &value.to_be_bytes())
     }
-    pub(crate) fn add(&mut self, address: u32, value: i16) -> Result<(), RuleError> {
+    pub fn add(&mut self, address: u32, value: i16) -> Result<(), RuleError> {
         self.ww(address, self.word(address)?.wrapping_add(value))
     }
-    pub(crate) fn load(
+    pub fn load(
         &mut self,
         request: LoadRequest,
         services: &(impl StorageServices + ?Sized),
@@ -165,7 +165,7 @@ impl Execution {
         });
         Ok(value)
     }
-    pub(crate) fn service(
+    pub fn service(
         &mut self,
         request: StorageRequest,
         services: &(impl StorageServices + ?Sized),
@@ -191,7 +191,7 @@ impl Execution {
         });
         Ok(value)
     }
-    pub(crate) fn toolbox(
+    pub fn toolbox(
         &mut self,
         opcode: u16,
         selector: Option<u32>,
@@ -207,10 +207,10 @@ impl Execution {
             services,
         )
     }
-    pub(crate) fn active(&self) -> bool {
+    pub fn active(&self) -> bool {
         self.plan.flow == LoadFlow::Returned
     }
-    pub(crate) fn fatal(
+    pub fn fatal(
         &mut self,
         child_frame: u32,
         code: i16,
@@ -244,7 +244,7 @@ impl Execution {
         }
         Err(RuleError::Invalid("unterminated filename C string".into()))
     }
-    pub(crate) fn filename(
+    pub fn filename(
         &mut self,
         name: u32,
         temporary: bool,
@@ -285,7 +285,7 @@ impl Execution {
         }
         Ok(())
     }
-    pub(crate) fn open(
+    pub fn open(
         &mut self,
         name: u32,
         mode: u32,
@@ -301,7 +301,7 @@ impl Execution {
             services,
         )
     }
-    pub(crate) fn read(
+    pub fn read(
         &mut self,
         handle: u32,
         size: u32,
@@ -318,7 +318,7 @@ impl Execution {
             services,
         )
     }
-    pub(crate) fn fwrite(
+    pub fn fwrite(
         &mut self,
         handle: u32,
         size: u32,
@@ -335,7 +335,7 @@ impl Execution {
             services,
         )
     }
-    pub(crate) fn close(
+    pub fn close(
         &mut self,
         handle: u32,
         services: &(impl StorageServices + ?Sized),
@@ -343,7 +343,7 @@ impl Execution {
         self.load(LoadRequest::Close(handle), services)?;
         Ok(())
     }
-    pub(crate) fn seek(
+    pub fn seek(
         &mut self,
         handle: u32,
         offset: u32,
@@ -650,450 +650,6 @@ pub fn reset_game_files(
     e.write(0x44274c, &[e.byte(0x44255f)?])?;
     Ok(e.plan)
 }
-pub(crate) fn string_slot(index: i16) -> u32 {
+pub fn string_slot(index: i16) -> u32 {
     0x438af4_u32.wrapping_add((i32::from(index) as u32).wrapping_shl(8))
-}
-
-#[cfg(test)]
-pub(crate) mod test_support {
-    use super::*;
-    use crate::recovered_audio::{AudioContext, AudioObservation};
-    use crate::recovered_drawing::{BuildingWorld, DrawingServices, PictureObservation};
-    use crate::recovered_equipment::test_support as equipment;
-    use crate::recovered_feedback::{
-        FeedbackMemory, FeedbackObservation, FeedbackRequest, FeedbackServices,
-    };
-    use crate::recovered_gamma::{
-        GammaError, GammaMemory, GammaObservation, GammaRequest, GammaServices,
-    };
-    use crate::recovered_gamma_control::{GammaControlRequest, GammaControlServices};
-    use crate::recovered_geometry::BodyRect;
-    use crate::recovered_load_control::VersionInputs;
-    use crate::recovered_text::PascalString;
-    use std::cell::RefCell;
-    use std::collections::{BTreeMap, VecDeque};
-    pub const FRAME: u32 = equipment::FRAME;
-    pub const LIMITS: StorageLimits = StorageLimits {
-        filename_capacity: 256,
-        maximum_iterations: 100000,
-        maximum_polls: 4,
-    };
-    pub struct ReadReply {
-        pub value: u32,
-        pub bytes: Vec<u8>,
-    }
-    #[derive(Default)]
-    pub struct Services {
-        pub(crate) base: equipment::Services,
-        pub loads: RefCell<Vec<LoadRequest>>,
-        pub requests: RefCell<Vec<StorageRequest>>,
-        pub opens: RefCell<VecDeque<u32>>,
-        pub reads: RefCell<BTreeMap<u32, VecDeque<ReadReply>>>,
-        pub menu: RefCell<Vec<Vec<u8>>>,
-        pub open_argument: Option<(u32, u32)>,
-        pub toggle_menu_flag: bool,
-        pub fail_write: bool,
-        pub fail_read: bool,
-        pub cache_ready_handle: Option<u32>,
-    }
-    pub fn word(memory: &mut RenderingMemory, address: u32, value: i16) {
-        equipment::put_word(memory, address, value);
-    }
-    pub fn long(memory: &mut RenderingMemory, address: u32, value: u32) {
-        equipment::put_long(memory, address, value);
-    }
-    pub fn fixture() -> RenderingMemory {
-        let mut memory = equipment::fixture();
-        long(&mut memory, 0x439570, 0);
-        for (address, size) in [
-            (0x402600, 512),
-            (0x401800, 512),
-            (0x403100, 256),
-            (0x4042c0, 32),
-            (0x440dbc, 288),
-            (0x41d1c4, 0x2440),
-            (0x478288, 0x1d22),
-        ] {
-            memory.insert_region(address, &vec![0; size]);
-        }
-        memory.insert_region(0x44260c, b"Scenario\0");
-        for (address, text) in [
-            (0x40181c, b"Land\0".as_slice()),
-            (0x401818, b"r+b\0"),
-            (0x401796, b"ED\0"),
-            (0x40178e, b"ED2\0"),
-            (0x401792, b"r+b\0"),
-            (0x4031b2, b"SD\0"),
-            (0x4031ae, b"r+b\0"),
-            (0x401e1a, b"NI\0"),
-            (0x402700, b"MENU\0"),
-            (0x4026f4, b"MD\0"),
-            (0x4026fc, b"rb\0"),
-            (0x4026d0, b"wb\0"),
-            (0x4026d4, b"\0"),
-            (0x4026d6, b"Loading\0"),
-            (0x4026c9, b"\0"),
-            (0x4026ca, b"DATA\0"),
-            (0x402436, b"NEWC\0"),
-            (0x4028c0, b"Mission\0"),
-            (0x4028bc, b"rb\0"),
-        ] {
-            memory.insert_region(address, text);
-        }
-        memory
-    }
-    fn cstring(memory: &RenderingMemory, address: u32) -> Result<Vec<u8>, RuleError> {
-        let mut bytes = vec![];
-        for index in 0..256 {
-            let value = memory.byte(address.wrapping_add(index))?;
-            if value == 0 {
-                return Ok(bytes);
-            }
-            bytes.push(value);
-        }
-        Err(RuleError::Invalid("test C string unavailable".into()))
-    }
-    impl FeedbackServices for Services {
-        fn observe(
-            &self,
-            request: &FeedbackRequest,
-            memory: &FeedbackMemory,
-        ) -> Result<FeedbackObservation, RuleError> {
-            self.base.observe(request, memory)
-        }
-        fn sound_observations(
-            &self,
-            id: i16,
-            context: &AudioContext,
-            memory: &FeedbackMemory,
-        ) -> Result<Vec<AudioObservation>, RuleError> {
-            self.base.sound_observations(id, context, memory)
-        }
-    }
-    impl GammaServices for Services {
-        fn observe(
-            &self,
-            _: &GammaRequest,
-            _: &GammaMemory,
-        ) -> Result<GammaObservation, GammaError> {
-            Err(GammaError::MissingService("unexpected gamma".into()))
-        }
-    }
-    impl GammaControlServices for Services {
-        fn observe_control(
-            &self,
-            _: &GammaControlRequest,
-            _: &GammaMemory,
-        ) -> Result<GammaObservation, GammaError> {
-            Err(GammaError::MissingService(
-                "unexpected gamma control".into(),
-            ))
-        }
-    }
-    impl LoadServices for Services {
-        fn observe_load(
-            &self,
-            request: &LoadRequest,
-            memory: &RenderingMemory,
-        ) -> Result<LoadObservation, RuleError> {
-            self.loads.borrow_mut().push(request.clone());
-            let mut next = memory.clone();
-            let mut value = 0;
-            match request {
-                LoadRequest::Open { .. } => {
-                    value = self.opens.borrow_mut().pop_front().unwrap_or(9);
-                    if let Some((address, argument)) = self.open_argument {
-                        long(&mut next, address, argument);
-                    }
-                }
-                LoadRequest::Read {
-                    handle,
-                    destination,
-                    ..
-                } => {
-                    if self.cache_ready_handle == Some(*handle) {
-                        word(&mut next, 0x4042c8, memory.word(FRAME + 8)? as i16);
-                    }
-                    if self.fail_read {
-                        return Err(RuleError::Invalid("missing read observation".into()));
-                    }
-                    if let Some(reply) = self
-                        .reads
-                        .borrow_mut()
-                        .get_mut(handle)
-                        .and_then(VecDeque::pop_front)
-                    {
-                        value = reply.value;
-                        next.insert_region(*destination, &reply.bytes);
-                    }
-                }
-                LoadRequest::GetIndexedString { destination, .. } => {
-                    next.insert_region(*destination, &[1, b'L']);
-                }
-                LoadRequest::CopyCString {
-                    source,
-                    destination,
-                } => {
-                    let mut bytes = cstring(memory, *source)?;
-                    bytes.push(0);
-                    next.insert_region(*destination, &bytes);
-                }
-                LoadRequest::CToPascal(address) => {
-                    next.insert_region(
-                        *address,
-                        PascalString::from_payload(&cstring(memory, *address)?)?.raw(),
-                    );
-                }
-                LoadRequest::PascalToC(address) => {
-                    let length = usize::from(memory.byte(*address)?);
-                    let mut bytes = (0..length)
-                        .map(|i| memory.byte(address.wrapping_add(i as u32 + 1)))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    bytes.push(0);
-                    next.insert_region(*address, &bytes);
-                }
-                LoadRequest::Toolbox {
-                    opcode, arguments, ..
-                } => match *opcode {
-                    0xa950 => value = self.menu.borrow().len() as u32,
-                    0xa947 => {
-                        if let [L(_), W(index), P(address)] = arguments.as_slice() {
-                            let length = usize::from(memory.byte(*address)?);
-                            let text = (0..length)
-                                .map(|i| memory.byte(address.wrapping_add(i as u32 + 1)))
-                                .collect::<Result<Vec<_>, _>>()?;
-                            let mut menu = self.menu.borrow_mut();
-                            let length = menu.len().max(usize::from(*index));
-                            menu.resize(length, vec![]);
-                            menu[usize::from(*index) - 1] = text;
-                        }
-                        if self.toggle_menu_flag {
-                            next.insert_region(0x442722, &[1]);
-                        }
-                    }
-                    0xa933 => {
-                        if let [L(_), P(address)] = arguments.as_slice() {
-                            let length = usize::from(memory.byte(*address)?);
-                            self.menu.borrow_mut().push(
-                                (0..length)
-                                    .map(|i| memory.byte(address.wrapping_add(i as u32 + 1)))
-                                    .collect::<Result<Vec<_>, _>>()?,
-                            );
-                        }
-                    }
-                    0xa946 => {
-                        if let [L(_), W(index), P(address)] = arguments.as_slice() {
-                            let menu = self.menu.borrow();
-                            let bytes = menu
-                                .get(usize::from(*index) - 1)
-                                .ok_or_else(|| RuleError::Invalid("test menu index".into()))?;
-                            next.insert_region(*address, PascalString::from_payload(bytes)?.raw());
-                        }
-                    }
-                    0xa874 => {
-                        if let [P(address)] = arguments.as_slice() {
-                            long(&mut next, *address, 123);
-                        }
-                    }
-                    0xaa1b => value = 55,
-                    0xa97c => value = 77,
-                    0xa991 => word(&mut next, 0x4434b2, 4),
-                    0xa98d => {
-                        if let [L(_), W(_), P(kind), P(handle), P(rect)] = arguments.as_slice() {
-                            word(&mut next, *kind, 4);
-                            long(&mut next, *handle, 88);
-                            next.insert_region(*rect, &[0; 8]);
-                        }
-                    }
-                    0xa990 => {
-                        if let [L(_), P(address)] = arguments.as_slice() {
-                            next.insert_region(*address, &[4, b'W', b'o', b'r', b'd']);
-                        }
-                    }
-                    _ => (),
-                },
-                _ => (),
-            }
-            Ok(LoadObservation {
-                memory: next,
-                value,
-                d0: 0x12345678,
-                flow: LoadFlow::Returned,
-            })
-        }
-        fn version_inputs(
-            &self,
-            _: i16,
-            _: i16,
-            _: &RenderingMemory,
-        ) -> Result<VersionInputs, RuleError> {
-            Err(RuleError::Invalid("unexpected version".into()))
-        }
-        fn filename_number(
-            &self,
-            variant: u8,
-            _: &RenderingMemory,
-        ) -> Result<PascalString, RuleError> {
-            PascalString::from_payload(variant.to_string().as_bytes())
-        }
-    }
-    use LoadArg::{Long as L, Pointer as P, Word as W};
-    impl StorageServices for Services {
-        fn observe_storage(
-            &self,
-            request: &StorageRequest,
-            memory: &RenderingMemory,
-        ) -> Result<StorageObservation, RuleError> {
-            self.requests.borrow_mut().push(request.clone());
-            let value = match request {
-                StorageRequest::Write { .. } if self.fail_write => {
-                    return Err(RuleError::Invalid("missing write observation".into()));
-                }
-                StorageRequest::Write { .. } => 1,
-                StorageRequest::StringLength(address) => cstring(memory, *address)?.len() as u32,
-                StorageRequest::CompareCString { left, right } => {
-                    match cstring(memory, *left)?.cmp(&cstring(memory, *right)?) {
-                        std::cmp::Ordering::Less => u32::MAX,
-                        std::cmp::Ordering::Equal => 0,
-                        std::cmp::Ordering::Greater => 1,
-                    }
-                }
-                _ => 0,
-            };
-            Ok(StorageObservation {
-                memory: memory.clone(),
-                value,
-                d0: value,
-            })
-        }
-    }
-    impl DrawingServices for Services {
-        fn color_icon(&mut self, id: i16) -> Result<u32, RuleError> {
-            self.base.color_icon(id)
-        }
-        fn picture(&mut self, id: i16) -> Result<PictureObservation, RuleError> {
-            self.base.picture(id)
-        }
-        fn indexed_string(&mut self, resource: i16, index: i16) -> Result<PascalString, RuleError> {
-            self.base.indexed_string(resource, index)
-        }
-        fn current_world(&mut self) -> Result<(u32, u32), RuleError> {
-            self.base.current_world()
-        }
-        fn new_world(
-            &mut self,
-            depth: i16,
-            rect: BodyRect,
-        ) -> Result<(i16, BuildingWorld), RuleError> {
-            self.base.new_world(depth, rect)
-        }
-    }
-    impl crate::recovered_scenario_menus::ScenarioMenuServices for Services {}
-}
-
-#[cfg(test)]
-mod tests {
-    use super::test_support::*;
-    use super::*;
-    #[test]
-    fn save_family_keeps_long_reread_word_indices_and_ordered_spans() {
-        let mut memory = fixture();
-        for (source, size) in LAND {
-            memory.insert_region(source, &vec![0; size as usize]);
-        }
-        long(&mut memory, FRAME + 8, 0);
-        let services = Services {
-            open_argument: Some((FRAME + 8, 0xfffffff9)),
-            ..Services::default()
-        };
-        let land = save_land(&memory, FRAME, LIMITS, &services).unwrap();
-        assert_eq!(land.native_return, Some(0));
-        assert!(services.loads.borrow().contains(&LoadRequest::Seek {
-            handle: 9,
-            offset: 0xfffffff9_u32.wrapping_mul(0x12fb0),
-            origin: 0
-        }));
-        let writes = services
-            .requests
-            .borrow()
-            .iter()
-            .filter_map(|request| {
-                if let StorageRequest::Write { source, size, .. } = request {
-                    Some((*source, *size))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(writes, LAND);
-        word(&mut memory, FRAME + 8, -1);
-        word(&mut memory, FRAME + 10, 1);
-        let services = Services::default();
-        save_encounter(&memory, FRAME, LIMITS, &services).unwrap();
-        assert!(services.loads.borrow().contains(&LoadRequest::Seek {
-            handle: 9,
-            offset: 65535 * 0x1aa,
-            origin: 0
-        }));
-        word(&mut memory, FRAME + 10, 2);
-        let services = Services::default();
-        save_encounter(&memory, FRAME, LIMITS, &services).unwrap();
-        assert!(services.loads.borrow().contains(&LoadRequest::Seek {
-            handle: 9,
-            offset: 65535 * 0x204,
-            origin: 0
-        }));
-        memory.insert_region(0x44273b, &[255]);
-        let services = Services::default();
-        save_shop(&memory, LIMITS, &services).unwrap();
-        assert!(services.loads.borrow().contains(&LoadRequest::Seek {
-            handle: 9,
-            offset: 65535 * 0xbba,
-            origin: 0
-        }));
-        let before = memory.clone();
-        let services = Services {
-            fail_write: true,
-            ..Services::default()
-        };
-        assert!(save_shop(&memory, LIMITS, &services).is_err());
-        assert_eq!(memory, before);
-    }
-    #[test]
-    fn reset_preserves_three_variants_clear_order_and_original_variant() {
-        let mut memory = fixture();
-        memory.insert_region(0x44274c, &[7]);
-        memory.insert_region(0x4358e6, &vec![9; 8100]);
-        memory.insert_region(0x44258c, &[9; 100]);
-        let services = Services::default();
-        services.opens.borrow_mut().extend([0; 18]);
-        let result = reset_game_files(&memory, FRAME, LIMITS, &services).unwrap();
-        assert_eq!(result.memory.byte(0x44274c).unwrap(), 7);
-        assert_eq!(result.memory.word(0x44255e).unwrap(), 7);
-        assert_eq!(result.memory.word(0x4434ac).unwrap(), 90);
-        assert_eq!(result.memory.byte(0x4358e6 + 8099).unwrap(), 0);
-        assert_eq!(
-            services
-                .loads
-                .borrow()
-                .iter()
-                .filter(|request| matches!(request, LoadRequest::Open { .. }))
-                .count(),
-            18
-        );
-        assert!(services.requests.borrow().is_empty());
-        assert!(
-            reset_game_files(
-                &memory,
-                FRAME,
-                StorageLimits {
-                    maximum_iterations: 1,
-                    ..LIMITS
-                },
-                &Services::default()
-            )
-            .is_err()
-        );
-        assert_eq!(memory.byte(0x44274c).unwrap(), 7);
-    }
 }

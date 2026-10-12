@@ -199,6 +199,15 @@ async fn main() {
             }
             let before = state.clone();
             application.sync(state, capture.is_none());
+            if capture.is_none()
+                && let Ok(audio) = &audio
+            {
+                audio.music(
+                    application.music_enabled,
+                    application.music_request.take(),
+                    get_time(),
+                );
+            }
             let controls = application.draw(content, state, assets, &ui);
             debug_assert_eq!(*state, before, "rendering changed rule state");
             let was_blocked = application.blocks_game();
@@ -212,6 +221,8 @@ async fn main() {
             if action.is_none() && !blocked && ui.effects.is_empty() && get_time() >= ui.delay_until
             {
                 action = input::action(state, &mut ui, &controls, pointer);
+            } else {
+                ui.movement.reset();
             }
             if let Some(Action::Application(command)) = action.clone() {
                 blocked = true;
@@ -322,7 +333,9 @@ async fn main() {
                                     application.quit = true;
                                 }
                             }
-                            Err(e) => ui.message(e.to_string()),
+                            Err(e) => {
+                                ui.message(format!("Could not save {}: {e}", save_path.display()))
+                            }
                         }
                         application.quit_after_save = false;
                     }
@@ -339,7 +352,17 @@ async fn main() {
                             next_enemy = get_time() + 0.45;
                             ui.message("Session reloaded.".into());
                         }
-                        Err(e) => ui.message(e.to_string()),
+                        Err(centurions_core::RuleError::Io(e))
+                            if e.kind() == std::io::ErrorKind::NotFound =>
+                        {
+                            ui.message(format!(
+                                "No saved session at {}. Save a mission first.",
+                                save_path.display()
+                            ))
+                        }
+                        Err(e) => {
+                            ui.message(format!("Could not load {}: {e}", save_path.display()))
+                        }
                     },
                     Action::Select(i) => {
                         ui.selected = i;

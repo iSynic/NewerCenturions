@@ -178,7 +178,7 @@ impl Execution {
     fn service(
         &mut self,
         request: WorldDisplayRequest,
-        services: &mut impl WorldDisplayServices,
+        services: &mut (impl WorldDisplayServices + ?Sized),
     ) -> Result<u32, RuleError> {
         self.step()?;
         let observation = services.observe(&request, &self.plan.state.memory)?;
@@ -227,7 +227,7 @@ impl Execution {
     fn drawing(
         &mut self,
         effect: DrawingEffect,
-        services: &mut impl WorldDisplayServices,
+        services: &mut (impl WorldDisplayServices + ?Sized),
     ) -> Result<u32, RuleError> {
         self.service(WorldDisplayRequest::Drawing(effect), services)
     }
@@ -331,7 +331,7 @@ fn visibility(e: &mut Execution, large: bool) -> Result<(), RuleError> {
 
 fn coordinate(
     e: &mut Execution,
-    services: &mut impl WorldDisplayServices,
+    services: &mut (impl WorldDisplayServices + ?Sized),
 ) -> Result<(), RuleError> {
     const START: u32 = 0x40226a;
     const END: u32 = 0x479fd8;
@@ -354,7 +354,7 @@ fn fastplot(
     e: &mut Execution,
     tile: i16,
     destination: BodyRect,
-    services: &mut impl WorldDisplayServices,
+    services: &mut (impl WorldDisplayServices + ?Sized),
 ) -> Result<(), RuleError> {
     let rect = e.plan.state.memory.rect(0x4471f2)?;
     let mut buildings = vec![];
@@ -439,7 +439,7 @@ fn icon(
     e: &mut Execution,
     id: i16,
     clear: bool,
-    services: &mut impl WorldDisplayServices,
+    services: &mut (impl WorldDisplayServices + ?Sized),
 ) -> Result<(), RuleError> {
     if clear {
         e.lw(0x439598, 0)?;
@@ -447,7 +447,10 @@ fn icon(
     let handle = e.drawing(DrawingEffect::GetColorIcon(id), services)?;
     e.lw(0x439598, handle)
 }
-fn get_world(e: &mut Execution, services: &mut impl WorldDisplayServices) -> Result<(), RuleError> {
+fn get_world(
+    e: &mut Execution,
+    services: &mut (impl WorldDisplayServices + ?Sized),
+) -> Result<(), RuleError> {
     e.service(
         WorldDisplayRequest::GetWorld {
             world: 0x4046da,
@@ -459,7 +462,7 @@ fn get_world(e: &mut Execution, services: &mut impl WorldDisplayServices) -> Res
 }
 fn set_backing(
     e: &mut Execution,
-    services: &mut impl WorldDisplayServices,
+    services: &mut (impl WorldDisplayServices + ?Sized),
 ) -> Result<(), RuleError> {
     e.drawing(
         DrawingEffect::SetWorld {
@@ -472,7 +475,7 @@ fn set_backing(
 }
 fn restore_world(
     e: &mut Execution,
-    services: &mut impl WorldDisplayServices,
+    services: &mut (impl WorldDisplayServices + ?Sized),
 ) -> Result<(), RuleError> {
     e.drawing(
         DrawingEffect::SetWorld {
@@ -483,7 +486,10 @@ fn restore_world(
     )?;
     Ok(())
 }
-fn plot_icon(e: &mut Execution, services: &mut impl WorldDisplayServices) -> Result<(), RuleError> {
+fn plot_icon(
+    e: &mut Execution,
+    services: &mut (impl WorldDisplayServices + ?Sized),
+) -> Result<(), RuleError> {
     e.service(
         WorldDisplayRequest::PlotColorIcon {
             rectangle: 0x4471f2,
@@ -495,7 +501,7 @@ fn plot_icon(e: &mut Execution, services: &mut impl WorldDisplayServices) -> Res
 }
 fn dispose_icon(
     e: &mut Execution,
-    services: &mut impl WorldDisplayServices,
+    services: &mut (impl WorldDisplayServices + ?Sized),
 ) -> Result<(), RuleError> {
     e.drawing(DrawingEffect::DisposeColorIcon(e.long(0x439598)?), services)?;
     Ok(())
@@ -509,7 +515,7 @@ fn large_icon_axis(e: &Execution, offset: u32) -> Result<bool, RuleError> {
 
 fn plot_overlay_icon(
     e: &mut Execution,
-    services: &mut impl WorldDisplayServices,
+    services: &mut (impl WorldDisplayServices + ?Sized),
 ) -> Result<(), RuleError> {
     if e.long(0x439598)? == 0 {
         return Ok(());
@@ -539,7 +545,7 @@ fn tile_pass(
     pass: u8,
     span: i32,
     large: bool,
-    services: &mut impl WorldDisplayServices,
+    services: &mut (impl WorldDisplayServices + ?Sized),
 ) -> Result<(), RuleError> {
     e.ww(0x4471f2, -32)?;
     e.ww(0x4471f6, 0)?;
@@ -662,7 +668,7 @@ fn actor_offset(last: i16, member: i16) -> Option<(i16, i16)> {
 fn party_icons(
     e: &mut Execution,
     large: bool,
-    services: &mut impl WorldDisplayServices,
+    services: &mut (impl WorldDisplayServices + ?Sized),
 ) -> Result<(), RuleError> {
     centered_rect(e, true)?;
     e.lw(0x439598, 0)?;
@@ -748,7 +754,7 @@ fn center(
     frame: u32,
     maximum_steps: u32,
     large: bool,
-    services: &mut impl WorldDisplayServices,
+    services: &mut (impl WorldDisplayServices + ?Sized),
 ) -> Result<WorldDisplayPlan, RuleError> {
     let mut e = Execution::new(state, maximum_steps);
     e.service(
@@ -831,7 +837,7 @@ pub fn centerpictlarge(
     state: &WorldDisplayState,
     frame: u32,
     maximum_steps: u32,
-    services: &mut impl WorldDisplayServices,
+    services: &mut (impl WorldDisplayServices + ?Sized),
 ) -> Result<WorldDisplayPlan, RuleError> {
     center(state, frame, maximum_steps, true, services)
 }
@@ -841,7 +847,7 @@ pub fn centerpictsmall(
     state: &WorldDisplayState,
     frame: u32,
     maximum_steps: u32,
-    services: &mut impl WorldDisplayServices,
+    services: &mut (impl WorldDisplayServices + ?Sized),
 ) -> Result<WorldDisplayPlan, RuleError> {
     center(state, frame, maximum_steps, false, services)
 }
@@ -1033,562 +1039,4 @@ pub fn combatmap(
         }
     }
     Ok(e.plan)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recovered_drawing::PictureObservation;
-
-    const FRAME: u32 = 0x800000;
-    const ICON: u32 = 0x700000;
-    const ICON_DATA: u32 = 0x700100;
-
-    #[derive(Default)]
-    struct Services {
-        requests: Vec<WorldDisplayRequest>,
-        numbers: Vec<i32>,
-        plots: Vec<(u32, BodyRect)>,
-        front_calls: usize,
-        stop_on_negative: bool,
-        change_icon_size: bool,
-    }
-
-    impl DrawingServices for Services {
-        fn color_icon(&mut self, _: i16) -> Result<u32, RuleError> {
-            Err(RuleError::Invalid("unexpected typed icon service".into()))
-        }
-        fn indexed_string(&mut self, _: i16, _: i16) -> Result<PascalString, RuleError> {
-            Err(RuleError::Invalid("unexpected indexed string".into()))
-        }
-        fn current_world(&mut self) -> Result<(u32, u32), RuleError> {
-            Ok((111, 222))
-        }
-        fn picture(&mut self, _: i16) -> Result<PictureObservation, RuleError> {
-            Err(RuleError::Invalid("unexpected building picture".into()))
-        }
-        fn new_world(&mut self, _: i16, _: BodyRect) -> Result<(i16, BuildingWorld), RuleError> {
-            Err(RuleError::Invalid("unexpected world allocation".into()))
-        }
-    }
-
-    impl NumericServices for Services {
-        fn number_to_string(&mut self, value: i32) -> Result<PascalString, RuleError> {
-            self.numbers.push(value);
-            PascalString::from_payload(value.to_string().as_bytes())
-        }
-        fn string_to_number(&mut self, _: &PascalString) -> Result<i32, RuleError> {
-            Err(RuleError::Invalid("unexpected inverse conversion".into()))
-        }
-    }
-
-    fn rectangle_bytes(rect: BodyRect) -> [u8; 8] {
-        let mut bytes = [0; 8];
-        for (chunk, value) in bytes.as_chunks_mut::<2>().0.iter_mut().zip([
-            rect.top,
-            rect.left,
-            rect.bottom,
-            rect.right,
-        ]) {
-            *chunk = value.to_be_bytes();
-        }
-        bytes
-    }
-
-    impl WorldDisplayServices for Services {
-        fn observe(
-            &mut self,
-            request: &WorldDisplayRequest,
-            memory: &RenderingMemory,
-        ) -> Result<WorldDisplayObservation, RuleError> {
-            self.requests.push(request.clone());
-            let mut next = memory.clone();
-            let mut value = 0;
-            match request {
-                WorldDisplayRequest::SetRect {
-                    pointer,
-                    left,
-                    top,
-                    right,
-                    bottom,
-                } => next.insert_region(
-                    *pointer,
-                    &rectangle_bytes(BodyRect {
-                        top: *top,
-                        left: *left,
-                        bottom: *bottom,
-                        right: *right,
-                    }),
-                ),
-                WorldDisplayRequest::FrontWindow => {
-                    self.front_calls += 1;
-                    value = 900 + self.front_calls as u32;
-                }
-                WorldDisplayRequest::GetWorld { world, device } => {
-                    next.insert_region(*world, &111_u32.to_be_bytes());
-                    next.insert_region(*device, &222_u32.to_be_bytes());
-                }
-                WorldDisplayRequest::Drawing(DrawingEffect::GetColorIcon(id)) => {
-                    value = if (*id < 0 && self.stop_on_negative) || *id == 104 {
-                        0
-                    } else {
-                        ICON
-                    };
-                    if *id < 0 && self.stop_on_negative {
-                        next.insert_region(0x442778, &i32::MAX.to_be_bytes());
-                        next.insert_region(0x44277c, &i32::MAX.to_be_bytes());
-                    }
-                }
-                WorldDisplayRequest::PlotColorIcon { rectangle, handle } => {
-                    self.plots.push((*handle, memory.rect(*rectangle)?));
-                    if self.change_icon_size {
-                        next.insert_region(ICON_DATA + 0x4a, &32_i16.to_be_bytes());
-                        next.insert_region(ICON_DATA + 0x4c, &32_i16.to_be_bytes());
-                    }
-                }
-                WorldDisplayRequest::OffsetRect {
-                    pointer,
-                    horizontal,
-                    vertical,
-                } => {
-                    let mut rect = memory.rect(*pointer)?;
-                    rect.left = rect.left.wrapping_add(*horizontal);
-                    rect.right = rect.right.wrapping_add(*horizontal);
-                    rect.top = rect.top.wrapping_add(*vertical);
-                    rect.bottom = rect.bottom.wrapping_add(*vertical);
-                    next.insert_region(*pointer, &rectangle_bytes(rect));
-                }
-                WorldDisplayRequest::InsetRect {
-                    pointer,
-                    horizontal,
-                    vertical,
-                } => {
-                    let mut rect = memory.rect(*pointer)?;
-                    rect.left = rect.left.wrapping_add(*horizontal);
-                    rect.right = rect.right.wrapping_sub(*horizontal);
-                    rect.top = rect.top.wrapping_add(*vertical);
-                    rect.bottom = rect.bottom.wrapping_sub(*vertical);
-                    next.insert_region(*pointer, &rectangle_bytes(rect));
-                }
-                _ => (),
-            }
-            Ok(WorldDisplayObservation {
-                value,
-                memory: next,
-            })
-        }
-    }
-
-    fn ww(state: &mut WorldDisplayState, address: u32, value: i16) {
-        state.memory.insert_region(address, &value.to_be_bytes());
-    }
-    fn lw(state: &mut WorldDisplayState, address: u32, value: u32) {
-        state.memory.insert_region(address, &value.to_be_bytes());
-    }
-
-    fn center_state() -> WorldDisplayState {
-        let mut memory = RenderingMemory::default();
-        // Explicit fixture bytes support the real coordinate child's contiguous adapter.
-        memory.insert_region(0x40226a, &vec![0; (0x479fd8 - 0x40226a) as usize]);
-        memory.insert_region(FRAME - 128, &[0xa5; 144]);
-        memory.insert_region(ICON, &ICON_DATA.to_be_bytes());
-        memory.insert_region(ICON_DATA, &[0; 80]);
-        let mut state = WorldDisplayState {
-            memory,
-            random: RandomState::new(4),
-        };
-        for x in 0_i16..90 {
-            for y in 0_i16..90 {
-                ww(&mut state, map_address(0x4085b8, x, y, 180, 2), 1);
-            }
-        }
-        for (address, value) in [
-            (0x43879c, 10),
-            (0x4394d8, 20),
-            (0x4386bc, 30),
-            (0x4386c4, 40),
-            (0x43878c, 50),
-        ] {
-            lw(&mut state, address, value);
-        }
-        ww(&mut state, 0x435508, 1);
-        ww(&mut state, ICON_DATA + 0x4a, 64);
-        ww(&mut state, ICON_DATA + 0x4c, 64);
-        state
-    }
-
-    fn icon_ids(services: &Services) -> Vec<i16> {
-        services
-            .requests
-            .iter()
-            .filter_map(|request| match request {
-                WorldDisplayRequest::Drawing(DrawingEffect::GetColorIcon(id)) => Some(*id),
-                _ => None,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn large_center_retains_clamps_signed_background_raw_loop_aliases_and_visibility_guard() {
-        let mut state = center_state();
-        lw(&mut state, 0x442764, 100);
-        lw(&mut state, 0x442768, 0);
-        lw(&mut state, 0x442778, 10);
-        lw(&mut state, 0x44277c, 0);
-        state.memory.insert_region(0x402f43, &[0xff]);
-        ww(&mut state, 0x435506, 13);
-        ww(&mut state, 0x40857a, 1);
-        state.memory.insert_region(0x44273a, &[0xff]);
-        ww(&mut state, map_address(0x4085b8, 75, 0, 180, 2), -1);
-        let before = state.clone();
-        let mut services = Services {
-            stop_on_negative: true,
-            ..Services::default()
-        };
-        let result = centerpictlarge(&state, FRAME, 20_000, &mut services).unwrap();
-        assert_eq!(state, before);
-        assert_eq!(result.native_return, 0);
-        assert_eq!(result.state.random, state.random);
-        assert_eq!(services.front_calls, 2);
-        assert!(
-            services
-                .requests
-                .contains(&WorldDisplayRequest::SelectWindow(10))
-        );
-        assert_eq!(services.numbers, [89, 0]);
-        assert_eq!(icon_ids(&services), [-1]);
-        assert_eq!(result.state.memory.long(0x442764).unwrap(), 14);
-        assert_eq!(result.state.memory.long(0x442768).unwrap(), 0);
-        assert_eq!(result.state.memory.long(0x442778).unwrap(), i32::MAX as u32);
-        assert_eq!(result.state.memory.byte(0x44273a).unwrap(), 0);
-        assert_eq!(
-            result.state.memory.rect(FRAME - 8).unwrap(),
-            BodyRect {
-                top: 0,
-                left: -64,
-                bottom: 32,
-                right: -32
-            }
-        );
-        assert!(result.effects.iter().any(|effect| matches!(
-            effect,
-            WorldDisplayEffect::Drawing(DrawingEffect::CopyBits {
-                source_bitmap: 42,
-                destination_bitmap: 32,
-                source: BodyRect { left: 384, .. },
-                mode: 0,
-                ..
-            })
-        )));
-        assert_eq!(
-            services.requests.last(),
-            Some(&WorldDisplayRequest::Drawing(DrawingEffect::SetPort(50)))
-        );
-        assert!(centerpictlarge(&state, FRAME, 1, &mut Services::default()).is_err());
-        assert_eq!(state, before);
-
-        let mut alias = center_state();
-        for address in [0x442778, 0x44277c] {
-            lw(&mut alias, address, 25);
-        }
-        for address in [0x442764, 0x442768] {
-            lw(&mut alias, address, 8);
-        }
-        for x in 0_i16..90 {
-            for y in 0_i16..90 {
-                ww(&mut alias, map_address(0x4085b8, x, y, 180, 2), 500);
-            }
-        }
-        let original = alias.clone();
-        assert!(matches!(
-            centerpictlarge(&alias, FRAME, 20_000, &mut Services::default()),
-            Err(RuleError::Unsupported {
-                action: "world_display.visibility",
-                ..
-            })
-        ));
-        assert_eq!(alias, original);
-    }
-
-    #[test]
-    fn small_center_draws_unrevealed_negative_overlay_and_all_actor_offsets_including_nil() {
-        let mut state = center_state();
-        lw(&mut state, 0x442764, 5);
-        lw(&mut state, 0x442768, 5);
-        ww(&mut state, 0x40857a, 1);
-        state.memory.insert_region(0x443291, &[1]);
-        state.memory.insert_region(0x435883, &[1]);
-        state.memory.insert_region(0x44273a, &[8]);
-        ww(&mut state, 0x435530, 1);
-        ww(&mut state, map_address(0x40c500, 12, 12, 180, 2), -500);
-        for member in 0..6 {
-            ww(
-                &mut state,
-                0x448aa0 + member * 3138 + 0x56,
-                101 + member as i16,
-            );
-            ww(
-                &mut state,
-                0x448aa0 + member * 3138 + 0x50,
-                if member == 2 { 0 } else { 1 },
-            );
-        }
-        let before = state.clone();
-        let mut services = Services {
-            change_icon_size: true,
-            ..Services::default()
-        };
-        let result = centerpictsmall(&state, FRAME, 20_000, &mut services).unwrap();
-        assert_eq!(state, before);
-        assert_eq!(
-            result.state.memory.byte(0x4358e6 + 12 * 90 + 12).unwrap(),
-            0
-        );
-        assert_eq!(result.state.memory.byte(0x44273a).unwrap(), 5);
-        assert_eq!(
-            icon_ids(&services),
-            [500, 193, 101, 102, 103, 104, 105, 106]
-        );
-        assert_eq!(
-            services.plots[0],
-            (
-                ICON,
-                BodyRect {
-                    top: 352,
-                    left: 352,
-                    bottom: 416,
-                    right: 416
-                }
-            )
-        );
-        assert!(services.plots.iter().any(|(handle, _)| *handle == 0));
-        let offsets: Vec<_> = services
-            .requests
-            .iter()
-            .filter_map(|request| match request {
-                WorldDisplayRequest::OffsetRect {
-                    horizontal,
-                    vertical,
-                    ..
-                } => Some((*horizontal, *vertical)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            offsets,
-            [
-                (-14, -12),
-                (0, -12),
-                (14, -12),
-                (-14, 12),
-                (0, 12),
-                (14, 12)
-            ]
-        );
-        let disposals = services
-            .requests
-            .iter()
-            .filter(|request| {
-                matches!(
-                    request,
-                    WorldDisplayRequest::Drawing(DrawingEffect::DisposeColorIcon(_))
-                )
-            })
-            .count();
-        assert_eq!(disposals, 7);
-        assert_eq!(services.plots.len(), 6);
-        assert_eq!(result.state.random, state.random);
-        assert_eq!(result.state.memory.long(0x439598).unwrap(), ICON);
-    }
-
-    fn combat_state(style: i16) -> WorldDisplayState {
-        let mut memory = RenderingMemory::default();
-        for (address, length) in [
-            (0x402f40, 8),
-            (0x4085b8, 16_200),
-            (0x410446, 16_202),
-            (0x414390, 32_400),
-            (0x43167c, 40 * 601),
-            (0x435500, 128),
-            (0x442760, 96),
-            (0x4434b0, 16),
-        ] {
-            memory.insert_region(address, &vec![0; length]);
-        }
-        memory.insert_region(FRAME - 128, &[0xa5; 144]);
-        let mut state = WorldDisplayState {
-            memory,
-            random: RandomState::new(4),
-        };
-        for x in 0_i16..90 {
-            for y in 0_i16..90 {
-                ww(&mut state, map_address(0x4085b8, x, y, 180, 2), 1);
-            }
-        }
-        ww(&mut state, 0x435508, 2);
-        ww(&mut state, 0x435530, style);
-        lw(&mut state, 0x442764, 15);
-        lw(&mut state, 0x442768, 15);
-        state
-    }
-
-    #[test]
-    fn combat_expands_all_subtiles_keeps_word_origins_decorations_and_copyback_wrap() {
-        let mut state = combat_state(1);
-        lw(&mut state, 0x442764, 5);
-        lw(&mut state, 0x442768, 100);
-        for tile in [1, 2] {
-            for sub_y in 0..3 {
-                for sub_x in 0..3 {
-                    let value = if tile == 2 && sub_y == 0 && sub_x == 0 {
-                        32767
-                    } else {
-                        tile as i16 * 10 + sub_y as i16 * 3 + sub_x as i16
-                    };
-                    ww(
-                        &mut state,
-                        0x43167c + tile * 40 + 20 + sub_y * 6 + sub_x * 2,
-                        value,
-                    );
-                }
-            }
-        }
-        ww(&mut state, map_address(0x4085b8, 0, 60, 180, 2), -1);
-        lw(&mut state, map_address(0x414390, 1, 60, 360, 4), 77);
-        let before = state.clone();
-        let result = combatmap(&state, FRAME, 20_000).unwrap();
-        assert_eq!(state, before);
-        assert_eq!(result.native_return, 0);
-        assert_eq!(result.state.random, state.random);
-        assert_eq!(result.state.memory.word(0x4427a8).unwrap() as i16, -30);
-        assert_eq!(result.state.memory.word(0x4427aa).unwrap(), 75);
-        assert_eq!(result.state.memory.word(0x410448).unwrap(), 32767);
-        assert_eq!(result.state.memory.word(0x4085b8).unwrap() as i16, -31769);
-        assert_eq!(
-            result
-                .state
-                .memory
-                .word(map_address(0x410448, 3, 0, 180, 2))
-                .unwrap(),
-            32767
-        );
-        assert_eq!(
-            result
-                .state
-                .memory
-                .word(map_address(0x410448, 6, 0, 180, 2))
-                .unwrap(),
-            10
-        );
-        assert_eq!(
-            result
-                .state
-                .memory
-                .word(map_address(0x410448, 2, 2, 180, 2))
-                .unwrap(),
-            28
-        );
-        let work_writes = result
-            .effects
-            .iter()
-            .filter(|effect| {
-                matches!(
-                    effect,
-                    WorldDisplayEffect::Write(RecordWrite {
-                        address: 0x4434b6,
-                        ..
-                    })
-                )
-            })
-            .count();
-        assert_eq!(work_writes, 8118);
-        assert!(!result.effects.iter().any(|effect| matches!(
-            effect,
-            WorldDisplayEffect::RandomBound { .. } | WorldDisplayEffect::RandomRange { .. }
-        )));
-        assert!(combatmap(&state, FRAME, 100).is_err());
-        assert_eq!(state, before);
-    }
-
-    fn one_decorated_cell() -> WorldDisplayState {
-        let mut state = combat_state(0);
-        for sub_y in 0..3 {
-            for sub_x in 0..3 {
-                ww(&mut state, 0x43167c + 40 + 20 + sub_y * 6 + sub_x * 2, 228);
-                ww(
-                    &mut state,
-                    0x43167c + 80 + 20 + sub_y * 6 + sub_x * 2,
-                    if sub_y == 0 && sub_x == 0 { 229 } else { 228 },
-                );
-            }
-        }
-        ww(&mut state, 0x43167c + 228 * 40 + 4, 1);
-        ww(&mut state, 0x43167c + 229 * 40 + 16, 1);
-        ww(&mut state, 0x4085b8, 2);
-        ww(&mut state, 0x410446, 230);
-        ww(&mut state, 0x4336b8, 1);
-        state
-    }
-
-    #[test]
-    fn combat_rng_preserves_twixt_branches_previous_row_and_atomic_failure_after_draws() {
-        let state = one_decorated_cell();
-        let before = state.clone();
-        let result = combatmap(&state, FRAME, 30_000).unwrap();
-        assert_eq!(state, before);
-        assert_eq!(result.state.memory.word(0x410448).unwrap(), 207);
-        assert_eq!(result.state.memory.word(0x410446).unwrap(), 203);
-        assert_eq!(result.state.memory.word(0x4085b8).unwrap(), 1207);
-        assert_eq!(
-            result.state.random,
-            RandomState {
-                seed: 48_149_351,
-                draws: 3
-            }
-        );
-        let random: Vec<_> = result
-            .effects
-            .iter()
-            .filter_map(|effect| match effect {
-                WorldDisplayEffect::RandomBound { value, .. } => Some(*value),
-                WorldDisplayEffect::RandomRange { value, .. } => Some(*value),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(random, [6, 207, 203]);
-        assert!(result.effects.iter().any(|effect| matches!(
-            effect,
-            WorldDisplayEffect::Between {
-                value: 230,
-                minimum: 201,
-                maximum: 211,
-                result: 0
-            }
-        )));
-        assert!(combatmap(&state, FRAME, 8104).is_err());
-        assert_eq!(state, before);
-
-        let mut paired = state.clone();
-        ww(&mut paired, 0x410446, 201);
-        let result = combatmap(&paired, FRAME, 30_000).unwrap();
-        assert_eq!(result.state.memory.word(0x410446).unwrap(), 206);
-        assert_eq!(
-            result.state.random,
-            RandomState {
-                seed: 1_129_900_996,
-                draws: 2
-            }
-        );
-        ww(&mut paired, 0x410446, 230);
-        ww(&mut paired, 0x4336b8, 0);
-        let result = combatmap(&paired, FRAME, 30_000).unwrap();
-        assert_eq!(result.state.memory.word(0x410446).unwrap(), 201);
-        assert_eq!(
-            result.state.random,
-            RandomState {
-                seed: 1_129_900_996,
-                draws: 2
-            }
-        );
-    }
 }

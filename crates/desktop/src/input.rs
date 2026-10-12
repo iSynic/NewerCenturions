@@ -5,6 +5,55 @@ use crate::{
 use centurions_core::{Command, Phase, Presentation, Session};
 use macroquad::prelude::*;
 
+#[derive(Default)]
+pub struct MovementInput {
+    direction: (i8, i8),
+    repeat_at: f64,
+}
+
+impl MovementInput {
+    pub fn reset(&mut self) {
+        self.direction = (0, 0);
+    }
+
+    fn step(&mut self, direction: (i8, i8), now: f64) -> Option<Command> {
+        if direction == (0, 0) {
+            self.reset();
+            return None;
+        }
+        if direction != self.direction || now >= self.repeat_at {
+            self.direction = direction;
+            // Repeat at a bounded rate without queuing moves during animation or dialogs.
+            self.repeat_at = now + 0.1;
+            Some(Command::Move {
+                dx: direction.0,
+                dy: direction.1,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+fn movement_direction(down: impl Fn(KeyCode) -> bool) -> (i8, i8) {
+    let right = [KeyCode::Right, KeyCode::Kp3, KeyCode::Kp6, KeyCode::Kp9]
+        .into_iter()
+        .any(&down);
+    let left = [KeyCode::Left, KeyCode::Kp1, KeyCode::Kp4, KeyCode::Kp7]
+        .into_iter()
+        .any(&down);
+    let below = [KeyCode::Down, KeyCode::Kp1, KeyCode::Kp2, KeyCode::Kp3]
+        .into_iter()
+        .any(&down);
+    let above = [KeyCode::Up, KeyCode::Kp7, KeyCode::Kp8, KeyCode::Kp9]
+        .into_iter()
+        .any(down);
+    (
+        i8::from(right) - i8::from(left),
+        i8::from(below) - i8::from(above),
+    )
+}
+
 pub fn refill_action(state: &Session, warrior: usize) -> Action {
     if state.phase == Phase::Combat
         && let Some((slot, item)) = state
@@ -214,10 +263,11 @@ pub fn action(
             return Some(Action::Command(Command::EndTurn));
         }
     }
-    let dx = i8::from(is_key_pressed(KeyCode::Right)) - i8::from(is_key_pressed(KeyCode::Left));
-    let dy = i8::from(is_key_pressed(KeyCode::Down)) - i8::from(is_key_pressed(KeyCode::Up));
-    if dx != 0 || dy != 0 {
-        return Some(Action::Command(Command::Move { dx, dy }));
+    if let Some(command) = ui
+        .movement
+        .step(movement_direction(is_key_down), get_time())
+    {
+        return Some(Action::Command(command));
     }
     if is_mouse_button_pressed(MouseButton::Left)
         && let Some(p) = pointer
@@ -258,75 +308,6 @@ pub fn action(
     }
     None
 }
-
 #[cfg(all(test, feature = "original-fixtures"))]
-mod tests {
-    use super::*;
-    use centurions_content::{Content, Warrior};
-
-    fn state() -> Session {
-        let fixture: serde_json::Value =
-            serde_json::from_str(include_str!("../../../evidence/fixtures/player-psi.json"))
-                .unwrap();
-        serde_json::from_value(fixture["route_foundation"].clone()).unwrap()
-    }
-
-    fn command(action: Action) -> Command {
-        let Action::Command(command) = action else {
-            panic!("refill must use the production command boundary");
-        };
-        command
-    }
-
-    #[test]
-    fn combat_refill_selects_equipped_weapon_and_ordinary_ammunition() {
-        let mut state = state();
-        let actor: &mut Warrior = &mut state.warriors[0];
-        actor.bytes[0x1a..0x1c].copy_from_slice(&2_i16.to_be_bytes());
-        actor.bytes[0x132..0x15e].fill(0);
-        actor.bytes[0x132..0x134].copy_from_slice(&165_i16.to_be_bytes());
-        // An unequipped earlier row must not steal the Load button or R key.
-        for (weapon, ammunition) in [(1_i16, 200), (2, 201), (38, 203), (165, 280)] {
-            state.warriors[0].bytes[0x148..0x14a].copy_from_slice(&weapon.to_be_bytes());
-            state.warriors[0].bytes[0x151] = 1;
-            let Command::FitAmmunition {
-                warrior,
-                slot,
-                ammunition: selected,
-            } = command(refill_action(&state, 0))
-            else {
-                panic!("combat refill did not select ammunition");
-            };
-            assert_eq!((warrior, slot, selected), (0, 1, ammunition));
-        }
-    }
-
-    #[test]
-    fn exploration_refill_uses_manual_command_and_no_weapon_fallback_is_bounded() {
-        let mut state = state();
-        state.phase = Phase::Exploration;
-        assert!(matches!(
-            command(refill_action(&state, 0)),
-            Command::Reload { warrior: 0 }
-        ));
-        state.phase = Phase::Combat;
-        state.warriors[0].bytes[0x1a..0x1c].copy_from_slice(&0_i16.to_be_bytes());
-        assert!(matches!(
-            command(refill_action(&state, 0)),
-            Command::Reload { warrior: 0 }
-        ));
-        // The rule boundary, rather than desktop input, reports unsupported use.
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let content = Content::load(
-            &root.join("NewCenturions"),
-            &root.join("analysis/extracted"),
-        )
-        .unwrap();
-        let before = state.clone();
-        assert!(
-            centurions_core::apply(command(refill_action(&state, 0)), &mut state, &content)
-                .is_err()
-        );
-        assert_eq!(state, before);
-    }
-}
+#[path = "../tests/unit/input_reference.rs"]
+mod tests;

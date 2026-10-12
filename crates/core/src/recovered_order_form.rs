@@ -14,7 +14,7 @@ fn control(
     x: &mut Execution,
     dialog: u32,
     item: i16,
-    s: &impl StartupServices,
+    s: &(impl StartupServices + ?Sized),
 ) -> Result<i16, RuleError> {
     x.get_item(dialog, item, 0x4434dc, s)?;
     Ok(x.tb(0xa960, None, vec![L(x.e.long(0x4434dc)?)], s)? as i16)
@@ -24,7 +24,7 @@ fn set_control(
     dialog: u32,
     item: i16,
     value: i16,
-    s: &impl StartupServices,
+    s: &(impl StartupServices + ?Sized),
 ) -> Result<(), RuleError> {
     x.get_item(dialog, item, 0x4434dc, s)?;
     x.tb(
@@ -39,7 +39,7 @@ fn sane(
     x: &mut Execution,
     selector: u16,
     pointers: &[u32],
-    s: &impl StartupServices,
+    s: &(impl StartupServices + ?Sized),
 ) -> Result<(), RuleError> {
     x.tb(
         0xa9eb,
@@ -49,7 +49,11 @@ fn sane(
     )?;
     Ok(())
 }
-fn get_number(x: &mut Execution, item: i16, s: &impl StartupServices) -> Result<i16, RuleError> {
+fn get_number(
+    x: &mut Execution,
+    item: i16,
+    s: &(impl StartupServices + ?Sized),
+) -> Result<i16, RuleError> {
     let dialog = x.e.long(0x4394b8)?;
     x.get_item(dialog, item, 0x4434dc, s)?;
     x.tb(0xa990, None, vec![L(x.e.long(0x4434dc)?), P(0x479ed8)], s)?;
@@ -72,7 +76,7 @@ fn totals(
     x: &mut Execution,
     dialog: u32,
     frame: u32,
-    s: &impl StartupServices,
+    s: &(impl StartupServices + ?Sized),
 ) -> Result<(), RuleError> {
     x.ww(0x4434b6, 0)?;
     let mut total = 0_u32;
@@ -191,7 +195,7 @@ fn print_form(
     x: &mut Execution,
     dialog: u32,
     frame: u32,
-    s: &mut impl StartupServices,
+    s: &mut (impl StartupServices + ?Sized),
 ) -> Result<(), RuleError> {
     let handle = x
         .request(
@@ -279,7 +283,7 @@ pub fn order_form(
     random: &RandomState,
     frame: u32,
     limits: StorageLimits,
-    s: &mut impl StartupServices,
+    s: &mut (impl StartupServices + ?Sized),
 ) -> Result<StartupPlan, RuleError> {
     let mut x = Execution::new(memory, random, limits, None);
     x.lw(frame.wrapping_sub(4), 0x3f800000)?;

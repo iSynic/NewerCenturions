@@ -2,9 +2,9 @@ name: Source build
 
 on:
   push:
-    branches: ['**']
     tags: ['v*-beta.*']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,6 +12,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 20
     env:
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
@@ -44,7 +45,7 @@ jobs:
         run: python tools/audit_public.py
       - name: Build and verify without game assets
         shell: pwsh
-        run: ./tools/Build.ps1 -Package -BuildJobs 2 -AllowCompilerParallelism -Timings
+        run: ./tools/Build.ps1 -Package -BuildJobs ([Environment]::ProcessorCount) -AllowCompilerParallelism -Timings
       - name: Upload compilation timings
         if: always()
         uses: actions/upload-artifact@v4

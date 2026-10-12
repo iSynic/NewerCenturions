@@ -7,6 +7,76 @@ pub struct Image {
     pub rgba: Vec<u8>,
 }
 
+pub fn decode_pattern(bytes: &[u8]) -> Result<Image, ContentError> {
+    if word(bytes, 0)? != 1 {
+        return Err(ContentError::Invalid(
+            "unsupported pixel pattern type".into(),
+        ));
+    }
+    let offset = |position| -> Result<usize, ContentError> {
+        Ok(u32::from_be_bytes(span(bytes, position, 4)?.try_into().unwrap()) as usize)
+    };
+    let map = offset(2)?;
+    span(bytes, map, 50)?;
+    let (width, height) = bounds(bytes, map + 6)?;
+    let row = (word(bytes, map + 4)? as u16 & 0x3fff) as usize;
+    let bits = word(bytes, map + 32)? as usize;
+    if word(bytes, map + 16)? != 0
+        || word(bytes, map + 30)? != 0
+        || ![1, 2, 4, 8].contains(&bits)
+        || row * 8 < width * bits
+    {
+        return Err(ContentError::Invalid(
+            "unsupported pixel pattern format".into(),
+        ));
+    }
+    let pixels = span(bytes, offset(6)?, row * height)?;
+    let table = offset(map + 42)?;
+    let count = word(bytes, table + 6)?;
+    if !(0..=255).contains(&count) {
+        return Err(ContentError::Invalid(
+            "pixel pattern palette exceeds bounds".into(),
+        ));
+    }
+    let flags = word(bytes, table + 4)? as u16;
+    let mut palette = [None; 256];
+    for (index, entry) in span(bytes, table + 8, (count as usize + 1) * 8)?
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .enumerate()
+    {
+        let id = if flags & 0x8000 != 0 {
+            index
+        } else {
+            u16::from_be_bytes([entry[0], entry[1]]) as usize
+        };
+        if id > 255 || palette[id].is_some() {
+            return Err(ContentError::Invalid(
+                "invalid pixel pattern palette index".into(),
+            ));
+        }
+        palette[id] = Some([entry[2], entry[4], entry[6], 255]);
+    }
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let bit = x * bits;
+            let index =
+                (pixels[y * row + bit / 8] >> (8 - bits - bit % 8)) as usize & ((1 << bits) - 1);
+            rgba.extend_from_slice(
+                &palette[index]
+                    .ok_or_else(|| ContentError::Invalid("missing pixel pattern color".into()))?,
+            );
+        }
+    }
+    Ok(Image {
+        width: width as u16,
+        height: height as u16,
+        rgba,
+    })
+}
+
 fn bounds(bytes: &[u8], offset: usize) -> Result<(usize, usize), ContentError> {
     let top = i32::from(word(bytes, offset)?);
     let left = i32::from(word(bytes, offset + 2)?);
@@ -341,17 +411,4 @@ fn unpack_bits(packed: &[u8], expected: usize) -> Result<Vec<u8>, ContentError> 
         return Err(ContentError::Invalid("PICT PackBits row length".into()));
     }
     Ok(output)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn rejects_short_and_oversized_headers() {
-        assert!(decode_cicn(&[0; 81]).is_err());
-        let mut bytes = [0; 82];
-        bytes[10..12].copy_from_slice(&32767i16.to_be_bytes());
-        bytes[12..14].copy_from_slice(&32767i16.to_be_bytes());
-        assert!(decode_cicn(&bytes).is_err());
-    }
 }

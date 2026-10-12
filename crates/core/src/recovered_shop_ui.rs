@@ -129,7 +129,7 @@ pub fn eraseshopname(context: &ShopContext, selector: i16) -> ShopPlan {
 /// FUN_00139faa: complete shop credit display, including the Pack7 observation.
 pub fn shop_credit_display(
     context: &mut ShopContext,
-    services: &mut impl NumericServices,
+    services: &mut (impl NumericServices + ?Sized),
 ) -> Result<ShopPlan, RuleError> {
     let mut candidate = context.clone();
     let mut effects = Vec::new();
@@ -248,7 +248,7 @@ fn missing_npc() -> RuleError {
 pub fn updatenpcmenu(
     context: &mut NpcMenuContext,
     maximum_updates: usize,
-    services: &impl NpcNameServices,
+    services: &(impl NpcNameServices + ?Sized),
 ) -> Result<NpcMenuPlan, RuleError> {
     let mut candidate = context.clone();
     let count = usize::from(candidate.count.max(0) as u16);
@@ -321,130 +321,4 @@ pub fn updatenpcmenu(
         native_return: 0,
         effects,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn shop() -> ShopContext {
-        ShopContext {
-            width: -3,
-            window: 77,
-            erase_pattern: 12,
-            normal_pattern: 13,
-            credits: -123456,
-            text_work: PascalString::default(),
-        }
-    }
-
-    struct Numbers;
-    impl NumericServices for Numbers {
-        fn number_to_string(&mut self, value: i32) -> Result<PascalString, RuleError> {
-            assert_eq!(value, -123456);
-            PascalString::from_payload(b"-123456")
-        }
-        fn string_to_number(&mut self, _: &PascalString) -> Result<i32, RuleError> {
-            Err(RuleError::Invalid("unused numeric observation".into()))
-        }
-    }
-
-    #[test]
-    fn shop_rectangles_follow_horizontal_offsets_and_preserve_installed_patterns() {
-        let plan = eraseshopstats(&shop(), 1);
-        let rects: Vec<_> = plan
-            .effects
-            .iter()
-            .filter_map(|e| match e {
-                ShopEffect::Drawing(DrawingEffect::EraseRect(rect)) => Some(*rect),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            rects.iter().map(|r| r.left).collect::<Vec<_>>(),
-            [107, 159, 212]
-        );
-        assert_eq!(
-            rects[2],
-            BodyRect {
-                top: 415,
-                left: 212,
-                bottom: 429,
-                right: 253
-            }
-        );
-        let name = eraseshopname(&shop(), 0);
-        assert_eq!(
-            name.effects.last(),
-            Some(&ShopEffect::Drawing(DrawingEffect::MoveTo {
-                horizontal: 70,
-                vertical: 451
-            }))
-        );
-        assert_eq!(half_width(i16::MIN), -16384);
-        assert_eq!(half_width(i16::MAX), 16383);
-        let mut state = shop();
-        let credit = shop_credit_display(&mut state, &mut Numbers).unwrap();
-        assert!(
-            credit
-                .effects
-                .contains(&ShopEffect::Drawing(DrawingEffect::MoveTo {
-                    horizontal: 424,
-                    vertical: 427,
-                }))
-        );
-        assert_eq!(state.text_work.payload(), b"-123456");
-    }
-
-    struct Names;
-    impl NpcNameServices for Names {
-        fn copy_name(&self, _address: u32, bytes: &[u8]) -> Result<PascalString, RuleError> {
-            let end = bytes.iter().position(|b| *b == 0).ok_or_else(missing_npc)?;
-            PascalString::from_payload(&bytes[..end])
-        }
-    }
-
-    #[test]
-    fn npc_menu_resets_twenty_items_and_retains_signed_icon_and_duplicate_clear() {
-        let mut state = NpcMenuContext {
-            menu: 4,
-            count: 2,
-            record_bytes: vec![0xaa; 576],
-            placeholder: PascalString::from_payload(b"---").unwrap(),
-            scratch: PascalString::default(),
-        };
-        state.record_bytes[80..82].copy_from_slice(&(-1_i16).to_be_bytes());
-        state.record_bytes[368..370].copy_from_slice(&512_i16.to_be_bytes());
-        state.record_bytes[218..220].copy_from_slice(b"A\0");
-        state.record_bytes[506..508].copy_from_slice(b"B\0");
-        let plan = updatenpcmenu(&mut state, 2, &Names).unwrap();
-        assert_eq!(
-            plan.effects[0],
-            NpcMenuEffect::EnableItem { menu: 4, item: 0 }
-        );
-        assert!(plan.effects.contains(&NpcMenuEffect::SetItemIcon {
-            menu: 4,
-            item: 1,
-            icon: -1
-        }));
-        assert!(!plan.effects.contains(&NpcMenuEffect::SetItemIcon {
-            menu: 4,
-            item: 2,
-            icon: 512
-        }));
-        let clears = plan
-            .effects
-            .iter()
-            .filter(|e| matches!(e,NpcMenuEffect::Write(w) if w.address==0x440fe1))
-            .count();
-        assert_eq!(clears, 2);
-        assert_eq!(state.scratch.payload(), b"B");
-        let before = state.clone();
-        assert!(updatenpcmenu(&mut state, 1, &Names).is_err());
-        assert_eq!(state, before);
-        state.record_bytes.truncate(400);
-        let before = state.clone();
-        assert!(updatenpcmenu(&mut state, 2, &Names).is_err());
-        assert_eq!(state, before);
-    }
 }

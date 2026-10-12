@@ -15,131 +15,6 @@ pub enum Screen {
     Game,
 }
 
-#[cfg(all(test, feature = "original-fixtures"))]
-mod tests {
-    use super::*;
-    fn content() -> Content {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        Content::load(
-            &root.join("NewCenturions"),
-            &root.join("analysis/extracted"),
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn squad_draft_is_separate_and_done_commits_selected_order_atomically() {
-        let content = content();
-        let mut state = Session::new(&content);
-        let before = state.clone();
-        let mut application = Application::at(Screen::Squad, 0.);
-        application
-            .handle(ApplicationAction::Done, &mut state, &content)
-            .unwrap();
-        assert_eq!(application.screen, Screen::Title);
-        assert_eq!(state, before);
-        assert!(application.supported(129, 1, &state));
-        assert!(!application.supported(200, 1, &state));
-        assert!(application.supported(130, 1, &state));
-        application = Application::at(Screen::Squad, 0.);
-        for i in [5, 2, 0, 4, 1] {
-            application
-                .handle(ApplicationAction::Warrior(i), &mut state, &content)
-                .unwrap();
-            application
-                .handle(ApplicationAction::Add, &mut state, &content)
-                .unwrap();
-        }
-        assert_eq!(state, before);
-        assert!(
-            application
-                .handle(ApplicationAction::Done, &mut state, &content)
-                .is_err()
-        );
-        assert_eq!(state, before);
-        assert_eq!(application.screen, Screen::Squad);
-        application
-            .handle(ApplicationAction::Warrior(3), &mut state, &content)
-            .unwrap();
-        application
-            .handle(ApplicationAction::Add, &mut state, &content)
-            .unwrap();
-        let (_, events) = application
-            .handle(ApplicationAction::Done, &mut state, &content)
-            .unwrap();
-        assert_eq!(application.screen, Screen::Game);
-        assert_eq!(state.phase, Phase::Exploration);
-        assert!(application.supported(129, 3, &state));
-        assert!(!application.supported(129, 1, &state));
-        assert_eq!(state.random, before.random);
-        assert_eq!(
-            state.warriors.iter().map(|w| &w.name).collect::<Vec<_>>(),
-            [5, 2, 0, 4, 1, 3]
-                .iter()
-                .map(|i| &content.warriors[*i].name)
-                .collect::<Vec<_>>()
-        );
-        assert!(matches!(
-            events.as_slice(),
-            [
-                Event::StartersImported { count: 6 },
-                Event::MissionEntered { .. }
-            ]
-        ));
-    }
-
-    #[test]
-    fn quit_answers_keep_native_exploration_and_combat_meanings() {
-        let content = content();
-        let mut state = Session::new(&content);
-        apply(Command::ImportStarters, &mut state, &content).unwrap();
-        apply(
-            Command::EnterMission {
-                name: "The Thunder of Guns".into(),
-            },
-            &mut state,
-            &content,
-        )
-        .unwrap();
-        let before = state.clone();
-        let mut application = Application::at(Screen::Game, 0.);
-        application
-            .handle(ApplicationAction::Menu(129, 6), &mut state, &content)
-            .unwrap();
-        assert!(application.blocks_game());
-        let (next, _) = application
-            .handle(ApplicationAction::QuitAnswer(false), &mut state, &content)
-            .unwrap();
-        assert!(matches!(next, Some(Action::Save)));
-        assert!(application.quit_after_save);
-        assert!(!application.quit);
-        assert_eq!(state, before);
-        let mut application = Application::at(Screen::Game, 0.);
-        state.phase = Phase::Combat;
-        assert!(!application.supported(129, 3, &state));
-        assert!(!application.supported(200, 1, &state));
-        let before = state.clone();
-        application
-            .handle(ApplicationAction::Menu(129, 6), &mut state, &content)
-            .unwrap();
-        let (next, _) = application
-            .handle(ApplicationAction::QuitAnswer(false), &mut state, &content)
-            .unwrap();
-        assert!(next.is_none());
-        assert!(!application.quit);
-        assert!(!application.blocks_game());
-        assert_eq!(state, before);
-        application
-            .handle(ApplicationAction::Menu(129, 6), &mut state, &content)
-            .unwrap();
-        application
-            .handle(ApplicationAction::QuitAnswer(true), &mut state, &content)
-            .unwrap();
-        assert!(application.quit);
-        assert_eq!(state, before);
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum ApplicationAction {
     SkipLogo,
@@ -160,6 +35,8 @@ pub struct Application {
     quit_question: bool,
     pub sound: bool,
     pub volume: usize,
+    pub music_enabled: bool,
+    pub music_request: Option<i16>,
     pub speed: usize,
     pub menu: Option<i16>,
     pub submenu: Option<i16>,
@@ -189,6 +66,8 @@ impl Application {
             quit_question: false,
             sound: true,
             volume: 10,
+            music_enabled: true,
+            music_request: Some(20128),
             speed: 6,
             menu: None,
             submenu: None,
@@ -347,6 +226,11 @@ impl Application {
                     (130, 2) | (200, 1) => self.open_intro(self.screen, None),
                     (130, 5) => {}
                     (137, 4) => {}
+                    (145, 1) => self.music_enabled = !self.music_enabled,
+                    (145, 10..=22) => {
+                        self.music_enabled = true;
+                        self.music_request = Some(20128 + item as i16 - 10);
+                    }
                     (134, 1..=11) => self.speed = item,
                     (135, 2..=12) => {
                         self.volume = item - 2;
@@ -371,6 +255,7 @@ impl Application {
             (129, 3 | 4) => game && state.phase == Phase::Exploration,
             (130, 1) => state.phase == Phase::SquadSelection && self.screen == Screen::Title,
             (134, 1..=11) | (135, 2..=12) => true,
+            (145, 1 | 10..=22) => true,
             _ => false,
         }
     }
@@ -404,7 +289,26 @@ impl Application {
             Screen::Intro => {
                 clear_background(BLACK);
                 let rect = Rect::new(160., 92., 480., 416.);
-                draw_rectangle(rect.x, rect.y, rect.w, rect.h, WHITE);
+                let background = &assets.movie_background;
+                for y in (0..rect.h as usize).step_by(background.height() as usize) {
+                    for x in (0..rect.w as usize).step_by(background.width() as usize) {
+                        draw_texture_ex(
+                            background,
+                            rect.x + x as f32,
+                            rect.y + y as f32,
+                            WHITE,
+                            DrawTextureParams {
+                                source: Some(Rect::new(
+                                    0.,
+                                    0.,
+                                    background.width().min(rect.w - x as f32),
+                                    background.height().min(rect.h - y as f32),
+                                )),
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
                 let id = self.prologue.unwrap_or_else(|| {
                     state
                         .exploration
@@ -714,7 +618,10 @@ impl Application {
             if item.is_separator() {
                 draw_line(rect.x + 5., y + 10., rect.right() - 5., y + 10., 1., GRAY);
             } else {
-                let enabled = self.supported(id, index + 1, state);
+                let enabled = self.supported(id, index + 1, state)
+                    && (id != 145
+                        || index < 9
+                        || assets.music_ids.contains(&(20128 + index as i16 - 9)));
                 let hovered = self.show_hover
                     && crate::layout::Canvas::new(screen_width(), screen_height())
                         .pointer(vec2(mouse_position().0, mouse_position().1))
@@ -729,7 +636,12 @@ impl Application {
                 } else {
                     BLACK
                 };
-                assets.text(&item.text, rect.x + 20., y + 14., 12, color);
+                let text = if id == 145 && index == 0 && !self.music_enabled {
+                    "Start Playing Music"
+                } else {
+                    &item.text
+                };
+                assets.text(text, rect.x + 20., y + 14., 12, color);
                 if item.submenu_id().is_some() {
                     assets.text("▶", rect.right() - 18., y + 14., 12, color);
                 } else if item.key.is_ascii_alphanumeric() {

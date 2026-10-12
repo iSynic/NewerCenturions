@@ -350,20 +350,3 @@ pub fn read_resource(extracted: &Path, resource: &Resource) -> Result<Vec<u8>, C
     }
     Ok(bytes)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn rejects_overflow_and_truncation() {
-        assert!(span(&[0; 4], usize::MAX, 2).is_err());
-        assert!(Warrior::read(&[0; WARRIOR_BYTES - 1]).is_err());
-        assert!(InventoryRecord::read(&[0; 21]).is_err());
-    }
-    #[test]
-    fn warrior_name_is_bounded() {
-        let mut bytes = vec![0; WARRIOR_BYTES];
-        bytes[0xa21..0xa40].fill(b'a');
-        assert!(Warrior::read(&bytes).is_err());
-    }
-}

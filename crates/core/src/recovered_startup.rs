@@ -27,7 +27,7 @@ pub enum StartupArg {
     Long(u32),
     Pointer(u32),
 }
-pub(crate) use StartupArg::{Byte as B, Long as L, Pointer as P, Word as W};
+pub use StartupArg::{Byte as B, Long as L, Pointer as P, Word as W};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StartupRequest {
     Toolbox {
@@ -94,14 +94,14 @@ pub struct StartupPlan {
     pub flow: LoadFlow,
     pub native_return: Option<u32>,
 }
-pub(crate) struct Execution {
+pub struct Execution {
     pub e: StorageExecution,
     pub random: RandomState,
     pub effects: Vec<StartupEffect>,
     pub d0: u32,
 }
 impl Execution {
-    pub(crate) fn new(
+    pub fn new(
         memory: &RenderingMemory,
         random: &RandomState,
         limits: StorageLimits,
@@ -114,7 +114,7 @@ impl Execution {
             d0: 0,
         }
     }
-    pub(crate) fn finish(mut self) -> StartupPlan {
+    pub fn finish(mut self) -> StartupPlan {
         self.flush();
         StartupPlan {
             memory: self.e.plan.memory,
@@ -124,14 +124,14 @@ impl Execution {
             native_return: self.e.plan.native_return,
         }
     }
-    pub(crate) fn flush(&mut self) {
+    pub fn flush(&mut self) {
         self.effects
             .extend(self.e.plan.effects.drain(..).map(StartupEffect::Storage));
     }
-    pub(crate) fn request(
+    pub fn request(
         &mut self,
         request: StartupRequest,
-        s: &impl StartupServices,
+        s: &(impl StartupServices + ?Sized),
     ) -> Result<StartupObservation, RuleError> {
         self.flush();
         let o = s.observe_startup(&request, &self.e.plan.memory)?;
@@ -143,12 +143,12 @@ impl Execution {
         });
         Ok(o)
     }
-    pub(crate) fn tb(
+    pub fn tb(
         &mut self,
         opcode: u16,
         selector: Option<u32>,
         arguments: Vec<StartupArg>,
-        s: &impl StartupServices,
+        s: &(impl StartupServices + ?Sized),
     ) -> Result<u32, RuleError> {
         Ok(self
             .request(
@@ -163,18 +163,18 @@ impl Execution {
             )?
             .value)
     }
-    pub(crate) fn ww(&mut self, address: u32, value: i16) -> Result<(), RuleError> {
+    pub fn ww(&mut self, address: u32, value: i16) -> Result<(), RuleError> {
         self.e.ww(address, value)
     }
-    pub(crate) fn lw(&mut self, address: u32, value: u32) -> Result<(), RuleError> {
+    pub fn lw(&mut self, address: u32, value: u32) -> Result<(), RuleError> {
         self.e.lw(address, value)
     }
-    pub(crate) fn get_item(
+    pub fn get_item(
         &mut self,
         dialog: u32,
         item: i16,
         handle: u32,
-        s: &impl StartupServices,
+        s: &(impl StartupServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.tb(
             0xa98d,
@@ -190,11 +190,11 @@ impl Execution {
         )?;
         Ok(())
     }
-    pub(crate) fn di_str(
+    pub fn di_str(
         &mut self,
         item: i16,
         text: u32,
-        s: &impl StartupServices,
+        s: &(impl StartupServices + ?Sized),
     ) -> Result<(), RuleError> {
         let dialog = self.e.long(0x4394b8)?;
         self.get_item(dialog, item, 0x4434dc, s)?;
@@ -202,11 +202,11 @@ impl Execution {
         self.d0 = 0;
         Ok(())
     }
-    pub(crate) fn number(
+    pub fn number(
         &mut self,
         item: i16,
         value: i32,
-        s: &impl StartupServices,
+        s: &(impl StartupServices + ?Sized),
     ) -> Result<(), RuleError> {
         let dialog = self.e.long(0x4394b8)?;
         self.get_item(dialog, item, 0x4434dc, s)?;
@@ -226,11 +226,11 @@ impl Execution {
         self.d0 = 0;
         Ok(())
     }
-    pub(crate) fn warn(
+    pub fn warn(
         &mut self,
         frame: u32,
         id: i16,
-        s: &impl StartupServices,
+        s: &(impl StartupServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.ww(frame.wrapping_add(8), id)?;
         self.flush();
@@ -247,7 +247,7 @@ impl Execution {
         self.d0 = p.native_return.unwrap_or(0);
         Ok(())
     }
-    fn save_pref(&mut self, s: &impl StartupServices) -> Result<(), RuleError> {
+    fn save_pref(&mut self, s: &(impl StartupServices + ?Sized)) -> Result<(), RuleError> {
         let input = s.preference_inputs(&self.e.plan.memory)?;
         let mut c = PreferenceContext::new(self.random.clone());
         c.handles = input.handles;
@@ -300,7 +300,11 @@ impl Execution {
         self.d0 = 0;
         Ok(())
     }
-    fn app_name(&mut self, frame: u32, s: &impl StartupServices) -> Result<(), RuleError> {
+    fn app_name(
+        &mut self,
+        frame: u32,
+        s: &(impl StartupServices + ?Sized),
+    ) -> Result<(), RuleError> {
         self.tb(
             0xa9f5,
             None,
@@ -319,7 +323,7 @@ impl Execution {
         &mut self,
         frame: u32,
         direction: i16,
-        s: &impl StartupServices,
+        s: &(impl StartupServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.lw(
             frame.wrapping_add(8),
@@ -350,7 +354,7 @@ pub fn initialize_worlds(
     random: &RandomState,
     frame: u32,
     limits: StorageLimits,
-    s: &impl StartupServices,
+    s: &(impl StartupServices + ?Sized),
 ) -> Result<StartupPlan, RuleError> {
     let mut x = Execution::new(memory, random, limits, Some(0));
     x.tb(0xab1d, Some(0x80005), vec![P(0x4046da), P(0x4046de)], s)?;
@@ -432,7 +436,7 @@ pub fn set_free(
     random: &RandomState,
     frame: u32,
     limits: StorageLimits,
-    s: &impl StartupServices,
+    s: &(impl StartupServices + ?Sized),
 ) -> Result<StartupPlan, RuleError> {
     let mut x = Execution::new(memory, random, limits, Some(0));
     let key = x.e.long(frame.wrapping_add(8))?;
@@ -478,7 +482,7 @@ pub fn set_free_name(
     random: &RandomState,
     frame: u32,
     limits: StorageLimits,
-    s: &impl StartupServices,
+    s: &(impl StartupServices + ?Sized),
 ) -> Result<StartupPlan, RuleError> {
     let mut x = Execution::new(memory, random, limits, Some(0));
     let force = x.e.word(frame.wrapping_add(8))?;
@@ -548,7 +552,7 @@ pub fn check_for_mismatch(
     random: &RandomState,
     frame: u32,
     limits: StorageLimits,
-    s: &impl StartupServices,
+    s: &(impl StartupServices + ?Sized),
 ) -> Result<StartupPlan, RuleError> {
     let mut x = Execution::new(memory, random, limits, Some(0));
     x.app_name(frame.wrapping_sub(12), s)?;
@@ -603,7 +607,7 @@ pub fn show_logo(
     random: &RandomState,
     frame: u32,
     limits: StorageLimits,
-    s: &mut impl StartupServices,
+    s: &mut (impl StartupServices + ?Sized),
 ) -> Result<StartupPlan, RuleError> {
     let mut x = Execution::new(memory, random, limits, Some(0));
     let duration = x.e.word(frame.wrapping_add(8))?;
@@ -740,565 +744,4 @@ pub fn show_logo(
     x.tb(0xa983, None, vec![L(x.e.long(0x41f604)?)], s)?;
     x.tb(0xa853, None, vec![], s)?;
     Ok(x.finish())
-}
-
-#[cfg(test)]
-pub(crate) mod test_support {
-    use super::*;
-    use crate::recovered_audio::{AudioContext, AudioObservation};
-    use crate::recovered_drawing::{BuildingWorld, DrawingServices, PictureObservation};
-    use crate::recovered_feedback::{
-        FeedbackMemory, FeedbackObservation, FeedbackRequest, FeedbackServices,
-    };
-    use crate::recovered_gamma::{GammaError, GammaObservation, GammaRequest, GammaServices};
-    use crate::recovered_gamma_control::{GammaControlRequest, GammaControlServices};
-    use crate::recovered_geometry::BodyRect;
-    use crate::recovered_item_ui::{ItemUiReply, ItemUiRequest};
-    use crate::recovered_load_control::{LoadObservation, LoadServices, VersionInputs};
-    use crate::recovered_preferences::{PreferenceReply as V, PreferenceRequest as R};
-    use crate::recovered_storage::test_support as storage;
-    use crate::recovered_storage::{StorageObservation, StorageRequest};
-    use crate::recovered_text::{NumericServices, PascalString};
-    use std::cell::{Cell, RefCell};
-    use std::collections::VecDeque;
-    pub use storage::{FRAME, LIMITS, long, word};
-    #[derive(Default)]
-    pub struct Services {
-        pub base: storage::Services,
-        pub requests: RefCell<Vec<StartupRequest>>,
-        pub events: RefCell<VecDeque<i16>>,
-        pub controls: RefCell<BTreeMap<i16, i16>>,
-        pub print_accept: bool,
-        pub fail: bool,
-        pub(crate) ticks: Cell<u32>,
-    }
-    impl FeedbackServices for Services {
-        fn observe(
-            &self,
-            r: &FeedbackRequest,
-            m: &FeedbackMemory,
-        ) -> Result<FeedbackObservation, RuleError> {
-            FeedbackServices::observe(&self.base, r, m)
-        }
-        fn sound_observations(
-            &self,
-            id: i16,
-            c: &AudioContext,
-            m: &FeedbackMemory,
-        ) -> Result<Vec<AudioObservation>, RuleError> {
-            self.base.sound_observations(id, c, m)
-        }
-    }
-    impl GammaServices for Services {
-        fn observe(
-            &self,
-            r: &GammaRequest,
-            m: &GammaMemory,
-        ) -> Result<GammaObservation, GammaError> {
-            GammaServices::observe(&self.base, r, m)
-        }
-    }
-    impl GammaControlServices for Services {
-        fn observe_control(
-            &self,
-            r: &GammaControlRequest,
-            m: &GammaMemory,
-        ) -> Result<GammaObservation, GammaError> {
-            self.base.observe_control(r, m)
-        }
-    }
-    impl LoadServices for Services {
-        fn observe_load(
-            &self,
-            r: &LoadRequest,
-            m: &RenderingMemory,
-        ) -> Result<LoadObservation, RuleError> {
-            let mut o = self.base.observe_load(r, m)?;
-            if let LoadRequest::NumberToString { value, destination } = r {
-                o.memory.insert_region(
-                    *destination,
-                    PascalString::from_payload(value.to_string().as_bytes())?.raw(),
-                );
-            }
-            Ok(o)
-        }
-        fn version_inputs(
-            &self,
-            id: i16,
-            f: i16,
-            m: &RenderingMemory,
-        ) -> Result<VersionInputs, RuleError> {
-            self.base.version_inputs(id, f, m)
-        }
-        fn filename_number(&self, v: u8, m: &RenderingMemory) -> Result<PascalString, RuleError> {
-            self.base.filename_number(v, m)
-        }
-    }
-    impl StorageServices for Services {
-        fn observe_storage(
-            &self,
-            r: &StorageRequest,
-            m: &RenderingMemory,
-        ) -> Result<StorageObservation, RuleError> {
-            self.base.observe_storage(r, m)
-        }
-    }
-    impl NumericServices for Services {
-        fn number_to_string(&mut self, v: i32) -> Result<PascalString, RuleError> {
-            self.base.base.number_to_string(v)
-        }
-        fn string_to_number(&mut self, p: &PascalString) -> Result<i32, RuleError> {
-            self.base.base.string_to_number(p)
-        }
-    }
-    impl DrawingServices for Services {
-        fn color_icon(&mut self, id: i16) -> Result<u32, RuleError> {
-            self.base.color_icon(id)
-        }
-        fn indexed_string(&mut self, r: i16, i: i16) -> Result<PascalString, RuleError> {
-            self.base.indexed_string(r, i)
-        }
-        fn current_world(&mut self) -> Result<(u32, u32), RuleError> {
-            self.base.current_world()
-        }
-        fn picture(&mut self, id: i16) -> Result<PictureObservation, RuleError> {
-            self.base.picture(id)
-        }
-        fn new_world(&mut self, d: i16, b: BodyRect) -> Result<(i16, BuildingWorld), RuleError> {
-            self.base.new_world(d, b)
-        }
-    }
-    impl ItemUiServices for Services {
-        fn observe(
-            &mut self,
-            r: &ItemUiRequest,
-            _: &RenderingMemory,
-        ) -> Result<ItemUiReply, RuleError> {
-            match r {
-                ItemUiRequest::GetDialogItem {
-                    item_type,
-                    handle,
-                    rectangle,
-                    ..
-                } => Ok(ItemUiReply::Writes(vec![
-                    crate::recovered_records::RecordWrite {
-                        address: *item_type,
-                        bytes: 8_i16.to_be_bytes().to_vec(),
-                    },
-                    crate::recovered_records::RecordWrite {
-                        address: *handle,
-                        bytes: 77_u32.to_be_bytes().to_vec(),
-                    },
-                    crate::recovered_records::RecordWrite {
-                        address: *rectangle,
-                        bytes: vec![0; 8],
-                    },
-                ])),
-                ItemUiRequest::GetDialogItemText { .. } => {
-                    Ok(ItemUiReply::Pascal(PascalString::from_payload(b"A\rB")?))
-                }
-                _ => Err(RuleError::Invalid("unexpected fixture item request".into())),
-            }
-        }
-    }
-    impl TimingServices for Services {
-        fn tick_count(&mut self) -> Result<u32, RuleError> {
-            let v = self.ticks.get();
-            self.ticks.set(v + 100);
-            Ok(v)
-        }
-        fn button(&mut self) -> Result<bool, RuleError> {
-            Ok(false)
-        }
-    }
-    impl StartupServices for Services {
-        fn observe_startup(
-            &self,
-            r: &StartupRequest,
-            m: &RenderingMemory,
-        ) -> Result<StartupObservation, RuleError> {
-            self.requests.borrow_mut().push(r.clone());
-            if self.fail {
-                return Err(RuleError::Invalid("absent startup observation".into()));
-            }
-            let mut n = m.clone();
-            let mut value = 0;
-            let mut a0 = 0;
-            let mut zero = false;
-            match r {
-                StartupRequest::Uppercase(v) => value = (*v as u8).to_ascii_uppercase().into(),
-                StartupRequest::PascalNameToC(a) => {
-                    let len = usize::from(m.byte(*a)?);
-                    let mut b = (0..len)
-                        .map(|i| m.byte(*a + 1 + i as u32))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    b.push(0);
-                    n.insert_region(*a, &b);
-                }
-                StartupRequest::CNameToPascal(a) => {
-                    let b = (0..40)
-                        .map(|i| m.byte(*a + i))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let len = b.iter().position(|b| *b == 0).unwrap_or(40);
-                    n.insert_region(*a, PascalString::from_payload(&b[..len])?.raw());
-                }
-                StartupRequest::StringToNumber { destination, .. } => long(&mut n, *destination, 2),
-                StartupRequest::Toolbox {
-                    opcode,
-                    selector,
-                    arguments,
-                    ..
-                } => match opcode {
-                    0xa8a7 => {
-                        if let [P(p), W(l), W(t), W(r), W(b)] = arguments.as_slice() {
-                            for (i, v) in [*t, *l, *b, *r].into_iter().enumerate() {
-                                word(&mut n, *p + i as u32 * 2, v as i16);
-                            }
-                        }
-                    }
-                    0xab1d => match selector {
-                        Some(0x160000) => {
-                            if let Some(P(p)) = arguments.first() {
-                                long(&mut n, *p, *p + 0x100000);
-                            }
-                        }
-                        Some(0x40017) => {
-                            if let Some(L(p)) = arguments.first() {
-                                value = p + 4;
-                            }
-                        }
-                        _ => (),
-                    },
-                    0xa9bc => {
-                        value = 0x500000;
-                        if let Some(W(id)) = arguments.first() {
-                            value += u32::from(*id) * 4;
-                        }
-                        long(&mut n, value, value + 64);
-                    }
-                    0xa9f5 => n.insert_region(0x479ed8, &[4, b'G', b'a', b'm', b'e']),
-                    0xa85e => {
-                        if let Some(P(p)) = arguments.first() {
-                            long(&mut n, *p, m.long(*p)? | 0x02000000);
-                        }
-                    }
-                    0xa8d8 => value = 0x600000,
-                    0xaa2a => {
-                        value = 0x600100;
-                        long(&mut n, value, 0x600200);
-                        n.insert_region(0x600200 + 34, &[0, 1, 0, 2, 0, 3, 0, 4]);
-                    }
-                    0xaa46 => value = 888,
-                    0xa97c => value = 999,
-                    0xa860 => {
-                        word(
-                            &mut n,
-                            0x44720a,
-                            self.events.borrow_mut().pop_front().unwrap_or(3),
-                        );
-                        value = 1;
-                    }
-                    0xa991 => word(
-                        &mut n,
-                        0x4434b2,
-                        self.events.borrow_mut().pop_front().unwrap_or(39),
-                    ),
-                    0xa98d => {
-                        if let [L(_), W(i), P(t), P(h), P(b)] = arguments.as_slice() {
-                            let printing = m.word(0x4434aa)? as i16 >= 3;
-                            let kind = if printing && *i == 3 { 8 } else { 4 };
-                            word(&mut n, *t, kind);
-                            long(
-                                &mut n,
-                                *h,
-                                if printing && *i != 3 {
-                                    0
-                                } else {
-                                    u32::from(*i)
-                                },
-                            );
-                            n.insert_region(*b, &[0; 8]);
-                        }
-                    }
-                    0xa960 => {
-                        if let Some(L(h)) = arguments.first() {
-                            value = self
-                                .controls
-                                .borrow()
-                                .get(&(*h as i16))
-                                .copied()
-                                .unwrap_or(0) as u16 as u32;
-                        }
-                    }
-                    0xa963 => {
-                        if let [L(h), W(v)] = arguments.as_slice() {
-                            self.controls.borrow_mut().insert(*h as i16, *v as i16);
-                        }
-                    }
-                    0xa9eb => {
-                        zero = selector == &Some(0x1008);
-                        if selector == &Some(0x2810)
-                            && let Some(P(dest)) = arguments.last()
-                        {
-                            long(&mut n, *dest, 31);
-                        }
-                    }
-                    0xa322 => a0 = 0x600300,
-                    0xa8fd => match selector {
-                        Some(0x32040488) => value = u32::from(self.print_accept),
-                        Some(0x04000c00) => value = 0x600400,
-                        _ => (),
-                    },
-                    0xa975 => {
-                        value = self.ticks.get();
-                        self.ticks.set(value + 100);
-                    }
-                    _ => (),
-                },
-                _ => (),
-            }
-            Ok(StartupObservation {
-                memory: n,
-                value,
-                d0: 0xaabb0011,
-                a0,
-                zero,
-            })
-        }
-        fn preference_inputs(&self, _: &RenderingMemory) -> Result<PreferenceInputs, RuleError> {
-            let obs = |request, reply| PreferenceObservation { request, reply };
-            let ignored = |request| obs(request, V::Ignored);
-            let name = PascalString::from_payload(b"Prefs")?;
-            Ok(PreferenceInputs {
-                handles: BTreeMap::new(),
-                observations: vec![
-                    obs(R::CurrentResourceFile, V::Word(12)),
-                    obs(
-                        R::FindFolder {
-                            volume: i16::MIN,
-                            kind: 0x70726566,
-                            create: false,
-                        },
-                        V::Folder {
-                            volume: -3,
-                            directory: 42,
-                            error: 0,
-                        },
-                    ),
-                    obs(
-                        R::MakeFileSpecification {
-                            volume: -3,
-                            directory: 42,
-                            name: PascalString::from_payload(b"New Centurions Prefs")?,
-                        },
-                        V::FileSpecification {
-                            bytes: vec![0; 70],
-                            error: 0,
-                        },
-                    ),
-                    obs(
-                        R::OpenResourceFile {
-                            specification: vec![0; 70],
-                            permission: 0,
-                        },
-                        V::Word(24),
-                    ),
-                    ignored(R::UseResourceFile(24)),
-                    obs(R::NewHandleClear(362), V::Handle(700)),
-                    ignored(R::LockHandle(700)),
-                    obs(
-                        R::GetResource {
-                            kind: 0x5052464e,
-                            id: 128,
-                            current_only: false,
-                        },
-                        V::Resource {
-                            handle: 800,
-                            memory: Some(HandleMemory {
-                                bytes: vec![0; 362],
-                                logical_size: 362,
-                            }),
-                        },
-                    ),
-                    obs(
-                        R::ResourceInfo(800),
-                        V::ResourceInfo {
-                            kind: 0x5052464e,
-                            id: 128,
-                            name: name.clone(),
-                        },
-                    ),
-                    obs(R::HomeResourceFile(800), V::Word(24)),
-                    ignored(R::RemoveResource(800)),
-                    ignored(R::AddResource {
-                        handle: 700,
-                        kind: 0x5052464e,
-                        id: 128,
-                        name,
-                    }),
-                    ignored(R::WriteResource(700)),
-                    ignored(R::UnlockHandle(700)),
-                    ignored(R::ReleaseResource(700)),
-                    ignored(R::CloseResourceFile(24)),
-                    ignored(R::UseResourceFile(12)),
-                ],
-            })
-        }
-    }
-    pub fn fixture() -> RenderingMemory {
-        let mut m = storage::fixture();
-        for (a, n) in [
-            (0x401400, 1400),
-            (0xbaa, 2),
-            (0x9ee, 4),
-            (0x4046d0, 64),
-            (0x41f604, 4),
-        ] {
-            m.insert_region(a, &vec![0; n]);
-        }
-        m.insert_region(0x438587, &[1]);
-        m.insert_region(0x438aa4, &[3, b'b', b'o', b'b', 0]);
-        long(&mut m, 0x4386f8, 0x12345678);
-        m
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::test_support::*;
-    use super::*;
-    #[test]
-    fn world_setup_preserves_asymmetric_rects_early_picture_draws_and_overwritten_slot() {
-        let m = fixture();
-        let r = RandomState::new(7);
-        let s = Services::default();
-        let p = initialize_worlds(&m, &r, FRAME, LIMITS, &s).unwrap();
-        assert_eq!(p.random, r);
-        assert_eq!(p.memory.long(0x4386f4).unwrap(), 0x5386d8);
-        let q = s.requests.borrow();
-        let locks = q
-            .iter()
-            .filter_map(|r| {
-                if let StartupRequest::Toolbox {
-                    opcode: 0xab1d,
-                    selector: Some(0x40001),
-                    arguments,
-                    ..
-                } = r
-                {
-                    Some(arguments.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(locks.len(), 9);
-        assert_eq!(locks[7], vec![L(0x12345678)]);
-        assert!(q.iter().any(|r|matches!(r,StartupRequest::Toolbox{opcode:0xa8a7,arguments,..}if arguments==&vec![P(0x4434ba),W(0),W(0),W(206),W(129)])));
-        assert!(q.iter().any(|r|matches!(r,StartupRequest::Toolbox{opcode:0xa8a7,arguments,..}if arguments==&vec![P(0x4434ba),W(0),W(0),W(960),W(192)])));
-        let pic=q.iter().position(|r|matches!(r,StartupRequest::Toolbox{opcode:0xa9bc,arguments,..}if arguments==&vec![W(192)])).unwrap();
-        assert!(matches!(
-            q[pic + 1],
-            StartupRequest::Toolbox { opcode: 0xa8f6, .. }
-        ));
-        let failed = Services {
-            fail: true,
-            ..Services::default()
-        };
-        assert!(initialize_worlds(&m, &r, FRAME, LIMITS, &failed).is_err());
-        assert_eq!(m, fixture());
-    }
-    #[test]
-    fn seed_and_name_bookkeeping_keeps_one_draw_all_comparisons_and_short_read_tail() {
-        let mut m = fixture();
-        long(&mut m, FRAME + 8, 123);
-        long(&mut m, 0x4015fe, 123);
-        let r = RandomState::new(17);
-        let s = Services::default();
-        let p = set_free(&m, &r, FRAME, LIMITS, &s).unwrap();
-        assert_eq!(p.random.draws, 1);
-        assert_ne!(p.memory.long(0x438598).unwrap(), 0x00801000);
-        assert_eq!(
-            p.memory.long(0x43859c).unwrap(),
-            p.memory.long(0x438598).unwrap() | 0x02000000
-        );
-        let n = set_free_name(&fixture(), &r, FRAME, LIMITS, &s).unwrap();
-        assert_eq!(n.random, r);
-        assert_eq!(n.memory.byte(0x438aa4).unwrap(), 3);
-        assert_eq!(n.memory.byte(0x438aa5).unwrap(), b'B');
-        assert_eq!(
-            s.base
-                .requests
-                .borrow()
-                .iter()
-                .filter(|q| matches!(
-                    q,
-                    crate::recovered_storage::StorageRequest::CompareCString { .. }
-                ))
-                .count(),
-            28
-        );
-        let mut m = fixture();
-        long(&mut m, 0x43859c, 0x80000001);
-        long(&mut m, 0x479fdc, 0x80000001);
-        s.base.reads.borrow_mut().insert(
-            9,
-            [crate::recovered_storage::test_support::ReadReply {
-                value: 0,
-                bytes: vec![0x80],
-            }]
-            .into(),
-        );
-        let p = check_for_mismatch(&m, &r, FRAME, LIMITS, &s).unwrap();
-        assert_eq!(p.memory.long(0x479fdc).unwrap(), 0x80000001);
-        assert_eq!(p.random, r);
-    }
-    #[test]
-    fn logo_waits_for_native_event_kind_then_restores_menu_and_closes_dialog() {
-        let mut m = fixture();
-        word(&mut m, FRAME + 8, -1);
-        word(&mut m, 0xbaa, 20);
-        long(&mut m, 0x9ee, 123);
-        m.insert_region(0x438587, &[0, 1]);
-        let mut s = Services::default();
-        s.events.borrow_mut().extend([2, 3]);
-        let p = show_logo(&m, &RandomState::new(1), FRAME, LIMITS, &mut s).unwrap();
-        assert_eq!(p.memory.word(0xbaa).unwrap(), 20);
-        assert_eq!(p.memory.word(0x4042c2).unwrap(), 20);
-        assert_eq!(p.memory.word(0x44720a).unwrap(), 3);
-        assert_eq!(
-            p.effects
-                .iter()
-                .filter_map(|effect| match effect {
-                    StartupEffect::Storage(StorageEffect::Write(write))
-                        if write.address == FRAME - 12 =>
-                        Some(write.bytes.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-            vec![
-                0x00190001_u32.to_be_bytes().to_vec(),
-                0x00190000_u32.to_be_bytes().to_vec(),
-                0x00190001_u32.to_be_bytes().to_vec()
-            ]
-        );
-        let q = s.requests.borrow();
-        assert!(q.iter().any(|request| matches!(request, StartupRequest::Toolbox { opcode:0xa91d, arguments,.. } if arguments == &vec![L(999), W(640), W(460), B(0)])));
-        assert_eq!(
-            q.iter()
-                .filter(|r| matches!(r, StartupRequest::Toolbox { opcode: 0xa860, .. }))
-                .count(),
-            2
-        );
-        assert_eq!(
-            q.iter()
-                .filter(|r| matches!(r, StartupRequest::Toolbox { opcode: 0xa937, .. }))
-                .count(),
-            2
-        );
-        assert!(matches!(
-            q.last(),
-            Some(StartupRequest::Toolbox { opcode: 0xa853, .. })
-        ));
-    }
 }

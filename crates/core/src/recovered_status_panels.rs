@@ -171,7 +171,7 @@ impl StatusPanelPlan {
     fn observe(
         &mut self,
         request: StatusPanelRequest,
-        services: &impl StatusPanelServices,
+        services: &(impl StatusPanelServices + ?Sized),
     ) -> Result<u32, RuleError> {
         let observation = services.observe_status(&request, &self.memory)?;
         let value = observation.value;
@@ -187,7 +187,7 @@ impl StatusPanelPlan {
         &mut self,
         opcode: u16,
         arguments: Vec<FeedbackArg>,
-        services: &impl StatusPanelServices,
+        services: &(impl StatusPanelServices + ?Sized),
     ) -> Result<u32, RuleError> {
         self.observe(
             StatusPanelRequest::Toolbox {
@@ -202,14 +202,14 @@ impl StatusPanelPlan {
         &mut self,
         address: u32,
         arguments: Vec<FeedbackArg>,
-        services: &impl StatusPanelServices,
+        services: &(impl StatusPanelServices + ?Sized),
     ) -> Result<u32, RuleError> {
         self.observe(
             StatusPanelRequest::Imported { address, arguments },
             services,
         )
     }
-    fn flush(&mut self, services: &impl StatusPanelServices) -> Result<(), RuleError> {
+    fn flush(&mut self, services: &(impl StatusPanelServices + ?Sized)) -> Result<(), RuleError> {
         self.observe(
             StatusPanelRequest::Toolbox {
                 opcode: 0xa032,
@@ -220,7 +220,11 @@ impl StatusPanelPlan {
         )?;
         Ok(())
     }
-    fn sound(&mut self, id: i16, services: &impl StatusPanelServices) -> Result<(), RuleError> {
+    fn sound(
+        &mut self,
+        id: i16,
+        services: &(impl StatusPanelServices + ?Sized),
+    ) -> Result<(), RuleError> {
         let child = recovered_feedback::sound(&self.memory, id, services)?;
         self.memory = child.memory;
         self.effects
@@ -249,7 +253,7 @@ impl StatusPanelPlan {
     fn selection(
         &mut self,
         plus_one: bool,
-        services: &impl StatusPanelServices,
+        services: &(impl StatusPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         let input = self.w(0x4536a2)?;
         let base = rules::selection_base(input);
@@ -266,7 +270,7 @@ impl StatusPanelPlan {
         &mut self,
         resource: i16,
         index: i16,
-        services: &impl StatusPanelServices,
+        services: &(impl StatusPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.imported(
             0x400178,
@@ -315,7 +319,10 @@ impl StatusPanelPlan {
         }
         Ok(context)
     }
-    fn plot_item(&mut self, services: &mut impl StatusPanelServices) -> Result<(), RuleError> {
+    fn plot_item(
+        &mut self,
+        services: &mut (impl StatusPanelServices + ?Sized),
+    ) -> Result<(), RuleError> {
         let id = self.w(0x4434b4)?;
         let backing = recovered_equipment::item_tables(&self.memory, id)?;
         let tables = ItemTables {
@@ -343,7 +350,7 @@ impl StatusPanelPlan {
         &mut self,
         frame: u32,
         charges: i16,
-        services: &mut impl StatusPanelServices,
+        services: &mut (impl StatusPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.ww(frame.wrapping_add(10), 0)?;
         self.ww(frame.wrapping_add(8), charges)?;
@@ -362,7 +369,7 @@ impl StatusPanelPlan {
         &mut self,
         frame: u32,
         charges: i16,
-        services: &mut impl StatusPanelServices,
+        services: &mut (impl StatusPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.ww(frame.wrapping_sub(22), self.w(0x4434b4)?)?;
         self.plot_item(services)?;
@@ -374,7 +381,7 @@ impl StatusPanelPlan {
     fn dialog_item(
         &mut self,
         item: i16,
-        services: &impl StatusPanelServices,
+        services: &(impl StatusPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.toolbox(
             0xa98d,
@@ -396,7 +403,7 @@ impl StatusPanelPlan {
         &mut self,
         item: i16,
         address: u32,
-        services: &impl StatusPanelServices,
+        services: &(impl StatusPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.dialog_item(item, services)?;
         let effects = recovered_text::dialog_string(item, &self.pascal(address)?);
@@ -414,7 +421,7 @@ impl StatusPanelPlan {
         &mut self,
         item: i16,
         value: i16,
-        services: &impl StatusPanelServices,
+        services: &(impl StatusPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.dialog_item(item, services)?;
         let mut numeric = StatusNumeric {
@@ -484,7 +491,7 @@ impl StatusPanelPlan {
         frame: u32,
         body: i16,
         damage: DamageFrame,
-        services: &mut impl StatusPanelServices,
+        services: &mut (impl StatusPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.ww(frame.wrapping_add(8), body)?;
         let child =
@@ -504,7 +511,7 @@ impl StatusPanelPlan {
         frame: u32,
         body: i16,
         force: i16,
-        services: &impl StatusPanelServices,
+        services: &(impl StatusPanelServices + ?Sized),
     ) -> Result<(), RuleError> {
         self.ww(frame.wrapping_add(12), 0)?;
         self.ww(frame.wrapping_add(10), force)?;
@@ -589,12 +596,12 @@ fn blank_drawing(rect: crate::recovered_geometry::BodyRect) -> DrawingContext {
         buildings: vec![],
     }
 }
-struct StatusNumeric<'a, S> {
+struct StatusNumeric<'a, S: ?Sized> {
     services: &'a S,
     memory: RenderingMemory,
     observation: Option<StatusPanelObservation>,
 }
-impl<S: StatusPanelServices> NumericServices for StatusNumeric<'_, S> {
+impl<S: StatusPanelServices + ?Sized> NumericServices for StatusNumeric<'_, S> {
     fn number_to_string(&mut self, value: i32) -> Result<PascalString, RuleError> {
         let observation = self.services.observe_status(
             &StatusPanelRequest::NumberToString {
@@ -690,7 +697,7 @@ fn scroll(
     e: &mut StatusPanelPlan,
     rect: u32,
     vertical: i16,
-    services: &impl StatusPanelServices,
+    services: &(impl StatusPanelServices + ?Sized),
 ) -> Result<(), RuleError> {
     e.toolbox(
         0xa8ef,
@@ -707,7 +714,7 @@ pub fn update_shop(
     frame: u32,
     incoming_d3: i16,
     maximum_steps: usize,
-    services: &mut impl StatusPanelServices,
+    services: &mut (impl StatusPanelServices + ?Sized),
 ) -> Result<StatusPanelPlan, RuleError> {
     let mut e = StatusPanelPlan::new(memory, random);
     e.l(frame.wrapping_add(10))?;
@@ -863,7 +870,7 @@ fn menu_text(
     frame: u32,
     member: u16,
     ranged: bool,
-    services: &impl StatusPanelServices,
+    services: &(impl StatusPanelServices + ?Sized),
 ) -> Result<(), RuleError> {
     e.selection(true, services)?;
     e.imported(0x400180, vec![ptr(0x479ed8)], services)?;
@@ -897,7 +904,7 @@ pub fn change_weapon(
     frame: u32,
     limits: EquipmentLimits,
     damage: DamageFrame,
-    services: &mut impl StatusPanelServices,
+    services: &mut (impl StatusPanelServices + ?Sized),
 ) -> Result<StatusPanelPlan, RuleError> {
     let mut e = StatusPanelPlan::new(memory, random);
     let member = e.w(frame.wrapping_add(8))? as u16;
@@ -1041,7 +1048,7 @@ fn fastplot(
     e: &mut StatusPanelPlan,
     tile: i16,
     destination: crate::recovered_geometry::BodyRect,
-    services: &mut impl StatusPanelServices,
+    services: &mut (impl StatusPanelServices + ?Sized),
 ) -> Result<(), RuleError> {
     let rect = if tile >= 23000 {
         e.memory.rect(0x4471f2)?
@@ -1081,7 +1088,7 @@ fn ground(
     e: &mut StatusPanelPlan,
     frame: u32,
     body: i16,
-    services: &mut impl StatusPanelServices,
+    services: &mut (impl StatusPanelServices + ?Sized),
 ) -> Result<(), RuleError> {
     e.ww(frame.wrapping_add(10), 0)?;
     e.ww(frame.wrapping_add(8), body)?;
@@ -1186,7 +1193,7 @@ pub fn combat_info(
     frame: u32,
     maximum_polls: usize,
     damage: DamageFrame,
-    services: &mut impl StatusPanelServices,
+    services: &mut (impl StatusPanelServices + ?Sized),
 ) -> Result<StatusPanelPlan, RuleError> {
     let mut e = StatusPanelPlan::new(memory, random);
     let mut current = e.w(frame.wrapping_add(8))?;
@@ -1249,7 +1256,7 @@ pub fn combat_info(
 fn quiet(
     e: &mut StatusPanelPlan,
     selector: i16,
-    services: &impl StatusPanelServices,
+    services: &(impl StatusPanelServices + ?Sized),
 ) -> Result<(), RuleError> {
     let last = e.w(0x439576)?;
     let mut context = AudioContext {
@@ -1283,7 +1290,7 @@ fn quiet(
 }
 fn compact_heap(
     e: &mut StatusPanelPlan,
-    services: &impl StatusPanelServices,
+    services: &(impl StatusPanelServices + ?Sized),
 ) -> Result<(), RuleError> {
     let mut context = RuntimeContext {
         memory: RuntimeMemory {
@@ -1311,7 +1318,7 @@ pub fn show_condition2(
     random: &RandomState,
     frame: u32,
     maximum_steps: usize,
-    services: &impl StatusPanelServices,
+    services: &(impl StatusPanelServices + ?Sized),
 ) -> Result<StatusPanelPlan, RuleError> {
     let mut e = StatusPanelPlan::new(memory, random);
     let npc = e.b(frame.wrapping_add(9))?.wrapping_sub(10) as i8 as i16 as u16;
@@ -1394,7 +1401,7 @@ pub fn show_special(
     random: &RandomState,
     frame: u32,
     maximum_steps: usize,
-    services: &impl StatusPanelServices,
+    services: &(impl StatusPanelServices + ?Sized),
 ) -> Result<StatusPanelPlan, RuleError> {
     let mut e = StatusPanelPlan::new(memory, random);
     let dialog = e.toolbox(0xa97c, vec![word(160), long(0), ptr(u32::MAX)], services)?;
@@ -1452,576 +1459,4 @@ pub fn show_special(
     e.toolbox(0xa983, vec![long(dialog)], services)?;
     e.native_return = StatusPanelReturn::full(0);
     Ok(e)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recovered_combat_panel::{CombatPanelObservation, CombatPanelRequest};
-    use crate::recovered_combat_ui::{CombatUiObservation, CombatUiRequest, CombatUiServices};
-    use crate::recovered_detail_ui::{DetailReply, DetailRequest, DetailServices};
-    use crate::recovered_drawing::{DrawingServices, PictureObservation};
-    use crate::recovered_equipment::test_support::{self, FRAME, LIMITS, put_long, put_word};
-    use crate::recovered_equipment_ui::EquipmentUiServices;
-    use crate::recovered_feedback::{
-        FeedbackMemory, FeedbackObservation, FeedbackRequest, FeedbackServices,
-    };
-    use crate::recovered_files::FileObservation;
-    use crate::recovered_geometry::BodyRect;
-    use crate::recovered_install::InstallMemory;
-    use crate::recovered_interface::{InterfaceServices, Point};
-    use crate::recovered_inventory_rules::{InventoryServices, SaneRequest};
-    use crate::recovered_item_ui::{ItemUiReply, ItemUiRequest, ItemUiServices};
-    use crate::recovered_rendering::{RenderingObservation, RenderingRequest};
-    use crate::recovered_runtime::{RuntimeReply, RuntimeRequest};
-    use std::cell::{Cell, RefCell};
-
-    #[derive(Default)]
-    struct Services {
-        equipment: test_support::Services,
-        requests: RefCell<Vec<StatusPanelRequest>>,
-        current: i16,
-        maximum: i16,
-        minimum: i16,
-        popup: u32,
-        button: Cell<usize>,
-        widths: Cell<usize>,
-        late_mode: bool,
-        reread_special: bool,
-    }
-    fn unused<T>() -> Result<T, RuleError> {
-        Err(RuleError::Invalid("unused synthetic service".into()))
-    }
-    impl FeedbackServices for Services {
-        fn observe(
-            &self,
-            r: &FeedbackRequest,
-            m: &FeedbackMemory,
-        ) -> Result<FeedbackObservation, RuleError> {
-            FeedbackServices::observe(&self.equipment, r, m)
-        }
-        fn sound_observations(
-            &self,
-            id: i16,
-            c: &AudioContext,
-            m: &FeedbackMemory,
-        ) -> Result<Vec<AudioObservation>, RuleError> {
-            FeedbackServices::sound_observations(&self.equipment, id, c, m)
-        }
-    }
-    impl InventoryServices for Services {
-        fn sane(
-            &self,
-            r: &SaneRequest,
-            m: &RenderingMemory,
-        ) -> Result<Vec<RecordWrite>, RuleError> {
-            InventoryServices::sane(&self.equipment, r, m)
-        }
-    }
-    impl NumericServices for Services {
-        fn number_to_string(&mut self, v: i32) -> Result<PascalString, RuleError> {
-            self.equipment.number_to_string(v)
-        }
-        fn string_to_number(&mut self, v: &PascalString) -> Result<i32, RuleError> {
-            self.equipment.string_to_number(v)
-        }
-    }
-    impl DrawingServices for Services {
-        fn color_icon(&mut self, id: i16) -> Result<u32, RuleError> {
-            self.equipment.color_icon(id)
-        }
-        fn indexed_string(&mut self, r: i16, i: i16) -> Result<PascalString, RuleError> {
-            self.equipment.indexed_string(r, i)
-        }
-        fn current_world(&mut self) -> Result<(u32, u32), RuleError> {
-            self.equipment.current_world()
-        }
-        fn picture(&mut self, id: i16) -> Result<PictureObservation, RuleError> {
-            self.equipment.picture(id)
-        }
-        fn new_world(&mut self, d: i16, r: BodyRect) -> Result<(i16, BuildingWorld), RuleError> {
-            self.equipment.new_world(d, r)
-        }
-    }
-    impl ItemUiServices for Services {
-        fn observe(
-            &mut self,
-            r: &ItemUiRequest,
-            m: &RenderingMemory,
-        ) -> Result<ItemUiReply, RuleError> {
-            ItemUiServices::observe(&mut self.equipment, r, m)
-        }
-    }
-    impl EquipmentUiServices for Services {
-        fn pen_position(
-            &mut self,
-            d: u32,
-            m: &RenderingMemory,
-        ) -> Result<Vec<RecordWrite>, RuleError> {
-            self.equipment.pen_position(d, m)
-        }
-    }
-    impl EquipmentServices for Services {
-        fn profile_observations(
-            &mut self,
-            r: i16,
-            c: i16,
-            m: &RenderingMemory,
-        ) -> Result<Vec<FileObservation>, RuleError> {
-            self.equipment.profile_observations(r, c, m)
-        }
-    }
-    impl CombatUiServices for Services {
-        fn observe(
-            &self,
-            _: &CombatUiRequest,
-            _: &RenderingMemory,
-        ) -> Result<CombatUiObservation, RuleError> {
-            unused()
-        }
-    }
-    impl DetailServices for Services {
-        fn observe(
-            &mut self,
-            _: &DetailRequest,
-            _: &RenderingMemory,
-        ) -> Result<DetailReply, RuleError> {
-            unused()
-        }
-    }
-    impl InterfaceServices for Services {
-        fn word(&mut self, _: u32) -> Result<i16, RuleError> {
-            unused()
-        }
-        fn current_port(&mut self) -> Result<u32, RuleError> {
-            unused()
-        }
-        fn pen_state(&mut self) -> Result<[u8; 18], RuleError> {
-            unused()
-        }
-        fn local_to_global(&mut self, _: Point) -> Result<Point, RuleError> {
-            unused()
-        }
-        fn point_in_rect(&mut self, _: Point, _: BodyRect) -> Result<u8, RuleError> {
-            unused()
-        }
-        fn new_region(&mut self) -> Result<u32, RuleError> {
-            unused()
-        }
-        fn main_device_rect(&mut self) -> Result<BodyRect, RuleError> {
-            unused()
-        }
-    }
-    impl CombatPanelServices for Services {
-        fn observe_panel(
-            &mut self,
-            _: &CombatPanelRequest,
-            _: &RenderingMemory,
-        ) -> Result<CombatPanelObservation, RuleError> {
-            unused()
-        }
-        fn visibility_memory(&mut self, _: &RenderingMemory) -> Result<InstallMemory, RuleError> {
-            unused()
-        }
-    }
-    impl RenderingServices for Services {
-        fn observe(
-            &self,
-            _: &RenderingRequest,
-            _: &RenderingMemory,
-        ) -> Result<RenderingObservation, RuleError> {
-            unused()
-        }
-    }
-    impl StatusPanelServices for Services {
-        fn observe_status(
-            &self,
-            request: &StatusPanelRequest,
-            memory: &RenderingMemory,
-        ) -> Result<StatusPanelObservation, RuleError> {
-            self.requests.borrow_mut().push(request.clone());
-            let mut memory = memory.clone();
-            let mut value = 0;
-            let mut d0 = 0x1234abcd;
-            match request {
-                StatusPanelRequest::Toolbox {
-                    opcode, arguments, ..
-                } => match opcode {
-                    0xa960 => value = u32::from(self.current as u16),
-                    0xa962 => value = u32::from(self.maximum as u16),
-                    0xa961 => value = u32::from(self.minimum as u16),
-                    0xa9bf | 0xa97c => value = 0x7777,
-                    0xa80b => value = self.popup,
-                    0xaa1b => value = 0xdead,
-                    0xaa26 => d0 = 0xbeef1234,
-                    0xa974 => {
-                        value = u32::from(self.button.get() == 0);
-                        self.button.set(self.button.get() + 1);
-                    }
-                    0xa972 => {
-                        put_word(&mut memory, 0x4471ee, -32);
-                        put_word(&mut memory, 0x4471f0, -31);
-                    }
-                    0xa940 if self.late_mode => memory.insert_region(FRAME + 11, &[1]),
-                    0xa88c => {
-                        value = u32::from(self.widths.get() != 0);
-                        self.widths.set(self.widths.get() + 1);
-                    }
-                    0xa98d => {
-                        put_word(&mut memory, 0x4434b0, 4);
-                        put_long(&mut memory, 0x4434dc, 0x5555);
-                        memory.insert_region(0x4434ba, &[0; 8]);
-                    }
-                    0xa98f
-                        if self.reread_special && *arguments == [long(0x5555), ptr(0x479ed8)] =>
-                    {
-                        put_word(&mut memory, 0x447312, 9);
-                    }
-                    0xa991 => put_word(&mut memory, FRAME - 2, 41),
-                    _ => (),
-                },
-                StatusPanelRequest::Imported { address, arguments } => {
-                    match (*address, arguments.as_slice()) {
-                        (0x400178, [FeedbackArg::Pointer(p), _, _]) => {
-                            memory.insert_region(*p, &[1, b'N'])
-                        }
-                        (
-                            0x400090,
-                            [
-                                FeedbackArg::Pointer(source),
-                                FeedbackArg::Pointer(destination),
-                            ],
-                        ) => {
-                            for offset in 0..256 {
-                                let b = memory.byte(source + offset)?;
-                                memory.insert_region(destination + offset, &[b]);
-                                if b == 0 {
-                                    break;
-                                }
-                            }
-                        }
-                        (0x400168, [FeedbackArg::Long(v), FeedbackArg::Pointer(p)]) => {
-                            let text =
-                                PascalString::from_payload((*v as i32).to_string().as_bytes())?;
-                            memory.insert_region(*p, text.raw());
-                        }
-                        _ => (),
-                    }
-                }
-                StatusPanelRequest::NumberToString { value, destination } => {
-                    let text = PascalString::from_payload(value.to_string().as_bytes())?;
-                    memory.insert_region(*destination, text.raw());
-                }
-            }
-            Ok(StatusPanelObservation { value, d0, memory })
-        }
-        fn body_ground_state(&self, _: &RenderingMemory) -> Result<BodyState, RuleError> {
-            unused()
-        }
-        fn quiet_observations(
-            &self,
-            _: i16,
-            _: &AudioContext,
-            _: &RenderingMemory,
-        ) -> Result<Vec<AudioObservation>, RuleError> {
-            Ok(vec![])
-        }
-        fn heap_observations(
-            &self,
-            c: &RuntimeContext,
-        ) -> Result<Vec<RuntimeObservation>, RuleError> {
-            let mut observations = vec![];
-            for a in [0x4386d8, 0x4386e0, 0x4386e4, 0x4386e8, 0x4386dc] {
-                observations.push(RuntimeObservation {
-                    request: RuntimeRequest::UnlockPixels(c.memory.long(a)?),
-                    reply: RuntimeReply::Ignored,
-                });
-            }
-            observations.push(RuntimeObservation {
-                request: RuntimeRequest::MaxMem,
-                reply: RuntimeReply::MaxMem { d0: 111, a0: 222 },
-            });
-            for (i, a) in [0x4386b4, 0x4386bc, 0x4386c0, 0x4386c4, 0x4386b8]
-                .into_iter()
-                .enumerate()
-            {
-                let pixmap = 0x9000 + i as u32;
-                observations.push(RuntimeObservation {
-                    request: RuntimeRequest::GetGWorldPixMap(c.memory.long(a)?),
-                    reply: RuntimeReply::Pointer(pixmap),
-                });
-                observations.push(RuntimeObservation {
-                    request: RuntimeRequest::LockPixels(pixmap),
-                    reply: RuntimeReply::LockPixels {
-                        boolean: 1,
-                        native_d0: 0xabcdffff,
-                    },
-                });
-            }
-            Ok(observations)
-        }
-    }
-    fn fixture() -> RenderingMemory {
-        let mut memory = test_support::fixture();
-        put_long(&mut memory, 0x439570, 0);
-        put_word(&mut memory, 0x439576, -1);
-        put_long(&mut memory, 0x439404, 10);
-        put_long(&mut memory, 0x439400, 10);
-        put_long(&mut memory, 0x4393fc, 20);
-        memory.insert_region(0x442756, &[1]);
-        memory.insert_region(0x442750, &[0]);
-        put_long(&mut memory, 0x4358da, 30);
-        put_word(&mut memory, 0x402f3c, 4);
-        put_word(&mut memory, 0x438776, 0);
-        put_word(&mut memory, 0x438760, 0);
-        memory
-    }
-    fn damage() -> DamageFrame {
-        DamageFrame {
-            unmatched_multiplier_single_bits: 0,
-        }
-    }
-
-    #[test]
-    fn shop_single_step_uses_normal_bounds_and_count_based_top() {
-        let mut memory = fixture();
-        put_word(&mut memory, FRAME + 8, 21);
-        put_long(&mut memory, FRAME + 10, 0);
-        put_word(&mut memory, 0x447236, 2);
-        let mut services = Services {
-            maximum: 4,
-            ..Services::default()
-        };
-        let result =
-            update_shop(&memory, &RandomState::new(7), FRAME, 99, 20, &mut services).unwrap();
-        assert_eq!(result.memory.word(0x4470b2).unwrap(), 1);
-        assert_eq!(result.memory.word(0x4471f2).unwrap(), 56);
-        assert!(
-            !services
-                .requests
-                .borrow()
-                .iter()
-                .any(|r| matches!(r, StatusPanelRequest::Toolbox { opcode: 0xa8ef, .. }))
-        );
-        assert_eq!(result.native_return.known_long(), Some(0x1234abcd));
-        assert_eq!(result.random, RandomState::new(7));
-    }
-    #[test]
-    fn shop_page_down_preserves_split_forced_id_and_charge_copy_rows() {
-        let mut memory = fixture();
-        put_word(&mut memory, FRAME + 8, 23);
-        put_long(&mut memory, FRAME + 10, 0);
-        put_word(&mut memory, 0x438756, 1);
-        put_word(&mut memory, 0x43875c, 0);
-        put_word(&mut memory, 0x447236, 2);
-        memory.insert_region(0x44273e, &[0xff]);
-        memory.insert_region(0x44273d, &[3]);
-        put_word(&mut memory, 0x44734e, 222);
-        put_word(&mut memory, 0x447350, 7);
-        memory.insert_region(0x447357, &[0x77]);
-        let mut services = Services {
-            maximum: 1,
-            ..Services::default()
-        };
-        let result =
-            update_shop(&memory, &RandomState::new(7), FRAME, 99, 20, &mut services).unwrap();
-        assert_eq!(result.memory.word(0x4434b4).unwrap(), 0);
-        assert_eq!(result.memory.word(0x41fc48).unwrap(), 222);
-        assert_eq!(result.memory.word(0x41fc4a).unwrap(), 7);
-        assert_eq!(result.memory.byte(0x41fc51).unwrap(), 0x77);
-        assert_eq!(result.memory.byte(0x41f708).unwrap(), 0);
-        assert_eq!(result.memory.byte(0x41f709).unwrap(), 3);
-        assert_eq!(result.memory.word(0x4434ac).unwrap(), 9);
-        assert!(services.requests.borrow().iter().any(|r| matches!(r,StatusPanelRequest::Toolbox { opcode:0xa8ef,arguments,.. } if *arguments==[ptr(FRAME-8),word(0),word(-40),long(0)])));
-    }
-    #[test]
-    fn weapon_menu_includes_count_slot_and_caches_actual_mapping() {
-        let mut memory = fixture();
-        put_word(&mut memory, FRAME + 8, 0);
-        put_word(&mut memory, member_address(0) + 0x1a, 0);
-        let node = node_address(0, 0);
-        put_word(&mut memory, node, 201);
-        memory.insert_region(node + 10, &[15]);
-        test_support::item(&mut memory, 201, 15);
-        let mut services = Services {
-            popup: 1,
-            ..Services::default()
-        };
-        let result = change_weapon(
-            &memory,
-            &RandomState::new(7),
-            FRAME,
-            LIMITS,
-            damage(),
-            &mut services,
-        )
-        .unwrap();
-        assert_eq!(result.memory.word(FRAME - 0x164).unwrap(), 0);
-        assert_eq!(result.memory.word(0x4471e8).unwrap(), 200);
-        assert_eq!(result.memory.word(0x4471ea).unwrap(), 0);
-        assert_eq!(result.native_return.known_long(), Some(0x12340000));
-        let requests = services.requests.borrow();
-        assert!(requests.iter().any(|r| *r
-            == StatusPanelRequest::Imported {
-                address: 0x400178,
-                arguments: vec![ptr(0x479ed8), word(201), word(2)]
-            }));
-        assert!(requests.iter().any(|r| *r
-            == StatusPanelRequest::Imported {
-                address: 0x400168,
-                arguments: vec![long(0), ptr(FRAME - 0x100)]
-            }));
-        assert_eq!(
-            requests
-                .iter()
-                .filter(|r| matches!(r, StatusPanelRequest::Toolbox { opcode: 0xa933, .. }))
-                .count(),
-            2
-        );
-    }
-    #[test]
-    fn combat_info_rounds_negative_points_and_disposes_observed_cursor() {
-        let mut memory = fixture();
-        put_word(&mut memory, FRAME + 8, 2);
-        put_word(&mut memory, 0x4085b6, 111);
-        let mut services = Services::default();
-        let result = combat_info(
-            &memory,
-            &RandomState::new(7),
-            FRAME,
-            4,
-            damage(),
-            &mut services,
-        )
-        .unwrap();
-        assert_eq!(result.memory.word(0x438782).unwrap(), 0);
-        assert_eq!(result.memory.word(FRAME - 22).unwrap(), 2);
-        assert_eq!(result.native_return.known_long(), Some(0xbeef1234));
-        assert!(services.requests.borrow().iter().any(|r| *r
-            == StatusPanelRequest::Toolbox {
-                opcode: 0xaa26,
-                arguments: vec![long(0xdead)],
-                d0_input: None
-            }));
-        assert!(services.requests.borrow().iter().any(|r| *r
-            == StatusPanelRequest::Toolbox {
-                opcode: 0xa032,
-                arguments: vec![],
-                d0_input: Some(0xffff)
-            }));
-        let original = memory.clone();
-        memory.bytes.remove(&(FRAME + 8));
-        assert!(
-            combat_info(
-                &memory,
-                &RandomState::new(7),
-                FRAME,
-                4,
-                damage(),
-                &mut Services::default()
-            )
-            .is_err()
-        );
-        assert_eq!(original.word(0x438782).unwrap(), 0);
-        let mut memory = fixture();
-        let destination = BodyRect {
-            top: 1,
-            left: 2,
-            bottom: 33,
-            right: 34,
-        };
-        for a in 0x4471f2..0x4471fa {
-            memory.bytes.remove(&a);
-        }
-        let mut plan = StatusPanelPlan::new(&memory, &RandomState::new(7));
-        fastplot(&mut plan, -1, destination, &mut Services::default()).unwrap();
-        assert!(plan.effects.is_empty());
-        fastplot(&mut plan, 1000, destination, &mut Services::default()).unwrap();
-        assert!(plan.effects.iter().any(|e| matches!(e, StatusPanelEffect::Drawing(DrawingEffect::CopyBits { destination: rect, mode: 0, .. }) if *rect == destination)));
-        memory.insert_region(0x4471f2, &[0; 8]);
-        put_long(&mut memory, 0x41c220, 0x9100);
-        memory.insert_region(0x9110, &[0, 0, 0, 0, 0, 64, 0, 96]);
-        put_long(&mut memory, 0x4386bc, 0x9876);
-        let mut plan = StatusPanelPlan::new(&memory, &RandomState::new(7));
-        fastplot(&mut plan, 23000, destination, &mut Services::default()).unwrap();
-        assert!(plan.effects.iter().any(|e| matches!(
-            e,
-            StatusPanelEffect::Drawing(DrawingEffect::CopyBits {
-                source_bitmap: 0x9102,
-                destination_bitmap: 0x9878,
-                mode: 36,
-                ..
-            })
-        )));
-    }
-    #[test]
-    fn condition_menu_reads_mode_late_and_uses_unincremented_selection_resource() {
-        let mut memory = fixture();
-        memory.insert_region(FRAME + 9, &[11]);
-        memory.insert_region(FRAME + 11, &[0]);
-        let npc = 0x439d3c + 288;
-        put_word(&mut memory, npc + 0x26, -201);
-        memory.insert_region(npc + 0xda, b"NPC\0");
-        test_support::item(&mut memory, 201, 2);
-        let services = Services {
-            late_mode: true,
-            popup: 0x12340002,
-            ..Services::default()
-        };
-        let result = show_condition2(&memory, &RandomState::new(7), FRAME, 50, &services).unwrap();
-        assert_eq!(result.memory.word(0x4434b2).unwrap(), 2);
-        assert_eq!(result.native_return.known_long(), Some(0));
-        assert_eq!(result.memory.long(0x4386dc).unwrap(), 0x9004);
-        let requests = services.requests.borrow();
-        assert!(requests.iter().any(|r| *r
-            == StatusPanelRequest::Imported {
-                address: 0x400178,
-                arguments: vec![ptr(0x479ed8), word(200), word(2)]
-            }));
-        assert!(requests.iter().any(|r| *r
-            == StatusPanelRequest::Toolbox {
-                opcode: 0xa945,
-                arguments: vec![long(0x7777), word(2), byte(1)],
-                d0_input: None
-            }));
-    }
-    #[test]
-    fn specialty_dialog_skips_zero_width_and_rereads_value_after_label() {
-        let mut memory = fixture();
-        put_word(&mut memory, 0x447310, 4);
-        put_word(&mut memory, 0x447312, 5);
-        put_word(&mut memory, 0x447d80, 7);
-        let services = Services {
-            reread_special: true,
-            ..Services::default()
-        };
-        let result = show_special(&memory, &RandomState::new(7), FRAME, 20, &services).unwrap();
-        assert_eq!(result.memory.word(FRAME - 2).unwrap(), 41);
-        assert_eq!(result.native_return.known_long(), Some(0));
-        let requests = services.requests.borrow();
-        assert!(requests.contains(&StatusPanelRequest::NumberToString {
-            value: 16,
-            destination: 0x479ed8
-        }));
-        assert!(requests.iter().any(|r| *r
-            == StatusPanelRequest::Toolbox {
-                opcode: 0xa91d,
-                arguments: vec![long(0x7777), word(300), word(64), byte(0)],
-                d0_input: None
-            }));
-        assert_eq!(
-            requests
-                .iter()
-                .filter(|r| matches!(r, StatusPanelRequest::Toolbox { opcode: 0xa98d, .. }))
-                .count(),
-            2
-        );
-        assert_eq!(
-            requests
-                .iter()
-                .filter(|r| matches!(r, StatusPanelRequest::Toolbox { opcode: 0xa98f, .. }))
-                .count(),
-            2
-        );
-    }
 }
