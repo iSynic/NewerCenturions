@@ -1,6 +1,12 @@
 #requires -Version 7.0
-param([switch]$Package, [switch]$OriginalFixtures, [switch]$ExtendedScenarios)
+param(
+    [switch]$Package, [switch]$OriginalFixtures, [switch]$ExtendedScenarios,
+    [ValidateRange(1, 64)][int]$BuildJobs = 1,
+    [switch]$AllowCompilerParallelism,
+    [switch]$Timings
+)
 $ErrorActionPreference = 'Stop'
+$cargoOptions = @{ BuildJobs = $BuildJobs; AllowCompilerParallelism = $AllowCompilerParallelism; Timings = $Timings }
 $taskRoot = Split-Path $PSScriptRoot -Parent
 Push-Location $taskRoot
 try {
@@ -22,20 +28,20 @@ try {
     cargo fmt --check
     if ($LASTEXITCODE) { throw 'Formatting failed' }
     if ($verifyOriginals) {
-        & "$PSScriptRoot/Run-Tests.ps1" -OriginalFixtures -MaximumTestSeconds 300
+        & "$PSScriptRoot/Run-Tests.ps1" -OriginalFixtures -MaximumTestSeconds 300 @cargoOptions
     } else {
-        & "$PSScriptRoot/Run-Tests.ps1" -MaximumTestSeconds 300
+        & "$PSScriptRoot/Run-Tests.ps1" -MaximumTestSeconds 300 @cargoOptions
     }
     if ($LASTEXITCODE) { throw 'Tests failed' }
-    & "$PSScriptRoot/Run-Tests.ps1" -ManifestPath vendor/miniquad/Cargo.toml -Library -TargetDirectory target/miniquad-check
+    & "$PSScriptRoot/Run-Tests.ps1" -ManifestPath vendor/miniquad/Cargo.toml -Library -TargetDirectory target/miniquad-check @cargoOptions
     if ($LASTEXITCODE) { throw 'Windows keyboard compatibility tests failed' }
     if ($verifyOriginals) {
-        & "$PSScriptRoot/Run-Cargo.ps1" -Action Clippy -AllTargets -OriginalFixtures
+        & "$PSScriptRoot/Run-Cargo.ps1" -Action Clippy -AllTargets -OriginalFixtures @cargoOptions
     } else {
-        & "$PSScriptRoot/Run-Cargo.ps1" -Action Clippy -AllTargets
+        & "$PSScriptRoot/Run-Cargo.ps1" -Action Clippy -AllTargets @cargoOptions
     }
     if ($LASTEXITCODE) { throw 'Clippy failed' }
-    & "$PSScriptRoot/Run-Cargo.ps1" -Action Build -Release
+    & "$PSScriptRoot/Run-Cargo.ps1" -Action Build -Release @cargoOptions
     if ($LASTEXITCODE) { throw 'Release build failed' }
     if ($verifyOriginals) {
         if ($ExtendedScenarios) {

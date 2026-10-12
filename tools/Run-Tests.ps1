@@ -7,6 +7,9 @@ param(
     [string]$ManifestPath,
     [string]$TargetDirectory,
     [switch]$Library,
+    [ValidateRange(1, 64)][int]$BuildJobs = 1,
+    [switch]$AllowCompilerParallelism,
+    [switch]$Timings,
     [ValidateRange(16, 4096)][int]$MaximumMemoryMiB = 512,
     [ValidateRange(1, 600)][int]$MaximumTestSeconds = 60
 )

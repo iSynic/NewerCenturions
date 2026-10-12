@@ -10,6 +10,9 @@ param(
     [switch]$Library,
     [switch]$AllTargets,
     [switch]$Release,
+    [ValidateRange(1, 64)][int]$BuildJobs = 1,
+    [switch]$AllowCompilerParallelism,
+    [switch]$Timings,
     [ValidateRange(16, 4096)][int]$MaximumMemoryMiB = 512,
     [ValidateRange(1, 600)][int]$MaximumTestSeconds = 60
 )
@@ -17,14 +20,15 @@ $ErrorActionPreference = 'Stop'
 if ($Filter -and $Action -ne 'Test') { throw 'A test filter requires -Action Test.' }
 if ($TestTarget -and ($Action -ne 'Test' -or $Library)) { throw 'A named test target requires -Action Test without -Library.' }
 $taskRoot = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
-$cargoPath = (Get-Command cargo -CommandType Application).Source
+$cargoPath = (Get-Command cargo -CommandType Application | Select-Object -First 1).Source
 $startInfo = [Diagnostics.ProcessStartInfo]::new($cargoPath)
 $startInfo.WorkingDirectory = $taskRoot
 $startInfo.UseShellExecute = $false
 $startInfo.CreateNoWindow = $true
 $startInfo.RedirectStandardOutput = $true
 $startInfo.RedirectStandardError = $true
-foreach ($argument in @($Action.ToLowerInvariant(), '--jobs', '1')) { $startInfo.ArgumentList.Add($argument) }
+foreach ($argument in @($Action.ToLowerInvariant(), '--jobs', $BuildJobs.ToString())) { $startInfo.ArgumentList.Add($argument) }
+if ($Timings) { $startInfo.ArgumentList.Add('--timings') }
 if ($ManifestPath) {
     $startInfo.ArgumentList.Add('--manifest-path')
     $startInfo.ArgumentList.Add($ManifestPath)
@@ -207,8 +211,19 @@ namespace CenturionsBuild
 $job = $null
 $guardProcess = $null
 $jobAssigned = $false
-$standardOutput = $null
-$standardError = $null
+$streams = @()
+function Receive-CargoOutput($stream) {
+    $lines = 0
+    while ($stream.Task -and $stream.Task.IsCompleted -and $lines -lt 100) {
+        $line = $stream.Task.GetAwaiter().GetResult()
+        if ($null -eq $line) { $stream.Task = $null; break }
+        Write-Output $line
+        $lines++
+        $stream.Task = $stream.Reader.ReadLineAsync()
+    }
+}
+$elapsed = [Diagnostics.Stopwatch]::StartNew()
+$lastProgressSeconds = 0
 $testStarted = @{}
 $peakResidentBytes = 0L
 $failure = $null
@@ -222,18 +237,23 @@ try {
         if (-not $guardProcess.HasExited) { $guardProcess.Kill($true) }
         throw
     }
-    $standardOutput = $guardProcess.StandardOutput.ReadToEndAsync()
-    $standardError = $guardProcess.StandardError.ReadToEndAsync()
+    $streams = @(
+        @{ Reader = $guardProcess.StandardOutput; Task = $guardProcess.StandardOutput.ReadLineAsync() },
+        @{ Reader = $guardProcess.StandardError; Task = $guardProcess.StandardError.ReadLineAsync() }
+    )
     try {
         $guardProcess.PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal
-        $guardProcess.ProcessorAffinity = [IntPtr]1
+        if (-not $AllowCompilerParallelism) { $guardProcess.ProcessorAffinity = [IntPtr]1 }
     } catch {
         if (-not $guardProcess.HasExited) { throw }
     }
     $guardProcess.StandardInput.WriteLine('start')
     $guardProcess.StandardInput.Flush()
     $guardProcess.StandardInput.Close()
+    Write-Output "Starting Cargo $Action; jobs=$BuildJobs; compiler parallelism=$AllowCompilerParallelism."
     while (-not $guardProcess.HasExited) {
+        foreach ($stream in $streams) { Receive-CargoOutput $stream }
+        $activeProcesses = [Collections.Generic.HashSet[string]]::new()
         foreach ($processId in $job.ProcessIds()) {
             $ownedProcess = Get-Process -Id $processId -ErrorAction SilentlyContinue
             if (-not $ownedProcess) { continue }
@@ -241,12 +261,14 @@ try {
                 # A live handle plus actual job membership prevents PID reuse
                 # from classifying another invocation's process as ours.
                 if (-not $job.Contains($ownedProcess.Handle)) { continue }
+                $null = $activeProcesses.Add($ownedProcess.ProcessName)
                 $ownedProcess.PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal
-                $ownedProcess.ProcessorAffinity = [IntPtr]1
+                if (-not $AllowCompilerParallelism) { $ownedProcess.ProcessorAffinity = [IntPtr]1 }
                 $executable = $ownedProcess.MainModule.FileName
                 if ($executable -notmatch '[\\/]deps[\\/][^\\/]+\.exe$' -and
                     $executable -notmatch '[\\/]rustdoctest[^\\/]*[\\/].*\.exe$' -and
                     [IO.Path]::GetFileName($executable) -ine 'rust_out.exe') { continue }
+                $ownedProcess.ProcessorAffinity = [IntPtr]1
                 $identity = '{0}:{1}' -f $ownedProcess.Id, $ownedProcess.StartTime.ToUniversalTime().Ticks
                 if (-not $testStarted.ContainsKey($identity)) {
                     $testStarted[$identity] = [Diagnostics.Stopwatch]::StartNew()
@@ -267,6 +289,10 @@ try {
             if ($failure) { break }
         }
         if ($failure) { break }
+        if ($elapsed.Elapsed.TotalSeconds - $lastProgressSeconds -ge 30) {
+            Write-Output ("Cargo {0}: {1:N0}s elapsed; active: {2}" -f $Action, $elapsed.Elapsed.TotalSeconds, (($activeProcesses | Sort-Object) -join ', '))
+            $lastProgressSeconds = $elapsed.Elapsed.TotalSeconds
+        }
         Start-Sleep -Milliseconds 200
         $guardProcess.Refresh()
     }
@@ -282,14 +308,15 @@ try {
             if (-not $jobAssigned -and -not $guardProcess.HasExited) { $guardProcess.Kill($true) }
             $null = $guardProcess.WaitForExit(5000)
         }
-        foreach ($streamTask in @($standardOutput, $standardError)) {
-            if (-not $streamTask) { continue }
-            if ($streamTask.Wait(5000)) {
-                Write-Output ($streamTask.GetAwaiter().GetResult())
-            } else {
-                Write-Warning 'Output stream did not close within five seconds after process cleanup.'
+        foreach ($stream in $streams) {
+            $drain = [Diagnostics.Stopwatch]::StartNew()
+            while ($stream.Task -and $drain.Elapsed.TotalSeconds -lt 5) {
+                Receive-CargoOutput $stream
+                if ($stream.Task) { Start-Sleep -Milliseconds 20 }
             }
+            if ($stream.Task) { Write-Warning 'Output stream did not close within five seconds after process cleanup.' }
         }
+        Write-Output ("Cargo {0} duration: {1:N1}s." -f $Action, $elapsed.Elapsed.TotalSeconds)
         if ($testStarted.Count) {
             Write-Output ("Observed test peak: {0:N1} MiB; memory ceiling: {1} MiB; one logical CPU." -f ($peakResidentBytes / 1MB), $MaximumMemoryMiB)
         }
