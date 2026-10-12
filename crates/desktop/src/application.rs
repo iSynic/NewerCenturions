@@ -33,6 +33,15 @@ mod tests {
         let mut state = Session::new(&content);
         let before = state.clone();
         let mut application = Application::at(Screen::Squad, 0.);
+        application
+            .handle(ApplicationAction::Done, &mut state, &content)
+            .unwrap();
+        assert_eq!(application.screen, Screen::Title);
+        assert_eq!(state, before);
+        assert!(application.supported(129, 1, &state));
+        assert!(!application.supported(200, 1, &state));
+        assert!(application.supported(130, 1, &state));
+        application = Application::at(Screen::Squad, 0.);
         for i in [5, 2, 0, 4, 1] {
             application
                 .handle(ApplicationAction::Warrior(i), &mut state, &content)
@@ -60,6 +69,8 @@ mod tests {
             .unwrap();
         assert_eq!(application.screen, Screen::Game);
         assert_eq!(state.phase, Phase::Exploration);
+        assert!(application.supported(129, 3, &state));
+        assert!(!application.supported(129, 1, &state));
         assert_eq!(state.random, before.random);
         assert_eq!(
             state.warriors.iter().map(|w| &w.name).collect::<Vec<_>>(),
@@ -75,38 +86,6 @@ mod tests {
                 Event::MissionEntered { .. }
             ]
         ));
-    }
-
-    #[test]
-    fn empty_done_returns_to_title_without_mutating_rules() {
-        let content = content();
-        let mut state = Session::new(&content);
-        let before = state.clone();
-        let mut application = Application::at(Screen::Squad, 0.);
-        application
-            .handle(ApplicationAction::Done, &mut state, &content)
-            .unwrap();
-        assert_eq!(application.screen, Screen::Title);
-        assert_eq!(state, before);
-    }
-
-    #[test]
-    fn original_phase_gates_disable_initial_maps_and_combat_save() {
-        let content = content();
-        let mut state = Session::new(&content);
-        let mut application = Application::at(Screen::Title, 0.);
-        assert!(application.supported(129, 1, &state));
-        assert!(!application.supported(200, 1, &state));
-        assert!(application.supported(130, 1, &state));
-        application.squad = (0..6).collect();
-        application
-            .handle(ApplicationAction::Done, &mut state, &content)
-            .unwrap();
-        assert!(application.supported(129, 3, &state));
-        assert!(!application.supported(129, 1, &state));
-        state.phase = Phase::Combat;
-        assert!(!application.supported(129, 3, &state));
-        assert!(!application.supported(200, 1, &state));
     }
 
     #[test]
@@ -137,6 +116,8 @@ mod tests {
         assert_eq!(state, before);
         let mut application = Application::at(Screen::Game, 0.);
         state.phase = Phase::Combat;
+        assert!(!application.supported(129, 3, &state));
+        assert!(!application.supported(200, 1, &state));
         let before = state.clone();
         application
             .handle(ApplicationAction::Menu(129, 6), &mut state, &content)

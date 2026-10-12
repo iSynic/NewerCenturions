@@ -15,7 +15,7 @@ def public_path(name: str) -> bool:
     path = PurePosixPath(name)
     if path.is_absolute() or ".." in path.parts or "\\" in name:
         return False
-    if name in TOP_LEVEL or name in {"docs/public-readme.md", ".github/workflows/build.yml"}:
+    if name in TOP_LEVEL or name in {"docs/public-readme.md", "docs/reconstruction.md", ".github/workflows/build.yml"}:
         return True
     if name in PRIVATE_TOOLS:
         return False

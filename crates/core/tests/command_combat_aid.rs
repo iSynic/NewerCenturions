@@ -412,22 +412,6 @@ fn medical_admission_and_unknown_legacy_marker_leave_complete_session_and_rng_un
 }
 
 #[test]
-fn recovered_medical_sound_resources_decode_from_unchanged_originals() {
-    let (content, _) = fixture();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../analysis/extracted");
-    for id in [631, 6000, 10105, 10122] {
-        let resource = content
-            .resources
-            .iter()
-            .find(|r| r.r#type == "snd " && r.id == id)
-            .unwrap();
-        let original = centurions_content::read_resource(&root, resource).unwrap();
-        let sample = centurions_content::audio::decode_snd(&original).unwrap();
-        assert!(!sample.samples.is_empty(), "sound {id}");
-    }
-}
-
-#[test]
 fn existing_v3_prepared_needles_load_with_their_original_origin_and_costs() {
     let (content, fixture) = fixture();
     let case = &fixture["stim_cases"][0];

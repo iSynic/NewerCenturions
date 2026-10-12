@@ -6,6 +6,28 @@ use std::path::Path;
 use thiserror::Error;
 
 pub mod rules {
+    /// CODE 1 pin, 0x13f65e. Sequential comparisons also define reversed bounds.
+    pub fn pin(mut value: i16, minimum: i16, maximum: i16) -> i16 {
+        if value < minimum {
+            value = minimum;
+        }
+        if value > maximum {
+            value = maximum;
+        }
+        value
+    }
+
+    /// CODE 1 getnumspells, 0x125512: ADD.W leaves the product's upper word intact.
+    pub fn spell_count(level: i16) -> i32 {
+        let square = i32::from(level) * i32::from(level);
+        (square & !0xffff) | i32::from((square as u16).wrapping_add(16))
+    }
+
+    /// CODE 1 getselection, 0x125a08: signed quotient, rounded toward zero.
+    pub fn selection_base(selection: i16) -> i16 {
+        (selection / 200).wrapping_mul(200)
+    }
+
     pub fn inclusive_range(value: i16, minimum: i16, maximum: i16) -> bool {
         value >= minimum && value <= maximum
     }
@@ -53,7 +75,7 @@ impl RandomState {
         rules::random_bound(bound, self.quickdraw())
     }
     pub fn range(&mut self, min: i16, max: i16) -> i16 {
-        rules::random_range(min, max, self.quickdraw())
+        recovered_ai::random_range(min, max, self)
     }
 }
 
@@ -385,6 +407,11 @@ pub enum Presentation {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
+    PoolCredits,
+    ShareCredits,
+    RecalculateStatistics {
+        warrior: usize,
+    },
     ImportStarters,
     SelectStarters {
         indices: Vec<usize>,
@@ -493,6 +520,15 @@ pub enum Command {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Event {
+    CreditsPooled {
+        total: i32,
+    },
+    CreditsShared {
+        each: i16,
+    },
+    StatisticsCalculated {
+        warrior: usize,
+    },
     StartersImported {
         count: usize,
     },
@@ -948,6 +984,23 @@ fn apply_inner(
         ));
     }
     match command {
+        Command::PoolCredits => {
+            party::pool_credits(&mut state.warriors, &mut state.party_currency)?;
+            Ok(vec![Event::CreditsPooled {
+                total: state.party_currency,
+            }])
+        }
+        Command::ShareCredits => {
+            let each = party::share_credits(&mut state.warriors, &mut state.party_currency)?;
+            Ok(vec![Event::CreditsShared { each }])
+        }
+        Command::RecalculateStatistics { warrior } => {
+            let record = state.warriors.get_mut(warrior).ok_or_else(|| {
+                RuleError::Invalid("statistics warrior is outside the squad".into())
+            })?;
+            character::calculate_statistics(record)?;
+            Ok(vec![Event::StatisticsCalculated { warrior }])
+        }
         Command::ImportStarters | Command::SelectStarters { .. } => {
             if state.phase != Phase::SquadSelection {
                 return Err(RuleError::Invalid("squad already entered a mission".into()));
@@ -1180,9 +1233,81 @@ fn initial_flags() -> Vec<u8> {
 }
 
 pub mod ammunition;
+pub mod character;
 pub mod combat;
 pub mod equipment;
 mod exploration;
+pub mod party;
+pub mod reconstruction;
+pub mod recovered_ai;
+pub mod recovered_application_children;
+pub mod recovered_application_control;
+pub mod recovered_attack;
+pub mod recovered_audio;
+pub mod recovered_battle_order;
+pub mod recovered_bodies;
+pub mod recovered_character_creation;
+pub mod recovered_character_panels;
+pub mod recovered_character_ui;
+pub mod recovered_character_upgrade;
+pub mod recovered_combat_center;
+pub mod recovered_combat_panel;
+pub mod recovered_combat_results;
+pub mod recovered_combat_setup;
+pub mod recovered_combat_ui;
+pub mod recovered_core_control;
+pub mod recovered_detail_ui;
+pub mod recovered_drawing;
+pub mod recovered_economy;
+pub mod recovered_equipment;
+pub mod recovered_equipment_ui;
+pub mod recovered_fade_ui;
+pub mod recovered_feedback;
+pub mod recovered_field_control;
+pub mod recovered_files;
+pub mod recovered_gameplay_control;
+pub mod recovered_gameplay_leaves;
+pub mod recovered_gamma;
+pub mod recovered_gamma_control;
+pub mod recovered_geometry;
+pub mod recovered_install;
+pub mod recovered_interface;
+pub mod recovered_inventory;
+pub mod recovered_inventory_edit;
+pub mod recovered_inventory_interaction;
+pub mod recovered_inventory_rules;
+pub mod recovered_inventory_selection;
+pub mod recovered_item_ui;
+pub mod recovered_load_control;
+pub mod recovered_loot_control;
+pub mod recovered_main_control;
+pub mod recovered_native_services;
+pub mod recovered_navigation;
+pub mod recovered_order_form;
+pub mod recovered_preferences;
+pub mod recovered_preparation;
+pub mod recovered_prompt_control;
+pub mod recovered_random_item;
+pub mod recovered_records;
+pub mod recovered_remaining_control;
+pub mod recovered_rendering;
+pub mod recovered_runtime;
+pub mod recovered_scenario_menus;
+pub mod recovered_selection_control;
+pub mod recovered_session_control;
+pub mod recovered_shop_ui;
+pub mod recovered_spatial;
+pub mod recovered_spell_animation;
+pub mod recovered_spell_control;
+pub mod recovered_spell_ui;
+pub mod recovered_startup;
+pub mod recovered_status_panels;
+pub mod recovered_storage;
+pub mod recovered_system_control;
+pub mod recovered_text;
+pub mod recovered_timing;
+pub mod recovered_verification;
+pub mod recovered_world_display;
 pub use exploration::needs_spell_confirmation;
 pub mod items;
 pub mod mission;
@@ -1353,6 +1478,57 @@ mod tests {
         assert_eq!(before, state);
     }
     #[test]
+    fn recovered_commands_commit_serializable_credits_and_statistics_without_rng() {
+        let content = content();
+        let mut state = Session::new(&content);
+        let mut bytes = vec![0; centurions_content::WARRIOR_BYTES];
+        bytes[0xa21..0xa25].copy_from_slice(b"Test");
+        bytes[0x9da..0x9dc].copy_from_slice(&65535_u16.to_be_bytes());
+        bytes[0x9ec..0x9ee].copy_from_slice(&60_i16.to_be_bytes());
+        state.warriors = vec![Warrior::read(&bytes).unwrap(); 6];
+        let random = state.random.clone();
+        assert_eq!(
+            apply(Command::PoolCredits, &mut state, &content).unwrap(),
+            vec![Event::CreditsPooled { total: 393210 }]
+        );
+        let restored: Session =
+            serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert_eq!(restored, state);
+        assert_eq!(
+            apply(Command::ShareCredits, &mut state, &content).unwrap(),
+            vec![Event::CreditsShared { each: -1 }]
+        );
+        assert_eq!(state.party_currency, 0);
+        assert_eq!(
+            centurions_content::word(&state.warriors[0].bytes, 0x9da).unwrap() as u16,
+            65535
+        );
+        assert_eq!(
+            apply(
+                Command::RecalculateStatistics { warrior: 0 },
+                &mut state,
+                &content
+            )
+            .unwrap(),
+            vec![Event::StatisticsCalculated { warrior: 0 }]
+        );
+        assert_eq!(
+            centurions_content::word(&state.warriors[0].bytes, 0xb46).unwrap(),
+            30
+        );
+        assert_eq!(state.random, random);
+        let before = state.clone();
+        assert!(
+            apply(
+                Command::RecalculateStatistics { warrior: 6 },
+                &mut state,
+                &content
+            )
+            .is_err()
+        );
+        assert_eq!(state, before);
+    }
+    #[test]
     fn storage_preserves_holes_full_behavior_and_effects() {
         let content = content();
         let mut state = Session::new(&content);
@@ -1385,8 +1561,15 @@ mod tests {
     }
     #[test]
     fn signed_arithmetic_boundaries() {
-        assert_eq!(rules::random_bound(32767, -32768), -32768);
-        assert_eq!(rules::random_bound(-32768, -32768), -32767);
+        assert_eq!(rules::pin(7, 10, 5), 5);
+        assert_eq!(rules::pin(i16::MIN, -10, 10), -10);
+        assert_eq!(rules::pin(i16::MAX, -10, 10), 10);
+        assert_eq!(rules::selection_base(-201), -200);
+        assert_eq!(rules::selection_base(-199), 0);
+        assert_eq!(rules::selection_base(i16::MIN), -32600);
+        assert_eq!(rules::spell_count(256), 65552);
+        assert_eq!(rules::spell_count(255), 65041);
+        assert_eq!(rules::spell_count(32767), 1073676305);
         assert_eq!(rules::movement_cost(-32768, 1, 1), 2);
         assert_eq!(rules::movement_cost(-1, 1, 1), 2);
         assert_eq!(rules::movement_cost(32767, 1, 1), 16384);

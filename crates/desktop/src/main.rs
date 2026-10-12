@@ -9,7 +9,7 @@ mod presentation;
 
 use assets::Assets;
 use audio::Audio;
-use centurions_content::Content;
+use centurions_content::installation::Installation;
 use centurions_core::{Command, Event, Session, apply, load, save};
 use macroquad::prelude::*;
 use presentation::{Action, UiState};
@@ -89,16 +89,18 @@ async fn main() {
             .unwrap_or_else(std::env::temp_dir)
             .join("NewCenturions/saves/session.json")
     });
-    let loaded = Content::load(
-        &root.join("NewCenturions"),
-        &root.join("analysis/extracted"),
-    );
+    let installation = Installation::open(&root);
+    let resource_root = installation
+        .as_ref()
+        .map(|i| i.resource_root.clone())
+        .unwrap_or_else(|_| root.clone());
+    let loaded = installation.map(|i| i.content);
     let assets = loaded
         .as_ref()
         .ok()
-        .map(|content| Assets::load(content, &root));
+        .map(|content| Assets::load(content, &resource_root));
     let audio = if let Ok(content) = &loaded {
-        Audio::load(content, &root).await
+        Audio::load(content, &resource_root).await
     } else {
         Err("content unavailable".into())
     };

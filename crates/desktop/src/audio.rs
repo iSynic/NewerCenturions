@@ -8,7 +8,7 @@ pub struct Audio {
     volume: Cell<f32>,
 }
 impl Audio {
-    pub async fn load(content: &Content, root: &Path) -> Result<Self, String> {
+    pub async fn load(content: &Content, resource_root: &Path) -> Result<Self, String> {
         let mut sounds = HashMap::new();
         for id in [
             82, 83, 85, 87, 88, 100, 101, 102, 104, 105, 107, 108, 109, 134, 137, 138, 139, 141,
@@ -25,8 +25,7 @@ impl Audio {
                 .find(|r| r.r#type == "snd " && r.id == id)
                 .ok_or_else(|| format!("sound {id} missing"))?;
             let wave = centurions_content::audio::decode_snd(
-                &read_resource(&root.join("analysis/extracted"), resource)
-                    .map_err(|e| e.to_string())?,
+                &read_resource(resource_root, resource).map_err(|e| e.to_string())?,
             )
             .map_err(|e| e.to_string())?
             .wave();

@@ -18,8 +18,7 @@ pub struct Assets {
     pub conditions: Vec<String>,
 }
 impl Assets {
-    pub fn load(content: &Content, root: &Path) -> Result<Self, ContentError> {
-        let extracted = root.join("analysis/extracted");
+    pub fn load(content: &Content, extracted: &Path) -> Result<Self, ContentError> {
         let mut terrain = HashMap::new();
         let mut icons = HashMap::new();
         let mut portraits = HashMap::new();
@@ -32,30 +31,30 @@ impl Assets {
         for resource in &content.resources {
             let cargo = resource.original.ends_with("/Cargo Pod");
             if cargo && resource.r#type == "MENU" {
-                let menu = ui::menu(&read_resource(&extracted, resource)?).map_err(|error| {
+                let menu = ui::menu(&read_resource(extracted, resource)?).map_err(|error| {
                     ContentError::Invalid(format!("MENU {}: {error}", resource.id))
                 })?;
                 menus.insert(resource.id, menu);
             }
             if cargo && resource.r#type == "MBAR" && resource.id == 128 {
-                menu_bar = Some(ui::menu_bar(&read_resource(&extracted, resource)?).map_err(
+                menu_bar = Some(ui::menu_bar(&read_resource(extracted, resource)?).map_err(
                     |error| ContentError::Invalid(format!("MBAR {}: {error}", resource.id)),
                 )?);
             }
             if cargo && resource.r#type == "sfnt" && resource.id == 30600 {
                 font = Some(
-                    load_ttf_font_from_bytes(&read_resource(&extracted, resource)?)
+                    load_ttf_font_from_bytes(&read_resource(extracted, resource)?)
                         .map_err(|e| ContentError::Invalid(format!("Textile font: {e}")))?,
                 );
             }
             if cargo && resource.r#type == "STR#" && resource.id == 133 {
-                conditions = ui::string_list(&read_resource(&extracted, resource)?)?;
+                conditions = ui::string_list(&read_resource(extracted, resource)?)?;
             }
             if resource.r#type == "STR#"
                 && resource.original.ends_with("/Data ID")
                 && [1, 201, 401, 601].contains(&resource.id)
             {
-                for (i, name) in ui::string_prefix(&read_resource(&extracted, resource)?, 200)?
+                for (i, name) in ui::string_prefix(&read_resource(extracted, resource)?, 200)?
                     .into_iter()
                     .enumerate()
                 {
@@ -77,7 +76,7 @@ impl Assets {
             if !picture && !portrait && !icon {
                 continue;
             }
-            let bytes = read_resource(&extracted, resource)?;
+            let bytes = read_resource(extracted, resource)?;
             let decoded = if picture {
                 graphics::decode_pict(&bytes).map_err(|error| {
                     ContentError::Invalid(format!("PICT {}: {error}", resource.id))

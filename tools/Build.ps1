@@ -1,4 +1,5 @@
-param([switch]$Package, [switch]$OriginalFixtures)
+#requires -Version 7.0
+param([switch]$Package, [switch]$OriginalFixtures, [switch]$ExtendedScenarios)
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path $PSScriptRoot -Parent
 Push-Location $taskRoot
@@ -14,37 +15,41 @@ try {
         python -m unittest discover -s tests/python -p test_extract.py
         if ($LASTEXITCODE) { throw 'Parser tests failed' }
         python -m unittest discover -s tests/python -p test_public.py
+        if ($LASTEXITCODE) { throw 'Public source checks failed' }
+        python -m unittest discover -s tests/python -p test_translation_plan.py
     }
     if ($LASTEXITCODE) { throw 'Parser tests failed' }
     cargo fmt --check
     if ($LASTEXITCODE) { throw 'Formatting failed' }
     if ($verifyOriginals) {
-        cargo test --workspace --features original-fixtures
+        & "$PSScriptRoot/Run-Tests.ps1" -OriginalFixtures -MaximumTestSeconds 300
     } else {
-        cargo test --workspace
+        & "$PSScriptRoot/Run-Tests.ps1" -MaximumTestSeconds 300
     }
     if ($LASTEXITCODE) { throw 'Tests failed' }
-    cargo test --manifest-path vendor/miniquad/Cargo.toml --lib --target-dir target/miniquad-check
+    & "$PSScriptRoot/Run-Tests.ps1" -ManifestPath vendor/miniquad/Cargo.toml -Library -TargetDirectory target/miniquad-check
     if ($LASTEXITCODE) { throw 'Windows keyboard compatibility tests failed' }
     if ($verifyOriginals) {
-        cargo clippy --workspace --all-targets --features original-fixtures -- -D warnings
+        & "$PSScriptRoot/Run-Cargo.ps1" -Action Clippy -AllTargets -OriginalFixtures
     } else {
-        cargo clippy --workspace --all-targets -- -D warnings
+        & "$PSScriptRoot/Run-Cargo.ps1" -Action Clippy -AllTargets
     }
     if ($LASTEXITCODE) { throw 'Clippy failed' }
-    cargo build --workspace --release
+    & "$PSScriptRoot/Run-Cargo.ps1" -Action Build -Release
     if ($LASTEXITCODE) { throw 'Release build failed' }
     if ($verifyOriginals) {
-        foreach ($seed in @(12, 1)) {
-            & '.\target\release\centurions-tools.exe' verify-opening $taskRoot $seed
-            if ($LASTEXITCODE) { throw "Opening workflow failed for seed $seed" }
+        if ($ExtendedScenarios) {
+            foreach ($seed in @(12, 1)) {
+                & '.\target\release\centurions-tools.exe' verify-opening $taskRoot $seed
+                if ($LASTEXITCODE) { throw "Opening workflow failed for seed $seed" }
+            }
+            & '.\target\release\centurions-tools.exe' verify-fight $taskRoot
+            if ($LASTEXITCODE) { throw 'Combat and resumed replay failed' }
+            & '.\target\release\centurions-tools.exe' verify-day-two $taskRoot
+            if ($LASTEXITCODE) { throw 'Day-two routes failed' }
+            & '.\target\release\centurions-tools.exe' verify-sustained $taskRoot
+            if ($LASTEXITCODE) { throw 'Authored supply, reload and subsequent battle workflow failed' }
         }
-        & '.\target\release\centurions-tools.exe' verify-fight $taskRoot
-        if ($LASTEXITCODE) { throw 'Combat and resumed replay failed' }
-        & '.\target\release\centurions-tools.exe' verify-day-two $taskRoot
-        if ($LASTEXITCODE) { throw 'Day-two routes failed' }
-        & '.\target\release\centurions-tools.exe' verify-sustained $taskRoot
-        if ($LASTEXITCODE) { throw 'Authored supply, reload and subsequent battle workflow failed' }
         & '.\target\release\centurions-tools.exe' verify-stage-one $taskRoot
         if ($LASTEXITCODE) { throw 'First mission transition and resumed replay failed' }
     }

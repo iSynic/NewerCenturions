@@ -1,4 +1,4 @@
-use centurions_content::Content;
+use centurions_content::{Content, installation::Installation};
 use centurions_core::{Command, Session, apply, load, save};
 use std::path::PathBuf;
 
@@ -8,15 +8,24 @@ mod sustained;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let action = args.next().unwrap_or_else(|| "inspect".into());
+    if action == "translation-report" {
+        translation_report(args.next().as_deref());
+        return Ok(());
+    }
     let root = args
         .next()
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("CENTURIONS_ASSET_ROOT").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("."));
-    let content = Content::load(
-        &root.join("NewCenturions"),
-        &root.join("analysis/extracted"),
-    )?;
+        .unwrap_or_else(|| {
+            std::env::current_exe()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf()
+        });
+    let installation = Installation::open(&root)?;
+    let content = installation.content;
+    let resource_root = installation.resource_root;
     match action.as_str() {
         "verify-stage-one" => completion::verify_stage_one(&root, &content)?,
         "verify-samples" => completion::verify_samples(
@@ -65,8 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if !["portraits", "tacticals", "cargo_pod"].contains(&group.as_str()) {
                     continue;
                 }
-                let bytes =
-                    centurions_content::read_resource(&root.join("analysis/extracted"), resource)?;
+                let bytes = centurions_content::read_resource(&resource_root, resource)?;
                 let image = if resource.r#type == "PICT" {
                     centurions_content::graphics::decode_pict(&bytes)?
                 } else {
@@ -407,4 +415,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err(format!("unknown command {action}").into()),
     }
     Ok(())
+}
+
+fn translation_report(filter: Option<&str>) {
+    use centurions_core::reconstruction::{ROUTINES, Translation};
+    let source_ports = ROUTINES
+        .iter()
+        .filter(|r| r.translation == Translation::SourcePort)
+        .count();
+    let partial = ROUTINES
+        .iter()
+        .filter(|r| r.translation == Translation::Partial)
+        .count();
+    println!("Recovered application routines: {}", ROUTINES.len());
+    println!(
+        "Decompiled C: {}; instruction/control-flow export: {}",
+        ROUTINES.iter().filter(|r| r.decompiled).count(),
+        ROUTINES.len()
+    );
+    println!(
+        "Source ports with explicit adapters: {source_ports}; selected Rust branches: {partial}; recovery only: {}",
+        ROUTINES.len() - source_ports - partial
+    );
+    println!(
+        "Recovered action blocks: {}; instructions: {}",
+        ROUTINES.iter().map(|r| r.blocks).sum::<usize>(),
+        ROUTINES.iter().map(|r| r.instructions).sum::<usize>()
+    );
+    println!(
+        "Recovery metadata does not count as implemented game logic. Native comparison remains separately scoped."
+    );
+    if let Some(filter) = filter {
+        for routine in ROUTINES
+            .iter()
+            .filter(|r| r.name.to_lowercase().contains(&filter.to_lowercase()))
+        {
+            println!(
+                "0x{:06x} {}: {:?}; {} blocks; Rust: {}",
+                routine.entry,
+                routine.name,
+                routine.translation,
+                routine.blocks,
+                routine.rust.join(", ")
+            );
+        }
+    }
 }

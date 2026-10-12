@@ -24,7 +24,7 @@ def main() -> None:
         "LICENSE": "LICENSE",
         "THIRD_PARTY.md": "THIRD_PARTY.md",
         "docs/public-readme.md": "README.md",
-        "tools/extract.py": "tools/extract.py",
+        "docs/reconstruction.md": "docs/reconstruction.md",
         "vendor/miniquad/LICENSE-MIT": "licenses/miniquad-MIT.txt",
         "vendor/miniquad/LICENSE-APACHE": "licenses/miniquad-APACHE.txt",
         "vendor/miniquad/LOCAL_CHANGES.md": "licenses/miniquad-local-changes.md",
@@ -52,7 +52,7 @@ def main() -> None:
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as package:
         for path in sorted(output.rglob("*")):
             if path.is_file():
-                package.write(path, Path(output.name) / path.relative_to(output))
+                package.write(path, path.relative_to(output))
     print(f"Packaged {len(entries)} runtime/documentation files; no original game assets")
     print(f"Archive: {archive}")
 

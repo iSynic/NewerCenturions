@@ -73,17 +73,53 @@ pub fn place(
 }
 
 /// bodyfield has a signed size check on the north cell, independent of its other cells.
+pub fn restore_body(combat: &combat::Combat, body: i16) -> Result<combat::TacticalMap, RuleError> {
+    if body < 10 {
+        let index = usize::try_from(body)
+            .map_err(|_| RuleError::Invalid("body-field warrior position unavailable".into()))?;
+        let position =
+            *combat.squad.positions.get(index).ok_or_else(|| {
+                RuleError::Invalid("body-field warrior position unavailable".into())
+            })?;
+        let under = *combat.squad.under_tiles.get(index).ok_or_else(|| {
+            RuleError::Invalid("body-field warrior under-tile unavailable".into())
+        })?;
+        let cell = self::index(&combat.map, position, 0, 0)?;
+        let mut result = combat.map.clone();
+        *result
+            .tiles
+            .get_mut(cell)
+            .ok_or_else(|| RuleError::Invalid("body-field map cell unavailable".into()))? = under;
+        Ok(result)
+    } else {
+        let index = (body - 10) as usize;
+        let monster = combat
+            .enemies
+            .records
+            .get(index)
+            .ok_or_else(|| RuleError::Invalid("body-field enemy record unavailable".into()))?;
+        let position =
+            *combat.enemies.positions.get(index).ok_or_else(|| {
+                RuleError::Invalid("body-field enemy position unavailable".into())
+            })?;
+        restore(&combat.map, monster, position)
+    }
+}
+
+/// Original bodyfield enemy suffix; signed sizes have no eligibility gate.
 pub fn restore(
     map: &combat::TacticalMap,
     monster: &MonsterRecord,
     position: (i16, i16),
 ) -> Result<combat::TacticalMap, RuleError> {
-    let size = size(monster)?;
+    span(&monster.bytes, 0, 288)?;
+    let signed_size = word(&monster.bytes, 0x10)?;
+    let size = signed_size.wrapping_abs();
     let mut result = map.clone();
     for (dx, dy, offset, occupied) in [
         (-1, -1, 0x118, size == 3),
         (-1, 0, 0x11a, size > 1),
-        (0, -1, 0x11c, size == 3 || word(&monster.bytes, 0x10)? == 1),
+        (0, -1, 0x11c, size == 3 || signed_size == 1),
         (0, 0, 0x11e, true),
     ] {
         if occupied {

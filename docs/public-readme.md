@@ -1,10 +1,17 @@
-# The New Centurions
+# Newer Centurions
 
-A work-in-progress native Windows Rust reconstruction of Centurions 1.3.2.
+A work-in-progress native Windows Rust reconstruction of The New Centurions 1.3.2.
 The original binary is the behavior authority. The current build covers
 selected mission routes, combat, persistent maps, earned equipment, learned
 psi, versioned saves and the original startup/menu presentation. Complete
 campaign reconstruction remains unfinished.
+
+Built with Codex Astra 6 and Sol 6.1.
+
+<img width="802" height="632" alt="image" src="https://github.com/user-attachments/assets/c4dd1720-2598-4bdf-92d0-d091ed59266e" />
+<img width="802" height="632" alt="image" src="https://github.com/user-attachments/assets/dfba2cc2-34f4-4e30-b7e9-385d32a3f442" />
+<img width="802" height="632" alt="image" src="https://github.com/user-attachments/assets/c9540a6f-94a6-43d8-aca0-d0c694dc343b" />
+
 
 ## Source and content
 
@@ -41,47 +48,48 @@ tools and native presentation. Desktop and replay use the same atomic command
 boundary. Unsupported gameplay reports its missing dependency without changing
 the represented state or random stream.
 
-## Prepare local content and run
+## Install the Windows beta
 
-Keep original files in a separate local asset directory. The current loader uses
-the fork-preserving extraction layout below; Macintosh resource forks must be
-preserved. An ordinary copy containing only data forks is insufficient.
+Download the Windows x86_64 ZIP from the GitHub Releases page and extract its
+contents into your existing New Centurions game folder. The Windows executable
+sits beside the original Mac application:
 
 ```text
-<asset-root>/
-  NewCenturions/
-    packsmith-mapping.json
-    TheNewCenturions/
-      New Centurions
-      New Centurions.rsrc
-      Data Files/
-      Scenarios/
-      Warriors/
-  analysis/extracted/
-    manifest.json
-    resources/
+TheNewCenturions/
+  New Centurions                 # original Mac application
+  New Centurions.rsrc            # preserved resource fork, where applicable
+  The New Centurions.exe         # Windows reconstruction
+  centurions-tools.exe           # optional inspection/replay tool
+  Data Files/
+  Scenarios/
+  Warriors/
+  Save/                         # original saves remain untouched
 ```
 
-`packsmith-mapping.json` is local extraction metadata with relative file paths
-and fork hashes. It is supplied by the fork-preserving extraction workflow,
-not downloaded from this repository. Resource sidecars can be raw forks or
-AppleSingle/AppleDouble containers. Prepare decoded resources locally:
+Run `The New Centurions.exe`. No `NewCenturions` wrapper directory, extraction
+manifest, mapping receipt, Python or Ghidra is required to play. Original content
+must be supplied by the player; the beta ZIP contains no game assets.
+The Windows build uses the Microsoft Visual C++ runtime; install that runtime
+if Windows reports a missing `VCRUNTIME140.dll`.
+
+Macintosh resource forks must be preserved. The Windows loader supports raw
+`.rsrc` sidecars, adjacent AppleDouble `._filename` sidecars, and AppleSingle
+files containing both forks. A copy containing only data forks is insufficient.
+The loader reads the original installation directly without modifying it or
+writing extracted files into the game folder.
+
+An explicit folder argument or `CENTURIONS_ASSET_ROOT` overrides discovery
+beside the executable. The inspection tool also defaults to its own folder:
 
 ```powershell
-python tools/extract.py --input 'D:/Games/TNC-assets/NewCenturions' --output 'D:/Games/TNC-assets/analysis/extracted'
-./target/release/centurions-desktop.exe 'D:/Games/TNC-assets'
-./target/release/centurions-tools.exe inspect 'D:/Games/TNC-assets'
+./centurions-tools.exe inspect
 ```
 
-Alternatively set `CENTURIONS_ASSET_ROOT` to that directory. A positional asset
-root takes precedence. If neither is given, the desktop looks beside its own
-executable; the tools default to the current directory. Original files are
-read-only. Versioned reconstruction saves go to
-`%LOCALAPPDATA%/NewCenturions/saves/session.json`.
-
-A direct installer into an existing classic game folder is planned. The current
-runtime requires the prepared layout above; it does not yet extract arbitrary
-classic installers or archives automatically.
+Versioned reconstruction saves go to
+`%LOCALAPPDATA%/NewCenturions/saves/session.json`. Original warriors and Mac saves
+remain separate. The prepared extraction layout remains supported for existing
+local development and native-comparison workflows. Installers and archives must
+be extracted with resource forks preserved before running the Windows binary.
 
 ## Playable scope
 
@@ -108,7 +116,7 @@ cargo test --workspace --features original-fixtures
 ```
 
 `./tools/Build.ps1 -Package` creates an asset-free Windows runtime folder and ZIP.
-It contains executables, preparation instructions, the extractor and licenses.
+It contains the game and inspection executables, instructions and licenses.
 It does not copy game data, fixtures, screenshots or extracted resources.
 
 `python tools/export_source.py <fresh-directory>` prepares a clean source

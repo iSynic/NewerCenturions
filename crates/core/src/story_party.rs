@@ -1,4 +1,4 @@
-use crate::{RandomState, RuleError, combat, story_variables::StoryContinuation};
+use crate::{RandomState, RuleError, character, combat, story_variables::StoryContinuation};
 use centurions_content::{Warrior, mission::OpeningMission, span, word};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -53,23 +53,7 @@ pub fn select_party(
             1 => (member as i16).wrapping_add(1) < value,
             2 => holds_item()?,
             3 => next_random.bound(100) <= value,
-            4 => {
-                let offset = match value {
-                    0 => 0x9e2,
-                    1 => 0x9e4,
-                    2 => 0x9e6,
-                    3 => 0x9e8,
-                    4 => 0x9ec,
-                    5 => 0x9ee,
-                    _ => {
-                        return Err(RuleError::Unsupported {
-                            action: "story.select_party",
-                            dependency: "attribute save selector",
-                        });
-                    }
-                };
-                next_random.bound(100) >= word(bytes, offset)?.wrapping_mul(4)
-            }
+            4 => !character::save_against_attribute(warrior, value, &mut next_random)?,
             5 => {
                 if context.casting && context.packet_type > 1 {
                     true

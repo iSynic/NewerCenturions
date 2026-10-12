@@ -133,118 +133,108 @@ fn assert_session(actual: &Session, expected: &Session) {
 }
 
 #[test]
-fn retained_work_cast_and_automatic_initiative_match_complete_native_session_and_resume() {
+fn native_casts_and_saved_continuations_preserve_work_effects_and_atomic_failures() {
     let content = content();
-    let f = fixture("warm-psi-work.json");
-    for (index, case) in f["cases"].as_array().unwrap().iter().enumerate() {
-        let mut state = state(&content, case);
-        let before = state.clone();
-        let path = std::env::temp_dir().join(format!(
-            "centurions-warm-{}-{index}.json",
-            std::process::id()
-        ));
-        save(&path, &state, &content).unwrap();
-        let mut resumed = load(&path, &content).unwrap();
-        let events = apply(command(case), &mut state, &content).unwrap();
-        assert_eq!(
-            apply(command(case), &mut resumed, &content).unwrap(),
-            events
-        );
-        assert_session(&state, &resumed);
-        let mut expected = before;
-        copy_snapshot(&mut expected, &case["after"]);
-        let effect = bytes(&case["after"]["packet"])[18] as i8;
-        expected.health_context.as_mut().unwrap().effect = effect;
-        assert_eq!(state.health_context.as_ref().unwrap().effect, effect);
-        assert_eq!(state.attack_packet.as_ref().unwrap()[18] as i8, effect);
-        assert_eq!(
-            state
-                .combat
-                .as_ref()
+    for name in ["warm-psi-work", "crystalize-psi"] {
+        let f = fixture(&format!("{name}.json"));
+        for (index, case) in f["cases"].as_array().unwrap().iter().enumerate() {
+            let mut state = state(&content, case);
+            let before = state.clone();
+            let path = std::env::temp_dir().join(format!(
+                "centurions-{name}-{}-{index}.json",
+                std::process::id()
+            ));
+            save(&path, &state, &content).unwrap();
+            let mut resumed = load(&path, &content).unwrap();
+            let events = apply(command(case), &mut state, &content).unwrap();
+            assert_eq!(
+                apply(command(case), &mut resumed, &content).unwrap(),
+                events
+            );
+            assert_session(&state, &resumed);
+            let mut expected = before;
+            copy_snapshot(&mut expected, &case["after"]);
+            let effect = bytes(&case["after"]["packet"])[18] as i8;
+            expected.health_context.as_mut().unwrap().effect = effect;
+            assert_eq!(state.health_context.as_ref().unwrap().effect, effect);
+            assert_eq!(state.attack_packet.as_ref().unwrap()[18] as i8, effect);
+            assert_eq!(
+                state
+                    .combat
+                    .as_ref()
+                    .unwrap()
+                    .attack_packet
+                    .as_ref()
+                    .unwrap()[18] as i8,
+                effect
+            );
+            let identity = words(&case["after"]["identity"]);
+            expected.psi_menu_choices[1] = Some(centurions_core::PsiMenuChoice {
+                row: identity[1] as u8,
+                column: identity[2] as u8,
+                power: case["after"]["count"].as_i64().unwrap() as i16,
+            });
+            expected.bandage_ready = Some(1);
+            assert_session(&state, &expected);
+            let mut expected_events: Vec<_> = case["after"]["sounds"]
+                .as_array()
                 .unwrap()
-                .attack_packet
-                .as_ref()
-                .unwrap()[18] as i8,
-            effect
-        );
-        let identity = words(&case["after"]["identity"]);
-        expected.psi_menu_choices[1] = Some(centurions_core::PsiMenuChoice {
-            row: identity[1] as u8,
-            column: identity[2] as u8,
-            power: case["after"]["count"].as_i64().unwrap() as i16,
-        });
-        expected.bandage_ready = Some(1);
-        assert_session(&state, &expected);
-        let mut expected_events: Vec<_> = case["after"]["sounds"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| Event::Sound {
-                resource_id: v.as_i64().unwrap() as i16,
-            })
-            .collect();
-        expected_events.push(Event::SpellResolved {
-            caster: Some(1),
-            spell: 2101,
-            target: 10,
-            damage: centurions_content::word(&bytes(&case["before"]["records"]), 0x110)
-                .unwrap()
-                .wrapping_sub(
-                    centurions_content::word(&bytes(&case["after"]["records"]), 0x110).unwrap(),
-                ),
-            defeated: false,
-        });
-        expected_events.push(Event::TurnStarted { body: 10, round: 1 });
-        assert_eq!(events, expected_events);
-        save(&path, &state, &content).unwrap();
-        assert_session(&state, &load(&path, &content).unwrap());
-        std::fs::remove_file(path).unwrap();
-    }
-}
-
-#[test]
-fn unsupported_next_actor_rolls_back_created_field_costs_damage_and_rng() {
-    let content = content();
-    let f = fixture("warm-psi-work.json");
-    for case in f["cases"].as_array().unwrap() {
-        let mut state = state(&content, case);
-        let monster = &mut state.combat.as_mut().unwrap().enemies.records[0].bytes;
-        monster[0x5e..0x60].copy_from_slice(&32767_i16.to_be_bytes());
-        monster[0x5c..0x5e].copy_from_slice(&100_i16.to_be_bytes());
-        let before = state.clone();
-        assert!(apply(command(case), &mut state, &content).is_err());
-        assert_session(&state, &before);
-    }
-}
-
-#[test]
-fn invalid_target_power_and_exhausted_psi_preserve_complete_session() {
-    let content = content();
-    let f = fixture("warm-psi-work.json");
-    for (power, target, mp) in [
-        (0, Some((20, 20)), 100),
-        (3, Some((20, 20)), 100),
-        (1, None, 100),
-        (1, Some((40, 40)), 100),
-        (1, Some((20, 20)), 7),
-        (2, Some((20, 20)), 15),
-    ] {
-        let mut state = state(&content, &f["cases"][0]);
-        state.warriors[1].bytes[0x58..0x5a].copy_from_slice(&i16::to_be_bytes(mp));
-        let before = state.clone();
-        assert!(
-            apply(
-                Command::CastPsi {
-                    spell: 2101,
-                    power,
-                    target
-                },
-                &mut state,
-                &content
-            )
-            .is_err()
-        );
-        assert_session(&state, &before);
+                .iter()
+                .map(|v| Event::Sound {
+                    resource_id: v.as_i64().unwrap() as i16,
+                })
+                .collect();
+            expected_events.push(Event::SpellResolved {
+                caster: Some(1),
+                spell: 2101,
+                target: 10,
+                damage: centurions_content::word(&bytes(&case["before"]["records"]), 0x110)
+                    .unwrap()
+                    .wrapping_sub(
+                        centurions_content::word(&bytes(&case["after"]["records"]), 0x110).unwrap(),
+                    ),
+                defeated: false,
+            });
+            expected_events.push(Event::TurnStarted { body: 10, round: 1 });
+            assert_eq!(events, expected_events);
+            save(&path, &state, &content).unwrap();
+            assert_session(&state, &load(&path, &content).unwrap());
+            std::fs::remove_file(path).unwrap();
+        }
+        for case in f["cases"].as_array().unwrap() {
+            let mut state = state(&content, case);
+            let monster = &mut state.combat.as_mut().unwrap().enemies.records[0].bytes;
+            monster[0x5e..0x60].copy_from_slice(&32767_i16.to_be_bytes());
+            monster[0x5c..0x5e].copy_from_slice(&100_i16.to_be_bytes());
+            let before = state.clone();
+            assert!(apply(command(case), &mut state, &content).is_err());
+            assert_session(&state, &before);
+        }
+        for (power, target, mp) in [
+            (0, Some((20, 20)), 100),
+            (3, Some((20, 20)), 100),
+            (1, None, 100),
+            (1, Some((40, 40)), 100),
+            (1, Some((20, 20)), 7),
+            (2, Some((20, 20)), 15),
+        ] {
+            let mut state = state(&content, &f["cases"][0]);
+            state.warriors[1].bytes[0x58..0x5a].copy_from_slice(&i16::to_be_bytes(mp));
+            let before = state.clone();
+            assert!(
+                apply(
+                    Command::CastPsi {
+                        spell: 2101,
+                        power,
+                        target
+                    },
+                    &mut state,
+                    &content
+                )
+                .is_err()
+            );
+            assert_session(&state, &before);
+        }
     }
 }
 

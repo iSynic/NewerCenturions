@@ -682,11 +682,6 @@ path = "tests/command_compress_psi.rs"
 required-features = ["original-fixtures"]
 
 [[test]]
-name = "command_crystalize_psi"
-path = "tests/command_crystalize_psi.rs"
-required-features = ["original-fixtures"]
-
-[[test]]
 name = "command_current_restricted_npc_spell"
 path = "tests/command_current_restricted_npc_spell.rs"
 required-features = ["original-fixtures"]

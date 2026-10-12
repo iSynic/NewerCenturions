@@ -198,7 +198,7 @@ pub fn move_warrior(
         effects.push(Event::Sound { resource_id: -130 });
         return Ok(effects);
     }
-    let cost = rules::movement_cost(mission.tile_word(tile - 1000, 2)?, dx, dy);
+    let cost = crate::recovered_preparation::movement_cost(&mission.tile_properties, tile, dx, dy)?;
     let remaining = word(bytes, 0x3c)?.wrapping_sub(cost);
     if remaining < 0 {
         effects.push(Event::Sound { resource_id: -130 });

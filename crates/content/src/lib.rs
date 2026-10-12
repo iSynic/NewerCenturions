@@ -7,6 +7,7 @@ use thiserror::Error;
 pub mod audio;
 pub mod combat;
 pub mod graphics;
+pub mod installation;
 pub mod mission;
 pub mod ui;
 
@@ -148,6 +149,8 @@ pub struct Resource {
     pub size: usize,
     pub sha256: String,
     pub output: String,
+    #[serde(default)]
+    pub source_fork: Option<installation::SourceFork>,
 }
 
 #[derive(Clone, Debug)]
@@ -209,6 +212,14 @@ impl Content {
                 "original manifest identity changed".into(),
             ));
         }
+        Self::from_manifest(originals, extracted, manifest)
+    }
+
+    fn from_manifest(
+        originals: &Path,
+        extracted: &Path,
+        manifest: Manifest,
+    ) -> Result<Self, ContentError> {
         let mut warriors = Vec::new();
         let mut items = Vec::new();
         let mut item_cache = None;
@@ -220,7 +231,7 @@ impl Content {
             if !starter && !item_table && fork.path != scenario_items {
                 continue;
             }
-            let bytes = fs::read(safe_path(originals, &fork.path)?)?;
+            let bytes = installation::read_data(originals, &fork.path)?;
             if bytes.len() != fork.size || digest(&bytes) != fork.sha256 {
                 return Err(ContentError::Invalid(format!(
                     "fork identity mismatch: {}",
@@ -310,7 +321,7 @@ fn read_fork(root: &Path, forks: &[Fork], path: &str) -> Result<Vec<u8>, Content
         .iter()
         .find(|f| f.kind == "data" && f.path == path)
         .ok_or_else(|| ContentError::Invalid(format!("missing data fork {path}")))?;
-    let bytes = fs::read(safe_path(root, path)?)?;
+    let bytes = installation::read_data(root, path)?;
     if bytes.len() != fork.size || digest(&bytes) != fork.sha256 {
         return Err(ContentError::Invalid(format!(
             "fork identity mismatch: {path}"
@@ -320,7 +331,17 @@ fn read_fork(root: &Path, forks: &[Fork], path: &str) -> Result<Vec<u8>, Content
 }
 
 pub fn read_resource(extracted: &Path, resource: &Resource) -> Result<Vec<u8>, ContentError> {
-    let bytes = fs::read(safe_path(extracted, &resource.output)?)?;
+    let bytes = if let Some(source) = &resource.source_fork {
+        if let Some(fork) = &source.cached {
+            span(fork, source.offset, resource.size)?.to_vec()
+        } else {
+            let raw = installation::read_file(&safe_path(extracted, &source.path)?)?;
+            let fork = installation::fork_payload(&raw, 2)?;
+            span(fork, source.offset, resource.size)?.to_vec()
+        }
+    } else {
+        fs::read(safe_path(extracted, &resource.output)?)?
+    };
     if bytes.len() != resource.size || digest(&bytes) != resource.sha256 {
         return Err(ContentError::Invalid(format!(
             "resource identity mismatch: {} {}:{}",

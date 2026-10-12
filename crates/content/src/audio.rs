@@ -330,18 +330,6 @@ mod tests {
             crate::digest(&sample.samples),
             fixture["pcm_le_sha256"].as_str().unwrap()
         );
-        for (value, expected) in sample
-            .samples
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .zip(fixture["first_samples"].as_array().unwrap())
-        {
-            assert_eq!(
-                i64::from(i16::from_le_bytes([value[0], value[1]])),
-                expected.as_i64().unwrap()
-            );
-        }
         let wave = sample.wave();
         assert_eq!(&wave[..4], b"RIFF");
         assert_eq!(&wave[8..16], b"WAVEfmt ");

@@ -2,6 +2,8 @@ name: Source build
 
 on:
   push:
+    branches: ['**']
+    tags: ['v*-beta.*']
   pull_request:
 
 permissions:
@@ -23,4 +25,45 @@ jobs:
         run: python tools/audit_public.py
       - name: Build and verify without game assets
         shell: pwsh
-        run: ./tools/Build.ps1
+        run: ./tools/Build.ps1 -Package
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-runtime
+          path: dist/*.zip
+          if-no-files-found: error
+
+  beta-release:
+    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-beta.')
+    needs: windows
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-runtime
+          path: release-assets
+      - name: Publish Windows beta
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+-beta\.\d+$') { throw 'Unexpected beta tag format' }
+          $archives = @(Get-ChildItem -LiteralPath release-assets -Filter '*.zip')
+          if ($archives.Count -ne 1) { throw 'Expected exactly one Windows package' }
+          $source = $archives[0]
+          $asset = Join-Path release-assets "NewerCenturions-$env:RELEASE_TAG-windows-x86_64.zip"
+          Move-Item -LiteralPath $source.FullName -Destination $asset
+          @'
+          Windows x86_64 beta. Extract the ZIP contents into the existing New Centurions Mac game folder and launch The New Centurions.exe beside the original application.
+
+          Preserved resource forks (.rsrc, adjacent AppleDouble sidecars, or AppleSingle files) are required. Original game content is supplied by the player and is not bundled. No Python, mapping receipt, or extraction step is needed to play.
+
+          This is a work-in-progress reconstruction; complete campaign behavior and original-game parity remain unfinished. Other platforms are not included in this beta.
+          '@ | Set-Content -LiteralPath release-notes.md
+          gh release create $env:RELEASE_TAG $asset --verify-tag --prerelease --title "Newer Centurions $env:RELEASE_TAG" --notes-file release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'Beta release publishing failed' }

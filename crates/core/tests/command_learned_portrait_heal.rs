@@ -501,22 +501,6 @@ fn owned_prior_spell_row_matches_native_heal_menu_and_saved_continuation() {
 }
 
 #[test]
-fn learned_menu_sounds_decode_from_original_resources() {
-    let (content, _) = fixture();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../analysis/extracted");
-    for id in [137, 10129, 20002] {
-        let resource = content
-            .resources
-            .iter()
-            .find(|resource| resource.r#type == "snd " && resource.id == id)
-            .unwrap();
-        let original = centurions_content::read_resource(&root, resource).unwrap();
-        let sample = centurions_content::audio::decode_snd(&original).unwrap();
-        assert!(!sample.samples.is_empty(), "sound {id}");
-    }
-}
-
-#[test]
 fn higher_portrait_powers_match_native_full_session_and_saved_continuations() {
     let (content, _) = fixture();
     let fixture: Value = serde_json::from_str(include_str!(

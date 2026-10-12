@@ -17,6 +17,11 @@ default = []
 original-fixtures = []
 
 [[test]]
+name = "installation"
+path = "tests/installation.rs"
+required-features = ["original-fixtures"]
+
+[[test]]
 name = "scenario_terrain"
 path = "tests/scenario_terrain.rs"
 required-features = ["original-fixtures"]
