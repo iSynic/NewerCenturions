@@ -67,7 +67,7 @@ fn authored_treasure_matches_original_full_loot_and_rng_for_both_seeds() {
     for case in fixture()["treasure_cases"].as_array().unwrap() {
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let items =
-            grant_story_treasure(&case.bytes("table_before"), &content, &mut random).unwrap();
+            grant_story_treasure(&case.bytes("table_before"), &content, &mut random, 0).unwrap();
         let mut loot = vec![InventoryRecord([0; 22]); 1000];
         loot[..items.len()].clone_from_slice(&items);
         crate::support::native_expect! {

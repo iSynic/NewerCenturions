@@ -166,7 +166,7 @@ pub fn cleanup_enemy(
         .ok_or_else(|| RuleError::Invalid("invalid defeated enemy".into()))?;
     if combat.enemies.records.len() > 100
         || combat.enemies.records.iter().any(|m| m.bytes.len() != 288)
-        || warriors.len() != 6
+        || !(1..=6).contains(&warriors.len())
         || warriors.iter().any(|w| w.bytes.len() != 3138)
         || combat.map.tiles.len() != 8100
     {

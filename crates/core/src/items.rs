@@ -55,6 +55,18 @@ pub fn initialize(
     content: &Content,
     random: &mut RandomState,
 ) -> Result<InventoryRecord, RuleError> {
+    initialize_at_difficulty(id, enhancement, 0, content, random)
+}
+
+/// randomitem uses the signed difficulty word at 0x442576 for draw thresholds and loop counts.
+pub fn initialize_at_difficulty(
+    id: i16,
+    enhancement: i16,
+    difficulty: i16,
+    content: &Content,
+    random: &mut RandomState,
+) -> Result<InventoryRecord, RuleError> {
+    let scale = difficulty.wrapping_add(3);
     let definition = content
         .items
         .get(usize::from(id.unsigned_abs()))
@@ -98,7 +110,7 @@ pub fn initialize(
         record.0[2..4].copy_from_slice(&base.to_be_bytes());
     }
     if maximum > 0 && [13, 14, 15].contains(&kind) {
-        if random.bound(100) < 50 {
+        if random.bound(100) < 50_i16.wrapping_add(difficulty.wrapping_mul(10)) {
             let quantity = random.bound(maximum);
             record.0[2..4].copy_from_slice(&quantity.to_be_bytes());
             let ammunition_type = word(definition, 0x20)?;
@@ -121,7 +133,7 @@ pub fn initialize(
         record.0[2..4].copy_from_slice(&base.to_be_bytes());
         record.0[4..8].fill(0);
     }
-    let enhanced = random.bound(100) >= 94 || enhancement != 0;
+    let enhanced = random.bound(100) >= 94_i16.wrapping_sub(difficulty) || enhancement != 0;
     if enhanced && kind != 26 && kind != 27 && word(definition, 0x24)? == 0 {
         let mut changes = 0_i16;
         let mut upgrades = 0_i8;
@@ -130,14 +142,14 @@ pub fn initialize(
             let damage = word(definition, 0x28)?;
             if damage.wrapping_add(word(definition, 0x3e)?) != 0 || [2, 15].contains(&kind) {
                 let destination = if damage == 0 { 15 } else { 11 };
-                for _ in 0..15 {
+                for _ in 0..scale.wrapping_mul(5) {
                     if random.bound(100) < 7 {
                         record.0[destination] =
                             record.0[destination].wrapping_add(random.bound(5) as u8);
                         changes += 1;
                     }
                 }
-                for _ in 0..12 {
+                for _ in 0..scale.wrapping_mul(4) {
                     if random.bound(100) < 5 {
                         record.0[18] =
                             record.0[18].wrapping_add(random.bound(6).wrapping_add(4) as u8);
@@ -145,14 +157,14 @@ pub fn initialize(
                     }
                 }
             } else if definition[0x51] != 0 {
-                for _ in 0..15 {
+                for _ in 0..scale.wrapping_mul(5) {
                     if random.bound(100) < 7 {
                         record.0[15] = record.0[15].wrapping_add(random.bound(3) as u8);
                         changes += 1;
                     }
                 }
             } else if definition[0x55] != 0 {
-                for _ in 0..15 {
+                for _ in 0..scale.wrapping_mul(5) {
                     if random.bound(100) < 5 {
                         record.0[18] =
                             record.0[18].wrapping_add(random.bound(6).wrapping_add(4) as u8);
@@ -162,7 +174,7 @@ pub fn initialize(
             }
             for (offset, destination) in [(0x58, 14), (0x5e, 19)] {
                 let maximum = word(definition, offset)?;
-                for _ in 0..maximum.max(0) * 3 {
+                for _ in 0..maximum.max(0).wrapping_mul(scale) {
                     if random.bound(100) < 2 {
                         record.0[destination] = record.0[destination].wrapping_add(1);
                         changes += 1;
@@ -175,7 +187,7 @@ pub fn initialize(
             for (offset, destination) in [(3, 16), (4, 17)] {
                 let maximum = definition[offset] as i8;
                 if maximum > 0 {
-                    for _ in 0..12 {
+                    for _ in 0..scale.wrapping_mul(4) {
                         if random.bound(100) < 4 {
                             record.0[destination] =
                                 record.0[destination].wrapping_add(random.bound(3) as u8);
@@ -189,7 +201,7 @@ pub fn initialize(
             }
             let maximum = word(definition, 0x3c)?;
             if maximum > 0 {
-                for _ in 0..6 {
+                for _ in 0..scale.wrapping_mul(2) {
                     if random.bound(100) < 4 {
                         record.0[20] = record.0[20].wrapping_add(1);
                         changes += 1;

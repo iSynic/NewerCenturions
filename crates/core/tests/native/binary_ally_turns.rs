@@ -25,6 +25,7 @@ fn mission(f: &serde_json::Value, content: &centurions_content::Content) -> Open
 }
 fn combat(case: &serde_json::Value, distance: i16) -> Combat {
     Combat {
+        difficulty: 0,
         battle: 8,
         map: TacticalMap {
             tiles: if case["map_before"].is_string() {

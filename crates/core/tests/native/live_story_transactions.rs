@@ -4,16 +4,7 @@ use std::path::PathBuf;
 
 fn fixture() -> (Content, Session) {
     let content = crate::support::content();
-    let mut state = Session::new(&content);
-    apply(Command::ImportStarters, &mut state, &content).unwrap();
-    apply(
-        Command::EnterMission {
-            name: "The Thunder of Guns".into(),
-        },
-        &mut state,
-        &content,
-    )
-    .unwrap();
+    let state = crate::support::mission_session(&content);
     (content, state)
 }
 

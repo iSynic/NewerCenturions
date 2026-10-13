@@ -14,6 +14,7 @@ fn stockpile_collection_matches_original_instruction_slice() {
     let mut items = vec![vec![0; 150]; 1000];
     items[200] = decode(fixture["definition"].as_str().unwrap());
     let content = Content {
+        tutorials: vec![],
         identity: "fixture".into(),
         warriors: vec![],
         items,
@@ -103,24 +104,12 @@ fn pack_command_is_atomic_and_resumes_with_the_same_events() {
         default_tile: 1,
         minutes_per_tick: 5,
         shared: std::sync::Arc::new(centurions_content::mission::StoryTables {
-            areas: vec![],
-            item_cache: vec![],
-            races: vec![],
-            profiles: vec![],
-            door_scripts: vec![],
-            dialogue: vec![],
-            treasure: vec![],
-            prologue: String::new(),
-            item_descriptions: vec![],
             schedule: vec![0; 40],
-            scheduled_scripts: vec![],
-            menus: vec![],
-            typed_encounters: vec![],
-            movies: Default::default(),
-            combat: None,
+            ..Default::default()
         }),
     };
     let content = Content {
+        tutorials: vec![],
         identity: "fixture".into(),
         warriors,
         items: definitions,
@@ -175,17 +164,6 @@ fn pack_command_is_atomic_and_resumes_with_the_same_events() {
         );
         assert_eq!(rejected, before);
     }
-    assert!(
-        apply(
-            Command::UseAmmunitionPack {
-                warrior: 6,
-                slot: 0
-            },
-            &mut state,
-            &content
-        )
-        .is_err()
-    );
     let mut modal = resumed.clone();
     modal.exploration.as_mut().unwrap().script = Some(ScriptState {
         record: vec![0; 42],

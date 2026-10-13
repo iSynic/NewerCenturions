@@ -1,4 +1,5 @@
 use centurions_content::Content;
+use centurions_core::{Command, Session, apply};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -78,6 +79,20 @@ pub fn content() -> Content {
             .unwrap()
         })
         .clone()
+}
+
+pub fn mission_session(content: &Content) -> Session {
+    let mut state = Session::new(content);
+    apply(Command::ImportStarters, &mut state, content).unwrap();
+    apply(
+        Command::EnterMission {
+            name: "The Thunder of Guns".into(),
+        },
+        &mut state,
+        content,
+    )
+    .unwrap();
+    state
 }
 
 pub fn data(name: &str) -> Vec<u8> {
@@ -200,6 +215,7 @@ impl NativeCase for Value {
 pub fn battle() -> centurions_core::combat::Combat {
     use centurions_core::combat::{Combat, EnemySetup, SquadPlacement, TacticalMap};
     Combat {
+        difficulty: 0,
         battle: 0,
         map: TacticalMap {
             tiles: vec![0; 8100],
@@ -291,23 +307,7 @@ pub fn native_value<T: NativeScalar>(_: &T, value: &Value) -> T {
 }
 
 pub fn stories() -> centurions_content::mission::StoryTables {
-    centurions_content::mission::StoryTables {
-        item_cache: vec![],
-        areas: vec![],
-        races: vec![],
-        profiles: vec![],
-        door_scripts: vec![],
-        dialogue: vec![],
-        treasure: vec![],
-        prologue: String::new(),
-        item_descriptions: vec![],
-        schedule: vec![],
-        scheduled_scripts: vec![],
-        menus: vec![],
-        typed_encounters: vec![],
-        movies: Default::default(),
-        combat: None,
-    }
+    centurions_content::mission::StoryTables::default()
 }
 pub fn mission() -> centurions_content::mission::OpeningMission {
     centurions_content::mission::OpeningMission {

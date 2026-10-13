@@ -14,6 +14,7 @@ pub mod footprint;
 pub mod lifecycle;
 pub mod medical;
 pub mod mission_deaths;
+pub mod monster;
 pub mod natural_conditions;
 pub mod party_buffs;
 pub mod player_psi;
@@ -26,6 +27,8 @@ pub mod weapon_work;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Combat {
+    #[serde(default, skip_serializing_if = "crate::normal_difficulty")]
+    pub difficulty: i16,
     pub battle: i16,
     pub map: TacticalMap,
     pub squad: SquadPlacement,
@@ -58,10 +61,11 @@ fn empty_field_used() -> Vec<u8> {
 }
 impl Combat {
     pub fn validate(&self, warriors: &[Warrior]) -> Result<(), RuleError> {
-        if warriors.len() != 6
+        if !(1..=6).contains(&warriors.len())
+            || !(-2..=2).contains(&self.difficulty)
             || self.map.tiles.len() != 8100
-            || self.squad.positions.len() != 6
-            || self.squad.under_tiles.len() != 6
+            || self.squad.positions.len() != warriors.len()
+            || self.squad.under_tiles.len() != warriors.len()
             || self.enemies.records.len() > 100
             || self.enemies.positions.len() != self.enemies.records.len()
             || self.order.len() != 110
@@ -78,7 +82,9 @@ impl Combat {
                 .is_some_and(|packet| packet.len() != 58)
             || self.enemies.records.iter().any(|m| m.bytes.len() != 288)
             || self.order.iter().any(|id| {
-                *id < -1 || (*id >= 6 && *id < 10) || *id >= self.enemies.records.len() as i16 + 10
+                *id < -1
+                    || (*id >= warriors.len() as i16 && *id < 10)
+                    || *id >= self.enemies.records.len() as i16 + 10
             })
             || self
                 .squad
@@ -703,6 +709,7 @@ fn begin_battle_with_group(
         base,
         &mut state.random,
         allies,
+        state.difficulty,
     )?;
     for (monster, position) in enemies.records.iter_mut().zip(&enemies.positions) {
         if position.0 < squad.positions[0].0 {
@@ -768,6 +775,7 @@ fn begin_battle_with_group(
         |combat| (combat.attack_packet.clone(), combat.attack_identity),
     );
     state.combat = Some(Combat {
+        difficulty: state.difficulty,
         battle: id,
         map,
         squad,
@@ -855,6 +863,18 @@ pub fn place_enemies(
     base: (i16, i16),
     random: &mut RandomState,
 ) -> Result<EnemySetup, RuleError> {
+    place_enemies_at_difficulty(map, mission, battle, definitions, base, random, 0)
+}
+
+pub fn place_enemies_at_difficulty(
+    map: &mut TacticalMap,
+    mission: &centurions_content::mission::OpeningMission,
+    battle: &BattleRecord,
+    definitions: &[u8],
+    base: (i16, i16),
+    random: &mut RandomState,
+    difficulty: i16,
+) -> Result<EnemySetup, RuleError> {
     place_enemies_with_allies(
         map,
         mission,
@@ -866,9 +886,11 @@ pub fn place_enemies(
             records: vec![],
             positions: vec![],
         },
+        difficulty,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn place_enemies_with_allies(
     map: &mut TacticalMap,
     mission: &centurions_content::mission::OpeningMission,
@@ -877,6 +899,7 @@ fn place_enemies_with_allies(
     base: (i16, i16),
     random: &mut RandomState,
     mut result: EnemySetup,
+    difficulty: i16,
 ) -> Result<EnemySetup, RuleError> {
     for y in 0..26 {
         for x in 0..26 {
@@ -931,9 +954,9 @@ fn place_enemies_with_allies(
             for _ in 0..dice {
                 stamina = stamina.wrapping_add(random.bound(8));
             }
-            stamina = stamina.max(1);
             put_word(bytes, 0x110, stamina);
             put_word(bytes, 0x112, stamina);
+            monster::adjust_battle(bytes, difficulty)?;
             if id < 0 {
                 let hostile = i16::from(word(bytes, 0xe)? == 0);
                 put_word(bytes, 0xe, hostile);
@@ -958,9 +981,9 @@ pub fn place_squad(
     direction: i16,
     race_moves: &[i8],
 ) -> Result<SquadPlacement, RuleError> {
-    if warriors.len() != 6 || !(1..=360).contains(&direction) {
+    if !(1..=6).contains(&warriors.len()) || !(1..=360).contains(&direction) {
         return Err(RuleError::Invalid(
-            "formation requires six warriors and a direction".into(),
+            "formation requires one to six warriors and a direction".into(),
         ));
     }
     let vertical = !(45..=315).contains(&direction) || (direction > 135 && direction < 225);
@@ -1200,7 +1223,10 @@ pub fn initiative(
     surprise: i16,
     random: &mut RandomState,
 ) -> Result<Vec<i16>, RuleError> {
-    if warrior_speeds.len() != 6 || enemy_speeds.len() > 100 || !(-1..=1).contains(&surprise) {
+    if !(1..=6).contains(&warrior_speeds.len())
+        || enemy_speeds.len() > 100
+        || !(-1..=1).contains(&surprise)
+    {
         return Err(RuleError::Invalid(
             "initiative requires the living starter squad and at most 100 enemies".into(),
         ));
@@ -1209,17 +1235,17 @@ pub fn initiative(
     let mut order = vec![-1; 110];
     match surprise {
         1 => {
-            for index in 0..6 {
+            for index in 0..warrior_speeds.len() {
                 order[index + 1] = index as i16;
             }
         }
         -1 => {
-            for index in 0..6 {
+            for index in 0..warrior_speeds.len() {
                 order[109 - index] = index as i16;
             }
         }
         _ => {
-            let mut left = 6;
+            let mut left = warrior_speeds.len();
             while left != 0 {
                 let slot = random.bound(total as i16) as usize;
                 if order[slot] == -1 {

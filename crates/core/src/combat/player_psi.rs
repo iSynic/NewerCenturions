@@ -85,7 +85,7 @@ pub fn validate_party(
             dependency: "other outdoor learned spell or power",
         });
     }
-    if warriors.len() != 6 {
+    if !(1..=6).contains(&warriors.len()) {
         return Err(RuleError::Invalid("outdoor psi input size".into()));
     }
     let actor = warriors

@@ -14,6 +14,7 @@ fn natural_attack_matches_original_routine() {
             &mut target,
             case.n::<usize>("attack"),
             &mut random,
+            0,
         )
         .unwrap();
         crate::support::native_expect! {

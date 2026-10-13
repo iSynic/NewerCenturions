@@ -142,7 +142,10 @@ pub fn apply_group_mask(
     mask: &[i16; 6],
     group: bool,
 ) -> Result<GroupSetup, RuleError> {
-    if warriors.len() != 6 || squad.positions.len() != 6 || squad.under_tiles.len() != 6 {
+    if !(1..=6).contains(&warriors.len())
+        || squad.positions.len() != warriors.len()
+        || squad.under_tiles.len() != warriors.len()
+    {
         return Err(RuleError::Invalid("group formation missing".into()));
     }
     let mut result = GroupSetup {
@@ -151,7 +154,7 @@ pub fn apply_group_mask(
         squad: squad.clone(),
         order: order.to_vec(),
     };
-    for (member, mask_value) in mask.iter().enumerate() {
+    for (member, mask_value) in mask.iter().take(warriors.len()).enumerate() {
         let bytes = &mut result.warriors[member].bytes;
         span(bytes, 0, 3138)?;
         bytes[0x9df] = 1;

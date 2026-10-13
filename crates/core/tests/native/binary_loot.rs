@@ -54,6 +54,7 @@ fn authored_supply_items_match_original_initialization() {
         definitions[id.parse::<usize>().unwrap()] = hex(bytes.as_str().unwrap());
     }
     let content = Content {
+        tutorials: vec![],
         identity: "fixture".into(),
         warriors: vec![],
         items: definitions,
@@ -83,6 +84,7 @@ fn verify(input: &str) {
     let mut definitions = vec![vec![0; 150]; 1000];
     definitions[fixture.item_id as usize] = hex(&fixture.definition);
     let content = Content {
+        tutorials: vec![],
         identity: "fixture".into(),
         warriors: vec![],
         items: definitions,

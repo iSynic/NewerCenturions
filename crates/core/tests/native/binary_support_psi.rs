@@ -17,6 +17,7 @@ fn combat(s: &Value, caster: i16) -> Combat {
     let mut order = vec![-1; 110];
     order[1] = caster;
     Combat {
+        difficulty: 0,
         battle: 85,
         map: TacticalMap {
             tiles: words(s.text("map")),
@@ -192,6 +193,7 @@ fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
                 attacks,
                 &retained,
                 &buffs,
+                0,
             )
         }
         .unwrap_or_else(|e| panic!("{label} {e:?}"));

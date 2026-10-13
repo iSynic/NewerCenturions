@@ -30,53 +30,22 @@ fn unsupported(dependency: &'static str) -> RuleError {
     }
 }
 
-/// buildmonster109210 at difficulty zero consumes HP dice before armor, speed and psi.
+/// Preserve the authored summon-ID boundary before invoking buildmonster.
 fn build_monster(
     definitions: &[u8],
     id: i16,
     faction: i16,
+    difficulty: i16,
     random: &mut RandomState,
 ) -> Result<MonsterRecord, RuleError> {
     if ![1, 2, 3, 5, 108, 109].contains(&id) {
         return Err(unsupported("unverified summoned monster"));
     }
     let mut monster = MonsterRecord::read(definitions, id)?;
-    let bytes = &mut monster.bytes;
-    let level = word(bytes, 0)?;
-    if !(0..=127).contains(&level) || word(bytes, 0x4e)? < 0 {
-        return Err(unsupported("summoned level or random weapon tables"));
-    }
-    put_word(bytes, 0x10c, -1);
-    let mut hp = word(bytes, 2)?;
-    for _ in 0..level {
-        hp = hp.wrapping_add(random.bound(8));
-    }
-    hp = hp.max(1);
-    put_word(bytes, 0x110, hp);
-    put_word(bytes, 0x112, hp);
-    if faction > -1 {
-        put_word(bytes, 0xe, faction);
-    }
-    bytes[0x107] = 0;
-    bytes[0x108] = 0;
-    let armor = word(bytes, 8)?;
-    let armor = if armor == 0 {
-        armor
-    } else {
-        armor.wrapping_add(random.bound(3).wrapping_sub(2))
-    };
-    put_word(bytes, 8, armor.max(0));
-    let speed = word(bytes, 4)?
-        .wrapping_add(random.bound(3).wrapping_sub(2))
-        .max(1);
-    put_word(bytes, 4, speed);
-    let psi = word(bytes, 0x52)?;
-    let spread = psi / 10;
-    let psi = psi.wrapping_add(random.range(spread.wrapping_neg(), spread));
-    put_word(bytes, 0x52, psi);
-    put_word(bytes, 0x10e, psi);
-    let chance = word(bytes, 0x5c)?;
-    put_word(bytes, 0x5c, chance.wrapping_neg());
+    put_word(&mut monster.bytes, 0x10c, -1);
+    let mut monster = super::monster::summon(monster, faction, difficulty, random)?;
+    let chance = word(&monster.bytes, 0x5c)?;
+    put_word(&mut monster.bytes, 0x5c, chance.wrapping_neg());
     Ok(monster)
 }
 
@@ -167,7 +136,7 @@ fn spawn(
     }
     let faction = word(&combat.enemies.records[active].bytes, 0xe)?;
     for _ in 0..count {
-        let monster = build_monster(definitions, id, faction, random)?;
+        let monster = build_monster(definitions, id, faction, combat.difficulty, random)?;
         let body = combat.enemies.records.len() as i16 + 10;
         let placed = place_spawn(combat, mission, &monster, active, body)?;
         combat.map = placed.map;
@@ -222,7 +191,7 @@ pub fn initialize(
     if combat.enemies.records.len() > 100
         || combat.enemies.positions.len() != combat.enemies.records.len()
         || combat.enemies.records.iter().any(|m| m.bytes.len() != 288)
-        || warriors.len() != 6
+        || !(1..=6).contains(&warriors.len())
         || warriors.iter().any(|w| w.bytes.len() != 3138)
         || combat.order.len() != 110
         || combat.cursor >= 110

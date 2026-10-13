@@ -7,16 +7,7 @@ fn authored_pack_collection_matches_live_records_reserve_and_rng() {
     let case = &fixture["cases"][0];
     let before = &case["before"];
     let after = &case["after"];
-    let mut state = Session::new(&content);
-    apply(Command::ImportStarters, &mut state, &content).unwrap();
-    apply(
-        Command::EnterMission {
-            name: "The Thunder of Guns".into(),
-        },
-        &mut state,
-        &content,
-    )
-    .unwrap();
+    let mut state = crate::support::mission_session(&content);
     state.warriors = before
         .array("warriors")
         .iter()

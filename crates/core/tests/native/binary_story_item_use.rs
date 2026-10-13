@@ -11,6 +11,7 @@ fn content(definition: Vec<u8>) -> Content {
     let mut items = vec![vec![0; 150]; 833];
     items[832] = definition;
     Content {
+        tutorials: vec![],
         identity: String::from("item-use fixture"),
         warriors: vec![],
         items,

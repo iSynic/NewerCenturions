@@ -41,6 +41,7 @@ fn formation_matches_whole_warriors_and_tactical_map() {
             ..crate::support::mission()
         };
         let content = Content {
+            tutorials: vec![],
             identity: "fixture".into(),
             warriors: vec![],
             items: decode(&fixture.items)

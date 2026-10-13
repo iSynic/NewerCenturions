@@ -3,8 +3,13 @@
 mod application;
 mod assets;
 mod audio;
+mod editor;
+mod help;
 mod input;
 mod layout;
+#[cfg(all(test, feature = "original-fixtures"))]
+#[path = "../tests/unit/original_content.rs"]
+mod original_content;
 mod presentation;
 
 use assets::Assets;
@@ -115,6 +120,25 @@ async fn main() {
         _ => application::Screen::Logo,
     };
     let mut application = application::Application::new(screen);
+    if let Err(error) = application.help.preferences(
+        option("--preferences-path")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::var_os("LOCALAPPDATA")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(std::env::temp_dir)
+                    .join("NewCenturions/ui.json")
+            }),
+    ) {
+        ui.message(error);
+    }
+    if screen == application::Screen::Squad
+        && loaded.is_ok()
+        && assets.as_ref().is_some_and(|assets| assets.is_ok())
+        && let Err(error) = application.help.open(121, 124)
+    {
+        ui.message(error);
+    }
     application.show_hover = capture.is_none();
     if capture.is_some()
         && screen == application::Screen::Squad
@@ -163,6 +187,49 @@ async fn main() {
     if let Err(e) = &audio {
         ui.message(e.clone());
     }
+    if capture.is_some()
+        && matches!(
+            option("--screen").as_deref(),
+            Some("editor" | "item-editor" | "editor-level" | "editor-scans")
+        )
+        && let (Ok(content), Some(state)) = (&loaded, &mut state)
+    {
+        application.editing = true;
+        let action = if option("--screen").as_deref() == Some("item-editor") {
+            application::ApplicationAction::OpenItemEditor(0, 0)
+        } else {
+            application::ApplicationAction::OpenEditor(usize::from(
+                option("--screen").as_deref() == Some("editor-scans"),
+            ))
+        };
+        if let Err(error) = application.handle(action, state, content) {
+            ui.message(error);
+        }
+        if option("--screen").as_deref() == Some("editor-level") {
+            for _ in 0..3 {
+                if let Err(error) = application.handle(
+                    application::ApplicationAction::EditorItem(81),
+                    state,
+                    content,
+                ) {
+                    ui.message(error);
+                    break;
+                }
+            }
+        }
+        if option("--screen").as_deref() == Some("editor-scans") {
+            for item in [39, 2, 11] {
+                if let Err(error) = application.handle(
+                    application::ApplicationAction::EditorItem(item),
+                    state,
+                    content,
+                ) {
+                    ui.message(error);
+                    break;
+                }
+            }
+        }
+    }
     let target = render_target(800, 600);
     target.texture.set_filter(FilterMode::Nearest);
     let mut camera = Camera2D::from_display_rect(Rect::new(0., 0., 800., 600.));
@@ -190,6 +257,7 @@ async fn main() {
         }
         set_camera(&camera);
         if let (Ok(content), Some(state), Some(Ok(assets))) = (&loaded, &mut state, &assets) {
+            ui.selected = ui.selected.min(state.warriors.len().saturating_sub(1));
             while ui
                 .effects
                 .front()
@@ -198,7 +266,9 @@ async fn main() {
                 ui.effects.pop_front();
             }
             let before = state.clone();
-            application.sync(state, capture.is_none());
+            if let Err(error) = application.sync(state, capture.is_none()) {
+                ui.messages.push_back(error);
+            }
             if capture.is_none()
                 && let Ok(audio) = &audio
             {
@@ -231,7 +301,7 @@ async fn main() {
                 match application.handle(command, state, content) {
                     Ok((next, events)) => {
                         action = next;
-                        ui.events(&events, state);
+                        ui.events(&events, assets);
                         if application.sound
                             && let Ok(audio) = &audio
                         {
@@ -311,7 +381,7 @@ async fn main() {
                                 {
                                     ui.inspection = None;
                                 }
-                                ui.events(&events, state);
+                                ui.events(&events, assets);
                                 if let Ok(audio) = &audio {
                                     audio.play(&events);
                                 }

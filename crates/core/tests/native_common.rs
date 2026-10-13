@@ -138,6 +138,7 @@ pub fn scalar_words(value: &Value) -> Vec<i16> {
 }
 pub fn melee_combat(records: &[u8]) -> Combat {
     Combat {
+        difficulty: 0,
         battle: 117,
         map: TacticalMap {
             tiles: vec![1155; 8100],

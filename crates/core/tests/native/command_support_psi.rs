@@ -6,16 +6,7 @@ fn fixture() -> Value {
 }
 
 fn outdoor(content: &Content, case: &Value) -> Session {
-    let mut state = Session::new(content);
-    apply(Command::ImportStarters, &mut state, content).unwrap();
-    apply(
-        Command::EnterMission {
-            name: "The Thunder of Guns".into(),
-        },
-        &mut state,
-        content,
-    )
-    .unwrap();
+    let mut state = crate::support::mission_session(content);
     state.warriors = crate::support::warriors(&case["before"]["party"]);
     state.psi_memory = Some(case["before"].bytes("memory"));
     state.party_buffs = case["before"].bytes("party_buffs");

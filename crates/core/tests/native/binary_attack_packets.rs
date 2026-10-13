@@ -10,6 +10,7 @@ fn fixture() -> serde_json::Value {
 
 fn combat(records: &[u8], member: i16) -> Combat {
     Combat {
+        difficulty: 0,
         battle: 117,
         map: TacticalMap {
             tiles: vec![1155; 8100],
@@ -59,6 +60,7 @@ fn attack_packets_match_native_complete_writers_and_retention() {
                     &mut random,
                     &attacks,
                     &retained,
+                    0,
                 )
                 .unwrap();
                 (result, packet, enemy.bytes.clone())
@@ -71,6 +73,7 @@ fn attack_packets_match_native_complete_writers_and_retention() {
                     &mut random,
                     &attacks,
                     &retained,
+                    0,
                 )
                 .unwrap();
                 (result, packet, enemy.bytes.clone())

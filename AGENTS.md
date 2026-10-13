@@ -10,6 +10,7 @@
 - Registration is always satisfied in the reconstruction. Registration-check opcode98 continues without a gate; promotion uses registered behavior. Do not require registration receipts or warrior codes.
 - Public distributions must exclude original copyrighted assets and use the player's existing New Centurions installation. Bundled originals are for local development checkpoints only.
 - Use ordinary maintainer-facing names and comments. Never use Codex in branch names.
+- In-game descriptive text must come verbatim from original resources or recovered original text. Do not add build-status copy, paraphrased tutorials, or authored gameplay explanations.
 - Keep tests to the minimum needed for critical logic, complex state transitions, and high-risk edge cases. Review proposed cases and remove redundant coverage before implementation. Do not test trivial getters, setters, standard configuration, framework behavior, or incidental implementation details. Prefer command/replay end-to-end coverage when it exercises the feature. Preserve independent native reference cases that establish otherwise untested critical behavior; consolidate their harnesses instead of duplicating them. Report only essential tests, and rerun checks only when changed behavior or unresolved failures justify them.
 - Verification: `python -m unittest discover -s tests/python`, `cargo fmt --check`, `cargo test --workspace --features original-fixtures`, `cargo clippy --workspace --all-targets --features original-fixtures -- -D warnings`, `cargo build --workspace --release`.
 

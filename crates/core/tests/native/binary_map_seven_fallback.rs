@@ -18,6 +18,7 @@ fn map_seven_ranged_to_natural_fallback_matches_original_full_records_and_random
             &mut enemy,
             case.n::<usize>("attack"),
             &mut random,
+            0,
         )
         .unwrap();
         party[member * 3138..(member + 1) * 3138].copy_from_slice(&warrior.bytes);

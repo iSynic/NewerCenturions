@@ -195,6 +195,7 @@ pub fn grant_story_treasure(
     treasure: &[u8],
     content: &Content,
     random: &mut RandomState,
+    difficulty: i16,
 ) -> Result<Vec<InventoryRecord>, RuleError> {
     let treasure = span(treasure, 0, 88)?;
     if treasure[80..88].iter().any(|value| *value != 0) {
@@ -208,9 +209,16 @@ pub fn grant_story_treasure(
     for slot in 0..20 {
         let id = word(treasure, slot * 2)?;
         if id > 0 {
-            result.push(items::initialize(
+            let enhancement = word(treasure, 40 + slot * 2)?;
+            let enhancement = if enhancement == 0 {
+                0
+            } else {
+                enhancement.wrapping_add(difficulty).max(1)
+            };
+            result.push(items::initialize_at_difficulty(
                 id,
-                word(treasure, 40 + slot * 2)?,
+                enhancement,
+                difficulty,
                 content,
                 &mut candidate_random,
             )?);

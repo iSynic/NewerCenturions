@@ -8,16 +8,7 @@ fn inactive_battle_entry_matches_original_complete_records_formation_order_and_r
     let cases = fixture.array("cases");
 
     for case in cases {
-        let mut state = Session::new(&content);
-        apply(Command::ImportStarters, &mut state, &content).unwrap();
-        apply(
-            Command::EnterMission {
-                name: "The Thunder of Guns".into(),
-            },
-            &mut state,
-            &content,
-        )
-        .unwrap();
+        let mut state = crate::support::mission_session(&content);
         state.warriors = crate::support::warriors(&case["warriors_before"]);
         if case["seed_before"] == 12 {
             state.health_context = Some(centurions_core::story_health::context(

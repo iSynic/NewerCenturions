@@ -18,6 +18,7 @@ fn controlled(case: &Value) -> Combat {
     let mut order = vec![-1; 110];
     order[1] = 1;
     Combat {
+        difficulty: 0,
         battle: 85,
         map: TacticalMap {
             tiles: words(case.text("map_before")),

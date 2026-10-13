@@ -116,6 +116,7 @@ fn resolve_attack(
                 random,
                 attacks,
                 &retained,
+                c.difficulty,
             )?;
             if copies_packet {
                 c.attack_packet = Some(packet);
@@ -126,6 +127,7 @@ fn resolve_attack(
                 &mut w[a as usize],
                 &mut c.enemies.records[(b - 10) as usize],
                 random,
+                c.difficulty,
             )?
         }
     } else if a >= 10 && b < 10 {
@@ -159,7 +161,7 @@ fn resolve_attack(
                     random,
                     (a, b, index, actor),
                     weapon,
-                    0,
+                    c.difficulty,
                     attacks,
                     &retained,
                     buffs,
@@ -172,7 +174,7 @@ fn resolve_attack(
                     &mut c.enemies.records[(a - 10) as usize],
                     weapon,
                     random,
-                    0,
+                    c.difficulty,
                     attacker_x,
                     target_x,
                     attacks,
@@ -187,7 +189,7 @@ fn resolve_attack(
                     &mut c.enemies.records[(a - 10) as usize],
                     weapon,
                     random,
-                    0,
+                    c.difficulty,
                     attacker_x,
                     target_x,
                 )?
@@ -203,6 +205,7 @@ fn resolve_attack(
                     attacks,
                     &retained,
                     buffs,
+                    c.difficulty,
                 )?;
                 c.attack_packet = Some(packet);
                 result
@@ -212,6 +215,7 @@ fn resolve_attack(
                     &mut c.enemies.records[(a - 10) as usize],
                     index,
                     random,
+                    c.difficulty,
                 )?
             }
         }
@@ -231,14 +235,20 @@ fn resolve_attack(
                     random,
                     (a, b, index, actor),
                     weapon,
-                    0,
+                    c.difficulty,
                     attacks,
                     &retained,
                 )?;
                 c.attack_packet = Some(packet);
                 result
             } else {
-                super::enemy_weapons::melee_enemy(c, random, (a, b, index, actor), weapon, 0)?
+                super::enemy_weapons::melee_enemy(
+                    c,
+                    random,
+                    (a, b, index, actor),
+                    weapon,
+                    c.difficulty,
+                )?
             }
         } else if let Some(attacks) = attacks {
             load_natural_work(c, items, buffers)?;
@@ -1442,7 +1452,7 @@ fn enemy_fire(
                     &mut c.enemies.records[e],
                     &prepared,
                     random,
-                    0,
+                    c.difficulty,
                 )?
             } else if target >= 10 {
                 let caster = c.enemies.records[e].clone();
@@ -1450,7 +1460,7 @@ fn enemy_fire(
                     &mut c.enemies.records[target - 10],
                     &caster,
                     &prepared,
-                    0,
+                    c.difficulty,
                     random,
                 )?
             } else {
@@ -2357,7 +2367,7 @@ pub fn player_shoot_action(
         &mut c.enemies.records[(target - 10) as usize],
         &prepared,
         &mut state.random,
-        0,
+        c.difficulty,
     )?;
     if result.killed {
         lifecycle::kill_body(c, &mut state.warriors, target)?;
@@ -2754,7 +2764,7 @@ pub fn reduce_enemy_round_with_fields(
             .records
             .iter()
             .any(|record| record.bytes.len() != 288)
-        || w.len() != 6
+        || !(1..=6).contains(&w.len())
         || w.iter().any(|warrior| warrior.bytes.len() != 3138)
         || selected_warrior >= w.len()
     {
@@ -3170,7 +3180,7 @@ pub fn victory_loot(
     let mut loot = vec![];
     if let Some(content) = content {
         for id in loot_ids {
-            loot.push(items::initialize_plain(id, content, random)?);
+            loot.push(items::initialize_at_difficulty(id, 0, 0, content, random)?);
         }
         loot.sort_by_key(|item| std::cmp::Reverse(item.0[10] as i8));
     }
@@ -3225,7 +3235,7 @@ pub fn confirm_survivors(state: &mut Session, content: &Content) -> Result<Vec<E
         &state.warriors,
         &combat.enemies.records,
         content,
-        0,
+        state.difficulty,
         0,
         state.party_currency,
         &mut state.random,
@@ -3316,9 +3326,12 @@ fn finish_battle_wrapper(state: &mut Session, content: &Content) -> Result<Vec<E
             state.battle_treasure.unsigned_abs() as usize * 88,
             88,
         )?;
-        for item in
-            crate::story_inventory::grant_story_treasure(treasure, content, &mut state.random)?
-        {
+        for item in crate::story_inventory::grant_story_treasure(
+            treasure,
+            content,
+            &mut state.random,
+            state.difficulty,
+        )? {
             state.load_item_work(content, item.id())?;
             let slot = state
                 .booty_items

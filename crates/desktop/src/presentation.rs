@@ -84,7 +84,7 @@ impl UiState {
             }
         }
     }
-    pub fn events(&mut self, events: &[Event], state: &Session) {
+    pub fn events(&mut self, events: &[Event], assets: &Assets) {
         for event in events {
             if let Event::Delay { ticks } = event {
                 self.delay_until = self.delay_until.max(get_time()) + f64::from(*ticks) / 60.;
@@ -110,76 +110,13 @@ impl UiState {
                     frame_seconds: f64::from((*delay).max(1)) / 60.,
                 });
             }
-            let text = match event {
-                Event::AttackResolved {
-                    attacker,
-                    target,
-                    damage,
-                    defeated,
-                } => {
-                    let name = |body: i16| {
-                        if (0..6).contains(&body) {
-                            state.warriors[body as usize].name.clone()
-                        } else {
-                            format!("Enemy {}", body - 9)
-                        }
-                    };
-                    format!(
-                        "{} → {}: {}{}",
-                        name(*attacker),
-                        name(*target),
-                        if *damage == 0 {
-                            "miss".into()
-                        } else {
-                            format!("{damage} damage")
-                        },
-                        if *defeated { ", defeated" } else { "" }
-                    )
-                }
-                Event::SpellResolved {
-                    target,
-                    damage,
-                    defeated,
-                    ..
-                } => {
-                    let name = if (0..6).contains(target) {
-                        state.warriors[*target as usize].name.clone()
-                    } else {
-                        "A combatant".into()
-                    };
-                    if *damage == 0 {
-                        format!("Psi affects {name}.")
-                    } else {
-                        format!(
-                            "{name} takes {damage} psi damage{}.",
-                            if *defeated { " and is defeated" } else { "" }
-                        )
-                    }
-                }
-                Event::CombatantAdded { .. } => "A combatant joins the battle.".into(),
-                Event::CombatantRemoved { .. } => "A combatant leaves the battle.".into(),
-                Event::AllyAdded { .. } => "An ally joins the squad.".into(),
-                Event::LevelAdvanced { warrior, level } => format!(
-                    "{} advances to level {level}.",
-                    state.warriors[*warrior].name
-                ),
-                Event::CollectionRejected { warning } => {
-                    format!("The action could not be completed (message {warning}).")
-                }
-                Event::BattleEnded { victory: true } => {
-                    "Victory. The squad returns to exploration.".into()
-                }
-                Event::AmmunitionAdded {
-                    ammunition,
-                    quantity,
-                    reserve,
-                } => format!("Ammo {ammunition}: +{quantity} rounds. Reserve {reserve}."),
-                Event::TimeAdvanced { day, hour, minute } if *hour == 0 || *hour == 12 => {
-                    format!("Day {day}, {hour:02}:{minute:02}. Squad recovery completed.")
-                }
-                _ => String::new(),
-            };
-            self.message(text);
+            if let Event::CollectionRejected { warning } = event
+                && let Some(text) = warning
+                    .checked_sub(1)
+                    .and_then(|index| assets.warnings.get(index as usize))
+            {
+                self.message(text.clone());
+            }
         }
     }
 }
@@ -727,21 +664,8 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                         Action::Command(Command::CancelMenu),
                     );
                 }
-                Presentation::WarriorChoice { .. } => {
-                    assets.wrapped(
-                        "Choose a living warrior from the squad [1-6].",
-                        Rect::new(12., 467., 444., 82.),
-                        12,
-                        16.,
-                    );
-                }
+                Presentation::WarriorChoice { .. } => {}
                 Presentation::StageChange { .. } => {
-                    assets.wrapped(
-                        "Proceed to the next mission?",
-                        Rect::new(12., 467., 444., 82.),
-                        12,
-                        16.,
-                    );
                     for (label, x, answer) in [("Yes [Y]", 490., true), ("No [N]", 625., false)] {
                         button(
                             assets,
@@ -783,25 +707,8 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                         Action::Command(Command::CancelMenu),
                     );
                 }
-                Presentation::Loot => {
-                    assets.text(
-                        "You find equipment! Open Items to collect or store it.",
-                        12.,
-                        477.,
-                        12,
-                        YELLOW,
-                    );
-                }
-                Presentation::Survivors => {
-                    assets.text("Surviving allies", 12., 250., 16, WHITE);
-                    assets.text(
-                        "Continue to keep the surviving allies with the squad.",
-                        12.,
-                        280.,
-                        12,
-                        YELLOW,
-                    );
-                }
+                Presentation::Loot => {}
+                Presentation::Survivors => {}
             }
             if !matches!(
                 p,
@@ -816,11 +723,7 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                 button(
                     assets,
                     &mut controls,
-                    if keep_spells {
-                        "Keep psi selections"
-                    } else {
-                        "Continue"
-                    },
+                    "Continue",
                     layout::CONTINUE,
                     !state.booty_items.iter().any(|i| i.id() != 0),
                     Action::Command(if keep_spells {
@@ -843,13 +746,6 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                 Rect::new(12., 467., 444., 99.),
                 12,
                 17.,
-            );
-            assets.text(
-                "Arrows: move   Click enemy: attack   F / R / Space",
-                12.,
-                578.,
-                12,
-                YELLOW,
             );
         }
     }
@@ -927,21 +823,6 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
             }
         }
     }
-    if let Some((spell, _)) = ui.psi_pending {
-        draw_rectangle(0., 449., 470., 139., Color::from_rgba(12, 18, 28, 245));
-        let prompt = match spell {
-            2101 => {
-                "Crystalize: click a map location. Its five-cell cross damages every body it reaches and leaves a lingering field. Esc cancels."
-            }
-            1305 => {
-                "Electric Shield: click a map location. Eligible squad members in its area receive electric protection. Esc cancels."
-            }
-            _ => {
-                "Energy Storm: click a map location to cast. The storm affects everyone in its area. Esc cancels."
-            }
-        };
-        assets.wrapped(prompt, Rect::new(12., 465., 444., 90.), 14, 20.);
-    }
     if state.medical_continuation.is_some() {
         controls.clear();
         draw_rectangle(0., 20., 800., 580., Color::from_rgba(0, 0, 0, 180));
@@ -968,12 +849,6 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
 }
 
 fn draw_bandage(state: &Session, assets: &Assets, controls: &mut Vec<Control>) {
-    assets.wrapped(
-        "Choose a warrior to stop bleeding. This ends the current turn.",
-        Rect::new(48., 124., 650., 48.),
-        14,
-        20.,
-    );
     for (index, warrior) in state.warriors.iter().enumerate() {
         let y = 185. + index as f32 * 44.;
         assets.text(
@@ -1023,27 +898,13 @@ fn draw_medical_target(
     let pending = state.medical_continuation.as_ref().unwrap();
     let learned = pending.origin == centurions_core::MedicalOrigin::LearnedHeal;
     assets.text(
-        if learned {
-            "Heal Mk I — choose a portrait"
-        } else {
-            "StimNeedle — choose a target"
-        },
+        if learned { "Heal Mk I" } else { "StimNeedle" },
         48.,
         70.,
         18,
         YELLOW,
     );
     if ui.medical_cancel {
-        assets.wrapped(
-            if learned {
-                "Cancel this cast? Some psi is refunded; canceling costs 3 movement."
-            } else {
-                "Cancel this use? The needle has already been consumed."
-            },
-            Rect::new(48., 148., 650., 70.),
-            16,
-            23.,
-        );
         button(
             assets,
             controls,
@@ -1064,12 +925,6 @@ fn draw_medical_target(
         );
         return;
     }
-    assets.wrapped(if learned {
-        "Choose an unconscious warrior. Revived warriors return to formation. Heal cannot help PDP-11. Psi has been charged; this action uses the caster's turn."
-    } else {
-        "Choose an organic warrior. Unconscious warriors return to formation if revived. Canceling still consumes the needle."
-    },
-        Rect::new(48., 110., 650., 56.), 14, 20.);
     let arena = state.combat.as_ref().unwrap();
     let mission = content
         .map(state.exploration.as_ref().unwrap().map)
@@ -1152,44 +1007,14 @@ fn draw_psi(
             );
         }
         let mut y = 182.;
-        for (spell, label, cost, outdoors, portrait) in [
-            (1101, "Heal Mk I: choose a living body", 6, false, false),
-            (
-                1101,
-                "Heal Mk I: choose an unconscious warrior",
-                6,
-                false,
-                true,
-            ),
-            (
-                1103,
-                "Inertial Shield Mk I: party protection",
-                15,
-                true,
-                false,
-            ),
-            (
-                1305,
-                "Electric Shield Mk II: choose a location",
-                8,
-                false,
-                false,
-            ),
-            (2101, "Crystalize Mk I: lingering cross", 8, false, false),
-            (
-                2204,
-                "Energy Storm Mk II: choose a location",
-                25,
-                false,
-                false,
-            ),
-            (
-                2302,
-                "Cosmic Blast Mk I: all hostile bodies",
-                25,
-                false,
-                false,
-            ),
+        for (spell, cost, outdoors, portrait) in [
+            (1101, 6, false, false),
+            (1101, 6, false, true),
+            (1103, 15, true, false),
+            (1305, 8, false, false),
+            (2101, 8, false, false),
+            (2204, 25, false, false),
+            (2302, 25, false, false),
         ] {
             if !warrior.knows_spell(spell).unwrap_or(false) || outdoors != combat.is_none() {
                 continue;
@@ -1237,33 +1062,19 @@ fn draw_psi(
             button(
                 assets,
                 controls,
-                &format!("{label}   {} psi", cost * power),
+                assets.spell_names.get(&spell).map_or("", String::as_str),
                 Rect::new(48., y, 674., 32.),
                 enabled,
                 action,
             );
             y += 38.;
         }
-        if y == 182. {
-            assets.text("No available learned psi spells.", 48., y, 14, WHITE);
-        }
-        let explanation = if combat.is_some() {
-            "Point casts cost 2 AP and 3 movement. Living Heal reaches one tile. Unconscious Heal supports powers 1–4 and uses the caster's turn. PDP-11 is immune. Electric Shield reaches eight tiles and requires sight."
-        } else {
-            "Inertial Shield protects the party from melee attacks. Its duration decreases each hour outdoors and each combat round. Select a squad member, then cast a learned spell."
-        };
-        assets.wrapped(
-            explanation,
-            Rect::new(48., (y + 12.).max(360.), 674., 78.),
-            14,
-            20.,
-        );
     } else if let (Some(combat), Some((spell, power))) = (combat, ui.psi_choice) {
         if spell != 1101 {
             button(
                 assets,
                 controls,
-                "Choose a location on the map",
+                "Map",
                 Rect::new(48., 136., 330., 28.),
                 true,
                 Action::PsiMapTarget,
@@ -1333,17 +1144,6 @@ fn draw_psi(
             Rect::new(166., 485., 110., 26.),
             (ui.page + 1) * 8 < targets.len(),
             Action::Page(1),
-        );
-        assets.text(
-            if spell == 1101 {
-                "Choose a body within one tile. Esc cancels."
-            } else {
-                "Area psi affects every body in its area. Esc cancels."
-            },
-            48.,
-            542.,
-            14,
-            WHITE,
         );
     }
 }
@@ -1432,10 +1232,6 @@ fn draw_conditions(state: &Session, assets: &Assets, ui: &UiState) {
     }
     if w.bytes[0x9de] != 0 {
         assets.text("Bleeding", 48., y, 14, WHITE);
-        y += 20.;
-    }
-    if y == 146. {
-        assets.text("No active conditions.", 48., y, 14, WHITE);
     }
     assets.text(
         &format!(
@@ -1505,19 +1301,6 @@ fn draw_items(
             Action::Open(Inspection::Crate),
         );
     }
-    assets.text(
-        if crate_view {
-            "Stored equipment — recipient selected above"
-        } else if loot {
-            "Found equipment — recipient selected above"
-        } else {
-            "Carried equipment"
-        },
-        48.,
-        142.,
-        14,
-        WHITE,
-    );
     for (row, (slot, item)) in items.iter().skip(ui.page * 8).take(8).enumerate() {
         let y = 159. + row as f32 * 39.;
         if let Some(def) = content.items.get(item.id().unsigned_abs() as usize)
@@ -1708,13 +1491,6 @@ fn draw_items(
             );
         }
     }
-    assets.text(
-        &format!("Starter ammunition reserve: {} rounds", state.ammunition[0]),
-        48.,
-        499.,
-        14,
-        YELLOW,
-    );
     let reserve = state
         .ammunition
         .iter()
@@ -1763,13 +1539,7 @@ fn draw_fire_targets(
         .enumerate()
         .filter(|(_, m)| m.stamina().unwrap_or(0) > 0 && word(&m.bytes, 0xe).unwrap_or(0) != 0)
         .collect();
-    assets.text(
-        &format!("{} — firearm shot costs 2 AP", warrior.name),
-        48.,
-        142.,
-        14,
-        YELLOW,
-    );
+    assets.text(&warrior.name, 48., 142., 14, YELLOW);
     let origin = combat.squad.positions[body as usize];
     for (row, (index, monster)) in targets.iter().skip(ui.page * 8).take(8).enumerate() {
         let p = combat.enemies.positions[*index];
@@ -1808,12 +1578,5 @@ fn draw_fire_targets(
         Rect::new(166., 485., 110., 26.),
         (ui.page + 1) * 8 < targets.len(),
         Action::Page(1),
-    );
-    assets.text(
-        "Choose a target. Range, ammunition and line of sight apply.",
-        48.,
-        542.,
-        14,
-        WHITE,
     );
 }

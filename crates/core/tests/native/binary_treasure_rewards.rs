@@ -22,6 +22,7 @@ fn original_treasure_eight_preserves_participation_and_awards_experience() {
             &bytes(case, "table_before"),
             &content,
             &mut random,
+            0,
         )
         .unwrap();
         assert_eq!(

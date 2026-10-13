@@ -5,6 +5,56 @@ fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
 }
 
+/// upgradewarrior 0x162bb2..0x1631e6: each cost iteration rounds through SINGLE.
+pub fn upgrade_cost(
+    warrior: &Warrior,
+    selector: u16,
+    profile: &[u8],
+) -> Result<(i32, i32), RuleError> {
+    const BASE: [i16; 33] = [
+        100, 100, 100, 100, 100, 100, 100, 50, 200, 200, 150, 150, 150, 150, 150, 150, 175, 125,
+        200, 175, 100, 100, 300, 250, 350, 400, 100, 100, 100, 200, 250, 300, 1000,
+    ];
+    let base = *BASE.get(usize::from(selector)).ok_or_else(|| {
+        RuleError::Invalid("upgrade selector is outside the original table".into())
+    })?;
+    let offset = match selector {
+        7 => Some(0xe4),
+        16 => Some(0xf0),
+        17 => Some(0xec),
+        18 => Some(0xf8),
+        19 => Some(0xfc),
+        20 => Some(0xe0),
+        21 => Some(0x108),
+        22 => Some(0x106),
+        23..=31 => Some(0x1c + usize::from(selector - 23) * 2),
+        32 => Some(0xf4),
+        _ => None,
+    };
+    let percent = if let Some(offset) = offset {
+        word(profile, offset)?
+    } else {
+        10
+    };
+    if percent < 0 {
+        return Err(RuleError::Unsupported {
+            action: "character.upgrade_cost",
+            dependency: "negative MOS upgrade percentages are not recovered",
+        });
+    }
+    let count = word(&warrior.bytes, 0xace + usize::from(selector) * 2)?;
+    let factor = (f64::from((100. + f64::from(percent)) as f32) / 100.) as f32;
+    let mut cost = f32::from(base);
+    for _ in 0..count.max(0) {
+        cost = (f64::from(cost) * f64::from(factor)) as f32;
+        if cost >= 50_000_000. {
+            // Nonnegative percentages cannot fall back below the original final cap.
+            return Ok((50_000_000, i32::from(percent)));
+        }
+    }
+    Ok((cost.trunc() as i32, i32::from(percent)))
+}
+
 /// CODE 1 applyupgrade, 0x1634f8. The caller owns costs and eligibility.
 pub fn apply_upgrade(
     warrior: &mut Warrior,

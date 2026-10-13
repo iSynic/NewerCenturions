@@ -1150,9 +1150,9 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
             0 => {}
             1 => {
                 let mut text = map.dialogue(parameter)?;
-                for index in 0..6 {
+                for index in 0..state.warriors.len() {
                     let selected = if state.warriors[index].stamina()? < 1 {
-                        (0..6)
+                        (0..state.warriors.len())
                             .rev()
                             .find(|i| state.warriors[*i].stamina().unwrap_or(0) > 0)
                             .unwrap_or(index)
@@ -1540,7 +1540,7 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                     &state.allies,
                     state.ally_count,
                     definition,
-                    0,
+                    state.difficulty,
                     &mut state.random,
                 )?;
                 state.allies = addition.records;
@@ -1588,6 +1588,7 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                     treasure,
                     content,
                     &mut state.random,
+                    state.difficulty,
                 )?;
                 state.warriors = prepared.warriors;
                 for (slot, item) in prepared.items.into_iter().enumerate() {

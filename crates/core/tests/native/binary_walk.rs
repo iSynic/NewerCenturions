@@ -7,6 +7,7 @@ fn walking_matches_instruction_state_and_effects() {
     let fixture: serde_json::Value = crate::support::fixture("walk.json");
     let properties = fixture.bytes("properties");
     let content = Content {
+        tutorials: vec![],
         identity: "walking".into(),
         warriors: vec![],
         items: vec![],

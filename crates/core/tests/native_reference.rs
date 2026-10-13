@@ -46,6 +46,8 @@ mod binary_earned_loaded_shot;
 mod binary_earned_player_armor;
 #[path = "native/binary_earned_unloaded_firearm.rs"]
 mod binary_earned_unloaded_firearm;
+#[path = "native/binary_editor_upgrades.rs"]
+mod binary_editor_upgrades;
 #[path = "native/binary_empty_rifle_ammunition.rs"]
 mod binary_empty_rifle_ammunition;
 #[path = "native/binary_encounter_battle.rs"]
@@ -96,6 +98,8 @@ mod binary_inactive_battle_entry;
 mod binary_inactive_initiative;
 #[path = "native/binary_initiative.rs"]
 mod binary_initiative;
+#[path = "native/binary_item_editing.rs"]
+mod binary_item_editing;
 #[path = "native/binary_large_body_move.rs"]
 mod binary_large_body_move;
 #[path = "native/binary_large_placement.rs"]

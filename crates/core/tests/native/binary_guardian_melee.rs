@@ -128,6 +128,7 @@ fn caller_combat(case: &serde_json::Value) -> Combat {
     let mut order = vec![-1; 110];
     order[1] = 22;
     Combat {
+        difficulty: 0,
         battle: 85,
         map: TacticalMap {
             tiles: case.words("map_before"),

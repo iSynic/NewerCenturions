@@ -9,35 +9,38 @@ fn changes(raw: &mut [u8], changes: &serde_json::Value) {
 }
 #[test]
 fn inactive_party_initiative_matches_original_records_order_and_random_consumption() {
-    let fixture: serde_json::Value = crate::support::fixture("inactive-initiative.json");
-    let original = fixture.bytes("warriors");
-    let enemies: Vec<_> = fixture.n::<Vec<i16>>("enemy_speeds");
-    let cases = fixture.array("cases");
+    for name in ["inactive-initiative.json", "partial-initiative.json"] {
+        let fixture: serde_json::Value = crate::support::fixture(name);
+        let original = fixture.bytes("warriors");
+        let enemies: Vec<_> = fixture.n::<Vec<i16>>("enemy_speeds");
+        let cases = fixture.array("cases");
 
-    for (index, case) in cases.iter().enumerate() {
-        let mut before = original.clone();
-        changes(&mut before, &case["before_changes"]);
-        assert_eq!(digest(&before), case["before_sha256"], "case{index} input");
-        let warriors: Vec<_> = crate::support::warriors(&before);
-        let mut random = RandomState::new(case.n::<u32>("seed_before"));
-        let outcome = initiative(
-            &warriors,
-            &enemies,
-            case.n::<i16>("mode"),
-            case.n::<i8>("unavailable"),
-            &mut random,
-        )
-        .unwrap();
-        let actual: Vec<_> = crate::support::record_bytes(&outcome.warriors);
-        let mut expected = before;
-        changes(&mut expected, &case["after_changes"]);
-        assert_eq!(actual, expected, "case{index} complete warrior records");
-        assert_eq!(digest(&actual), case["after_sha256"], "case{index} output");
-        let order: Vec<_> = crate::support::words(&case.bytes("order"));
-        assert_eq!(outcome.order, order, "case{index} order");
-        crate::support::native_expect! {
-        scalar random.seed => &case["seed_after"], "binary_inactive_initiative";
-        scalar random.draws => &case["draws"], "binary_inactive_initiative";
+        for (index, case) in cases.iter().enumerate() {
+            let count = case["party_count"].as_u64().unwrap_or(6) as usize;
+            let mut before = original[..count * 3138].to_vec();
+            changes(&mut before, &case["before_changes"]);
+            assert_eq!(digest(&before), case["before_sha256"], "case{index} input");
+            let warriors: Vec<_> = crate::support::warriors(&before);
+            let mut random = RandomState::new(case.n::<u32>("seed_before"));
+            let outcome = initiative(
+                &warriors,
+                &enemies,
+                case.n::<i16>("mode"),
+                case.n::<i8>("unavailable"),
+                &mut random,
+            )
+            .unwrap();
+            let actual: Vec<_> = crate::support::record_bytes(&outcome.warriors);
+            let mut expected = before;
+            changes(&mut expected, &case["after_changes"]);
+            assert_eq!(actual, expected, "case{index} complete warrior records");
+            assert_eq!(digest(&actual), case["after_sha256"], "case{index} output");
+            let order: Vec<_> = crate::support::words(&case.bytes("order"));
+            assert_eq!(outcome.order, order, "case{index} order");
+            crate::support::native_expect! {
+            scalar random.seed => &case["seed_after"], "binary_inactive_initiative";
+            scalar random.draws => &case["draws"], "binary_inactive_initiative";
+            }
         }
     }
 }

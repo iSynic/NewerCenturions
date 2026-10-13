@@ -27,16 +27,7 @@ fn fixture() -> Value {
 }
 
 fn state(content: &Content, snapshot: &Value) -> Session {
-    let mut state = Session::new(content);
-    apply(Command::ImportStarters, &mut state, content).unwrap();
-    apply(
-        Command::EnterMission {
-            name: "The Thunder of Guns".into(),
-        },
-        &mut state,
-        content,
-    )
-    .unwrap();
+    let mut state = crate::support::mission_session(content);
     state.warriors = warriors(snapshot);
     state.psi_memory = Some(snapshot.bytes("memory"));
     state.party_buffs = snapshot.bytes("party_buffs");

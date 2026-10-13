@@ -26,6 +26,7 @@ fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>, RandomState) {
     let positions = words(&bytes(case, "positions_before"));
     (
         Combat {
+            difficulty: 0,
             battle: 134,
             map: TacticalMap {
                 tiles: words(&bytes(case, "map_before")),

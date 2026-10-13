@@ -122,6 +122,60 @@ pub fn string_list(bytes: &[u8]) -> Result<Vec<String>, ContentError> {
     string_prefix(bytes, count as usize)
 }
 
+#[derive(Clone, Debug)]
+pub struct DialogItem {
+    pub rect: [i16; 4],
+    pub kind: u8,
+    pub data: Vec<u8>,
+}
+impl DialogItem {
+    pub fn text(&self) -> String {
+        encoding_rs::MACINTOSH.decode(&self.data).0.into_owned()
+    }
+}
+
+pub fn dialog_items(bytes: &[u8]) -> Result<Vec<DialogItem>, ContentError> {
+    let count = word(bytes, 0)?;
+    if count < -1 {
+        return Err(ContentError::Invalid("negative dialog-item count".into()));
+    }
+    let mut cursor = 2;
+    let mut items = Vec::new();
+    for _ in 0..=count {
+        let kind = span(bytes, cursor, 13)?[12] & 0x7f;
+        let rect = [
+            word(bytes, cursor + 4)?,
+            word(bytes, cursor + 6)?,
+            word(bytes, cursor + 8)?,
+            word(bytes, cursor + 10)?,
+        ];
+        cursor += 13;
+        let length = usize::from(span(bytes, cursor, 1)?[0]);
+        let data = span(bytes, cursor + 1, length)?.to_vec();
+        cursor += 1 + length + length % 2;
+        items.push(DialogItem { rect, kind, data });
+    }
+    Ok(items)
+}
+
+pub fn dialog_strings(bytes: &[u8]) -> Result<Vec<String>, ContentError> {
+    let mut strings = Vec::new();
+    for item in dialog_items(bytes)? {
+        let kind = item.kind;
+        if kind == 8 || kind == 16 {
+            strings.push(
+                encoding_rs::MACINTOSH
+                    .decode(&item.data)
+                    .0
+                    .replace('\r', "\n"),
+            );
+        } else {
+            strings.push(String::new());
+        }
+    }
+    Ok(strings)
+}
+
 pub fn string_prefix(bytes: &[u8], count: usize) -> Result<Vec<String>, ContentError> {
     if i32::from(word(bytes, 0)?) < count as i32 {
         return Err(ContentError::Invalid(

@@ -28,8 +28,17 @@ pub fn unarmed_attack(
     warrior: &mut Warrior,
     enemy: &mut MonsterRecord,
     random: &mut RandomState,
+    difficulty: i16,
 ) -> Result<AttackResult, RuleError> {
-    Ok(unarmed_attack_inner(warrior, enemy, random, default_attack_packet(), &[0; 58])?.0)
+    Ok(unarmed_attack_inner(
+        warrior,
+        enemy,
+        random,
+        default_attack_packet(),
+        &[0; 58],
+        difficulty,
+    )?
+    .0)
 }
 
 pub fn unarmed_attack_with_packet(
@@ -38,6 +47,7 @@ pub fn unarmed_attack_with_packet(
     random: &mut RandomState,
     attacks: &[u8],
     retained: &[u8],
+    difficulty: i16,
 ) -> Result<(AttackResult, Vec<u8>), RuleError> {
     if retained.len() != 58 {
         return Err(RuleError::Invalid("retained attack packet size".into()));
@@ -51,6 +61,7 @@ pub fn unarmed_attack_with_packet(
         &mut next_random,
         base,
         retained,
+        difficulty,
     )?;
     *warrior = next_warrior;
     *enemy = next_enemy;
@@ -64,6 +75,7 @@ fn unarmed_attack_inner(
     random: &mut RandomState,
     base: Vec<u8>,
     retained: &[u8],
+    difficulty: i16,
 ) -> Result<(AttackResult, Vec<u8>), RuleError> {
     let mut packet = retained.to_vec();
     let w = &mut warrior.bytes;
@@ -113,7 +125,13 @@ fn unarmed_attack_inner(
             hit = hit.wrapping_add(bonus);
         }
     }
-    if random.bound(100) > hit.clamp(15, 90) && m[0xb3] == 0 {
+    if random.bound(100)
+        > hit.clamp(
+            15_i16.wrapping_sub(difficulty.wrapping_mul(5)),
+            90_i16.wrapping_sub(difficulty.wrapping_mul(5)),
+        )
+        && m[0xb3] == 0
+    {
         increment_long(w, 0xa52, 1);
         return Ok((
             AttackResult {
@@ -183,6 +201,7 @@ pub fn natural_attack(
     enemy: &mut MonsterRecord,
     attack_index: usize,
     random: &mut RandomState,
+    difficulty: i16,
 ) -> Result<AttackResult, RuleError> {
     Ok(natural_attack_inner(
         warrior,
@@ -191,6 +210,7 @@ pub fn natural_attack(
         random,
         default_attack_packet(),
         &[0; 20],
+        difficulty,
     )?
     .0)
 }
@@ -202,6 +222,7 @@ pub fn natural_attack_with_packet(
     random: &mut RandomState,
     attacks: &[u8],
     retained: &[u8],
+    difficulty: i16,
 ) -> Result<(AttackResult, Vec<u8>), RuleError> {
     natural_attack_with_buffs(
         warrior,
@@ -211,9 +232,11 @@ pub fn natural_attack_with_packet(
         attacks,
         retained,
         &[0; 20],
+        difficulty,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn natural_attack_with_buffs(
     warrior: &mut Warrior,
     enemy: &mut MonsterRecord,
@@ -222,6 +245,7 @@ pub fn natural_attack_with_buffs(
     attacks: &[u8],
     retained: &[u8],
     buffs: &[u8],
+    difficulty: i16,
 ) -> Result<(AttackResult, Vec<u8>), RuleError> {
     super::party_buffs::validate(buffs)?;
     if retained.len() != 58 {
@@ -237,6 +261,7 @@ pub fn natural_attack_with_buffs(
         &mut next_random,
         base,
         buffs,
+        difficulty,
     )?;
     *warrior = next_warrior;
     *enemy = next_enemy;
@@ -251,6 +276,7 @@ fn natural_attack_inner(
     random: &mut RandomState,
     mut packet: Vec<u8>,
     buffs: &[u8],
+    difficulty: i16,
 ) -> Result<(AttackResult, Vec<u8>), RuleError> {
     let w = &mut warrior.bytes;
     let m = &mut enemy.bytes;
@@ -301,7 +327,12 @@ fn natural_attack_inner(
     if (m[0xac] != 0 || m[0xad] != 0) && word(w, 0x8a)? != 0 {
         hit = hit.wrapping_sub(10);
     }
-    if random.bound(100) > hit.clamp(15, 90) {
+    if random.bound(100)
+        > hit.clamp(
+            15_i16.wrapping_sub(difficulty.wrapping_mul(5)),
+            90_i16.wrapping_sub(difficulty.wrapping_mul(5)),
+        )
+    {
         increment_long(w, 0xa56, 1);
         return Ok((
             AttackResult {

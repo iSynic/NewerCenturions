@@ -26,6 +26,7 @@ fn flat_installation_matches_prepared_content_and_does_not_write_originals() {
     let flat = Installation::open(&originals.join("TheNewCenturions")).unwrap();
     assert_eq!(flat.content.warriors, prepared.warriors);
     assert_eq!(flat.content.items, prepared.items);
+    assert_eq!(flat.content.tutorials, prepared.tutorials);
     for (actual, expected) in flat
         .content
         .scenario

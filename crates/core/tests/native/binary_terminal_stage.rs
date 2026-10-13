@@ -7,16 +7,7 @@ fn authored_terminal_choice_matches_native_records_and_resumes() {
     let fixture: Value = crate::support::fixture("terminal-stage.json");
 
     let content = crate::support::content();
-    let mut state = Session::new(&content);
-    apply(Command::ImportStarters, &mut state, &content).unwrap();
-    apply(
-        Command::EnterMission {
-            name: "The Thunder of Guns".into(),
-        },
-        &mut state,
-        &content,
-    )
-    .unwrap();
+    let mut state = crate::support::mission_session(&content);
     state.warriors = crate::support::warriors(&fixture["warriors_before"]);
     state.flags = fixture.bytes("flags_before");
     state.mission_stage = 5;

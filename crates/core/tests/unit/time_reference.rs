@@ -24,6 +24,7 @@ fn hourly_update_matches_original_instruction_execution() {
         serde_json::from_str(include_str!("../../../../evidence/fixtures/time.json")).unwrap();
     for case in fixture.cases {
         let content = Content {
+            tutorials: vec![],
             identity: "hourly".into(),
             warriors: vec![],
             items: vec![],
@@ -84,6 +85,7 @@ fn calendar_content(schedule: Vec<u8>) -> Content {
     let mut items = vec![vec![0; 150]; 801];
     items[800] = decode(fixture["food_definition"].as_str().unwrap());
     Content {
+        tutorials: vec![],
         identity: "calendar".into(),
         warriors: vec![],
         items,
@@ -103,21 +105,9 @@ fn calendar_content(schedule: Vec<u8>) -> Content {
                 default_tile: 0,
                 minutes_per_tick: 5,
                 shared: std::sync::Arc::new(centurions_content::mission::StoryTables {
-                    areas: vec![],
-                    item_cache: vec![],
-                    races: vec![],
-                    profiles: vec![],
                     schedule,
-                    door_scripts: vec![],
-                    dialogue: vec![],
-                    treasure: vec![],
-                    prologue: String::new(),
-                    item_descriptions: vec![],
-                    combat: None,
                     scheduled_scripts: vec![0; 118 * 42],
-                    menus: vec![],
-                    typed_encounters: vec![],
-                    movies: Default::default(),
+                    ..Default::default()
                 }),
             },
         )),

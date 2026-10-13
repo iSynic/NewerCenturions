@@ -19,6 +19,7 @@ pub(super) fn compare_poison_natural_attack_matches_original_complete_records_an
             &mut target,
             case.n::<usize>("attack"),
             &mut random,
+            0,
         )
         .unwrap();
         crate::support::native_expect! {

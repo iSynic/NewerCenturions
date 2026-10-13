@@ -156,6 +156,7 @@ pub struct Resource {
 #[derive(Clone, Debug)]
 pub struct Content {
     pub identity: String,
+    pub tutorials: Vec<String>,
     pub warriors: Vec<Warrior>,
     pub items: Vec<Vec<u8>>,
     pub resources: Vec<Resource>,
@@ -305,8 +306,27 @@ impl Content {
         if items.is_empty() {
             return Err(ContentError::Invalid("missing item table".into()));
         }
+        let tutorial_bytes = read_fork(
+            originals,
+            &manifest.forks,
+            "TheNewCenturions/Data Files/Tutorial Text",
+        )?;
+        let (records, tail) = tutorial_bytes.as_chunks::<256>();
+        if !tail.is_empty() || records.len() > 256 {
+            return Err(ContentError::Invalid("invalid tutorial text table".into()));
+        }
+        let tutorials = records
+            .iter()
+            .map(|record| {
+                encoding_rs::MACINTOSH
+                    .decode(&record[1..1 + usize::from(record[0])])
+                    .0
+                    .replace('\r', "\n")
+            })
+            .collect();
         Ok(Self {
             identity: manifest.input_manifest_sha256,
+            tutorials,
             warriors,
             items,
             resources: manifest.resources,

@@ -217,7 +217,12 @@ fn natural_attack_enemy_inner(
     if (source[0xac] != 0 || source[0xad] != 0) && victim[0xc8] != 0 {
         hit = hit.wrapping_sub(10);
     }
-    if random.bound(100) > hit.clamp(15, 90) {
+    if random.bound(100)
+        > hit.clamp(
+            15_i16.wrapping_sub(c.difficulty.wrapping_mul(5)),
+            90_i16.wrapping_sub(c.difficulty.wrapping_mul(5)),
+        )
+    {
         return Ok((
             AttackResult {
                 damage: 0,
@@ -512,7 +517,12 @@ fn fire(
             3 => 10,
             _ => 0,
         });
-        if random.bound(100) > hit.clamp(15, 90) {
+        if random.bound(100)
+            > hit.clamp(
+                15_i16.wrapping_sub(c.difficulty.wrapping_mul(5)),
+                90_i16.wrapping_sub(c.difficulty.wrapping_mul(5)),
+            )
+        {
             return Ok(true);
         }
     }

@@ -10,16 +10,7 @@ fn noon_and_midnight_moves_match_live_original_complete_warriors_and_rng() {
     for case in fixture.array("cases") {
         let before = &case["before"];
         let after = &case["after"];
-        let mut state = Session::new(&content);
-        apply(Command::ImportStarters, &mut state, &content).unwrap();
-        apply(
-            Command::EnterMission {
-                name: "The Thunder of Guns".into(),
-            },
-            &mut state,
-            &content,
-        )
-        .unwrap();
+        let mut state = crate::support::mission_session(&content);
         state.warriors = before
             .array("warriors")
             .iter()

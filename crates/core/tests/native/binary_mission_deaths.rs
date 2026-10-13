@@ -28,6 +28,7 @@ fn mission(fixture: &serde_json::Value) -> OpeningMission {
 fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>, i8) {
     (
         Combat {
+            difficulty: 0,
             battle: 146,
             map: TacticalMap {
                 tiles: words(&bytes(case, "map_before")),

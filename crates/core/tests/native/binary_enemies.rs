@@ -2,7 +2,7 @@ use crate::prelude::*;
 
 use centurions_content::combat::BattleRecord;
 
-use centurions_core::combat::place_enemies;
+use centurions_core::combat::place_enemies_at_difficulty;
 
 #[derive(Deserialize)]
 struct Fixture {
@@ -13,6 +13,8 @@ struct Fixture {
 }
 #[derive(Deserialize)]
 struct Case {
+    #[serde(default)]
+    difficulty: i16,
     base: i16,
     seed: u32,
     after_seed: u32,
@@ -27,6 +29,7 @@ fn enemy_setup_matches_whole_records_positions_map_and_randomness() {
     for json in [
         include_str!("../../../../evidence/fixtures/enemies.json"),
         include_str!("../../../../evidence/fixtures/enemies-opening.json"),
+        include_str!("../../../../evidence/fixtures/difficulty-enemies.json"),
     ] {
         let fixture: Fixture = serde_json::from_str(json).unwrap();
         let map_fixture: serde_json::Value = crate::support::fixture("combat-map.json");
@@ -47,13 +50,14 @@ fn enemy_setup_matches_whole_records_positions_map_and_randomness() {
                 edge_word: 0,
             };
             let mut random = RandomState::new(case.seed);
-            let result = place_enemies(
+            let result = place_enemies_at_difficulty(
                 &mut map,
                 &mission,
                 &battle,
                 &decode(&fixture.definitions),
                 (case.base, case.base),
                 &mut random,
+                case.difficulty,
             )
             .unwrap();
             assert_eq!(result.records.len(), case.count);

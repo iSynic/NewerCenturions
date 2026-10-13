@@ -31,7 +31,6 @@ fn complete_original_reward_table_cash_drops_and_ordinary_close() {
             seed: case.n::<u32>("seed_before"),
             draws: 0,
         };
-        let initial = random.clone();
         let result = rewards::prepare(
             &party(&before),
             &enemies,
@@ -41,19 +40,6 @@ fn complete_original_reward_table_cash_drops_and_ordinary_close() {
             case.n::<i32>("currency_before"),
             &mut random,
         );
-        let expected_crate = patched(vec![0; 22000], &case["crate_changes"]);
-        if case.n::<i64>("difficulty") != 0
-            && expected_crate.as_chunks::<22>().0.iter().any(|item| {
-                i16::from_be_bytes([item[0], item[1]]) != 0 && !matches!(item[10], 23..=25)
-            })
-        {
-            assert!(
-                result.is_err(),
-                "{name} requires difficulty-sensitive enhancements"
-            );
-            assert_eq!(random, initial, "{name} unsupported case must preserve RNG");
-            continue;
-        }
         let result = result.unwrap_or_else(|e| panic!("{name}: {e:?}"));
         let prep = patched(before, &case["prep_changes"]);
         assert_eq!(flatten(&result.warriors), prep, "{name} preparation");

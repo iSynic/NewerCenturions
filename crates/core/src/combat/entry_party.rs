@@ -14,7 +14,10 @@ pub fn initiative(
     unavailable: i8,
     random: &mut RandomState,
 ) -> Result<PartyOrder, RuleError> {
-    if warriors.len() != 6 || enemy_speeds.len() > 100 || !(-1..=1).contains(&surprise) {
+    if !(1..=6).contains(&warriors.len())
+        || enemy_speeds.len() > 100
+        || !(-1..=1).contains(&surprise)
+    {
         return Err(RuleError::Invalid(
             "initiative party or enemy capacity invalid".into(),
         ));
@@ -34,8 +37,10 @@ pub fn initiative(
             living.push(index as i16);
         }
     }
-    let bound = 6_i16 - i16::from(unavailable) + enemy_speeds.len() as i16;
-    let inserted = 5_i8.wrapping_sub(unavailable).wrapping_add(1) as u8 as usize;
+    let bound = warriors.len() as i16 - i16::from(unavailable) + enemy_speeds.len() as i16;
+    let inserted = (warriors.len() as i8 - 1)
+        .wrapping_sub(unavailable)
+        .wrapping_add(1) as u8 as usize;
     if !(1..110).contains(&bound) || (surprise == 0 && inserted > living.len()) {
         return Err(RuleError::Unsupported {
             action: "combat.initiative",
@@ -94,7 +99,7 @@ pub fn initiative(
                 enemy_speeds[(body - 10) as usize]
             }
         };
-        let last = enemy_speeds.len() + 5;
+        let last = enemy_speeds.len() + warriors.len() - 1;
         for start in 1..=last {
             for slot in start..=last {
                 if order[slot] >= 0

@@ -32,6 +32,8 @@ pub struct StoryTables {
     pub treasure: Vec<u8>,
     pub prologue: String,
     pub item_descriptions: Vec<u8>,
+    pub stock_item_descriptions: Vec<u8>,
+    pub scan_descriptions: Vec<u8>,
     pub schedule: Vec<u8>,
     pub scheduled_scripts: Vec<u8>,
     pub menus: Vec<u8>,
@@ -238,6 +240,8 @@ impl OpeningMission {
                 treasure: read(&format!("{SCENARIO}Data TD"))?,
                 prologue: String::new(),
                 item_descriptions: read(&format!("{SCENARIO}Data NI Des"))?,
+                stock_item_descriptions: read("TheNewCenturions/Data Files/Data ID DES")?,
+                scan_descriptions: read("TheNewCenturions/Data Files/Data Scan DES")?,
                 schedule,
                 scheduled_scripts: read(&format!("{SCENARIO}Data ED3"))?,
                 menus: read(&format!("{SCENARIO}Data ED"))?,
@@ -294,15 +298,40 @@ impl StoryTables {
             .unwrap())
     }
     pub fn item_description(&self, id: i16) -> Result<String, ContentError> {
-        if !(800..1000).contains(&id) {
+        if !(0..1000).contains(&id) {
             return Err(ContentError::Invalid(
                 "description outside scenario item band".into(),
             ));
         }
-        let record = span(&self.item_descriptions, (id - 800) as usize * 256, 256)?;
+        let record = if id < 800 {
+            span(&self.stock_item_descriptions, id as usize * 256, 256)?
+        } else {
+            span(&self.item_descriptions, (id - 800) as usize * 256, 256)?
+        };
         Ok(encoding_rs::MACINTOSH
             .decode(span(record, 1, usize::from(record[0]))?)
             .0
             .into_owned())
+    }
+    pub fn scan_description(
+        &self,
+        school: i16,
+        tier: usize,
+        column: usize,
+    ) -> Result<String, ContentError> {
+        if !(1..=4).contains(&school) || tier >= 7 || column >= 7 {
+            return Err(ContentError::Invalid(
+                "scan description outside original matrix".into(),
+            ));
+        }
+        let record = span(
+            &self.scan_descriptions,
+            ((school as usize - 1) * 49 + tier * 7 + column) * 256,
+            256,
+        )?;
+        Ok(encoding_rs::MACINTOSH
+            .decode(span(record, 1, usize::from(record[0]))?)
+            .0
+            .replace('\r', "\n"))
     }
 }

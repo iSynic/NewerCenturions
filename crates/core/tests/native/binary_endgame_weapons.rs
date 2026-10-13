@@ -288,6 +288,7 @@ fn required_endgame_ranged_to_natural_fallback_matches_original_full_records_and
             ))
             .unwrap(),
             &[0; 58],
+            0,
         )
         .unwrap();
         assert_eq!(packet, case.bytes("packet"), "case{index} packet");

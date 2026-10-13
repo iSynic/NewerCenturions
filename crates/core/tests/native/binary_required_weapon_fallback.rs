@@ -13,7 +13,7 @@ fn ranged_to_natural_fallback_matches_original_full_records_and_randomness() {
             bytes: case.bytes("enemy_before"),
         };
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
-        let result = natural_attack(&mut warrior, &mut enemy, 0, &mut random).unwrap();
+        let result = natural_attack(&mut warrior, &mut enemy, 0, &mut random, 0).unwrap();
         party[member * 3138..(member + 1) * 3138].copy_from_slice(&warrior.bytes);
         crate::support::native_expect! {
         bytes party => &case["warriors_after"], "case{index} party";

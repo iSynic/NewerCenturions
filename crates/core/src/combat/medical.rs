@@ -334,8 +334,8 @@ pub fn resolve(
     pending: &MedicalContinuation,
     target: &MedicalTarget,
 ) -> Result<MedicalResolution, RuleError> {
-    if pending.actor >= 6
-        || warriors.len() != 6
+    if pending.actor >= warriors.len()
+        || !(1..=6).contains(&warriors.len())
         || combat.active_body() != Some(pending.actor as i16)
     {
         return Err(unsupported("other medical continuation"));
@@ -461,7 +461,9 @@ fn resolve_inner(
                 i32::from(y) + i32::from(combat.map.shift.1) + 5,
             )?;
             let body = combat.map.tiles[cell].wrapping_abs();
-            if !(0..6).contains(&body) || word(&warriors[body as usize].bytes, 0x50)? <= 0 {
+            if !(0..warriors.len() as i16).contains(&body)
+                || word(&warriors[body as usize].bytes, 0x50)? <= 0
+            {
                 return Err(RuleError::Invalid(
                     "medical point requires a living warrior".into(),
                 ));

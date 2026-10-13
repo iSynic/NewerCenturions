@@ -26,6 +26,7 @@ fn required_parts_ranged_to_natural_fallback_matches_original_full_records_and_r
             ))
             .unwrap(),
             &[0; 58],
+            0,
         )
         .unwrap();
         assert_eq!(packet, case.bytes("packet"), "case{index} packet");

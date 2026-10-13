@@ -606,7 +606,7 @@ fn validate_earned_shot(
         || w[0x9dd] != 1
         || word(w, 0x126)? != 280
         || word(&enemy.bytes, 0x110)? <= 0
-        || difficulty != 0
+        || !(-2..=2).contains(&difficulty)
         || prepared.slot != 0
         || prepared.shots != 1
         || prepared.rounds != 1

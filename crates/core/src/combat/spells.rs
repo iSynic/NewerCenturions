@@ -586,7 +586,7 @@ pub fn resolve_player_support(
     count: i16,
     random: &mut RandomState,
 ) -> Result<SupportSpellResult, RuleError> {
-    if warriors.len() != 6
+    if !(1..=6).contains(&warriors.len())
         || enemies.len() > 100
         || mask.len() < 10 + enemies.len()
         || packet.len() != 58
@@ -608,7 +608,7 @@ pub fn resolve_player_support(
         });
     }
     if count > 2 {
-        let target = mask[..6].iter().position(|value| *value > 0);
+        let target = mask[..warriors.len()].iter().position(|value| *value > 0);
         if id != 1101
             || mask.iter().filter(|value| **value > 0).count() != 1
             || target.is_none()
@@ -637,7 +637,7 @@ pub fn resolve_player_support(
             dependency: "other medical support packet or count",
         });
     }
-    if mask[6..].iter().any(|value| *value > 0) {
+    if mask[warriors.len()..].iter().any(|value| *value > 0) {
         return Err(RuleError::Unsupported {
             action: "combat.spell.support",
             dependency: "other support body",

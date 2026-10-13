@@ -28,16 +28,7 @@ fn composed_shot_matches_live_original_records_rng_and_next_turn() {
     let c = &before["combat"];
     let hex = |key: &str| c[key].as_str().unwrap();
     let o = origin(c);
-    let mut state = Session::new(&content);
-    apply(Command::ImportStarters, &mut state, &content).unwrap();
-    apply(
-        Command::EnterMission {
-            name: "The Thunder of Guns".into(),
-        },
-        &mut state,
-        &content,
-    )
-    .unwrap();
+    let mut state = crate::support::mission_session(&content);
     state.phase = Phase::Combat;
     state.warriors = before
         .array("warriors")

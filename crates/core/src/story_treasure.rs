@@ -13,6 +13,7 @@ pub fn prepare(
     record: &[u8],
     content: &Content,
     random: &mut RandomState,
+    difficulty: i16,
 ) -> Result<Treasure, RuleError> {
     let record = span(record, 0, 88)?;
     let amount = long(record, 80)?;
@@ -28,9 +29,16 @@ pub fn prepare(
     for slot in 0..20 {
         let id = word(record, slot * 2)?;
         if id > 0 {
-            loot.push(items::initialize(
+            let enhancement = word(record, 40 + slot * 2)?;
+            let enhancement = if enhancement == 0 {
+                0
+            } else {
+                enhancement.wrapping_add(difficulty).max(1)
+            };
+            loot.push(items::initialize_at_difficulty(
                 id,
-                word(record, 40 + slot * 2)?,
+                enhancement,
+                difficulty,
                 content,
                 &mut next_random,
             )?);

@@ -25,7 +25,7 @@ pub fn prepare(
     currency: i32,
     random: &mut RandomState,
 ) -> Result<Rewards, RuleError> {
-    if warriors.len() != 6 || enemies.len() > 100 {
+    if !(1..=6).contains(&warriors.len()) || enemies.len() > 100 {
         return Err(RuleError::Invalid("invalid battle reward capacity".into()));
     }
     let unavailable = warriors
@@ -114,14 +114,13 @@ pub fn prepare(
     };
     let mut loot = vec![];
     for id in ids {
-        let definition = &content.items[usize::from(id.unsigned_abs())];
-        if difficulty != 0 && !matches!(word(definition, 0x1a)?, 23..=25) {
-            return Err(RuleError::Unsupported {
-                action: "combat.rewards",
-                dependency: "difficulty-dependent ordinary item enhancements",
-            });
-        }
-        loot.push(items::initialize_plain(id, content, &mut next_random)?);
+        loot.push(items::initialize_at_difficulty(
+            id,
+            0,
+            difficulty,
+            content,
+            &mut next_random,
+        )?);
         last_item_id = Some(id);
     }
     loot.sort_by_key(|item| std::cmp::Reverse(item.0[10] as i8));

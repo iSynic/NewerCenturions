@@ -994,6 +994,7 @@ fn monster_view(enemy: u16, bytes: Vec<u8>) -> BodyState {
     records[usize::from(enemy)] = MonsterRecord { bytes };
     BodyState {
         combat: crate::combat::Combat {
+            difficulty: 0,
             battle: 0,
             map: crate::combat::TacticalMap {
                 tiles: vec![],

@@ -3,16 +3,7 @@ use crate::prelude::*;
 use centurions_core::combat::*;
 
 fn session(content: &Content) -> Session {
-    let mut state = Session::new(content);
-    apply(Command::ImportStarters, &mut state, content).unwrap();
-    apply(
-        Command::EnterMission {
-            name: "The Thunder of Guns".into(),
-        },
-        &mut state,
-        content,
-    )
-    .unwrap();
+    let mut state = crate::support::mission_session(content);
     state.random = centurions_core::RandomState::new(12);
     let p = state.exploration.as_mut().unwrap();
     p.x = 43;

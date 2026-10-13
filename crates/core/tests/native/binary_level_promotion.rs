@@ -81,7 +81,7 @@ fn original_reward_chain_crosses_level_thresholds_at_close() {
             let table = bytes(stage, "table");
             let loot = if n == 1 {
                 let prepared =
-                    story_treasure::prepare(&warriors, &table, &content, &mut random).unwrap();
+                    story_treasure::prepare(&warriors, &table, &content, &mut random, 0).unwrap();
                 warriors = prepared.warriors;
                 prepared.items
             } else {

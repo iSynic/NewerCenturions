@@ -1,4 +1,4 @@
-use centurions_content::{Content, ContentError, InventoryRecord, Warrior};
+use centurions_content::{Content, ContentError, InventoryRecord, Warrior, word};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -89,6 +89,8 @@ pub enum Phase {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Session {
     pub content_identity: String,
+    #[serde(default, skip_serializing_if = "normal_difficulty")]
+    pub difficulty: i16,
     pub warriors: Vec<Warrior>,
     pub phase: Phase,
     pub mission: Option<String>,
@@ -407,10 +409,29 @@ pub enum Presentation {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
+    SetDifficulty {
+        level: i16,
+    },
     PoolCredits,
     ShareCredits,
     RecalculateStatistics {
         warrior: usize,
+    },
+    EditWarriorUpgrade {
+        warrior: usize,
+        selector: u16,
+    },
+    EditCarriedItem {
+        warrior: usize,
+        slot: usize,
+        control: u16,
+    },
+    EditWarriorLevel {
+        warrior: usize,
+    },
+    EditWarriorScans {
+        warrior: usize,
+        controls: Vec<u16>,
     },
     ImportStarters,
     SelectStarters {
@@ -625,6 +646,11 @@ pub enum Event {
         warrior: usize,
         level: i16,
     },
+    EditorLevelAdvanced {
+        warrior: usize,
+        level: i16,
+        information: bool,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -652,6 +678,7 @@ impl Session {
     pub fn new(content: &Content) -> Self {
         Self {
             content_identity: content.identity.clone(),
+            difficulty: 0,
             warriors: vec![],
             phase: Phase::SquadSelection,
             mission: None,
@@ -712,6 +739,7 @@ impl Session {
             return Err(RuleError::Invalid("content identity mismatch".into()));
         }
         if self.warriors.len() > 6
+            || !(-2..=2).contains(&self.difficulty)
             || self.crate_items.len() != 1000
             || self.booty_items.len() != 1000
             || self.ammunition.len() != 200
@@ -719,7 +747,7 @@ impl Session {
             || self.flags.len() != 128
             || self.allies.len() != story_allies::ALLY_CAPACITY * story_allies::ALLY_BYTES
             || self.ally_count > story_allies::ALLY_CAPACITY
-            || self.selected_warrior >= 6
+            || self.selected_warrior >= self.warriors.len().max(1)
             || self.party_buffs.len() != 20
             || self
                 .psi_memory
@@ -797,6 +825,15 @@ impl Session {
             return Err(RuleError::Invalid("invalid combat story state".into()));
         }
         if self.phase == Phase::Combat {
+            if self
+                .combat
+                .as_ref()
+                .is_some_and(|combat| combat.difficulty != self.difficulty)
+            {
+                return Err(RuleError::Invalid(
+                    "combat difficulty differs from the session".into(),
+                ));
+            }
             self.combat
                 .as_ref()
                 .ok_or_else(|| RuleError::Invalid("combat state missing".into()))?
@@ -833,7 +870,7 @@ impl Session {
             position.map_state().validate(map)?;
             if self.mission_stage < 0
                 || self.mission_stage >= 20
-                || self.warriors.len() != 6
+                || !(1..=6).contains(&self.warriors.len())
                 || self.mission.as_deref() != Some("The Thunder of Guns")
                 || !(0..90).contains(&position.x)
                 || !(0..90).contains(&position.y)
@@ -897,6 +934,13 @@ pub fn apply(
 ) -> Result<Vec<Event>, RuleError> {
     state.validate(content)?;
     let mut candidate = state.clone();
+    let editing = matches!(
+        command,
+        Command::EditWarriorUpgrade { .. }
+            | Command::EditCarriedItem { .. }
+            | Command::EditWarriorLevel { .. }
+            | Command::EditWarriorScans { .. }
+    );
     let melee_input = matches!(command, Command::AttackEnemy { .. } | Command::Move { .. });
     let physical_work_input = matches!(
         command,
@@ -915,9 +959,10 @@ pub fn apply(
             _ => {}
         }
     }
-    if !events
-        .iter()
-        .any(|event| matches!(event, Event::Message { .. }))
+    if !editing
+        && !events
+            .iter()
+            .any(|event| matches!(event, Event::Message { .. }))
     {
         events.extend(exploration::resume_movement(&mut candidate, content)?);
     }
@@ -984,6 +1029,125 @@ fn apply_inner(
         ));
     }
     match command {
+        Command::EditWarriorScans { warrior, controls } => {
+            if state.phase != Phase::Exploration || controls.len() > 4096 {
+                return Err(RuleError::Invalid(
+                    "scan editing requires bounded exploration input".into(),
+                ));
+            }
+            let map = content
+                .map(0)
+                .ok_or_else(|| RuleError::Invalid("editor profiles unavailable".into()))?;
+            let record = state
+                .warriors
+                .get(warrior)
+                .ok_or_else(|| RuleError::Invalid("editor warrior is outside the squad".into()))?;
+            let mut selection = story_promotion::ScanSelection::new(record, &map.profiles)?;
+            let mut events = vec![Event::Sound { resource_id: 3000 }];
+            if !matches!(controls.last(), Some(1 | 32)) {
+                return Err(RuleError::Invalid("scan selection requires Done".into()));
+            }
+            for control in &controls[..controls.len() - 1] {
+                match control {
+                    2..=8 => {
+                        selection.select_tier(usize::from(*control - 2))?;
+                        events.push(Event::Sound { resource_id: 137 });
+                    }
+                    10..=16 => {
+                        if let Some(resource_id) = selection.toggle(usize::from(*control - 10))? {
+                            events.push(Event::Sound { resource_id });
+                        }
+                    }
+                    _ => return Err(RuleError::Invalid("unknown scan-selection control".into())),
+                }
+            }
+            let attacks = &map
+                .combat
+                .as_ref()
+                .ok_or_else(|| RuleError::Invalid("scan records unavailable".into()))?
+                .attacks;
+            state.warriors[warrior] = selection.finish(attacks)?;
+            if state.psi_memory.is_none() {
+                state.psi_memory = Some(initial_psi_memory(&state.warriors)?);
+            }
+            state.psi_memory.as_mut().unwrap()[warrior * 80..(warrior + 1) * 80]
+                .copy_from_slice(&state.warriors[warrior].bytes[0xa76..0xac6]);
+            let record = &state.warriors[warrior];
+            if let Some(index) = record.bytes[0x9f0..0xa21]
+                .iter()
+                .rposition(|selected| *selected != 0)
+            {
+                let school = word(&record.bytes, 0x36)? as usize - 1;
+                state.attack_packet = Some(
+                    centurions_content::span(attacks, (school * 49 + index) * 58, 58)?.to_vec(),
+                );
+            }
+            Ok(events)
+        }
+        Command::EditWarriorLevel { warrior } => {
+            if state.phase != Phase::Exploration {
+                return Err(RuleError::Invalid(
+                    "warrior editing requires exploration".into(),
+                ));
+            }
+            let map = content
+                .map(0)
+                .ok_or_else(|| RuleError::Invalid("editor profiles unavailable".into()))?;
+            let record = state
+                .warriors
+                .get_mut(warrior)
+                .ok_or_else(|| RuleError::Invalid("editor warrior is outside the squad".into()))?;
+            let mut random = story_promotion::LibraryRandom {
+                seed: state.library_random_seed,
+                draws: state.library_random_draws,
+            };
+            let information =
+                story_promotion::editor_level_up(record, &map.races, &map.profiles, &mut random)?;
+            state.library_random_seed = random.seed;
+            state.library_random_draws = random.draws;
+            Ok(vec![
+                Event::Sound { resource_id: 133 },
+                Event::EditorLevelAdvanced {
+                    warrior,
+                    level: word(&record.bytes, 0x3a)?,
+                    information,
+                },
+            ])
+        }
+        Command::EditCarriedItem {
+            warrior,
+            slot,
+            control,
+        } => editor_items::edit(state, content, warrior, slot, control),
+        Command::EditWarriorUpgrade { warrior, selector } => {
+            if state.phase != Phase::Exploration || selector > 32 {
+                return Err(RuleError::Invalid(format!(
+                    "warrior editing requires exploration and a selector from 0 through 32 (received {selector})"
+                )));
+            }
+            let record = state
+                .warriors
+                .get_mut(warrior)
+                .ok_or_else(|| RuleError::Invalid("editor warrior is outside the squad".into()))?;
+            if (23..=31).contains(&selector)
+                && word(&record.bytes, 0xf4 + usize::from(selector - 23) * 2)? < 1
+                || selector == 21 && word(&record.bytes, 0x36)? == 0
+                || word(&record.bytes, 0xace + usize::from(selector) * 2)? < 0
+            {
+                return Err(RuleError::Invalid(
+                    "this warrior cannot upgrade that attribute".into(),
+                ));
+            }
+            let offset = 0xace + usize::from(selector) * 2;
+            let count = word(&record.bytes, offset)?.wrapping_add(1);
+            record.bytes[offset..offset + 2].copy_from_slice(&count.to_be_bytes());
+            character::apply_upgrade(record, selector, 1)?;
+            character::calculate_statistics(record)?;
+            Ok(vec![
+                Event::Sound { resource_id: 10129 },
+                Event::StatisticsCalculated { warrior },
+            ])
+        }
         Command::PoolCredits => {
             party::pool_credits(&mut state.warriors, &mut state.party_currency)?;
             Ok(vec![Event::CreditsPooled {
@@ -1001,6 +1165,15 @@ fn apply_inner(
             character::calculate_statistics(record)?;
             Ok(vec![Event::StatisticsCalculated { warrior }])
         }
+        Command::SetDifficulty { level } => {
+            if state.phase != Phase::SquadSelection || !(-2..=2).contains(&level) {
+                return Err(RuleError::Invalid(
+                    "difficulty can only be selected before a mission".into(),
+                ));
+            }
+            state.difficulty = level;
+            Ok(vec![])
+        }
         Command::ImportStarters | Command::SelectStarters { .. } => {
             if state.phase != Phase::SquadSelection {
                 return Err(RuleError::Invalid("squad already entered a mission".into()));
@@ -1009,12 +1182,12 @@ fn apply_inner(
                 Command::SelectStarters { indices } => indices,
                 _ => (0..content.warriors.len()).collect(),
             };
-            if indices.len() != 6
+            if !(1..=6).contains(&indices.len())
                 || indices.iter().any(|i| *i >= content.warriors.len())
                 || (0..indices.len()).any(|i| indices[..i].contains(&indices[i]))
             {
                 return Err(RuleError::Invalid(
-                    "select six distinct supplied warriors".into(),
+                    "select one to six distinct supplied warriors".into(),
                 ));
             }
             state.warriors = indices
@@ -1042,9 +1215,9 @@ fn apply_inner(
                     dependency: "only the supplied opening scenario is recovered",
                 });
             }
-            if state.phase != Phase::SquadSelection || state.warriors.len() != 6 {
+            if state.phase != Phase::SquadSelection || !(1..=6).contains(&state.warriors.len()) {
                 return Err(RuleError::Invalid(
-                    "mission entry requires six selected warriors".into(),
+                    "mission entry requires one to six selected warriors".into(),
                 ));
             }
             let opening = content
@@ -1235,6 +1408,7 @@ fn initial_flags() -> Vec<u8> {
 pub mod ammunition;
 pub mod character;
 pub mod combat;
+pub mod editor_items;
 pub mod equipment;
 mod exploration;
 pub mod party;
@@ -1356,10 +1530,14 @@ struct Save {
     session: Session,
 }
 
+pub(crate) fn normal_difficulty(level: &i16) -> bool {
+    *level == 0
+}
+
 pub fn save(path: &Path, state: &Session, content: &Content) -> Result<(), RuleError> {
     state.validate(content)?;
     let bytes = serde_json::to_vec_pretty(&Save {
-        schema_version: 3,
+        schema_version: if state.difficulty == 0 { 3 } else { 4 },
         session: state.clone(),
     })?;
     let parent = path
@@ -1421,11 +1599,16 @@ pub fn load(path: &Path, content: &Content) -> Result<Session, RuleError> {
                 .clone();
             position.region_state = content.map(0).unwrap().regions.clone();
         }
-    } else if !matches!(saved.schema_version, 2 | 3) {
+    } else if !matches!(saved.schema_version, 2..=4) {
         return Err(RuleError::Invalid(format!(
             "unsupported save version {}",
             saved.schema_version
         )));
+    }
+    if saved.schema_version < 4 && saved.session.difficulty != 0 {
+        return Err(RuleError::Invalid(
+            "non-Normal difficulty requires save version 4".into(),
+        ));
     }
     if saved.schema_version < 3
         && let Some(position) = saved.session.exploration.as_mut()

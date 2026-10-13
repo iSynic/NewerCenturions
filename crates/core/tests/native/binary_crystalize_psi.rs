@@ -10,6 +10,7 @@ fn data() -> Value {
 
 fn combat(s: &Value) -> Combat {
     Combat {
+        difficulty: 0,
         battle: 85,
         map: TacticalMap {
             tiles: words(s.text("map")),

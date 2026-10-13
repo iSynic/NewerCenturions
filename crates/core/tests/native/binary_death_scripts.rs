@@ -16,6 +16,7 @@ fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>) {
     order[1] = 10;
     (
         Combat {
+            difficulty: 0,
             map: TacticalMap {
                 tiles: words(&bytes(case, "map_before")),
                 shift: (0, 0),

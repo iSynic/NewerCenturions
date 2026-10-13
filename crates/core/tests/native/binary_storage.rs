@@ -18,6 +18,7 @@ struct Case {
 fn storage_matches_independent_68k_execution() {
     let fixture: Fixture = serde_json::from_value(crate::support::fixture("storage.json")).unwrap();
     let content = Content {
+        tutorials: vec![],
         identity: "fixture".into(),
         warriors: vec![],
         items: vec![],

@@ -24,8 +24,17 @@ pub enum ApplicationAction {
     Add,
     Remove,
     Done,
+    Difficulty(i16),
     CloseIntro,
     QuitAnswer(bool),
+    Help(usize),
+    HelpResetAnswer(bool),
+    EditorAnswer(bool),
+    EditorItem(usize),
+    ScanAnswer(bool),
+    OpenEditor(usize),
+    OpenItemEditor(usize, usize),
+    ItemEditorItem(usize),
 }
 
 pub struct Application {
@@ -33,6 +42,11 @@ pub struct Application {
     pub quit: bool,
     pub quit_after_save: bool,
     quit_question: bool,
+    help_reset_question: bool,
+    editor_question: bool,
+    pub editing: bool,
+    editor: Option<crate::editor::WarriorEditor>,
+    item_editor: Option<crate::editor::ItemEditor>,
     pub sound: bool,
     pub volume: usize,
     pub music_enabled: bool,
@@ -41,9 +55,11 @@ pub struct Application {
     pub menu: Option<i16>,
     pub submenu: Option<i16>,
     pub show_hover: bool,
+    pub help: crate::help::Help,
     selected: Option<usize>,
     member: Option<usize>,
     pub squad: Vec<usize>,
+    difficulty: i16,
     started: f64,
     intro_y: f32,
     intro_tick: f64,
@@ -58,12 +74,17 @@ impl Application {
         Self::at(screen, get_time())
     }
 
-    fn at(screen: Screen, now: f64) -> Self {
+    pub(crate) fn at(screen: Screen, now: f64) -> Self {
         Self {
             screen,
             quit: false,
             quit_after_save: false,
             quit_question: false,
+            help_reset_question: false,
+            editor_question: false,
+            editing: false,
+            editor: None,
+            item_editor: None,
             sound: true,
             volume: 10,
             music_enabled: true,
@@ -72,9 +93,11 @@ impl Application {
             menu: None,
             submenu: None,
             show_hover: true,
+            help: crate::help::Help::default(),
             selected: None,
             member: None,
             squad: Vec::new(),
+            difficulty: 0,
             started: now,
             intro_y: 0.,
             intro_tick: now,
@@ -85,7 +108,7 @@ impl Application {
         }
     }
 
-    pub fn sync(&mut self, state: &Session, animate: bool) {
+    pub fn sync(&mut self, state: &Session, animate: bool) -> Result<(), String> {
         let now = get_time();
         if self.screen == Screen::Game && state.phase == Phase::SquadSelection {
             self.screen = Screen::Title;
@@ -108,6 +131,11 @@ impl Application {
                 self.intro_tick += f64::from(steps as f32) / 15.;
             }
         }
+        // updatemain 0x13bb20 requests tutorial pages 94 through 102.
+        if self.screen == Screen::Game && self.help.page.is_none() {
+            self.help.open(94, 102)?;
+        }
+        Ok(())
     }
 
     fn open_intro(&mut self, return_to: Screen, prologue: Option<i16>) {
@@ -123,7 +151,14 @@ impl Application {
     }
 
     pub fn blocks_game(&self) -> bool {
-        self.screen != Screen::Game || self.menu.is_some() || self.quit_question
+        self.screen != Screen::Game
+            || self.menu.is_some()
+            || self.quit_question
+            || self.help.page.is_some()
+            || self.help_reset_question
+            || self.editor_question
+            || self.editor.is_some()
+            || self.item_editor.is_some()
     }
 
     pub fn handle(
@@ -135,6 +170,80 @@ impl Application {
         let mut next = None;
         let mut events = Vec::new();
         match action {
+            ApplicationAction::OpenItemEditor(warrior, slot) => {
+                if !self.editing || self.screen != Screen::Game || state.phase != Phase::Exploration
+                {
+                    return Err("Item editing is unavailable.".into());
+                }
+                self.item_editor = Some(crate::editor::ItemEditor::new(state, warrior, slot)?);
+            }
+            ApplicationAction::ItemEditorItem(item) => {
+                let editor = self
+                    .item_editor
+                    .as_mut()
+                    .ok_or("Item editor is not open.")?;
+                if item < 3 {
+                    editor.draft.validate(content).map_err(|e| e.to_string())?;
+                    *state = editor.draft.clone();
+                    self.item_editor = None;
+                } else {
+                    events = editor.handle(item, content)?;
+                }
+            }
+            ApplicationAction::EditorAnswer(answer) => {
+                self.editor_question = false;
+                self.editing = answer;
+            }
+            ApplicationAction::OpenEditor(warrior) => {
+                if !self.editing || self.screen != Screen::Game || state.phase != Phase::Exploration
+                {
+                    return Err("Warrior editing is unavailable.".into());
+                }
+                self.editor = Some(crate::editor::WarriorEditor::new(state, warrior)?);
+            }
+            ApplicationAction::EditorItem(item) => {
+                let editor = self.editor.as_mut().ok_or("Warrior editor is not open.")?;
+                if editor.level_information || editor.scans.is_some() {
+                    events = editor.handle(item, content)?;
+                    return Ok((next, events));
+                }
+                match item {
+                    1 | 4 => {
+                        if item == 1 {
+                            editor.cancel_current()?;
+                        }
+                        editor.draft.validate(content).map_err(|e| e.to_string())?;
+                        *state = editor.draft.clone();
+                        self.editor = None;
+                    }
+                    _ => events = editor.handle(item, content)?,
+                }
+            }
+            ApplicationAction::ScanAnswer(answer) => {
+                self.editor
+                    .as_mut()
+                    .ok_or("Warrior editor is not open.")?
+                    .scan_answer(answer, content)?;
+            }
+            ApplicationAction::Difficulty(level) => {
+                if self.screen != Screen::Squad || !(-2..=2).contains(&level) {
+                    return Err("Difficulty selection is unavailable.".into());
+                }
+                self.difficulty = level;
+                events.push(Event::Sound { resource_id: 144 });
+            }
+            ApplicationAction::HelpResetAnswer(answer) => {
+                self.help_reset_question = false;
+                if answer {
+                    self.help.reset()?;
+                }
+            }
+            ApplicationAction::Help(item) => {
+                let resource_id = self.help.action(item)?;
+                if resource_id != 0 {
+                    events.push(Event::Sound { resource_id });
+                }
+            }
             ApplicationAction::SkipLogo => self.screen = Screen::Title,
             ApplicationAction::Warrior(i) => {
                 self.selected = Some(i);
@@ -163,6 +272,14 @@ impl Application {
                     self.screen = Screen::Title;
                 } else {
                     let mut candidate = Session::new(content);
+                    apply(
+                        Command::SetDifficulty {
+                            level: self.difficulty,
+                        },
+                        &mut candidate,
+                        content,
+                    )
+                    .map_err(|error| error.to_string())?;
                     events = apply(
                         Command::SelectStarters {
                             indices: self.squad.clone(),
@@ -204,6 +321,13 @@ impl Application {
                 self.menu = None;
                 self.submenu = None;
                 match (id, item) {
+                    (136, 8) => {
+                        if self.editing {
+                            self.editing = false;
+                        } else {
+                            self.editor_question = true;
+                        }
+                    }
                     (129, 1 | 2) => {
                         next = Some(Action::Load);
                     }
@@ -217,15 +341,21 @@ impl Application {
                         }
                     }
                     (130, 1) => {
+                        self.difficulty = state.difficulty;
                         self.screen = Screen::Squad;
                         self.squad.clear();
                         self.selected = None;
                         self.member = None;
+                        self.help.open(121, 124)?;
                         events.push(Event::Sound { resource_id: 10004 });
                     }
                     (130, 2) | (200, 1) => self.open_intro(self.screen, None),
                     (130, 5) => {}
                     (137, 4) => {}
+                    (137, 5) => {
+                        self.help.resume()?;
+                        self.help_reset_question = true;
+                    }
                     (145, 1) => self.music_enabled = !self.music_enabled,
                     (145, 10..=22) => {
                         self.music_enabled = true;
@@ -244,12 +374,18 @@ impl Application {
     }
 
     fn supported(&self, id: i16, item: usize, state: &Session) -> bool {
-        if self.screen == Screen::Squad || self.quit_question {
+        if self.screen == Screen::Squad
+            || self.quit_question
+            || self.help_reset_question
+            || self.editor_question
+            || self.editor.is_some()
+        {
             return false;
         }
         let game = self.screen == Screen::Game && state.phase != Phase::SquadSelection;
         match (id, item) {
-            (129, 6) | (130, 2 | 5) | (137, 1 | 2 | 4) => true,
+            (136, 8) => true,
+            (129, 6) | (130, 2 | 5) | (137, 1 | 2 | 4 | 5) => true,
             (129, 1) => self.screen == Screen::Title,
             (129, 2) | (200, 1) => game && state.phase != Phase::Combat,
             (129, 3 | 4) => game && state.phase == Phase::Exploration,
@@ -364,7 +500,51 @@ impl Application {
         if self.screen != Screen::Logo && self.screen != Screen::Intro {
             self.draw_menus(state, assets, &mut controls);
         }
-        if self.quit_question {
+        if let Some(editor) = &self.item_editor {
+            controls.clear();
+            editor.draw(content, assets, &mut controls);
+        } else if let Some(editor) = &self.editor {
+            controls.clear();
+            editor.draw(content, assets, &mut controls);
+        } else if self.editing && self.screen == Screen::Game && state.phase == Phase::Exploration {
+            if ui.inspection == Some(presentation::Inspection::Items) {
+                for (row, (slot, _)) in state.warriors[ui.selected]
+                    .inventory()
+                    .unwrap_or_default()
+                    .iter()
+                    .enumerate()
+                    .skip(ui.page * 8)
+                    .take(8)
+                    .enumerate()
+                {
+                    let rect = Rect::new(450., 162. + row as f32 * 39., 50., 32.);
+                    assets.panel(234, rect);
+                    controls.push(Control {
+                        rect,
+                        enabled: true,
+                        action: Action::Application(ApplicationAction::OpenItemEditor(
+                            ui.selected,
+                            slot,
+                        )),
+                    });
+                }
+            }
+            for (index, _) in state
+                .warriors
+                .iter()
+                .enumerate()
+                .filter(|_| ui.inspection.is_none())
+            {
+                let mut rect = crate::layout::row(index);
+                rect.w = 50.;
+                controls.push(Control {
+                    rect,
+                    enabled: true,
+                    action: Action::Application(ApplicationAction::OpenEditor(index)),
+                });
+            }
+        }
+        if self.quit_question || self.help_reset_question || self.editor_question {
             let origin = vec2(221., 203.);
             draw_texture_ex(
                 &assets.panels[&214],
@@ -377,16 +557,19 @@ impl Application {
                 },
             );
             assets.panel(182, Rect::new(origin.x + 22., origin.y + 23., 320., 84.));
-            assets.text(
-                if state.phase == Phase::Combat {
-                    "Are you sure you want to quit?"
+            assets.wrapped(
+                &assets.questions[if self.editor_question {
+                    18
+                } else if self.help_reset_question {
+                    8
+                } else if state.phase == Phase::Combat {
+                    9
                 } else {
-                    "Quit without saving first?"
-                },
-                origin.x + 32.,
-                origin.y + 58.,
+                    0
+                }],
+                Rect::new(origin.x + 32., origin.y + 44., 294., 72.),
                 14,
-                WHITE,
+                18.,
             );
             for (id, x, answer) in [(2, 66., true), (4, 208., false)] {
                 let rect = Rect::new(origin.x + x, origin.y + 127., 70., 35.);
@@ -394,15 +577,101 @@ impl Application {
                 controls.push(Control {
                     rect,
                     enabled: true,
-                    action: Action::Application(ApplicationAction::QuitAnswer(answer)),
+                    action: Action::Application(if self.editor_question {
+                        ApplicationAction::EditorAnswer(answer)
+                    } else if self.help_reset_question {
+                        ApplicationAction::HelpResetAnswer(answer)
+                    } else {
+                        ApplicationAction::QuitAnswer(answer)
+                    }),
                 });
             }
         }
-        if self.screen != Screen::Game
+        if (self.screen != Screen::Game || self.editor.is_some() || self.item_editor.is_some())
             && let Some(message) = ui.messages.back()
         {
             draw_rectangle(0., 567., 800., 33., BLACK);
             assets.text(message, 14., 587., 12, YELLOW);
+        }
+        if let Some(page) = self.help.page {
+            let origin = vec2(5., 25.);
+            draw_texture_ex(
+                &assets.panels[&214],
+                origin.x,
+                origin.y,
+                WHITE,
+                DrawTextureParams {
+                    source: Some(Rect::new(12., 18., 320., 200.)),
+                    ..Default::default()
+                },
+            );
+            draw_rectangle_lines(origin.x, origin.y, 320., 200., 1., MAGENTA);
+            assets.panel(221, Rect::new(origin.x + 6., origin.y + 7., 308., 139.));
+            let text = content
+                .tutorials
+                .get(page)
+                .map(String::as_str)
+                .unwrap_or("");
+            let mut y = origin.y + 30.;
+            let mut line = String::new();
+            for word in text.split_whitespace() {
+                let proposed = if line.is_empty() {
+                    word.to_owned()
+                } else {
+                    format!("{line} {word}")
+                };
+                if measure_text(&proposed, Some(&assets.font), 14, 1.).width > 286.
+                    && !line.is_empty()
+                {
+                    draw_text_ex(
+                        &line,
+                        origin.x + 17.,
+                        y,
+                        TextParams {
+                            font: Some(&assets.font),
+                            font_size: 14,
+                            color: YELLOW,
+                            ..Default::default()
+                        },
+                    );
+                    y += 16.;
+                    line.clear();
+                }
+                if !line.is_empty() {
+                    line.push(' ');
+                }
+                line.push_str(word);
+            }
+            draw_text_ex(
+                &line,
+                origin.x + 17.,
+                y,
+                TextParams {
+                    font: Some(&assets.font),
+                    font_size: 14,
+                    color: YELLOW,
+                    ..Default::default()
+                },
+            );
+            for (id, rect, items) in [
+                (168, Rect::new(196., 146., 50., 50.), vec![(3, 0., 50.)]),
+                (
+                    142,
+                    Rect::new(264., 146., 50., 50.),
+                    vec![(4, 0., 25.), (5, 25., 25.)],
+                ),
+                (180, Rect::new(6., 152., 170., 31.), vec![(6, 0., 170.)]),
+            ] {
+                let rect = Rect::new(origin.x + rect.x, origin.y + rect.y, rect.w, rect.h);
+                assets.panel(id, rect);
+                for (item, x, width) in items {
+                    controls.push(Control {
+                        rect: Rect::new(rect.x + x, rect.y, width, rect.h),
+                        enabled: true,
+                        action: Action::Application(ApplicationAction::Help(item)),
+                    });
+                }
+            }
         }
         controls
     }
@@ -411,8 +680,13 @@ impl Application {
         clear_background(BLACK);
         let origin = vec2(80., 80.);
         assets.panel(203, Rect::new(origin.x, origin.y, 640., 460.));
-        assets.text("Warrior", origin.x + 12., origin.y + 23., 12, WHITE);
-        assets.text("Level", origin.x + 177., origin.y + 23., 12, WHITE);
+        assets.text(
+            &assets.squad_text[69],
+            origin.x + 7.,
+            origin.y + 19.,
+            12,
+            WHITE,
+        );
         for (i, warrior) in content.warriors.iter().enumerate() {
             let rect = Rect::new(origin.x + 12., origin.y + 30. + i as f32 * 20., 155., 14.);
             if self.selected == Some(i) {
@@ -460,12 +734,7 @@ impl Application {
             (160, 22., add, ApplicationAction::Add),
             (7, 72., self.member.is_some(), ApplicationAction::Remove),
             (158, 122., false, ApplicationAction::Remove),
-            (
-                168,
-                222.,
-                self.squad.is_empty() || self.squad.len() == 6,
-                ApplicationAction::Done,
-            ),
+            (168, 222., true, ApplicationAction::Done),
             (183, 272., false, ApplicationAction::Add),
         ] {
             let rect = Rect::new(origin.x + 221., origin.y + y, 50., 50.);
@@ -487,31 +756,41 @@ impl Application {
             50.,
             Color::new(0., 0., 0., 0.55),
         );
-        for (i, name) in ["Novice", "Easy", "Normal", "Hard", "Veteran"]
-            .iter()
-            .enumerate()
-        {
+        assets.text(
+            assets.squad_text[66].trim_end(),
+            origin.x + 233.,
+            origin.y + 360.,
+            12,
+            YELLOW,
+        );
+        for (i, name) in assets.squad_text[67].lines().enumerate() {
             assets.text(
                 name,
                 origin.x + 268.,
                 origin.y + 375. + i as f32 * 16.,
                 12,
-                if i == 2 { WHITE } else { GRAY },
+                WHITE,
             );
+            controls.push(Control {
+                rect: Rect::new(origin.x + 241., origin.y + 364. + i as f32 * 16., 130., 16.),
+                enabled: true,
+                action: Action::Application(ApplicationAction::Difficulty(i as i16 - 2)),
+            });
         }
-        assets.panel(179, Rect::new(origin.x + 241., origin.y + 396., 13., 13.));
-        assets.text(
-            "Select a warrior and click ADD. Up to six members; click DONE to begin.",
-            origin.x + 12.,
-            origin.y + 333.,
-            12,
-            WHITE,
+        assets.panel(
+            179,
+            Rect::new(
+                origin.x + 241.,
+                origin.y + 364. + f32::from(self.difficulty + 2) * 16.,
+                13.,
+                13.,
+            ),
         );
-        assets.text(
-            "This build supports the six supplied warriors and Normal difficulty.",
-            origin.x + 12.,
-            origin.y + 354.,
+        assets.wrapped_color(
+            &assets.squad_text[68],
+            Rect::new(origin.x + 12., origin.y + 311., 202., 119.),
             12,
+            16.,
             YELLOW,
         );
     }
@@ -654,6 +933,7 @@ impl Application {
                     );
                 }
                 if (id == 130 && index + 1 == 5)
+                    || (id == 136 && index == 7 && self.editing)
                     || (id == 134 && index + 1 == self.speed)
                     || (id == 135 && index + 1 == self.volume + 2)
                 {
@@ -681,12 +961,9 @@ impl Application {
         controls: &[Control],
         pointer: Option<Vec2>,
     ) -> Option<Action> {
-        if self.quit_question {
-            if is_key_pressed(KeyCode::Y) {
-                return Some(Action::Application(ApplicationAction::QuitAnswer(true)));
-            }
-            if is_key_pressed(KeyCode::N) {
-                return Some(Action::Application(ApplicationAction::QuitAnswer(false)));
+        if self.help.page.is_some() {
+            if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Enter) {
+                return Some(Action::Application(ApplicationAction::Help(3)));
             }
             if is_mouse_button_pressed(MouseButton::Left)
                 && let Some(p) = pointer
@@ -698,7 +975,76 @@ impl Application {
                         control.rect.contains(p)
                             && matches!(
                                 control.action,
-                                Action::Application(ApplicationAction::QuitAnswer(_))
+                                Action::Application(ApplicationAction::Help(_))
+                            )
+                    })
+                    .map(|control| control.action.clone());
+            }
+            return None;
+        }
+        if self.editor.is_some() || self.item_editor.is_some() {
+            if self
+                .editor
+                .as_ref()
+                .and_then(|editor| editor.scans.as_ref())
+                .is_some_and(|scan| scan.question)
+            {
+                if is_key_pressed(KeyCode::Y) {
+                    return Some(Action::Application(ApplicationAction::ScanAnswer(true)));
+                }
+                if is_key_pressed(KeyCode::N) || is_key_pressed(KeyCode::Escape) {
+                    return Some(Action::Application(ApplicationAction::ScanAnswer(false)));
+                }
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                return Some(Action::Application(if self.item_editor.is_some() {
+                    ApplicationAction::ItemEditorItem(2)
+                } else {
+                    ApplicationAction::EditorItem(1)
+                }));
+            }
+            if is_mouse_button_pressed(MouseButton::Left)
+                && let Some(p) = pointer
+            {
+                return controls
+                    .iter()
+                    .rev()
+                    .find(|c| c.enabled && c.rect.contains(p))
+                    .map(|c| c.action.clone());
+            }
+            return None;
+        }
+        if self.quit_question || self.help_reset_question || self.editor_question {
+            let answer = |answer| {
+                Action::Application(if self.editor_question {
+                    ApplicationAction::EditorAnswer(answer)
+                } else if self.help_reset_question {
+                    ApplicationAction::HelpResetAnswer(answer)
+                } else {
+                    ApplicationAction::QuitAnswer(answer)
+                })
+            };
+            if is_key_pressed(KeyCode::Y) {
+                return Some(answer(true));
+            }
+            if is_key_pressed(KeyCode::N) {
+                return Some(answer(false));
+            }
+            if is_mouse_button_pressed(MouseButton::Left)
+                && let Some(p) = pointer
+            {
+                return controls
+                    .iter()
+                    .rev()
+                    .find(|control| {
+                        control.rect.contains(p)
+                            && matches!(
+                                control.action,
+                                Action::Application(
+                                    ApplicationAction::QuitAnswer(_)
+                                        | ApplicationAction::HelpResetAnswer(_)
+                                        | ApplicationAction::EditorAnswer(_)
+                                )
                             )
                     })
                     .map(|control| control.action.clone());
@@ -744,6 +1090,7 @@ impl Application {
                 (KeyCode::B, b'B'),
                 (KeyCode::V, b'V'),
                 (KeyCode::K, b'K'),
+                (KeyCode::W, b'W'),
             ] {
                 if is_key_pressed(key) {
                     for id in &assets.menu_bar {
@@ -832,3 +1179,7 @@ pub fn command_modifier() -> bool {
     .iter()
     .any(|key| is_key_down(*key) || is_key_pressed(*key))
 }
+
+#[cfg(all(test, feature = "original-fixtures"))]
+#[path = "../tests/unit/difficulty_state.rs"]
+mod tests;

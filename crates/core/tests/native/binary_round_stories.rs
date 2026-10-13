@@ -4,6 +4,29 @@ use crate::support::field_bytes as bytes;
 use centurions_core::combat::round_stories;
 use centurions_core::combat::round_stories::RoundEffect;
 
+#[test]
+fn summoned_difficulty_matches_original_record_widths_rounding_and_rng() {
+    let fixture = crate::support::fixture("difficulty-summons.json");
+    for case in fixture.array("cases") {
+        let before = MonsterRecord {
+            bytes: case.bytes("before"),
+        };
+        let mut random = RandomState::new(case.n::<u32>("seed_before"));
+        let after = centurions_core::combat::monster::summon(
+            before,
+            case.n::<i16>("faction"),
+            case.n::<i16>("difficulty"),
+            &mut random,
+        )
+        .unwrap();
+        assert_eq!(after.bytes, case.bytes("after"), "{}", case["case"]);
+        assert_eq!(
+            (random.seed, random.draws),
+            (case.n::<u32>("seed_after"), case.n::<u64>("draws"))
+        );
+    }
+}
+
 fn fixture() -> serde_json::Value {
     crate::support::fixture("round-stories.json")
 }
@@ -29,6 +52,7 @@ fn input(
     let positions = words(&bytes(case, "positions_before"));
     (
         Combat {
+            difficulty: 0,
             battle: 146,
             map: TacticalMap {
                 tiles: words(&bytes(case, "map_before")),

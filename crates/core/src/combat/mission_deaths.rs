@@ -48,7 +48,7 @@ pub fn apply(
             .iter()
             .any(|record| record.bytes.len() != 288)
         || actor >= combat.enemies.records.len()
-        || warriors.len() != 6
+        || !(1..=6).contains(&warriors.len())
         || warriors.iter().any(|warrior| warrior.bytes.len() != 3138)
     {
         return Err(RuleError::Invalid(
