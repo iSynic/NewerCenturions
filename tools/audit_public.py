@@ -25,6 +25,8 @@ def public_path(name: str) -> bool:
         return path.suffix in {".py", ".ps1", ".java", ".ldefs", ".slaspec"}
     if name.startswith("tests/python/"):
         return path.suffix == ".py"
+    if name.startswith("tests/native/"):
+        return path.suffix == ".java"
     if name.startswith("vendor/"):
         return path.name in {"LICENSE", "LICENSE-MIT", "LICENSE-APACHE"} or path.suffix in {".rs", ".toml", ".md"}
     return False

@@ -537,9 +537,33 @@ PRESENTATION = {
     "showlogo", "delay2", "partyselect", "quitgame", "question", "sound",
 }
 
+RUNTIME_CONNECTIONS = {
+    0x13F684: (["crates/core/src/creation.rs", "crates/desktop/src/creation.rs"], "evidence/fixtures/new-warrior.json", 3),
+    0x13F52C: (["crates/core/src/creation.rs"], "evidence/fixtures/new-warrior.json", 3),
+    0x1476CC: (["crates/core/src/roster.rs", "crates/desktop/src/application.rs"], None, 0),
+    0x152188: (["crates/core/src/roster.rs", "crates/desktop/src/application.rs"], None, 0),
+    0x1374BC: (["crates/core/src/roster.rs"], None, 0),
+    0x14B63A: (["crates/desktop/src/preferences.rs", "crates/desktop/src/application.rs"], None, 0),
+}
+
 
 def address(value: str) -> int:
     return int(value, 16)
+
+
+def runtime_source_path(path: str) -> str:
+    for name, crate in {
+        "recovered_gameplay_control/": "translated-gameplay",
+        "recovered_gameplay_leaves.rs": "translated-gameplay",
+        "recovered_remaining_control.rs": "translated-system",
+        "recovered_main_control.rs": "translated-application",
+        "recovered_items_control.rs": "translated-application",
+        "recovered_application_children.rs": "translated-application",
+    }.items():
+        prefix = "crates/core/src/" + name
+        if path.startswith(prefix):
+            return path.replace("crates/core/src/", f"crates/{crate}/src/", 1)
+    return path
 
 
 def dependency_batches(graph: dict[int, set[int]]) -> list[list[int]]:
@@ -620,6 +644,10 @@ def build_plan(inventory: dict, registry: dict) -> dict:
         graph[entry] = set(calls).intersection(entries)
         source_port = SOURCE_PORTS.get(entry)
         rust = bindings[entry]
+        if entry in RUNTIME_CONNECTIONS:
+            paths, fixture, cases = RUNTIME_CONNECTIONS[entry]
+            rust.append({"action": "runtime.connected_branches", "rust": paths,
+                         "native_cases": cases, "fixture": fixture})
         if function["name"] in PRESENTATION:
             rust.append({"action": "presentation.selected_branches", "rust": ["crates/desktop/src/application.rs"],
                          "native_cases": 0, "fixture": None})
@@ -637,6 +665,8 @@ def build_plan(inventory: dict, registry: dict) -> dict:
             rust.append({"action": "recovered_remaining_control." + SHARED_NATIVE_REMAINING[entry],
                          "rust": ["crates/translated-system/src/recovered_remaining_control.rs"],
                          "native_cases": 0, "fixture": None})
+        for binding in rust:
+            binding["rust"] = [runtime_source_path(path) for path in binding["rust"]]
         status = "source_port" if source_port else "partial" if rust else "recovered"
         instruction_count = operation_count = 0
         for block in function["blocks"]:

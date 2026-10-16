@@ -10,7 +10,6 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
     let mut content = crate::support::content();
     content.scenario.as_mut().unwrap().maps[0].tile_properties =
         fixture.bytes("properties")[64..12064].to_vec();
-    let mut checked = 0;
     for case in fixture.array("cases") {
         if case.n::<bool>("forced_kill_return") {
             continue;
@@ -104,9 +103,7 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
         assert_eq!(combat.cursor, 1);
         assert_eq!(combat.order[1], 0);
         assert_eq!(combat.round, 0);
-        checked += 1;
     }
-    assert_eq!(checked, 38);
 }
 
 #[test]

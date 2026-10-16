@@ -11,6 +11,7 @@ pub mod entry_party;
 pub mod final_turn_stories;
 pub mod firearm;
 pub mod footprint;
+pub mod interaction;
 pub mod lifecycle;
 pub mod medical;
 pub mod mission_deaths;
@@ -18,11 +19,15 @@ pub mod monster;
 pub mod natural_conditions;
 pub mod party_buffs;
 pub mod player_psi;
+pub mod psi_selection;
+pub mod retreat;
 pub mod rewards;
 pub mod round_stories;
 pub mod runtime;
+pub mod shooting;
 pub mod spell_conditions;
 pub mod spells;
+mod warrior_attack;
 pub mod weapon_work;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -36,6 +41,17 @@ pub struct Combat {
     pub order: Vec<i16>,
     pub cursor: usize,
     pub round: i16,
+    /// Native WORD4427a6: rounds since attack/cast; ten wraps force retreat.
+    #[serde(default)]
+    pub inactive_rounds: i16,
+    #[serde(default)]
+    pub selection_pending: bool,
+    /// getup's retained WORD43800e; an NPC script death skips its reset.
+    #[serde(default)]
+    pub script_enemy: usize,
+    /// WORD447196 is written by getup, independently of the retained script origin.
+    #[serde(default)]
+    pub selected_enemy: usize,
     #[serde(default)]
     pub round_scripts: round_stories::RoundScripts,
     #[serde(default)]
@@ -52,6 +68,11 @@ pub struct Combat {
     pub weapon_work: weapon_work::WeaponWork,
     #[serde(default)]
     pub unavailable: i8,
+    /// killbody's retained body, consumed into the session before script dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_last_defeated: Option<i16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firearm_selection: Option<shooting::Selection>,
 }
 fn empty_spell_fields() -> Vec<u8> {
     vec![0; 1200]
@@ -61,6 +82,9 @@ fn empty_field_used() -> Vec<u8> {
 }
 impl Combat {
     pub fn validate(&self, warriors: &[Warrior]) -> Result<(), RuleError> {
+        if let Some(selection) = &self.firearm_selection {
+            selection.validate(self, warriors)?;
+        }
         if !(1..=6).contains(&warriors.len())
             || !(-2..=2).contains(&self.difficulty)
             || self.map.tiles.len() != 8100
@@ -69,8 +93,18 @@ impl Combat {
             || self.enemies.records.len() > 100
             || self.enemies.positions.len() != self.enemies.records.len()
             || self.order.len() != 110
-            || self.cursor >= 110
+            || self.cursor > 110
+            || self.script_enemy >= 100
+            || self.selected_enemy >= 100
+            || self.pending_last_defeated.is_some_and(|body| {
+                body < 0
+                    || (body < 10 && body as usize >= warriors.len())
+                    || (body >= 10 && body as usize - 10 >= self.enemies.records.len())
+            })
             || self.round < 0
+            || !(0..=9).contains(&self.inactive_rounds)
+            || (self.selection_pending
+                && (self.cursor != 110 || self.round_scripts.pending.is_some()))
             || self.death_queue.entries.len() != 100
             || self.death_queue.count > 100
             || self.death_queue.cursor > 100
@@ -123,6 +157,25 @@ pub fn move_warrior(
     dx: i8,
     dy: i8,
 ) -> Result<Vec<Event>, RuleError> {
+    move_warrior_inner(state, content, dx, dy, false)
+}
+
+pub(crate) fn move_controlled(
+    state: &mut Session,
+    content: &Content,
+    dx: i8,
+    dy: i8,
+) -> Result<Vec<Event>, RuleError> {
+    move_warrior_inner(state, content, dx, dy, true)
+}
+
+fn move_warrior_inner(
+    state: &mut Session,
+    content: &Content,
+    dx: i8,
+    dy: i8,
+    automatic: bool,
+) -> Result<Vec<Event>, RuleError> {
     if !(-1..=1).contains(&dx) || !(-1..=1).contains(&dy) || (dx == 0 && dy == 0) {
         return Err(RuleError::Invalid("invalid tactical direction".into()));
     }
@@ -164,6 +217,49 @@ pub fn move_warrior(
     )?;
     let tile = combat.map.tiles[next_index].wrapping_abs();
     if tile <= 110 {
+        if interaction::friendly_neighbor_parts(combat, &state.warriors, tile)? {
+            let exchange = interaction::can_exchange_parts(combat, &state.warriors, tile)?;
+            let mut effects = runtime::check_neighbors_with_work(
+                combat,
+                &mut state.warriors,
+                &mut state.random,
+                body as i16,
+                &content.items,
+                &mission.combat.as_ref().unwrap().attacks,
+                &state.party_buffs,
+                &mut state.ammunition_work,
+            )?;
+            if state.warriors[body].bytes[0x9df] == 0 {
+                effects.extend(runtime::end_turn(state, content)?);
+                return Ok(effects);
+            }
+            if dx != 0 {
+                state.warriors[body].bytes[0x9e0] = u8::from(dx < 0);
+            }
+            if automatic {
+                effects.extend(if exchange {
+                    interaction::exchange(state, tile)?
+                } else {
+                    runtime::player_attack_friend(state, content, tile)?
+                });
+                return Ok(effects);
+            }
+            effects.extend([
+                Event::Sound { resource_id: 20005 },
+                if exchange {
+                    Event::ExchangeOffered { body: tile }
+                } else {
+                    Event::FriendAttackOffered { body: tile }
+                },
+            ]);
+            return Ok(effects);
+        }
+        if tile < 110
+            && state.warriors[body].bytes[0x9dd] == 0
+            && runtime::neighbors(combat, &state.warriors, body as i16)?.contains(&tile)
+        {
+            return runtime::player_attack(state, content, tile);
+        }
         return reload_at_occupied_cell(state, content, mission, body, tile, destination, dx);
     }
     if tile < 1000 {
@@ -172,7 +268,7 @@ pub fn move_warrior(
             dependency: "non-terrain tactical marker",
         });
     }
-    if word(&state.warriors[body].bytes, 0x90)? != 0 {
+    if !automatic && word(&state.warriors[body].bytes, 0x90)? != 0 {
         return Err(RuleError::Unsupported {
             action: "combat.move",
             dependency: "involuntary movement",
@@ -269,6 +365,35 @@ pub fn move_warrior(
         }
     }
     Ok(effects)
+}
+
+/// combatchoice movement uses the next cell; firing mode retains the clicked target.
+pub fn click_command(state: &Session, x: i16, y: i16) -> Result<Option<Command>, RuleError> {
+    let combat = state
+        .combat
+        .as_ref()
+        .ok_or_else(|| RuleError::Invalid("combat missing".into()))?;
+    let actor = combat
+        .active_body()
+        .filter(|body| (0..state.warriors.len() as i16).contains(body))
+        .ok_or_else(|| RuleError::Invalid("active warrior missing".into()))?
+        as usize;
+    let index = centurions_content::mission::OpeningMission::index(
+        i32::from(x) + i32::from(combat.map.shift.0) + 5,
+        i32::from(y) + i32::from(combat.map.shift.1) + 5,
+    )?;
+    let body = combat.map.tiles[index].wrapping_abs();
+    if state.warriors[actor].bytes[0x9dd] != 0
+        && (body != actor as i16)
+        && ((0..state.warriors.len() as i16).contains(&body)
+            || (10..10 + combat.enemies.records.len() as i16).contains(&body))
+    {
+        return Ok(Some(Command::ShootEnemy { body }));
+    }
+    let origin = combat.squad.positions[actor];
+    let dx = x.wrapping_sub(origin.0).signum() as i8;
+    let dy = y.wrapping_sub(origin.1).signum() as i8;
+    Ok((dx != 0 || dy != 0).then_some(Command::Move { dx, dy }))
 }
 
 fn reload_at_occupied_cell(
@@ -432,10 +557,10 @@ pub fn initialize_turn(
             .get_mut((body - 10) as usize)
             .ok_or_else(|| RuleError::Invalid("enemy outside battle".into()))?;
         let bytes = &mut monster.bytes;
-        if bytes[0xb3] != 0 || bytes[0xcf] != 0 || word(bytes, 0x110)? <= 0 {
+        if bytes[0xb3] != 0 || word(bytes, 0x110)? <= 0 {
             return Err(RuleError::Unsupported {
                 action: "combat.turn",
-                dependency: "inactive or confused enemy",
+                dependency: "inactive enemy",
             });
         }
         let chance = word(bytes, 0x5c)?;
@@ -445,22 +570,55 @@ pub fn initialize_turn(
                 dependency: "enemy turn script",
             });
         }
-        put_word(bytes, 0x5c, chance.wrapping_abs());
-        let mut points = (bytes[0x109] as i8).min(1).wrapping_add(bytes[0x8a] as i8);
-        let mut movement = (word(bytes, 6)? as i8).wrapping_sub(bytes[0xb4] as i8);
-        if bytes[0xb8] != 0 {
-            movement /= 2;
-        }
-        if bytes[0xc9] != 0 {
-            movement = movement.wrapping_mul(2);
-            points = points.wrapping_add(4).min(11);
-        }
-        bytes[0x109] = points as u8;
-        bytes[0x106] = movement as u8;
+        initialize_enemy_record(bytes, random)?;
     } else {
         return Err(RuleError::Invalid("invalid active body".into()));
     }
     Ok(())
+}
+
+/// getup126a18..126dd6: signed counters, confusion draws and haste attack copies.
+pub(crate) fn initialize_enemy_record(
+    bytes: &mut [u8],
+    random: &mut RandomState,
+) -> Result<(bool, i16), RuleError> {
+    put_word(bytes, 0x5c, word(bytes, 0x5c)?.wrapping_abs());
+    bytes[0x109] = (bytes[0x109] as i8).min(1).wrapping_add(bytes[0x8a] as i8) as u8;
+    let faction = word(bytes, 0xe)?;
+    if bytes[0xcf] != 0 {
+        match random.bound(100) {
+            1..40 => {
+                if random.bound(2) == 1 && faction == 0 {
+                    put_word(bytes, 0xe, 1);
+                } else if random.bound(2) == 1 && faction != 0 {
+                    put_word(bytes, 0xe, 0);
+                }
+            }
+            40..61 => {
+                bytes[0xb3] = bytes[0xb3].wrapping_add(1);
+                return Ok((true, 0));
+            }
+            _ => bytes[0xb2] = bytes[0xb2].wrapping_add(1),
+        }
+    }
+    let mut movement = (word(bytes, 6)? as i8).wrapping_sub(bytes[0xb4] as i8);
+    if bytes[0xb8] != 0 {
+        movement /= 2;
+    }
+    if bytes[0xc9] != 0 {
+        movement = movement.wrapping_mul(2);
+        let points = (bytes[0x109] as i8).wrapping_add(4).min(11);
+        bytes[0x109] = points as u8;
+        for slot in 1..points / 2 {
+            let offset = 0x93 + slot as usize * 4;
+            if bytes[offset] == 0 {
+                bytes.copy_within(0x93..0x97, offset);
+            }
+        }
+    }
+    bytes[0x106] = movement as u8;
+    let hostile_change = i16::from(word(bytes, 0xe)? != 0) - i16::from(faction != 0);
+    Ok((false, hostile_change))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -548,6 +706,23 @@ pub fn begin_group(
     content: &Content,
     parameter: i16,
 ) -> Result<Vec<Event>, RuleError> {
+    begin_group_inner(state, content, parameter, false)
+}
+
+pub fn begin_selected_battle(
+    state: &mut Session,
+    content: &Content,
+    parameter: i16,
+) -> Result<Vec<Event>, RuleError> {
+    begin_group_inner(state, content, parameter, true)
+}
+
+fn begin_group_inner(
+    state: &mut Session,
+    content: &Content,
+    parameter: i16,
+    treasure: bool,
+) -> Result<Vec<Event>, RuleError> {
     let map = content
         .map(
             state
@@ -563,6 +738,12 @@ pub fn begin_group(
         10,
     )?;
     let plan = crate::story_party::group_encounter(extra, &mut state.random)?;
+    if treasure && plan.failure_script != 0 {
+        return Err(RuleError::Unsupported {
+            action: "story.selected_battle",
+            dependency: "additional post-battle treasure continuation",
+        });
+    }
     let mut events = vec![];
     if plan.sound != 0 {
         events.push(Event::Sound {
@@ -694,7 +875,11 @@ fn begin_battle_with_group(
     )?;
     let allies = allies::place_allies(
         &state.allies,
-        state.ally_count,
+        if state.suppress_allies == 0 {
+            state.ally_count
+        } else {
+            0
+        },
         &mut map,
         mission,
         squad.positions[0],
@@ -774,6 +959,12 @@ fn begin_battle_with_group(
         || (state.attack_packet.clone(), state.attack_identity),
         |combat| (combat.attack_packet.clone(), combat.attack_identity),
     );
+    let (selected_enemy, script_enemy) = state
+        .combat
+        .as_ref()
+        .map_or((state.selected_enemy, state.script_enemy), |combat| {
+            (combat.selected_enemy, combat.script_enemy)
+        });
     state.combat = Some(Combat {
         difficulty: state.difficulty,
         battle: id,
@@ -783,6 +974,10 @@ fn begin_battle_with_group(
         order,
         cursor,
         round: 0,
+        inactive_rounds: 0,
+        selection_pending: false,
+        script_enemy,
+        selected_enemy,
         round_scripts: round_stories::RoundScripts::read(
             &mission.combat.as_ref().unwrap().battles,
             id,
@@ -794,6 +989,8 @@ fn begin_battle_with_group(
         attack_identity,
         weapon_work: state.weapon_work,
         unavailable,
+        pending_last_defeated: None,
+        firearm_selection: None,
     });
     if let Some(packet) = state.combat.as_mut().unwrap().attack_packet.as_mut() {
         packet[19] = 0;

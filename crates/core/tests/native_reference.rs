@@ -104,10 +104,6 @@ mod binary_item_editing;
 mod binary_large_body_move;
 #[path = "native/binary_large_placement.rs"]
 mod binary_large_placement;
-#[path = "native/binary_learned_heal_power.rs"]
-mod binary_learned_heal_power;
-#[path = "native/binary_learned_portrait_heal.rs"]
-mod binary_learned_portrait_heal;
 #[path = "native/binary_level_promotion.rs"]
 mod binary_level_promotion;
 #[path = "native/binary_lifecycle.rs"]
@@ -134,6 +130,8 @@ mod binary_monster_elemental;
 mod binary_monster_melee;
 #[path = "native/binary_move_away.rs"]
 mod binary_move_away;
+#[path = "native/binary_native_save.rs"]
+mod binary_native_save;
 #[path = "native/binary_natural.rs"]
 mod binary_natural;
 #[path = "native/binary_natural_poison.rs"]
@@ -142,6 +140,8 @@ mod binary_natural_poison;
 mod binary_natural_slow;
 #[path = "native/binary_nested_victory.rs"]
 mod binary_nested_victory;
+#[path = "native/binary_new_warrior.rs"]
+mod binary_new_warrior;
 #[path = "native/binary_npc_battle.rs"]
 mod binary_npc_battle;
 #[path = "native/binary_npc_poison_consumer.rs"]
@@ -262,8 +262,11 @@ mod binary_warm_psi_work;
 mod binary_warrior_choice;
 #[path = "native/binary_warrior_opportunity.rs"]
 mod binary_warrior_opportunity;
+mod campaign;
 #[path = "native/command_automatic_turn.rs"]
 mod command_automatic_turn;
+#[path = "native/command_combat_clicks.rs"]
+mod command_combat_clicks;
 #[path = "native/command_current_restricted_npc_spell.rs"]
 mod command_current_restricted_npc_spell;
 #[path = "native/command_earned_combat_reload.rs"]

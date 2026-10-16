@@ -39,34 +39,15 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
     use centurions_core::combat::{
         Combat, EnemySetup, SquadPlacement, TacticalMap, spells::select_targets,
     };
-    let mut additional: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../evidence/fixtures/additional-spells.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let mut additional: serde_json::Value = crate::support::fixture("additional-spells.json");
     additional["cases"] = additional["selection_cases"].take();
-    let fixtures: [serde_json::Value; 4] = [
+    let fixtures: [serde_json::Value; 6] = [
         crate::support::fixture("enemy-spell-selection.json"),
-        serde_json::from_str(
-            &std::fs::read_to_string(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../evidence/fixtures/firearm-targets.json"),
-            )
-            .unwrap(),
-        )
-        .unwrap(),
+        crate::support::fixture("npc-area-selection.json"),
+        crate::support::fixture("firearm-targets.json"),
         additional,
-        serde_json::from_str(
-            &std::fs::read_to_string(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../evidence/fixtures/condition-targets.json"),
-            )
-            .unwrap(),
-        )
-        .unwrap(),
+        crate::support::fixture("condition-targets.json"),
+        crate::support::fixture("zero-area-selection.json"),
     ];
     for fixture in fixtures {
         let properties = fixture.bytes("properties");
@@ -109,6 +90,7 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
             };
             let mut random = RandomState::new(case.n::<u32>("seed_before"));
             let packet = case.bytes("packet");
+            let rotated = packet[7] != 0;
             let result = if case["weapon_id"].is_null() {
                 select_targets(
                     &combat,
@@ -138,23 +120,30 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
                     &mut random,
                 )
             };
-            if case["invalid_shape"].as_bool().unwrap_or(false) {
-                assert!(
-                    matches!(result, Err(centurions_core::RuleError::Unsupported { .. })),
-                    "invalid shape case {index}"
-                );
-                crate::support::expect(random.seed, &case["seed_before"]);
-                assert_eq!(random.draws, 0);
-                continue;
-            }
             let result = result.unwrap();
+            if result.cast && rotated {
+                assert_eq!(
+                    result.rotation,
+                    case.array("draws").last().unwrap().n::<u8>("result") - 1,
+                );
+            }
             crate::support::native_expect! {
-            bytes result.caster.bytes => &case["caster_after"], &format!("caster case {index}");
             scalar result.range => &case["range"], "binary_enemy_spells";
             scalar result.nearest => &case["nearest"], "binary_enemy_spells";
             scalar result.count => &case["count"], "binary_enemy_spells";
             bytes crate::support::word_bytes(&result.distances) => &case["distances"], "distances case {index}";
             }
+            if case["invalid_shape"].as_bool().unwrap_or(false) {
+                // These original receipts stop before bestchoice: retain their measured prefix.
+                crate::support::expect(random.seed, &case["seed_after"]);
+                crate::support::expect(random.draws, &case["rng_draws"]);
+                continue;
+            }
+            crate::support::assert_bytes(
+                &result.caster.bytes,
+                &case.bytes("caster_after"),
+                "caster",
+            );
             let mut targets = [255; 42];
             for (slot, target) in result.targets.iter().enumerate() {
                 targets[slot * 6..slot * 6 + 6].copy_from_slice(

@@ -152,11 +152,22 @@ def accounting(root):
                                      for name in ("core", "content", "desktop")]
     for test_root in test_roots:
         for path in sorted(test_root.rglob("*")):
-            if path.is_file() and path.suffix in (".rs", ".py", ".ps1"):
+            if path.is_file() and path.suffix in (".rs", ".py", ".ps1", ".java"):
                 add_count(totals, inventory, path.relative_to(root), path.read_text(encoding="utf-8"), "tests")
-    for name in ("Run-Tests.ps1", "Run-Cargo.ps1", "Build.ps1", "source_audit.py", "check_menu_boundary.py"):
+    for name in ("Run-Tests.ps1", "Run-Cargo.ps1", "Build.ps1", "source_audit.py", "check_menu_boundary.py",
+                 "audit_public.py", "oracle_cache.py", "capture_reference.py", "reference.py",
+                 "reference_debug.py", "registration_status.py", "verify_mace3_audio.py",
+                 "Setup-Reference.ps1"):
         path = root / "tools" / name
-        add_count(totals, inventory, path.relative_to(root), path.read_text(encoding="utf-8"), "tests")
+        if path.is_file():
+            add_count(totals, inventory, path.relative_to(root), path.read_text(encoding="utf-8"), "tests")
+    native = root / "tools" / "ghidra"
+    probes = set(native.glob("Verify*.java"))
+    probes.update(native / name for name in ("ActionOracleHarness.java", "RecordNativeContext.java",
+                  "ResultAudioBoundary.java", "SaneBoundary.java", "SubmitMusicBoundary.java"))
+    for path in sorted(probes):
+        if path.is_file():
+            add_count(totals, inventory, path.relative_to(root), path.read_text(encoding="utf-8"), "tests")
     totals["ratio"] = totals["tests"]["code"] / totals["production"]["code"]
     totals["cap"] = 0.25
     totals["passed"] = totals["ratio"] <= totals["cap"]

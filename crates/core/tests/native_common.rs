@@ -1,4 +1,127 @@
 use crate::prelude::*;
+
+pub fn assert_body_records(
+    warriors: &[Warrior],
+    enemies: &[MonsterRecord],
+    party: &Value,
+    monsters: &Value,
+) {
+    crate::support::assert_bytes(
+        &crate::support::record_bytes(warriors),
+        &bytes(party),
+        "party",
+    );
+    crate::support::assert_bytes(
+        &crate::support::record_bytes(enemies),
+        &bytes(monsters),
+        "monsters",
+    );
+}
+
+pub fn spell_sequence(
+    fixture: &Value,
+    case: &Value,
+    caster: Option<usize>,
+) -> (Combat, Vec<i16>, usize) {
+    let before = &case["before"];
+    let mut state: Session =
+        serde_json::from_value(fixture["foundation"]["session"].clone()).unwrap();
+    let mut warriors = snapshot_party(before);
+    let mut combat = state.combat.take().unwrap();
+    combat.enemies.records = crate::support::monsters(&before["records"]);
+    combat.unavailable = before.n::<i8>("unavailable");
+    let cache = before.bytes("first_item_cache");
+    let mut random = random_state(before);
+    let mut receipts = case.array("rng").iter();
+    let mut sounds = vec![];
+    let mut party_deaths = 0;
+    for resolution in case.array("resolutions") {
+        crate::support::advance_rng(&mut random, &mut receipts, resolution.n("draws_before"));
+        let mut actual = random.clone();
+        // The boundary supplies either one charged actor or the caller's retained roster.
+        let captured = crate::support::monsters(&resolution["records_after"]);
+        if let Some(caster) = caster {
+            combat.enemies.records[caster] = captured[caster].clone();
+        } else {
+            combat.enemies.records = captured;
+        }
+        let result = resolve_bodies_with_item_cache(
+            &warriors,
+            &combat.enemies.records,
+            &resolution.words("mask"),
+            &DirectSpell {
+                packet: &resolution.bytes("packet"),
+                level: resolution.n::<i16>("spell_id") % 1000 / 100 - 1,
+                count: resolution.n("count"),
+                armor_filter: false,
+                weapon_sound: 402,
+            },
+            &cache,
+            &mut actual,
+        )
+        .unwrap();
+        crate::support::advance_rng(&mut random, &mut receipts, resolution.n("draws_after"));
+        assert_eq!(actual, random);
+        assert!(result.race_excluded.is_empty());
+        assert_eq!(
+            result
+                .targets
+                .iter()
+                .map(|(body, _)| *body)
+                .collect::<Vec<_>>(),
+            resolution
+                .words("applied_mask")
+                .iter()
+                .enumerate()
+                .filter_map(|(body, flag)| (*flag > 0).then_some(body))
+                .collect::<Vec<_>>()
+        );
+        sounds.extend(body_spell_sounds(&result));
+        let defeated: Vec<_> = result
+            .targets
+            .iter()
+            .filter_map(|(body, outcome)| outcome.killed.then_some(*body as i16))
+            .collect();
+        warriors = result.warriors;
+        combat.enemies.records = result.enemies;
+        for body in defeated {
+            party_deaths += usize::from(body < 10);
+            centurions_core::combat::lifecycle::kill_body(&mut combat, &mut warriors, body)
+                .unwrap();
+        }
+        assert_body_records(
+            &warriors,
+            &combat.enemies.records,
+            &resolution["party_after"],
+            &resolution["records_after"],
+        );
+    }
+    assert_eq!(random, random_state(&case["after"]));
+    crate::support::assert_bytes(
+        &crate::support::record_bytes(&warriors),
+        &case["after"].bytes("party"),
+        "final party",
+    );
+    (combat, sounds, party_deaths)
+}
+
+pub fn script_mission(fixture: &Value) -> OpeningMission {
+    OpeningMission {
+        name: "native fixture".into(),
+        start: (0, 0),
+        tile_properties: fixture
+            .get("properties")
+            .map(crate::support::bytes)
+            .unwrap_or_default(),
+        default_tile: 1155,
+        shared: Arc::new(StoryTables {
+            door_scripts: fixture.bytes("scripts"),
+            ..Default::default()
+        }),
+        ..crate::support::mission()
+    }
+}
+
 pub fn random_state(snapshot: &Value) -> RandomState {
     RandomState {
         seed: snapshot.n::<u32>("seed"),
@@ -30,13 +153,8 @@ pub fn body_spell_sounds(result: &BodySpellResult) -> Vec<i16> {
 pub fn compare_health_round(input: &str) {
     let fixture: serde_json::Value = serde_json::from_str(input).unwrap();
     for (index, case) in fixture.array("cases").iter().enumerate() {
-        let mut warriors: Vec<_> = case
-            .bytes("warriors")
-            .as_chunks::<3138>()
-            .0
-            .iter()
-            .map(|w| Warrior::read(w).unwrap())
-            .collect();
+        let detailed = case.get("before_map").is_some();
+        let mut warriors = crate::support::warriors(&case["warriors"]);
         let mut enemies = vec![MonsterRecord {
             bytes: case.bytes("enemy"),
         }];
@@ -45,30 +163,26 @@ pub fn compare_health_round(input: &str) {
             battle: 2,
             map: centurions_core::combat::TacticalMap {
                 tiles: case
-                    .bytes("before_map")
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|v| i16::from_be_bytes(*v))
-                    .collect(),
+                    .get("before_map")
+                    .map(crate::support::words)
+                    .unwrap_or_else(|| vec![1155; 8100]),
                 shift: (0, 0),
                 edge_word: 0,
             },
             squad: centurions_core::combat::SquadPlacement {
-                positions: (0..6).map(|i| (20 + i, 20)).collect(),
+                positions: (0..6)
+                    .map(|i| (20 + if detailed { i } else { 0 }, 20))
+                    .collect(),
                 under_tiles: vec![1155; 6],
             },
             enemies: centurions_core::combat::EnemySetup {
                 records: enemies.clone(),
-                positions: vec![(30, 30)],
+                positions: vec![if detailed { (30, 30) } else { (20, 20) }],
             },
             order: case
-                .bytes("before_order")
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|v| i16::from_be_bytes(*v))
-                .collect(),
+                .get("before_order")
+                .map(crate::support::words)
+                .unwrap_or_else(|| vec![-1; 110]),
             cursor: 0,
             round: 1,
             ..crate::support::battle()
@@ -76,7 +190,10 @@ pub fn compare_health_round(input: &str) {
         let events =
             centurions_core::combat::runtime::reduce_round(&mut combat, &mut warriors, &mut random)
                 .unwrap();
-        if let Some(sounds) = case.get("tick_sounds") {
+        if let Some(sounds) = case
+            .get("tick_sounds")
+            .or_else(|| case.get("bleeding_sounds"))
+        {
             assert_eq!(
                 events,
                 sounds
@@ -89,16 +206,15 @@ pub fn compare_health_round(input: &str) {
                     .collect::<Vec<_>>()
             );
         }
-        assert_eq!(
-            crate::support::word_bytes(&combat.map.tiles),
-            case.bytes("map"),
-            "map case {index}"
-        );
-        assert_eq!(
-            crate::support::word_bytes(&combat.order),
-            case.bytes("order"),
-            "order case {index}"
-        );
+        for (actual, key) in [(&combat.map.tiles, "map"), (&combat.order, "order")] {
+            if let Some(expected) = case.get(key) {
+                assert_eq!(
+                    crate::support::word_bytes(actual),
+                    bytes(expected),
+                    "{key} case{index}"
+                );
+            }
+        }
         enemies = combat.enemies.records;
         initialize_turn(
             case.n::<i16>("body"),
@@ -120,25 +236,16 @@ pub fn compare_health_round(input: &str) {
     }
 }
 pub fn snapshot_party(snapshot: &Value) -> Vec<Warrior> {
-    snapshot
-        .bytes("party")
-        .as_chunks::<3138>()
-        .0
-        .iter()
-        .map(|record| Warrior::read(record).unwrap())
-        .collect()
+    crate::support::warriors(&snapshot["party"])
 }
 pub fn scalar_words(value: &Value) -> Vec<i16> {
-    value
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|value| value.as_i64().unwrap() as i16)
-        .collect()
+    crate::support::NativeScalar::from_native(value)
+}
+pub fn buffer_words(fixture: &Value, value: &Value) -> Vec<i16> {
+    crate::support::words(&crate::support::buffer(fixture, value))
 }
 pub fn melee_combat(records: &[u8]) -> Combat {
     Combat {
-        difficulty: 0,
         battle: 117,
         map: TacticalMap {
             tiles: vec![1155; 8100],
@@ -160,37 +267,14 @@ pub fn melee_combat(records: &[u8]) -> Combat {
 pub fn raw_word(raw: &[u8], offset: usize) -> i16 {
     i16::from_be_bytes(raw[offset..offset + 2].try_into().unwrap())
 }
-pub fn medical_continuation(case: &Value) -> MedicalContinuation {
-    MedicalContinuation {
-        origin: MedicalOrigin::LearnedHeal,
-        actor: 5,
-        item: 0,
-        spell: 1101,
-        power: case.n::<i16>("power"),
-    }
-}
-pub fn same_unmodified_combat(before: &Session, after: &Session) {
-    assert_eq!(after.ammunition, before.ammunition);
-    assert_eq!(after.crate_items, before.crate_items);
-    assert_eq!(after.booty_items, before.booty_items);
-    assert_eq!(after.psi_memory, before.psi_memory);
-    assert_eq!(after.party_buffs, before.party_buffs);
-    assert_eq!(after.health_context, before.health_context);
-    let actual = after.combat.as_ref().unwrap();
-    let previous = before.combat.as_ref().unwrap();
-    assert_eq!(actual.enemies, previous.enemies);
-    assert_eq!(actual.spell_fields, previous.spell_fields);
-    assert_eq!(actual.field_used, previous.field_used);
-    assert_eq!(actual.death_queue, previous.death_queue);
-    assert_eq!(actual.weapon_work, previous.weapon_work);
-    assert_eq!(actual.cursor, previous.cursor);
-    assert_eq!(actual.round, previous.round);
-    assert_eq!(actual.round_scripts, previous.round_scripts);
-}
 pub fn patch_bytes(raw: &mut [u8], values: &serde_json::Value) {
     for change in values.as_array().unwrap() {
         raw[change[0].as_u64().unwrap() as usize] = change[1].as_u64().unwrap() as u8;
     }
+}
+pub fn patched(mut raw: Vec<u8>, values: &serde_json::Value) -> Vec<u8> {
+    patch_bytes(&mut raw, values);
+    raw
 }
 pub fn health_event(event: &HealthEvent) -> serde_json::Value {
     match event {
@@ -203,16 +287,11 @@ pub fn health_event(event: &HealthEvent) -> serde_json::Value {
         }
         HealthEvent::PartyLost => serde_json::json!(["party_loss", 0, 0]),
         HealthEvent::Dialogue(dialogue) => serde_json::json!(["dialogue", dialogue, 0]),
+        HealthEvent::Flash { address, sound } => serde_json::json!(["flash", address, sound]),
     }
 }
 pub fn snapshot_ammunition(snapshot: &Value) -> Vec<i32> {
-    snapshot
-        .bytes("ammunition")
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|record| i32::from_be_bytes(*record))
-        .collect()
+    crate::support::longs(&snapshot["ammunition"])
 }
 pub fn snapshot_rng(snapshot: &Value) -> RandomState {
     RandomState {
@@ -221,30 +300,21 @@ pub fn snapshot_rng(snapshot: &Value) -> RandomState {
     }
 }
 pub fn snapshot_enemies(snapshot: &Value) -> Vec<MonsterRecord> {
-    snapshot
-        .bytes("records")
-        .as_chunks::<288>()
-        .0
-        .iter()
-        .map(|record| MonsterRecord {
-            bytes: record.to_vec(),
-        })
-        .collect()
+    crate::support::monsters(&snapshot["records"])
 }
-pub fn decoded_positions(value: &Value) -> Vec<(i16, i16)> {
-    words(value)
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|p| (p[0], p[1]))
-        .collect()
-}
+pub use crate::support::positions as decoded_positions;
 pub fn snapshot_word(snapshot: &Value, key: &str) -> i16 {
     snapshot[key].as_i64().unwrap() as i16
 }
 pub fn foundation_session(fixture: &Value, case: &Value) -> Session {
-    serde_json::from_value(fixture["foundations"][case.n::<usize>("foundation")]["session"].clone())
-        .unwrap()
+    let mut state = serde_json::from_value(
+        fixture["foundations"][case.n::<usize>("foundation")]["session"].clone(),
+    )
+    .unwrap();
+    if case["before"].get("current_npc_index").is_some() {
+        crate::snapshots::actor_work(&mut state, &case["before"]);
+    }
+    state
 }
 pub fn restore_party(state: &mut Session, snapshot: &Value) {
     for (warrior, record) in state

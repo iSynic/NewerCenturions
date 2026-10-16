@@ -28,7 +28,7 @@ def identity(root: Path, fixture: Path, toolchain: dict) -> dict:
     probe_hash = declared.get("probe_sha256")
     probes = [p for p in by_hash.get(probe_hash, []) if p.suffix == ".java"]
     if len(probes) != 1:
-        raise ValueError(f"{fixture.name}: missing or changed probe definition")
+        raise ValueError(f"{fixture.name}: probe unavailable or retired; see evidence/native-capture-provenance.json. Archived generators are historical sources, not runnable cache targets.")
     for key, value in declared.items():
         if key.endswith("_sha256") and value not in by_hash:
             raise ValueError(f"{fixture.name}: changed or unavailable {key}")

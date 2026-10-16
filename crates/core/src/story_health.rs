@@ -18,6 +18,7 @@ pub enum HealthEvent {
     Defeated { warrior: usize, permanent: bool },
     PartyLost,
     Dialogue(i16),
+    Flash { address: u32, sound: i16 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

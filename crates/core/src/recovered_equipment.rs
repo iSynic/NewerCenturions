@@ -3,7 +3,6 @@
 use crate::recovered_equipment_ui::{self, EquipmentUiEffect, EquipmentUiServices};
 use crate::recovered_feedback::{self, FeedbackEffect};
 use crate::recovered_files::FileObservation;
-use crate::recovered_install::InstallMemory;
 use crate::recovered_inventory_rules::{self, InventoryEffect, InventoryServices};
 use crate::recovered_navigation;
 use crate::recovered_records::{self, ITEM_TABLE_ADDRESSES, ItemTables, RecordWrite};
@@ -63,6 +62,8 @@ pub struct EquipmentPlan {
     pub random: RandomState,
     pub effects: Vec<EquipmentEffect>,
     pub native_return: EquipmentReturn,
+    pub refusal_warnings: Vec<i16>,
+    pub deferred_warnings: Vec<i16>,
 }
 fn plan(memory: &RenderingMemory, random: &RandomState) -> EquipmentPlan {
     EquipmentPlan {
@@ -70,6 +71,8 @@ fn plan(memory: &RenderingMemory, random: &RandomState) -> EquipmentPlan {
         random: random.clone(),
         effects: vec![],
         native_return: EquipmentReturn::long(0),
+        refusal_warnings: vec![],
+        deferred_warnings: vec![],
     }
 }
 pub fn read(memory: &RenderingMemory, address: u32, length: usize) -> Result<Vec<u8>, RuleError> {
@@ -239,6 +242,7 @@ fn remove(
         services,
     )?;
     let value = child.native_return;
+    result.deferred_warnings.extend(child.warnings);
     result.memory = child.memory;
     result
         .effects
@@ -251,28 +255,7 @@ fn movement(result: &mut EquipmentPlan, member: u16) -> Result<(), RuleError> {
         0xffff => 0x44721c,
         _ => member_address(member),
     };
-    let race = sw(&result.memory, warrior.wrapping_add(0x32))?.wrapping_sub(1);
-    let race_address = 0x435664_u32.wrapping_add(i32::from(race) as u32);
-    let start = warrior.min(race_address);
-    let end = warrior
-        .checked_add(WARRIOR_BYTES as u32)
-        .ok_or_else(|| RuleError::Invalid("equipment movement projection wraps".into()))?
-        .max(
-            race_address
-                .checked_add(1)
-                .ok_or_else(|| RuleError::Invalid("equipment race projection wraps".into()))?,
-        );
-    let length = (end - start) as usize;
-    if length > 1024 * 1024 {
-        return Err(RuleError::Invalid(
-            "equipment movement projection exceeds one MiB".into(),
-        ));
-    }
-    let memory = InstallMemory {
-        base_address: start,
-        bytes: read(&result.memory, start, length)?,
-    };
-    let child = recovered_navigation::movecalc(&memory, member)?;
+    let child = recovered_navigation::projected_movecalc(&result.memory, warrior, member)?;
     for effect in child.writes {
         write(result, effect.address, &effect.bytes)?;
     }
@@ -506,6 +489,7 @@ fn wear_warning(
     limits: EquipmentLimits,
     services: &(impl EquipmentServices + ?Sized),
 ) -> Result<Option<u16>, RuleError> {
+    result.refusal_warnings.push(message);
     if emit != 0 {
         warn(result, frame.wrapping_sub(0x126), message, limits, services)?;
         Ok(Some(0))

@@ -1,5 +1,56 @@
 # Source translation workflow
 
+Desktop integration is tracked separately from source translation. Recovered
+routine coverage does not mean that every original menu or control is connected.
+The runtime correction pass connects original editor feedback, paid/free upgrades,
+warrior information, appearance selection, music playlist toggles and typed combat
+refusals. Native refusal receipts cover the bounded ranged-selection branch;
+ordinary map-click routing remains source-derived until the complete original
+event loop is observed. Live desktop comparison is still required for visual
+parity. Creation, roster, mission-ending and preference handlers are connected;
+their existence does not establish complete interactive or original-game parity.
+
+## Current functionality checkpoint
+
+The beta 4 source checkpoint preserves the compiler split, the shared command
+boundary and schema 6 saves with readers for versions 1-5. Six assisted command
+routes exercise all six Thunder stages, both terminal branches and mission-one
+reset, including independent replay and save/reload suffix checks. Assistance is
+explicit; these are functionality checks, not unaided campaign completion or
+proof of all obtainable features.
+
+The reconciled remaining work is grouped below. This is a disclosure of known
+limits, not a claim that unlisted bugs cannot exist.
+
+| Area | Remaining behavior |
+| --- | --- |
+| Treasure | Authored credit chests currently produce an unsupported diagnostic. |
+| Learned Psi | 29 combat-enabled choices, outdoor Leap/Open Lock and 16 typed-encounter special-effect contexts lack complete entries. |
+| Items and equipment | Disposable script-item directories beyond 30 entries, remaining script returns and retained work after shop/refit/loot callers. |
+| Combat | Occupied-target reload restrictions, conditioned party battle entry, weapon/effect dispatch and some allied rifle turns. |
+| Actors and scripts | Large recruited allies, retained actor backing and nested death/summon caller restoration. |
+| Desktop | Original text-entry conversion and the About action; remaining visual/audio/input acceptance. |
+| Verification | Story alternatives, native eligibility and caller effects, persistent continuations, Hive Leader fault qualification and historical native case-to-runner ownership. |
+
+Current maintained test code is 25,466 lines against 102,041 production code
+lines (24.9566%, with a 25% ceiling). Expanded instruction bodies, generated
+catalogs and fixture data are excluded from the denominator. Raw physical
+totals are 26,617 test lines and 104,952 maintained production lines. Independent
+native fixture data stays private and is not included in public source or
+runtime packages.
+
+Local release measurements for the unchanged runtime checkpoint were 220.516
+seconds cold, 68.601 seconds after a representative runtime edit and 0.932 seconds
+with no changes. These timings do not predict a hosted runner's duration.
+
+Complete original Mac save import, additional real scenario content, other
+platforms and full original-game fidelity remain separate work. Native dialogs,
+fullscreen recovery, held movement/targeting, inventory/shop interactions,
+music/audio, visual comparison and sustained desktop CPU/memory acceptance need
+user-operated observation. No automated desktop control establishes those gates.
+
+## Recovery workflow
+
 Recover application routines from the mapped Ghidra project, split their
 control flow into ordered action blocks, translate related behavior into Rust,
 and compile the batch. Native comparisons refine fidelity after implementation;
@@ -279,3 +330,13 @@ ceiling of 25 percent test code relative to maintained runtime code, including
 test helpers, optional native harnesses and test scripts. Expanded instruction
 bodies, generated catalogs, fixture data and build/recovery code are excluded
 from the production denominator. `tools/Build.ps1` runs this gate before compiling.
+
+Campaign checks exercise functionality rather than unaided adventure completion.
+The headless recorder keeps explicit test-only assistance receipts for health,
+ammunition, Psi, positions, branch prerequisites and battle cleanup. Each route
+is independently replayed, including saved continuations, and compares ordered
+events, state and RNG. `-ExtendedScenarios` runs this check; local packages with
+original inputs require it. Assistance does not establish acquisition, navigation,
+combat calculations or native fidelity. Independent original-binary cases remain
+the authority for their measured behavior. No assistance enters the desktop
+runtime. Live presentation, audio and responsiveness require user observation.

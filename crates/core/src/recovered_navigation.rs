@@ -230,6 +230,42 @@ pub fn movecalc(memory: &InstallMemory, member: u16) -> Result<MovementResult, R
     })
 }
 
+/// Only the warrior and one race byte are read by movecalc; intervening addresses are not inputs.
+pub(crate) fn projected_movecalc(
+    memory: &crate::recovered_rendering::RenderingMemory,
+    warrior: u32,
+    member: u16,
+) -> Result<MovementResult, RuleError> {
+    let race = (memory.word(warrior.wrapping_add(0x32))? as i16).wrapping_sub(1);
+    let race_address = 0x435664_u32.wrapping_add(i32::from(race) as u32);
+    let start = warrior.min(race_address);
+    let end = warrior
+        .checked_add(WARRIOR_BYTES as u32)
+        .ok_or("movement warrior address wraps")?
+        .max(
+            race_address
+                .checked_add(1)
+                .ok_or("movement race address wraps")?,
+        );
+    let length = (end - start) as usize;
+    if length > 1024 * 1024 {
+        return Err("movement projection exceeds one MiB".into());
+    }
+    let mut bytes = vec![0; length];
+    for index in 0..WARRIOR_BYTES {
+        bytes[(warrior - start) as usize + index] =
+            memory.byte(warrior.wrapping_add(index as u32))?;
+    }
+    bytes[(race_address - start) as usize] = memory.byte(race_address)?;
+    movecalc(
+        &InstallMemory {
+            base_address: start,
+            bytes,
+        },
+        member,
+    )
+}
+
 /// twixt, 0x13846a: signed inclusive WORD bounds, returning a zero-extended BYTE.
 pub fn twixt(value: i16, lower: i16, upper: i16) -> i32 {
     i32::from(lower <= value && value <= upper)

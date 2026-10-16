@@ -9,6 +9,7 @@ pub mod combat;
 pub mod graphics;
 pub mod installation;
 pub mod mission;
+pub mod native_text;
 pub mod ui;
 
 pub const WARRIOR_BYTES: usize = 0xc42;
@@ -67,13 +68,8 @@ impl Warrior {
             return Err(ContentError::Invalid("empty warrior name".into()));
         }
         let name_bytes = &name_field[..length];
-        if !name_bytes.is_ascii() {
-            return Err(ContentError::Invalid(
-                "non-ASCII warrior name needs MacRoman decoder".into(),
-            ));
-        }
         Ok(Self {
-            name: String::from_utf8(name_bytes.to_vec()).unwrap(),
+            name: encoding_rs::MACINTOSH.decode(name_bytes).0.into_owned(),
             original_sha256: digest(bytes),
             bytes: bytes.to_vec(),
         })
@@ -191,6 +187,61 @@ fn safe_path(root: &Path, relative: &str) -> Result<std::path::PathBuf, ContentE
 }
 
 impl Content {
+    pub fn context(
+        &self,
+        name: Option<&str>,
+        level: u8,
+    ) -> Result<std::borrow::Cow<'_, Self>, ContentError> {
+        let Some(name) = name else {
+            return Ok(std::borrow::Cow::Borrowed(self));
+        };
+        let current = self
+            .scenario
+            .as_ref()
+            .ok_or_else(|| ContentError::Invalid("scenario unavailable".into()))?;
+        if current.name == name && current.level == level {
+            return Ok(std::borrow::Cow::Borrowed(self));
+        }
+        let selected = current.selection(name, level).ok_or_else(|| {
+            ContentError::Invalid(format!("scenario level unavailable: {name}/{level}"))
+        })?;
+        let mut result = self.clone();
+        let mut selected = selected.clone();
+        selected.catalog = current.catalog.clone();
+        result.items.truncate(800);
+        result.items.extend(selected.items.iter().cloned());
+        result.scenario = Some(selected);
+        Ok(std::borrow::Cow::Owned(result))
+    }
+
+    pub fn scenario_names(&self) -> Vec<String> {
+        let Some(current) = &self.scenario else {
+            return vec![];
+        };
+        let mut names = std::collections::BTreeSet::from([current.name.clone()]);
+        names.extend(
+            current
+                .catalog
+                .keys()
+                .filter(|(_, level)| *level == 0)
+                .map(|(name, _)| name.clone()),
+        );
+        names.into_iter().collect()
+    }
+
+    pub fn map_at(
+        &self,
+        name: Option<&str>,
+        level: u8,
+        index: i32,
+    ) -> Option<&mission::OpeningMission> {
+        let current = self.scenario.as_ref()?;
+        current
+            .selection(name.unwrap_or(&current.name), level)?
+            .maps
+            .get(usize::try_from(index).ok()?)
+    }
+
     pub fn map(&self, index: i32) -> Option<&mission::OpeningMission> {
         self.scenario
             .as_ref()?
@@ -224,12 +275,11 @@ impl Content {
         let mut warriors = Vec::new();
         let mut items = Vec::new();
         let mut item_cache = None;
-        let scenario_items = "TheNewCenturions/Scenarios/The Thunder of Guns/0/Data NI";
         for fork in manifest.forks.iter().filter(|f| f.kind == "data") {
             let starter =
                 fork.path.starts_with("TheNewCenturions/Warriors/") && fork.size == WARRIOR_BYTES;
             let item_table = fork.path == "TheNewCenturions/Data Files/Data ID";
-            if !starter && !item_table && fork.path != scenario_items {
+            if !starter && !item_table {
                 continue;
             }
             let bytes = installation::read_data(originals, &fork.path)?;
@@ -255,47 +305,76 @@ impl Content {
                     .collect();
             }
         }
-        let scenario_item_bytes = read_fork(originals, &manifest.forks, scenario_items)?;
-        items.extend(
-            span(&scenario_item_bytes, 0, 200 * ITEM_BYTES)?
-                .as_chunks::<ITEM_BYTES>()
-                .0
-                .iter()
-                .map(|v| v.to_vec()),
-        );
-        let mut scenario =
-            mission::ScenarioContent::read(|path| read_fork(originals, &manifest.forks, path))?;
-        let prologue = manifest
-            .resources
-            .iter()
-            .find(|r| {
-                r.r#type == "TEXT"
-                    && r.id == 1000
-                    && r.original.ends_with("/The Thunder of Guns/0/Scenario")
-            })
-            .ok_or_else(|| ContentError::Invalid("opening prologue missing".into()))?;
-        let mut tables = (*scenario.maps[0].shared).clone();
-        tables.item_cache = item_cache
+        let item_cache = item_cache
             .ok_or_else(|| ContentError::Invalid("missing original item cache".into()))?;
-        tables.prologue = encoding_rs::MACINTOSH
-            .decode(&read_resource(extracted, prologue)?)
-            .0
-            .replace('\r', "\n");
-        for resource in manifest.resources.iter().filter(|r| {
-            r.r#type == "TEXT" && r.original.ends_with("/The Thunder of Guns/0/Scenario")
-        }) {
-            tables.movies.insert(
-                resource.id,
-                encoding_rs::MACINTOSH
-                    .decode(&read_resource(extracted, resource)?)
-                    .0
-                    .replace('\r', "\n"),
-            );
+        let mut catalog = std::collections::BTreeMap::new();
+        for fork in manifest
+            .forks
+            .iter()
+            .filter(|f| f.kind == "data" && f.path.ends_with("/Data CS"))
+        {
+            let Some(relative) = fork.path.strip_prefix("TheNewCenturions/Scenarios/") else {
+                continue;
+            };
+            let parts: Vec<_> = relative.split('/').collect();
+            if parts.len() != 3 {
+                return Err(ContentError::Invalid("invalid scenario directory".into()));
+            }
+            let level = parts[1]
+                .parse::<u8>()
+                .map_err(|_| ContentError::Invalid("invalid scenario level".into()))?;
+            let mut selected = mission::ScenarioContent::read_level(
+                |path| read_fork(originals, &manifest.forks, path),
+                parts[0],
+                level,
+            )?;
+            let mut tables = (*selected.maps[0].shared).clone();
+            tables.item_cache = item_cache.clone();
+            let owner = format!("TheNewCenturions/Scenarios/{}/{level}/Scenario", parts[0]);
+            for resource in manifest
+                .resources
+                .iter()
+                .filter(|r| r.r#type == "TEXT" && r.original == owner)
+            {
+                tables.movies.insert(
+                    resource.id,
+                    encoding_rs::MACINTOSH
+                        .decode(&read_resource(extracted, resource)?)
+                        .0
+                        .replace('\r', "\n"),
+                );
+            }
+            for resource in manifest.resources.iter().filter(|r| {
+                r.r#type == "STR#" && matches!(r.id, -101 | -102) && r.original == owner
+            }) {
+                let labels = ui::string_list(&read_resource(extracted, resource)?)?;
+                if resource.id == -102 {
+                    tables.note_labels = labels;
+                } else {
+                    tables.unknown_note_labels = labels;
+                }
+            }
+            tables.prologue = tables.movies.get(&1000).cloned().ok_or_else(|| {
+                ContentError::Invalid(format!("opening prologue missing: {owner}"))
+            })?;
+            let tables = std::sync::Arc::new(tables);
+            for map in &mut selected.maps {
+                map.shared = tables.clone();
+            }
+            catalog.insert((parts[0].to_string(), level), selected);
         }
-        let tables = std::sync::Arc::new(tables);
-        for map in &mut scenario.maps {
-            map.shared = tables.clone();
-        }
+        let mut scenario = catalog
+            .get(&("The Thunder of Guns".into(), 0))
+            .or_else(|| {
+                catalog
+                    .iter()
+                    .find(|((_, level), _)| *level == 0)
+                    .map(|(_, value)| value)
+            })
+            .cloned()
+            .ok_or_else(|| ContentError::Invalid("no installed starting scenario".into()))?;
+        items.extend(scenario.items.iter().cloned());
+        scenario.catalog = std::sync::Arc::new(catalog);
         warriors.sort_by(|a, b| a.name.cmp(&b.name));
         if warriors.len() != 6 {
             return Err(ContentError::Invalid(format!(
@@ -324,12 +403,30 @@ impl Content {
                     .replace('\r', "\n")
             })
             .collect();
+        let mut resources = manifest.resources;
+        for resource in &mut resources {
+            if resource.original.ends_with("/New Centurions")
+                && resource.id == 0
+                && matches!(resource.r#type.as_str(), "CODE" | "DATA")
+                && resource.source_fork.is_none()
+            {
+                let bytes = read_resource(extracted, resource)?;
+                resource.source_fork = Some(installation::SourceFork {
+                    path: extracted
+                        .join(&resource.output)
+                        .to_string_lossy()
+                        .into_owned(),
+                    offset: 0,
+                    cached: Some(std::sync::Arc::from(bytes)),
+                });
+            }
+        }
         Ok(Self {
             identity: manifest.input_manifest_sha256,
             tutorials,
             warriors,
             items,
-            resources: manifest.resources,
+            resources,
             scenario: Some(scenario),
             original_services: None,
         })

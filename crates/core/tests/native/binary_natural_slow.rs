@@ -7,9 +7,7 @@ fn natural_slow_attack_matches_original_complete_records_and_random_consumption(
 
 #[test]
 fn slow_duration_reduction_matches_original_signed_counter_records() {
-    use centurions_core::combat::{
-        Combat, EnemySetup, SquadPlacement, TacticalMap, runtime::reduce_round,
-    };
+    use centurions_core::combat::{Combat, SquadPlacement, TacticalMap, runtime::reduce_round};
     let fixture: serde_json::Value = crate::support::fixture("slow-reduction.json");
     let mut warriors = crate::support::warriors(&fixture.bytes("before"));
     let mut combat = Combat {
@@ -22,10 +20,6 @@ fn slow_duration_reduction_matches_original_signed_counter_records() {
         squad: SquadPlacement {
             positions: vec![],
             under_tiles: vec![],
-        },
-        enemies: EnemySetup {
-            records: vec![],
-            positions: vec![],
         },
         order: vec![],
         cursor: 0,

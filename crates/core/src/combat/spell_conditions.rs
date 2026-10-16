@@ -12,17 +12,27 @@ pub fn apply(
     if target.len() != if monster { 288 } else { 3138 } {
         return Err(RuleError::Invalid("spell condition record size".into()));
     }
-    if !matches!(effect, 4 | 13 | 36) {
+    if !(1..=40).contains(&effect) {
         return Err(RuleError::Unsupported {
             action: "combat.spell.condition",
             dependency: "spell condition outside recovered party and monster effects",
         });
     }
-    if !monster && effect == 4 && word(target, 0x9a)? != 0 {
-        return Err(RuleError::Unsupported {
-            action: "combat.spell.condition",
-            dependency: "poison ward reflection",
-        });
+    add_duration(target, monster, effect, duration)?;
+    if !monster && word(target, 0x9a)? != 0 {
+        random.bound(100);
+    }
+    follow_up(target, monster, effect)
+}
+
+pub(crate) fn add_duration(
+    target: &mut [u8],
+    monster: bool,
+    effect: i16,
+    duration: i16,
+) -> Result<(), RuleError> {
+    if target.len() != if monster { 288 } else { 3138 } || !(1..=40).contains(&effect) {
+        return Err(RuleError::Invalid("condition duration input".into()));
     }
     if monster {
         let offset = 0xb2 + (effect as usize - 1);
@@ -38,9 +48,47 @@ pub fn apply(
         if total < 100 && previous >= 0 {
             target[offset..offset + 2].copy_from_slice(&total.to_be_bytes());
         }
-        if word(target, 0x9a)? != 0 {
-            random.bound(100);
+    }
+    Ok(())
+}
+
+/// spelllist15c8dc..15ca62 applies immediate effects after the duration writer.
+pub(crate) fn follow_up(target: &mut [u8], monster: bool, effect: i16) -> Result<(), RuleError> {
+    match effect {
+        2 => {
+            if monster {
+                target[0x106] = 0;
+            } else {
+                target[0x3c..0x3e].fill(0);
+            }
         }
+        3 | 7 => {
+            if monster {
+                target[0x106] = ((target[0x106] as i8) / 2) as u8;
+            } else {
+                let movement = word(target, 0x3c)? / 2;
+                target[0x3c..0x3e].copy_from_slice(&movement.to_be_bytes());
+            }
+        }
+        10 => {
+            if monster {
+                if (target[0x90] as i8) > 100 || target[0xcb] != 0 {
+                    target[0xb5] = 0;
+                }
+            } else if word(target, 0x90)? < 0 {
+                target[0x64..0x66].fill(0);
+            }
+        }
+        26 if !monster && word(target, 0x50)? < -9 => {
+            target[0x90..0x92].copy_from_slice(&(-1_i16).to_be_bytes());
+            let health = word(target, 0x52)? / 4;
+            target[0x50..0x52].copy_from_slice(&health.to_be_bytes());
+        }
+        64 if !monster && (word(target, 0x50)? < -9 || word(target, 0x90)? != 0) => {
+            target[0x90..0x92].fill(0);
+            target[0x50..0x52].copy_from_slice(&(-9_i16).to_be_bytes());
+        }
+        _ => {}
     }
     Ok(())
 }

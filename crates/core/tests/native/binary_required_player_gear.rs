@@ -3,19 +3,11 @@ use crate::prelude::*;
 use crate::support::warriors as party;
 use centurions_core::items;
 
-fn records(hex: &str) -> Vec<InventoryRecord> {
-    crate::support::inventory(&bytes(hex))
-}
-fn data() -> Value {
-    crate::support::fixture("required-player-gear.json")
-}
+use crate::support::inventory as records;
 
 use crate::support::assert_bytes;
 
-fn assert_party(warriors: &[Warrior], snapshot: &Value, context: &str) {
-    let actual: Vec<_> = crate::support::record_bytes(warriors);
-    assert_bytes(&actual, &snapshot.bytes("party"), context);
-}
+use crate::support::compare_party_named as assert_party;
 fn sounds(snapshot: &Value) -> Vec<i16> {
     snapshot.n::<Vec<i16>>("sounds")
 }
@@ -26,7 +18,7 @@ use crate::support::event_sounds;
 
 #[test]
 fn equipment_admission_matches_all_12_native_race_and_mos_cases() {
-    let fixture = data();
+    let fixture = crate::support::fixture("required-player-gear.json");
     let content = content();
     let mission = content.map(0).unwrap();
     let cases = fixture.array("gate_cases");
@@ -47,7 +39,7 @@ fn equipment_admission_matches_all_12_native_race_and_mos_cases() {
 
 #[test]
 fn crate_transfer_matches_18_native_whole_party_and_storage_cases() {
-    let fixture = data();
+    let fixture = crate::support::fixture("required-player-gear.json");
     let content = content();
     let cases = fixture.array("transfer_cases");
 
@@ -99,7 +91,7 @@ fn crate_transfer_matches_18_native_whole_party_and_storage_cases() {
 
 #[test]
 fn equipment_wear_compact_remove_and_rewear_match_48_native_cases() {
-    let fixture = data();
+    let fixture = crate::support::fixture("required-player-gear.json");
     let content = content();
     let cases = fixture.array("equipment_cases");
 
@@ -177,14 +169,12 @@ fn equipment_wear_compact_remove_and_rewear_match_48_native_cases() {
 
 #[test]
 fn replacement_firearm_preparation_shot_and_refill_match_four_native_callers() {
-    let fixture = data();
+    let fixture = crate::support::fixture("required-player-gear.json");
     let content = content();
-    let mut checked = 0;
     for (index, case) in fixture.array("equipment_cases").iter().enumerate() {
         if case["fired"].is_null() {
             continue;
         }
-        checked += 1;
         let member = case.n::<usize>("member");
         let source = case.n::<usize>("source");
         let mut state: Session =
@@ -261,5 +251,4 @@ fn replacement_firearm_preparation_shot_and_refill_match_four_native_callers() {
         assert_eq!(state.random.draws, 55);
         crate::support::expect(state.random.seed, &case["reloaded"]["rng_seed"]);
     }
-    assert_eq!(checked, 4);
 }

@@ -16,6 +16,12 @@ encoding_rs = "=0.8.35"
 default = []
 original-fixtures = ["centurions-content/original-fixtures"]
 
+[[example]]
+name = "centurions-replay-recorder"
+path = "tests/support/replay_recorder.rs"
+test = false
+bench = false
+
 [[test]]
 name = "execution_limits"
 path = "tests/execution_limits.rs"

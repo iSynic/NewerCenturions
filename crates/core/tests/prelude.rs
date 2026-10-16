@@ -1,8 +1,9 @@
 pub use crate::support::NativeCase;
-pub use crate::support::attacks;
 pub use crate::support::bytes;
 pub use crate::support::bytes as decode;
 pub use crate::support::content;
+pub use crate::support::data;
+pub use crate::support::replay_command;
 pub use crate::support::words;
 pub use centurions_content::Content;
 pub use centurions_content::InventoryRecord;

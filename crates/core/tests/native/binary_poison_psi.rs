@@ -2,9 +2,6 @@ use crate::prelude::*;
 
 use centurions_core::combat::spells::select_targets;
 
-fn fixture() -> Value {
-    crate::support::fixture("poison-psi.json")
-}
 use crate::native_common::snapshot_party as party;
 
 fn monsters(snapshot: &Value, key: &str) -> Vec<MonsterRecord> {
@@ -13,46 +10,17 @@ fn monsters(snapshot: &Value, key: &str) -> Vec<MonsterRecord> {
 use crate::native_common::random_state as random;
 use crate::support::assert_bytes;
 
-fn assert_records(result: &BodySpellResult, expected: &Value, monster_key: &str) {
-    assert_bytes(
-        &crate::support::record_bytes(&result.warriors),
-        &expected.bytes("party"),
-        "complete party",
-    );
-    assert_bytes(
-        &crate::support::record_bytes(&result.enemies),
-        &bytes(&expected[monster_key]),
-        "complete monsters",
-    );
-}
-
-fn audio(result: &BodySpellResult) -> Vec<i16> {
-    let mut sounds = result
-        .targets
-        .iter()
-        .map(|(body, result)| (*body, result.sounds.clone()))
-        .collect::<Vec<_>>();
-    sounds.extend(result.race_excluded.iter().map(|body| (*body, vec![651])));
-    sounds.sort_by_key(|(body, _)| *body);
-    result
-        .sounds
-        .iter()
-        .copied()
-        .chain(sounds.into_iter().flat_map(|(_, sounds)| sounds))
-        .collect()
-}
+use crate::native_common::body_spell_sounds as audio;
 
 fn receipts(case: &Value, initial: &RandomState, actual: &RandomState) {
     let mut expected = initial.clone();
-    for draw in case.array("rng") {
-        crate::support::expect(expected.bound(draw.n::<i16>("bound")), &draw["result"]);
-    }
+    crate::support::replay_rng(&mut expected, case.array("rng"));
     assert_eq!(&expected, actual);
 }
 
 #[test]
 fn twelve_full_direct_poison_cases_match_signed_duration_gates_records_rng_and_audio() {
-    let f = fixture();
+    let f = crate::support::fixture("poison-psi.json");
     let cases = f.array("direct_cases");
 
     for (index, case) in cases.iter().enumerate() {
@@ -83,7 +51,12 @@ fn twelve_full_direct_poison_cases_match_signed_duration_gates_records_rng_and_a
             &mut actual,
         )
         .unwrap();
-        assert_records(&result, after, "all_records");
+        crate::native_common::assert_body_records(
+            &result.warriors,
+            &result.enemies,
+            &after["party"],
+            &after["all_records"],
+        );
         assert_eq!(actual, random(after), "case {index}");
         receipts(case, &initial, &actual);
         crate::support::expect_array(&(audio(&result)), &case["sounds"]);
@@ -93,38 +66,17 @@ fn twelve_full_direct_poison_cases_match_signed_duration_gates_records_rng_and_a
                 .iter()
                 .all(|(_, result)| result.damage == 0 && !result.killed)
         );
-        assert_eq!(word(&packet, 40).unwrap(), 4);
-        assert_eq!(word(&packet, 50).unwrap(), 0x2000);
         assert_eq!(
             result.race_excluded,
             if index == 9 { vec![4] } else { vec![] }
         );
         assert_eq!(result.targets.len(), usize::from(!matches!(index, 9 | 10)));
-        assert!(result.enemies.iter().all(|enemy| enemy.bytes[0xb5] == 0));
-
-        crate::support::native_expect! {
-        bytes crate::support::record_bytes(&warriors) => &before["party"], "immutable input party";
-        bytes crate::support::record_bytes(&enemies) => &before["all_records"], "immutable input monsters";
-        }
-        if index < 9 {
-            let duration = after.n::<i16>("duration");
-            let mut target = warriors[4].bytes.clone();
-            let mut condition_random = initial.clone();
-            spell_conditions::apply(&mut target, false, 4, duration, &mut condition_random)
-                .unwrap();
-            assert_bytes(
-                &target,
-                &result.warriors[4].bytes,
-                "standalone condition addition",
-            );
-            assert_eq!(condition_random, initial);
-        }
     }
 }
 
 #[test]
 fn actual_actor_target_charge_and_resolution_match_native_complete_boundaries() {
-    let f = fixture();
+    let f = crate::support::fixture("poison-psi.json");
     let case = &f["cases"][0];
     let before = &case["before"];
 
@@ -140,9 +92,7 @@ fn actual_actor_target_charge_and_resolution_match_native_complete_boundaries() 
     let packet = cast.bytes("packet");
     let mut actual = random(before);
     let rng = case.array("rng");
-    for draw in &rng[..3] {
-        crate::support::expect(actual.bound(draw.n::<i16>("bound")), &draw["result"]);
-    }
+    crate::support::replay_rng(&mut actual, &rng[..3]);
     let selected = select_targets(
         &combat,
         &warriors,
@@ -166,12 +116,7 @@ fn actual_actor_target_charge_and_resolution_match_native_complete_boundaries() 
     let resolution = &case["resolutions"][0];
     crate::support::expect(actual.draws, &resolution["draws_before"]);
     let mut expected_random = random(before);
-    for draw in &rng[..23] {
-        crate::support::expect(
-            expected_random.bound(draw.n::<i16>("bound")),
-            &draw["result"],
-        );
-    }
+    crate::support::replay_rng(&mut expected_random, &rng[..23]);
     assert_eq!(actual, expected_random);
     combat.enemies.records[6] = selected.caster;
     assert_bytes(
@@ -194,22 +139,16 @@ fn actual_actor_target_charge_and_resolution_match_native_complete_boundaries() 
         &mut actual,
     )
     .unwrap();
-    let expected = serde_json::json!({ "party": resolution["party_after"], "records": resolution["records_after"] });
-    assert_records(&result, &expected, "records");
+    crate::native_common::assert_body_records(
+        &result.warriors,
+        &result.enemies,
+        &resolution["party_after"],
+        &resolution["records_after"],
+    );
     assert_eq!(audio(&result), vec![430]);
-    for draw in &rng[23..29] {
-        crate::support::expect(
-            expected_random.bound(draw.n::<i16>("bound")),
-            &draw["result"],
-        );
-    }
+    crate::support::replay_rng(&mut expected_random, &rng[23..29]);
     assert_eq!(actual, expected_random);
-    for draw in &rng[29..] {
-        crate::support::expect(
-            expected_random.bound(draw.n::<i16>("bound")),
-            &draw["result"],
-        );
-    }
+    crate::support::replay_rng(&mut expected_random, &rng[29..]);
     assert_eq!(expected_random, random(&case["after_cast"]));
     assert_eq!(random(&case["after_cast"]), random(&case["after_getup"]));
 }

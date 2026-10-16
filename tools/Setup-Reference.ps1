@@ -37,6 +37,7 @@ if ($Launch) {
     $binaryRoot = Join-Path $referenceRoot 'bin'
     New-Item -ItemType Directory -Force -Path $binaryRoot | Out-Null
     Copy-Item -LiteralPath (Join-Path $EmulatorRoot 'src\macemu\BasiliskII\src\Windows\BasiliskII.exe') -Destination $binaryRoot
+    Copy-Item -LiteralPath (Join-Path $EmulatorRoot 'src\macemu\BasiliskII\src\Windows\divinity-harness-client.exe') -Destination $binaryRoot
     foreach ($dll in @('libgcc_s_dw2-1.dll', 'libwinpthread-1.dll')) {
         Copy-Item -LiteralPath (Join-Path $MingwRoot ('bin\' + $dll)) -Destination $binaryRoot
     }
@@ -44,7 +45,8 @@ if ($Launch) {
     $previousPath = $env:PATH
     try {
         $env:PATH = "$(Join-Path $MingwRoot 'bin');$previousPath"
-        $process = Start-Process -FilePath $exe -ArgumentList @('--config', ('"' + $prefs + '"'), '--divinity-harness') -WorkingDirectory $referenceRoot -WindowStyle Normal -RedirectStandardOutput (Join-Path $referenceRoot 'stdout.log') -RedirectStandardError (Join-Path $referenceRoot 'stderr.log') -PassThru
+        $process = Start-Process -FilePath $exe -ArgumentList @('--config', ('"' + $prefs + '"'), '--divinity-harness') -WorkingDirectory $referenceRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $referenceRoot 'stdout.log') -RedirectStandardError (Join-Path $referenceRoot 'stderr.log') -PassThru
+        $process.PriorityClass = 'BelowNormal'
     } finally { $env:PATH = $previousPath }
     $process.Id | Set-Content -LiteralPath (Join-Path $referenceRoot 'basilisk.pid')
     Write-Output "Reference emulator PID $($process.Id)"

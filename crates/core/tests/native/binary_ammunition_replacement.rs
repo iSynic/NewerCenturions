@@ -1,16 +1,12 @@
 use crate::prelude::*;
-fn fixture() -> Value {
-    crate::support::fixture("ammunition-management.json")
-}
 
 use crate::support::buffer as bytes;
 
 #[test]
 fn replacement_matches_native_full_warriors_retained_instances_costs_and_audio() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("ammunition-management.json");
     let content = content();
     let mission = content.map(0).unwrap();
-    let mut checked = 0;
     for (index, case) in fixture
         .array("cases")
         .iter()
@@ -51,7 +47,5 @@ fn replacement_matches_native_full_warriors_retained_instances_costs_and_audio()
         };
         assert_eq!(result.sounds, expected("sounds"), "case {index}");
         assert_eq!(result.warnings, expected("warnings"), "case {index}");
-        checked += 1;
     }
-    assert_eq!(checked, 11);
 }

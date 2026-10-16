@@ -46,13 +46,15 @@ pub fn decode_snd(bytes: &[u8]) -> Result<Sample, ContentError> {
         }
         return decode_mace3(bytes, offset, rate_fixed);
     }
-    let (count, bits_per_sample, sample_offset) = match bytes[offset + 20] {
-        0 => (long(bytes, offset + 4)?, 8, offset + 22),
+    let (count, channels, bits_per_sample, sample_offset) = match bytes[offset + 20] {
+        0 => (long(bytes, offset + 4)?, 1, 8, offset + 22),
         0xff => {
             span(bytes, offset, 64)?;
+            let channels = long(bytes, offset + 4)?;
+            let bits = word(bytes, offset + 48)?;
             if long(bytes, offset)? != 0
-                || long(bytes, offset + 4)? != 1
-                || word(bytes, offset + 48)? != 16
+                || !(1..=2).contains(&channels)
+                || !matches!(bits, 8 | 16)
                 || span(bytes, offset + 36, 12)?.iter().any(|&b| b != 0)
                 || span(bytes, offset + 50, 14)?.iter().any(|&b| b != 0)
             {
@@ -60,31 +62,33 @@ pub fn decode_snd(bytes: &[u8]) -> Result<Sample, ContentError> {
                     "unsupported extended sound header".into(),
                 ));
             }
-            (long(bytes, offset + 22)?, 16, offset + 64)
+            (
+                long(bytes, offset + 22)?,
+                channels as u16,
+                bits as u16,
+                offset + 64,
+            )
         }
         _ => {
             return Err(ContentError::Invalid("unsupported sound encoding".into()));
         }
     };
-    if !(1..=16_000_000).contains(&count) || !(500 * 65536..=64000u32 * 65536).contains(&rate_fixed)
+    let frame_bytes = usize::from(channels * (bits_per_sample / 8));
+    if !(1..=(16_000_000 / frame_bytes) as i32).contains(&count)
+        || !(500 * 65536..=64000u32 * 65536).contains(&rate_fixed)
     {
         return Err(ContentError::Invalid(
             "sound size or sample rate outside bounds".into(),
         ));
     }
-    let mut samples = span(
-        bytes,
-        sample_offset,
-        count as usize * (bits_per_sample / 8) as usize,
-    )?
-    .to_vec();
+    let mut samples = span(bytes, sample_offset, count as usize * frame_bytes)?.to_vec();
     if bits_per_sample == 16 {
         for sample in samples.as_chunks_mut::<2>().0 {
             sample.swap(0, 1);
         }
     }
     Ok(Sample {
-        channels: 1,
+        channels,
         rate_fixed,
         bits_per_sample,
         samples,

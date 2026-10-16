@@ -1,8 +1,5 @@
 use crate::native_common::decoded_positions as positions;
 use crate::prelude::*;
-fn fixture() -> Value {
-    crate::support::fixture("warm-psi-work.json")
-}
 
 fn native_work(s: &Value) -> WeaponWork {
     let weapon = s.bytes("weapon_work");
@@ -103,16 +100,14 @@ fn assert_snapshot(state: &Session, expected: &Value, events: &[Event], label: &
         "{label} audio"
     );
     let mut receipt = RandomState::new(12);
-    for draw in expected.array("rng_records") {
-        crate::support::expect(receipt.bound(draw.n::<i16>("bound")), &draw["result"]);
-    }
+    crate::support::replay_rng(&mut receipt, expected.array("rng_records"));
     assert_eq!(receipt, state.random, "{label} RNG receipt state");
 }
 
 #[test]
 fn native_loading_and_preparation_preserve_independent_weapon_and_ammunition_fields() {
     let content = content();
-    let fixture = fixture();
+    let fixture = crate::support::fixture("warm-psi-work.json");
     for case in fixture.array("cases") {
         let mut work = native_work(&case["unwarmed"]);
         let weapon = &content.items[case.n::<usize>("warm_weapon")];
@@ -134,7 +129,7 @@ fn native_loading_and_preparation_preserve_independent_weapon_and_ammunition_fie
 fn warmed_cast_automatic_initiative_and_field_collision_match_complete_native_cases() {
     let content = content();
     let mission = content.map(0).unwrap();
-    let fixture = fixture();
+    let fixture = crate::support::fixture("warm-psi-work.json");
 
     for case in fixture.array("cases") {
         let label = format!(
@@ -179,6 +174,7 @@ fn warmed_cast_automatic_initiative_and_field_collision_match_complete_native_ca
             state.psi_memory.as_mut().unwrap(),
             0,
             CastRequest {
+                rotation: 0,
                 spell: 2101,
                 power: 1,
                 target: Some((point[0] - 5, point[1] - 5)),

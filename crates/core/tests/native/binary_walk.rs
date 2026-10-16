@@ -44,10 +44,6 @@ fn walking_matches_instruction_state_and_effects() {
                 positions: vec![(20, 20); 6],
                 under_tiles: vec![1155; 6],
             },
-            enemies: EnemySetup {
-                records: vec![],
-                positions: vec![],
-            },
             order: vec![-1, 0],
             ..crate::support::battle()
         });

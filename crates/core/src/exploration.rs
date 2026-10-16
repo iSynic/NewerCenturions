@@ -7,9 +7,14 @@ use centurions_content::{
 fn unsupported(action: &'static str, dependency: &'static str) -> RuleError {
     RuleError::Unsupported { action, dependency }
 }
-fn active_map<'a>(state: &Session, content: &'a Content) -> Result<&'a OpeningMission, RuleError> {
+pub(crate) fn active_map<'a>(
+    state: &Session,
+    content: &'a Content,
+) -> Result<&'a OpeningMission, RuleError> {
     content
-        .map(
+        .map_at(
+            state.mission.as_deref(),
+            state.scenario_level,
             state
                 .exploration
                 .as_ref()
@@ -41,6 +46,7 @@ pub fn manual_encounter(state: &mut Session, content: &Content) -> Result<Vec<Ev
         record: map.script(id)?.to_vec(),
         cursor: 0,
         map_slot: 0,
+        item_return: true,
         scheduled: true,
         menu: None,
         persist: false,
@@ -55,6 +61,35 @@ pub fn use_item(
     warrior: usize,
     slot: usize,
 ) -> Result<Vec<Event>, RuleError> {
+    if state
+        .exploration
+        .as_ref()
+        .is_some_and(|p| matches!(p.presentation, Some(Presentation::Typed { .. })))
+    {
+        return use_encounter_item(state, content, warrior, slot);
+    }
+    let item = state
+        .warriors
+        .get(warrior)
+        .ok_or("item warrior unavailable")?
+        .inventory()?
+        .get(slot)
+        .cloned()
+        .ok_or("inventory item unavailable")?;
+    if (700..=703).contains(&item.id()) && state.phase == Phase::Combat {
+        return crate::combat::runtime::begin_medical_item(state, content, warrior, slot);
+    }
+    let definition = crate::ammunition::definition(content, item.id())?;
+    if state.combat.is_none() && word(&definition, 26)? == 28 && word(&definition, 44)? > 1100 {
+        return crate::outdoor_psi::begin_item(state, content, warrior, slot);
+    }
+    if word(&definition, 26)? == 27 {
+        return crate::item_modifiers::use_item(state, content, warrior, slot);
+    }
+    crate::story_item_use::reject_inert_item(&definition)?;
+    if state.phase == Phase::Combat && word(&definition, 26)?.wrapping_abs() == 23 {
+        return refuse_combat_script_item(state, content, warrior, item.id(), false);
+    }
     if state.phase != Phase::Exploration
         || state
             .exploration
@@ -67,11 +102,18 @@ pub fn use_item(
     }
     let map = active_map(state, content)?;
     let races = &map.combat.as_ref().unwrap().race_moves;
-    let used =
-        crate::story_item_use::use_scenario_item(&state.warriors, warrior, slot, content, races)?;
+    let used = crate::story_item_use::use_scenario_item(
+        &state.warriors,
+        warrior,
+        slot,
+        content,
+        races,
+        crate::story_item_use::ScriptItemContext::Exploration,
+    )?;
     let id = state.warriors[warrior].inventory()?[slot].id();
     state.load_item_work(content, id)?;
     state.warriors = used.warriors;
+    state.selected_warrior = warrior;
     let mut effects: Vec<Event> = used
         .warnings
         .into_iter()
@@ -87,6 +129,7 @@ pub fn use_item(
             record: map.script(id)?.to_vec(),
             cursor: 0,
             map_slot: 0,
+            item_return: false,
             scheduled: true,
             menu: None,
             persist: false,
@@ -173,10 +216,11 @@ pub fn move_squad(
     }
     let px = position.x as i16;
     let py = position.y as i16;
-    state.movement_continuation = Some(if event_branch {
-        MovementContinuation::Header
-    } else {
-        MovementContinuation::Secrets
+    state.movement_continuation = Some(MovementContinuation::Region {
+        x: px,
+        y: py,
+        check: ticks != 0,
+        header: event_branch,
     });
     effects.extend(super::time::advance(
         state,
@@ -184,35 +228,6 @@ pub fn move_squad(
         ticks as u8,
         map.minutes_per_tick,
     )?);
-    if ticks != 0 {
-        let region = regional_selection(
-            &mut state.exploration.as_mut().unwrap().region_state,
-            (px, py),
-            &mut state.random,
-        )?;
-        match region {
-            Regional::Battle(battle, advantage) => {
-                effects.extend(super::combat::begin_battle(
-                    state, content, battle, advantage,
-                )?);
-                return Ok(effects);
-            }
-            Regional::Script(id) => {
-                state.exploration.as_mut().unwrap().script = Some(ScriptState {
-                    record: map.script(id)?.to_vec(),
-                    cursor: 0,
-                    map_slot: 0,
-                    scheduled: true,
-                    menu: None,
-                    persist: false,
-                    origin: None,
-                });
-                effects.extend(run_script(state, content)?);
-                return Ok(effects);
-            }
-            Regional::None => {}
-        }
-    }
     Ok(effects)
 }
 
@@ -228,7 +243,52 @@ pub(crate) fn resume_movement(
             .as_ref()
             .is_some_and(|position| position.presentation.is_none() && position.script.is_none())
     {
+        if state.time_continuation.is_some() {
+            effects.extend(super::time::resume(state, content)?);
+            if state.time_continuation.is_some()
+                || state.phase != Phase::Exploration
+                || state
+                    .exploration
+                    .as_ref()
+                    .is_none_or(|p| p.presentation.is_some() || p.script.is_some())
+            {
+                break;
+            }
+        }
         match state.movement_continuation.take() {
+            Some(MovementContinuation::Region {
+                x,
+                y,
+                check,
+                header,
+            }) => {
+                state.movement_continuation = Some(if header {
+                    MovementContinuation::Header
+                } else {
+                    MovementContinuation::Secrets
+                });
+                if check && word(&state.party_buffs, 14)? == 0 {
+                    let region = regional_selection(
+                        &mut state.exploration.as_mut().unwrap().region_state,
+                        (x, y),
+                        &mut state.random,
+                    )?;
+                    if matches!(region, Regional::Script(_)) {
+                        state.movement_continuation =
+                            Some(MovementContinuation::RegionalReturn { header });
+                    }
+                    effects.extend(apply_region(state, content, region)?);
+                }
+            }
+            Some(MovementContinuation::RegionalReturn { header }) => {
+                // timeclick15ea8c resumes buttonchoice after clearing the movement deltas.
+                state.exploration.as_mut().unwrap().last_move = [0; 2];
+                state.movement_continuation = Some(if header {
+                    MovementContinuation::Header
+                } else {
+                    MovementContinuation::Secrets
+                });
+            }
             Some(MovementContinuation::Header) => {
                 state.movement_continuation = Some(MovementContinuation::Secrets);
                 let position = state.exploration.as_mut().unwrap();
@@ -243,6 +303,7 @@ pub(crate) fn resume_movement(
                         record: header.record,
                         cursor: 0,
                         map_slot: header.slot,
+                        item_return: false,
                         scheduled: false,
                         menu: None,
                         persist: false,
@@ -250,6 +311,7 @@ pub(crate) fn resume_movement(
                             map: position.map,
                             x: position.x,
                             y: position.y,
+                            level: state.scenario_level,
                         }),
                     });
                     effects.extend(run_script(state, content)?);
@@ -270,13 +332,23 @@ pub(crate) fn resume_movement(
                     skill,
                     &mut state.random,
                 )?;
-                if search.center_revealed {
-                    return Err(unsupported(
-                        "exploration.move",
-                        "revealed-center NewLand continuation",
+                for discovery in &search.discoveries {
+                    effects.push(Event::Feedback(
+                        crate::feedback::NativeFeedback::ResourceFlash {
+                            resource_id: 138,
+                            index: usize::from(discovery.ordinal),
+                            x: 30,
+                            y: 375,
+                            wait: 0,
+                            sound: 5000,
+                        },
                     ));
                 }
                 position.floor = search.floor;
+                if search.center_revealed {
+                    // Packed (mode0, argument1) returns to the walking-header branch.
+                    state.movement_continuation = Some(MovementContinuation::Header);
+                }
             }
             None => break,
         }
@@ -293,7 +365,7 @@ pub fn regional_encounter(
     match regional_selection(&mut regions.to_vec(), position, random)? {
         Regional::None => Ok(None),
         Regional::Battle(battle, advantage) => Ok(Some((battle, advantage))),
-        Regional::Script(_) => Err(unsupported(
+        Regional::Script(_) | Regional::Avoidance(_) => Err(unsupported(
             "exploration.encounter",
             "regional event scripts",
         )),
@@ -304,6 +376,7 @@ enum Regional {
     None,
     Battle(i16, i16),
     Script(i16),
+    Avoidance(usize),
 }
 
 fn regional_selection(
@@ -311,8 +384,17 @@ fn regional_selection(
     position: (i16, i16),
     random: &mut RandomState,
 ) -> Result<Regional, RuleError> {
+    regional_selection_from(regions, position, 20, random)
+}
+
+fn regional_selection_from(
+    regions: &mut [u8],
+    position: (i16, i16),
+    before: usize,
+    random: &mut RandomState,
+) -> Result<Regional, RuleError> {
     let (px, py) = position;
-    for region in (0..20).rev() {
+    for region in (0..before.min(20)).rev() {
         let offset = region * 8;
         if rules::inclusive_range(px, word(regions, offset + 2)?, word(regions, offset + 6)?)
             && rules::inclusive_range(py, word(regions, offset)?, word(regions, offset + 4)?)
@@ -335,10 +417,9 @@ fn regional_selection(
                 }
                 let minimum = word(regions, 200 + region * 4)?;
                 if minimum != 0 {
-                    if regions[544 + region] != 0 {
-                        return Err(unsupported("exploration.encounter", "avoidance choice"));
+                    if random.bound(100) < i16::from(regions[544 + region] as i8) {
+                        return Ok(Regional::Avoidance(region));
                     }
-                    random.bound(100);
                     let advantage = if random.bound(100) < 10 { -1 } else { 0 };
                     let battle = random.range(minimum, word(regions, 202 + region * 4)?);
                     return Ok(Regional::Battle(battle, advantage));
@@ -350,6 +431,82 @@ fn regional_selection(
         }
     }
     Ok(Regional::None)
+}
+
+fn apply_region(
+    state: &mut Session,
+    content: &Content,
+    region: Regional,
+) -> Result<Vec<Event>, RuleError> {
+    match region {
+        Regional::None => Ok(vec![]),
+        Regional::Battle(battle, advantage) => {
+            super::combat::begin_battle(state, content, battle, advantage)
+        }
+        Regional::Script(id) => {
+            let map = active_map(state, content)?;
+            state.exploration.as_mut().unwrap().script = Some(ScriptState {
+                record: map.script(id)?.to_vec(),
+                cursor: 0,
+                map_slot: 0,
+                item_return: false,
+                scheduled: true,
+                menu: None,
+                persist: false,
+                origin: None,
+            });
+            run_script(state, content)
+        }
+        Regional::Avoidance(region) => {
+            let map = active_map(state, content)?;
+            let position = state.exploration.as_mut().unwrap();
+            let id = word(&position.region_state, 604 + region * 2)?.wrapping_abs();
+            let sound = word(&position.region_state, 564 + region * 2)?;
+            position.presentation = Some(Presentation::Avoidance {
+                region: region as u8,
+                text: map.dialogue(id)?,
+            });
+            Ok(vec![
+                Event::Sound { resource_id: sound },
+                Event::StoryPresented,
+            ])
+        }
+    }
+}
+
+fn choose_avoidance(
+    state: &mut Session,
+    content: &Content,
+    region: usize,
+    fight: bool,
+) -> Result<Vec<Event>, RuleError> {
+    let position = state
+        .exploration
+        .as_mut()
+        .ok_or("encounter position missing")?;
+    if region >= 20 {
+        return Err(RuleError::Invalid("encounter region outside map".into()));
+    }
+    position.presentation = None;
+    let next = if fight {
+        let battle = state.random.range(
+            word(&position.region_state, 200 + region * 4)?,
+            word(&position.region_state, 202 + region * 4)?,
+        );
+        Regional::Battle(battle, 1)
+    } else if position.region_state[524 + region] != 0 {
+        Regional::None
+    } else {
+        regional_selection_from(
+            &mut position.region_state,
+            (position.x as i16, position.y as i16),
+            region,
+            &mut state.random,
+        )?
+    };
+    let mut events = apply_region(state, content, next)?;
+    events.extend(resume_movement(state, content)?);
+    Ok(events)
 }
 
 pub fn continue_messages(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
@@ -414,14 +571,19 @@ fn continue_with_spells(
     content: &Content,
     keep_spells: bool,
 ) -> Result<Vec<Event>, RuleError> {
+    if state
+        .exploration
+        .as_ref()
+        .is_some_and(|p| p.presentation == Some(Presentation::Shop))
+    {
+        return crate::shop::close(state, content);
+    }
     let loot = state
         .exploration
         .as_ref()
         .is_some_and(|position| matches!(position.presentation, Some(Presentation::Loot)));
     if loot && needs_spell_confirmation(state) && !keep_spells {
-        return Err(RuleError::Invalid(
-            "confirm keeping the current psi selections to complete promotion".into(),
-        ));
+        return crate::story_promotion::begin(state, content);
     }
     let mut events = vec![];
     if loot && !state.booty_items.iter().any(|item| item.id() != 0) {
@@ -460,6 +622,15 @@ fn continue_with_spells(
             });
         }
     }
+    events.extend(finish_story_page(state, content)?);
+    Ok(events)
+}
+
+pub(crate) fn finish_story_page(
+    state: &mut Session,
+    content: &Content,
+) -> Result<Vec<Event>, RuleError> {
+    let mut events = vec![];
     let position = state
         .exploration
         .as_mut()
@@ -485,6 +656,18 @@ fn continue_with_spells(
         return Err(RuleError::Invalid(
             "collect or store the equipment before continuing".into(),
         ));
+    }
+    if state.actor_replacement.is_some() {
+        let (feedback, progress) = crate::story_actor::resume(state, content)?;
+        events.extend(feedback);
+        match progress {
+            crate::story_actor::Progress::Waiting => return Ok(events),
+            crate::story_actor::Progress::Stop => {
+                events.extend(finish_script(state, content, false)?);
+                return Ok(events);
+            }
+            crate::story_actor::Progress::Continue => {}
+        }
     }
     if state
         .combat_story
@@ -548,6 +731,13 @@ pub fn choose(
     content: &Content,
     answer: bool,
 ) -> Result<Vec<Event>, RuleError> {
+    if let Some(Presentation::Avoidance { region, .. }) = state
+        .exploration
+        .as_ref()
+        .and_then(|p| p.presentation.as_ref())
+    {
+        return choose_avoidance(state, content, *region as usize, answer);
+    }
     if let Some(Presentation::StageChange { parameter }) = state
         .exploration
         .as_ref()
@@ -578,26 +768,21 @@ pub fn choose(
     match typed_encounter::question_plan(record, answer)? {
         typed_encounter::QuestionPlan::Continue => {}
         typed_encounter::QuestionPlan::MoveAway => {
-            let [dx, dy] = position.last_move;
-            let forward =
-                OpeningMission::index(position.x + i32::from(dx), position.y + i32::from(dy))?;
-            let undone = crate::story_move_away::move_away(
-                position.x,
-                position.y,
-                dx,
-                dy,
-                position.floor[forward],
-                [0; 6],
-            );
-            OpeningMission::index(undone.x, undone.y)?;
-            position.x = undone.x;
-            position.y = undone.y;
+            let movement = back_out(position)?;
             position.presentation = None;
             position.script = None;
-            return Ok(vec![Event::Moved {
-                x: undone.x,
-                y: undone.y,
-            }]);
+            let mut events = vec![movement];
+            if state
+                .combat_story
+                .as_ref()
+                .is_some_and(|story| story.shared_dispatch)
+            {
+                events.extend(combat::runtime::finish_death_story(state, content)?);
+            }
+            if state.round_dispatch.is_some() {
+                events.extend(combat::runtime::finish_round_dispatch(state, content)?);
+            }
+            return Ok(events);
         }
         typed_encounter::QuestionPlan::ReplaceScript(id) => {
             let replacement = map.script(id)?;
@@ -633,19 +818,56 @@ pub fn choose(
             )?);
             script.cursor = 0;
         }
-        typed_encounter::QuestionPlan::EndScript => position.script = None,
-        _ => {
-            return Err(unsupported(
-                "story.choose",
-                "typed branch or move-away caller",
-            ));
+        typed_encounter::QuestionPlan::TypedBranch(branch) => {
+            let script = position.script.as_mut().ok_or("question script missing")?;
+            let menu = script
+                .menu
+                .as_ref()
+                .filter(|m| m.typed)
+                .ok_or("question typed continuation missing")?;
+            let record = span(
+                if state.typed_encounters.is_empty() {
+                    &map.typed_encounters
+                } else {
+                    &state.typed_encounters
+                },
+                menu.id as usize * typed_encounter::RECORD_BYTES,
+                typed_encounter::RECORD_BYTES,
+            )?;
+            if let typed_encounter::TypedContinuation::Branch { body, .. } =
+                typed_encounter::continuation(record, branch as i8 + 1, menu.remaining)?
+            {
+                script.record[8..40].copy_from_slice(&body);
+                script.cursor = 0;
+            }
         }
+        typed_encounter::QuestionPlan::EndScript => position.script = None,
     }
     position.presentation = None;
     run_script(state, content)
 }
 
-pub fn cancel_menu(state: &mut Session, _content: &Content) -> Result<Vec<Event>, RuleError> {
+fn back_out(position: &mut Exploration) -> Result<Event, RuleError> {
+    let [dx, dy] = position.last_move;
+    let forward = OpeningMission::index(position.x + i32::from(dx), position.y + i32::from(dy))?;
+    let undone = crate::story_move_away::move_away(
+        position.x,
+        position.y,
+        dx,
+        dy,
+        position.floor[forward],
+        [0; 6],
+    );
+    OpeningMission::index(undone.x, undone.y)?;
+    position.x = undone.x;
+    position.y = undone.y;
+    Ok(Event::Moved {
+        x: undone.x,
+        y: undone.y,
+    })
+}
+
+pub fn cancel_menu(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let position = state
         .exploration
         .as_mut()
@@ -666,9 +888,29 @@ pub fn cancel_menu(state: &mut Session, _content: &Content) -> Result<Vec<Event>
         position.event_headers[script.map_slot * 42..(script.map_slot + 1) * 42]
             .copy_from_slice(&menu.original);
     }
+    // buttonchoice10a5a8 marks the manual caller; newland142cca skips its menu backstep.
+    let backstep =
+        matches!(position.presentation, Some(Presentation::Typed { .. })) || !script.item_return;
+    let mut events =
+        if state.phase == Phase::Exploration && backstep && position.last_move != [0; 2] {
+            vec![back_out(position)?]
+        } else {
+            vec![]
+        };
     position.presentation = None;
     position.script = None;
-    Ok(vec![])
+    if state
+        .combat_story
+        .as_ref()
+        .is_some_and(|story| story.shared_dispatch)
+    {
+        events.extend(combat::runtime::finish_death_story(state, content)?);
+        return Ok(events);
+    }
+    if state.round_dispatch.is_some() {
+        events.extend(combat::runtime::finish_round_dispatch(state, content)?);
+    }
+    Ok(events)
 }
 
 pub fn select_menu(
@@ -761,6 +1003,7 @@ fn present_menu(
 
 fn present_typed(
     map: &OpeningMission,
+    table: &[u8],
     script: &mut ScriptState,
     id: i16,
 ) -> Result<Presentation, RuleError> {
@@ -768,7 +1011,7 @@ fn present_typed(
         return Err(RuleError::Invalid("negative typed encounter".into()));
     }
     let record = span(
-        &map.typed_encounters,
+        table,
         id as usize * typed_encounter::RECORD_BYTES,
         typed_encounter::RECORD_BYTES,
     )?;
@@ -791,24 +1034,198 @@ pub fn submit_text(
     content: &Content,
     text: &str,
 ) -> Result<Vec<Event>, RuleError> {
-    let map = active_map(state, content)?;
-    let position = state
-        .exploration
-        .as_mut()
-        .ok_or_else(|| RuleError::Invalid("no active mission".into()))?;
-    let Some(Presentation::Typed { id, .. }) = position.presentation.as_ref() else {
-        return Err(RuleError::Invalid("no typed encounter active".into()));
-    };
-    let record = span(
-        &map.typed_encounters,
-        *id as usize * typed_encounter::RECORD_BYTES,
-        typed_encounter::RECORD_BYTES,
-    )?;
+    let record = typed_record(state, content)?;
     let typed_encounter::PasswordSelection::Selected(selected) =
         typed_encounter::select_password(record, text.as_bytes())?
     else {
         return Ok(vec![]);
     };
+    finish_typed_selection(state, content, selected)
+}
+
+pub fn typed_record<'a>(state: &'a Session, content: &'a Content) -> Result<&'a [u8], RuleError> {
+    let map = active_map(state, content)?;
+    let position = state
+        .exploration
+        .as_ref()
+        .ok_or_else(|| RuleError::Invalid("no active mission".into()))?;
+    let Some(Presentation::Typed { id, .. }) = position.presentation.as_ref() else {
+        return Err(RuleError::Invalid("no typed encounter active".into()));
+    };
+    Ok(span(
+        if state.typed_encounters.is_empty() {
+            &map.typed_encounters
+        } else {
+            &state.typed_encounters
+        },
+        *id as usize * typed_encounter::RECORD_BYTES,
+        typed_encounter::RECORD_BYTES,
+    )?)
+}
+
+pub(crate) fn check_item_actor(state: &Session, warrior: usize) -> Result<(), RuleError> {
+    let actor = state
+        .warriors
+        .get(warrior)
+        .ok_or("item warrior unavailable")?;
+    if let Some(combat) = &state.combat {
+        let warning = if combat.active_body() != Some(warrior as i16) {
+            Some(10)
+        } else if word(&actor.bytes, 0x40)? < 1 {
+            Some(17)
+        } else {
+            None
+        };
+        if let Some(index) = warning {
+            return Err(RuleError::Refused {
+                feedback: vec![crate::feedback::NativeFeedback::Warning { index }],
+            });
+        }
+    }
+    Ok(())
+}
+
+fn refuse_combat_script_item(
+    state: &mut Session,
+    content: &Content,
+    warrior: usize,
+    item: i16,
+    encounter: bool,
+) -> Result<Vec<Event>, RuleError> {
+    check_item_actor(state, warrior)?;
+    state.load_item_work(content, item)?;
+    let mut feedback = Vec::new();
+    if !encounter && word(state.ammunition_work.item.as_ref().unwrap(), 44)? < 1100 {
+        feedback.extend([88, 89].map(|index| crate::feedback::NativeFeedback::Warning { index }));
+    }
+    feedback.push(crate::feedback::NativeFeedback::Warning { index: 52 });
+    Err(RuleError::RefusedAfterEffects { feedback })
+}
+
+fn use_encounter_item(
+    state: &mut Session,
+    content: &Content,
+    warrior: usize,
+    slot: usize,
+) -> Result<Vec<Event>, RuleError> {
+    check_item_actor(state, warrior)?;
+    let item = state.warriors[warrior]
+        .inventory()?
+        .get(slot)
+        .cloned()
+        .ok_or("inventory item unavailable")?;
+    let selected = typed_encounter::select_item(typed_record(state, content)?, item.id())?;
+    let definition = crate::ammunition::definition(content, item.id())?;
+    let class = word(&definition, 26)?.wrapping_abs();
+    if word(&definition, 26)? == 27 {
+        return crate::item_modifiers::use_item(state, content, warrior, slot);
+    }
+    if class == 23 {
+        if state.combat.is_some() {
+            return refuse_combat_script_item(state, content, warrior, item.id(), true);
+        }
+        let frame = state
+            .exploration
+            .as_ref()
+            .unwrap()
+            .script
+            .as_ref()
+            .ok_or("typed item caller missing")?;
+        let manual = frame.item_return;
+        let walking =
+            !frame.scheduled && frame.origin.is_some() && state.time_continuation.is_none();
+        let calendar = frame.scheduled
+            && state.time_continuation.is_some()
+            && state.combat_story.is_none()
+            && state.round_dispatch.is_none();
+        let regional = frame.scheduled
+            && frame.origin.is_none()
+            && state.time_continuation.is_none()
+            && state.combat_story.is_none()
+            && state.round_dispatch.is_none()
+            && matches!(
+                state.movement_continuation,
+                Some(MovementContinuation::RegionalReturn { .. })
+            );
+        if !manual && !walking && !calendar && !regional {
+            return Err(unsupported(
+                "story.encounter_item",
+                "script-item return caller",
+            ));
+        }
+        let map = active_map(state, content)?;
+        let used = crate::story_item_use::use_scenario_item(
+            &state.warriors,
+            warrior,
+            slot,
+            content,
+            &map.combat
+                .as_ref()
+                .ok_or("item movement tables unavailable")?
+                .race_moves,
+            crate::story_item_use::ScriptItemContext::Encounter,
+        )?;
+        // Only manual buttonchoice10a9ee decodes the script-item return.
+        let record = if manual {
+            Some(
+                map.script(used.return_code.wrapping_abs().wrapping_sub(100))?
+                    .to_vec(),
+            )
+        } else {
+            None
+        };
+        state.load_item_work(content, item.id())?;
+        state.warriors = used.warriors;
+        state.selected_warrior = warrior;
+        state.party_mask[warrior] = 1;
+        let position = state.exploration.as_mut().unwrap();
+        position.presentation = None;
+        position.script = record.map(|record| ScriptState {
+            record,
+            cursor: 0,
+            map_slot: 0,
+            item_return: false,
+            scheduled: true,
+            menu: None,
+            persist: false,
+            origin: None,
+        });
+        let mut effects: Vec<_> = used
+            .sounds
+            .into_iter()
+            .map(|resource_id| Event::Sound { resource_id })
+            .collect();
+        if manual {
+            effects.extend(run_script(state, content)?);
+        }
+        return Ok(effects);
+    }
+    let activating =
+        word(&definition, 44)? > 1100 && (word(&item.0, 2)? > 0 || word(&definition, 20)? < 0);
+    if activating && class == 28 && state.combat.is_none() {
+        return crate::outdoor_psi::begin_item(state, content, warrior, slot);
+    }
+    if class == 27 || activating {
+        return Err(unsupported(
+            "story.encounter_item",
+            "activating item encounter caller",
+        ));
+    }
+    // Items12b04a reloads the item and clears targets;12c422 selects its owner.
+    state.load_item_work(content, item.id())?;
+    state.party_mask.fill(0);
+    state.party_mask[warrior] = 1;
+    state.selected_warrior = warrior;
+    finish_typed_selection(state, content, selected)
+}
+
+pub(crate) fn finish_typed_selection(
+    state: &mut Session,
+    content: &Content,
+    selected: i8,
+) -> Result<Vec<Event>, RuleError> {
+    let record = typed_record(state, content)?.to_vec();
+    let position = state.exploration.as_mut().unwrap();
     let script = position
         .script
         .as_mut()
@@ -818,7 +1235,7 @@ pub fn submit_text(
         .as_ref()
         .ok_or_else(|| RuleError::Invalid("typed continuation missing".into()))?
         .remaining;
-    match typed_encounter::continuation(record, selected, remaining)? {
+    match typed_encounter::continuation(&record, selected, remaining)? {
         typed_encounter::TypedContinuation::Branch { body, .. } => {
             script.record[8..40].copy_from_slice(&body);
             script.cursor = 0;
@@ -872,7 +1289,7 @@ pub fn take_loot(
             .race_moves
             .get(race as usize)
             .ok_or_else(|| RuleError::Invalid("recipient race unavailable".into()))?;
-        let collected = if item.id() == 700 {
+        let collected = if item.0[10] != 23 {
             crate::equipment::collect_item(
                 recipient,
                 &item,
@@ -912,7 +1329,52 @@ pub fn take_loot(
         }
     }
     state.booty_items[slot].0[..2].fill(0);
+    if let Some(limit) = &mut state.loot_limit
+        && *limit != 0
+    {
+        *limit = limit.wrapping_sub(1);
+        if *limit == 0 {
+            state.booty_items.fill(InventoryRecord([0; 22]));
+            if !needs_spell_confirmation(state) {
+                effects.extend(continue_with_spells(state, content, false)?);
+            }
+        }
+    }
     Ok(effects)
+}
+
+fn present_treasure(
+    state: &mut Session,
+    content: &Content,
+    id: i16,
+) -> Result<Vec<Event>, RuleError> {
+    if id < 0 {
+        return Err("negative treasure record".into());
+    }
+    let position = state
+        .exploration
+        .as_ref()
+        .ok_or("treasure mission unavailable")?;
+    let map = state
+        .map(content, position.map)
+        .ok_or("treasure map unavailable")?;
+    let record = span(&map.treasure, id as usize * 88, 88)?;
+    let prepared = crate::story_treasure::prepare(
+        &state.warriors,
+        record,
+        content,
+        &mut state.random,
+        state.difficulty,
+    )?;
+    state.warriors = prepared.warriors;
+    state.inventory_record = None;
+    state.booty_items.fill(InventoryRecord([0; 22]));
+    for (slot, item) in prepared.items.into_iter().enumerate() {
+        state.loaded_item_field32 = Some(state.ammunition_work.load_item(content, item.id())?);
+        state.booty_items[slot] = item;
+    }
+    state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
+    Ok(vec![Event::StoryPresented])
 }
 
 fn finish_script(
@@ -927,6 +1389,17 @@ fn finish_script(
     let Some(mut script) = position.script.take() else {
         return Ok(vec![]);
     };
+    if state.round_dispatch.is_some() {
+        return combat::runtime::finish_round_dispatch(state, content);
+    }
+    state.scripted_cleanup = None;
+    if state
+        .combat_story
+        .as_ref()
+        .is_some_and(|story| story.shared_dispatch)
+    {
+        return combat::runtime::finish_death_story(state, content);
+    }
     if script.scheduled {
         return Ok(vec![]);
     }
@@ -936,11 +1409,19 @@ fn finish_script(
             map: key / 10000,
             x: key % 100,
             y: key / 100 % 100,
+            level: state.scenario_level,
         }
     });
     if exhausted && script.menu.is_none() {
         script.record[7] = 255;
-        let headers = if origin.map == position.map {
+        let headers = if origin.level != state.scenario_level {
+            &mut state
+                .visited_levels
+                .get_mut(&origin.level)
+                .and_then(|l| l.maps.get_mut(&origin.map))
+                .ok_or("event origin level missing")?
+                .event_headers
+        } else if origin.map == position.map {
             &mut position.event_headers
         } else {
             &mut state
@@ -955,7 +1436,7 @@ fn finish_script(
         map: position.map,
         x: position.x,
         y: position.y,
-        level: 0,
+        level: state.scenario_level,
     };
     let Some(plan) = crate::story_destination::destination(
         &script.record,
@@ -966,17 +1447,21 @@ fn finish_script(
     else {
         return Ok(vec![]);
     };
-    if plan.target.level != 0 {
-        return Err(unsupported("story.destination", "other scenario levels"));
-    }
     OpeningMission::index(plan.target.x, plan.target.y)?;
-    let authored = content
-        .map(plan.target.map)
+    content
+        .map_at(state.mission.as_deref(), plan.target.level, plan.target.map)
         .ok_or_else(|| RuleError::Invalid("door destination map unavailable".into()))?;
     if script.persist {
         let record =
             crate::story_destination::persistent_record(&script.record, origin.x, origin.y)?;
-        let headers = if origin.map == position.map {
+        let headers = if origin.level != state.scenario_level {
+            &mut state
+                .visited_levels
+                .get_mut(&origin.level)
+                .and_then(|l| l.maps.get_mut(&origin.map))
+                .ok_or("event origin level missing")?
+                .event_headers
+        } else if origin.map == position.map {
             &mut position.event_headers
         } else {
             &mut state
@@ -987,22 +1472,32 @@ fn finish_script(
         };
         headers[script.map_slot * 42..(script.map_slot + 1) * 42].copy_from_slice(&record);
     }
-    if plan.target.map != position.map {
-        let records = state
-            .visited_maps
-            .remove(&plan.target.map)
-            .unwrap_or_else(|| MapState::authored(authored));
-        state
-            .visited_maps
-            .insert(position.map, position.map_state());
-        position.restore_map(plan.target.map, records);
-    }
-    position.x = plan.target.x;
-    position.y = plan.target.y;
+    crate::mission::travel(state, content, plan.target)?;
+    let position = state.exploration.as_ref().unwrap();
     Ok(vec![Event::Moved {
         x: position.x,
         y: position.y,
     }])
+}
+
+pub(crate) fn dialogue(
+    map: &OpeningMission,
+    warriors: &[Warrior],
+    id: i16,
+) -> Result<String, RuleError> {
+    let mut text = map.dialogue(id)?;
+    for index in 0..warriors.len() {
+        let selected = if warriors[index].stamina()? < 1 {
+            (0..warriors.len())
+                .rev()
+                .find(|i| warriors[*i].stamina().unwrap_or(0) > 0)
+                .unwrap_or(index)
+        } else {
+            index
+        };
+        text = text.replace(&format!("^{}", index + 1), &warriors[selected].name);
+    }
+    Ok(text)
 }
 
 pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
@@ -1011,6 +1506,16 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
         let map = active_map(state, content)?;
         let position = state.exploration.as_mut().unwrap();
         let Some(script) = position.script.as_mut() else {
+            if state.round_dispatch.is_some() {
+                effects.extend(combat::runtime::finish_round_dispatch(state, content)?);
+            }
+            if state
+                .combat_story
+                .as_ref()
+                .is_some_and(|story| story.shared_dispatch)
+            {
+                effects.extend(combat::runtime::finish_death_story(state, content)?);
+            }
             return Ok(effects);
         };
         if script.cursor >= 8 {
@@ -1020,7 +1525,16 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                 if before > 1 {
                     let id = menu.id;
                     if menu.typed {
-                        position.presentation = Some(present_typed(map, script, id)?);
+                        position.presentation = Some(present_typed(
+                            map,
+                            if state.typed_encounters.is_empty() {
+                                &map.typed_encounters
+                            } else {
+                                &state.typed_encounters
+                            },
+                            script,
+                            id,
+                        )?);
                         effects.push(Event::StoryPresented);
                         return Ok(effects);
                     }
@@ -1046,12 +1560,169 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
         let parameter = word(&script.record, 24 + cursor * 2)?;
         script.cursor += 1;
         match opcode {
+            100 => {
+                effects.extend(crate::story_cleanup::begin(state, content, parameter)?);
+                if state.scripted_cleanup == Some(crate::story_cleanup::Stage::Survivors) {
+                    return Ok(effects);
+                }
+            }
+            101 => {
+                // newland141340 returns before door persistence and destination handling.
+                position.x -= i32::from(position.last_move[0]);
+                position.y -= i32::from(position.last_move[1]);
+                OpeningMission::index(position.x, position.y)?;
+                position.script = None;
+                state.movement_continuation = None;
+                state.time_continuation = None;
+                effects.push(Event::Moved {
+                    x: position.x,
+                    y: position.y,
+                });
+                return Ok(effects);
+            }
+            120 => {
+                let (events, progress) = crate::story_actor::begin(state, content, parameter)?;
+                effects.extend(events);
+                match progress {
+                    crate::story_actor::Progress::Waiting => return Ok(effects),
+                    crate::story_actor::Progress::Stop => {
+                        effects.extend(finish_script(state, content, false)?);
+                        return Ok(effects);
+                    }
+                    crate::story_actor::Progress::Continue => {}
+                }
+            }
+            119 | 122 | 123 | 124 | 125 => {
+                let (events, stopped) =
+                    crate::story_combat::apply(state, content, opcode, parameter)?;
+                effects.extend(events);
+                if stopped {
+                    effects.extend(finish_script(state, content, false)?);
+                    return Ok(effects);
+                }
+            }
+            126 => {
+                if state.round_dispatch.is_none() {
+                    return Err(unsupported("story.round_jump", "native round-slot caller"));
+                }
+                let arena = state.combat.as_mut().ok_or("round combat missing")?;
+                let slot = arena
+                    .round_scripts
+                    .pending
+                    .as_ref()
+                    .ok_or("round program missing")?
+                    .slot;
+                let extra = span(
+                    &map.combat
+                        .as_ref()
+                        .ok_or("round tables missing")?
+                        .encounters,
+                    parameter.unsigned_abs() as usize * 10,
+                    10,
+                )?;
+                let Some(target) = combat::round_stories::replacement(
+                    &mut arena.round_scripts,
+                    slot,
+                    extra,
+                    &mut state.random,
+                )?
+                else {
+                    effects.extend(finish_script(state, content, false)?);
+                    return Ok(effects);
+                };
+                script.record[8..].copy_from_slice(&map.script(target)?[8..]);
+                script.cursor = 0;
+            }
+            17 | 18 => {
+                let extra = span(
+                    &map.combat.as_ref().unwrap().encounters,
+                    parameter.unsigned_abs() as usize * 10,
+                    10,
+                )?;
+                effects.extend(crate::story_spell::apply(
+                    state,
+                    content,
+                    extra,
+                    opcode == 18,
+                )?);
+                if state
+                    .health_context
+                    .as_ref()
+                    .is_some_and(|health| health.unavailable >= state.warriors.len() as i8)
+                {
+                    effects.extend(crate::mission::defeat(state, content));
+                    return Ok(effects);
+                }
+            }
+            105 => state.suppress_allies = parameter,
+            108 => {
+                let extra = span(
+                    &map.combat
+                        .as_ref()
+                        .ok_or("story combat tables missing")?
+                        .encounters,
+                    parameter.unsigned_abs() as usize * 10,
+                    10,
+                )?;
+                state.warriors =
+                    story_party::adjust_statistics(&state.warriors, &state.party_mask, extra)?;
+            }
+            36 => {
+                effects.extend(crate::confiscation::apply(state, content, parameter)?);
+                if state.exploration.as_ref().unwrap().presentation.is_some() {
+                    return Ok(effects);
+                }
+            }
+            6 => {
+                if crate::shop::visit(state, content, parameter)? {
+                    effects.push(Event::StoryPresented);
+                    return Ok(effects);
+                }
+            }
+            -32 => {
+                let extra = span(
+                    &map.combat
+                        .as_ref()
+                        .ok_or("clinic extra records missing")?
+                        .encounters,
+                    parameter.unsigned_abs() as usize * 10,
+                    10,
+                )?;
+                let percent = word(extra, 0)?;
+                let sound = word(extra, 2)?;
+                let text = word(extra, 4)?;
+                if text != 0 {
+                    return Err(RuleError::Unsupported {
+                        action: "story.clinic",
+                        dependency: "clinic introductory textbox caller",
+                    });
+                }
+                if sound != 0 {
+                    effects.push(Event::Sound { resource_id: sound });
+                }
+                effects.extend(crate::clinic::visit(state, percent)?);
+                return Ok(effects);
+            }
+            29 => {
+                let index = usize::from(parameter.unsigned_abs());
+                let flag = state
+                    .notes
+                    .get_mut(index)
+                    .ok_or("map or note index unavailable")?;
+                *flag = 1;
+                if parameter > -1 {
+                    effects.push(Event::Feedback(crate::feedback::NativeFeedback::Flash {
+                        address: 0x401c28,
+                        x: 30,
+                        y: 355,
+                        wait: 0,
+                        sound: 30005,
+                    }));
+                }
+            }
             113 => crate::story_map_picture::assign(&mut state.map_picture, parameter),
             98 => {}
             15 | 16 => {
-                if state.phase != Phase::Exploration {
-                    return Err(unsupported("story.health", "combat body removal"));
-                }
                 let extra = span(
                     &map.combat.as_ref().unwrap().encounters,
                     parameter.unsigned_abs() as usize * 10,
@@ -1072,8 +1743,18 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                 )?;
                 state.warriors = outcome.warriors;
                 state.health_context = Some(outcome.context);
+                let mut party_lost = false;
                 for event in outcome.events {
                     match event {
+                        crate::story_health::HealthEvent::Flash { address, sound } => {
+                            effects.push(Event::Feedback(crate::feedback::NativeFeedback::Flash {
+                                address,
+                                x: 100,
+                                y: 30,
+                                wait: 100,
+                                sound,
+                            }))
+                        }
                         crate::story_health::HealthEvent::Animation { effect, .. } => {
                             effects.push(Event::OutdoorEffect {
                                 effect: i16::from(effect),
@@ -1093,15 +1774,41 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                             });
                             effects.push(Event::StoryPresented);
                         }
-                        crate::story_health::HealthEvent::Defeated { .. } => {}
+                        crate::story_health::HealthEvent::Defeated { warrior, .. } => {
+                            if let Some(combat) = state.combat.as_mut() {
+                                crate::combat::lifecycle::kill_body(
+                                    combat,
+                                    &mut state.warriors,
+                                    warrior as i16,
+                                )?;
+                            }
+                        }
                         crate::story_health::HealthEvent::PartyLost => {
-                            return Err(unsupported("story.health", "party defeat transition"));
+                            party_lost = true;
                         }
                     }
+                }
+                if party_lost {
+                    effects.extend(crate::mission::defeat(state, content));
+                    return Ok(effects);
                 }
                 if position.presentation.is_some() {
                     return Ok(effects);
                 }
+            }
+            30 => {
+                let extra = span(
+                    &map.combat.as_ref().unwrap().encounters,
+                    parameter.unsigned_abs() as usize * 10,
+                    10,
+                )?;
+                state.party_mask = crate::story_party::filter_party(
+                    &state.warriors,
+                    state.party_mask,
+                    cursor,
+                    extra,
+                    &mut state.random,
+                )?;
             }
             52 => {
                 let extra = span(
@@ -1109,17 +1816,24 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                     parameter.unsigned_abs() as usize * 10,
                     10,
                 )?;
-                if matches!(word(extra, 0)?, 4 | 5) {
-                    return Err(unsupported(
-                        "story.select_party",
-                        "casting context for attribute or resistance selection",
-                    ));
-                }
+                let packet = state
+                    .combat
+                    .as_ref()
+                    .and_then(|c| c.attack_packet.as_ref())
+                    .or(state.attack_packet.as_ref());
+                let context = crate::story_party::PartySaveContext {
+                    casting: false,
+                    packet_type: packet.map_or(0, |p| p[9] as i8),
+                    bonus: packet.map_or(0, |p| p[6] as i8),
+                    bonus_per_attack: packet.map_or(0, |p| p[8] as i8),
+                    attack_count: state.attack_count,
+                    mind_shield: word(&state.party_buffs, 14)? != 0,
+                };
                 state.party_mask = crate::story_party::select_party(
                     &state.warriors,
                     state.selected_warrior,
                     extra,
-                    crate::story_party::PartySaveContext::default(),
+                    context,
                     &mut state.random,
                 )?;
             }
@@ -1137,6 +1851,10 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                 effects.extend(combat::begin_group(state, content, parameter)?);
                 return Ok(effects);
             }
+            48 => {
+                effects.extend(combat::begin_selected_battle(state, content, parameter)?);
+                return Ok(effects);
+            }
             56 => {
                 effects.extend(combat::begin_npc(state, content, parameter)?);
                 return Ok(effects);
@@ -1149,18 +1867,7 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
             }
             0 => {}
             1 => {
-                let mut text = map.dialogue(parameter)?;
-                for index in 0..state.warriors.len() {
-                    let selected = if state.warriors[index].stamina()? < 1 {
-                        (0..state.warriors.len())
-                            .rev()
-                            .find(|i| state.warriors[*i].stamina().unwrap_or(0) > 0)
-                            .unwrap_or(index)
-                    } else {
-                        index
-                    };
-                    text = text.replace(&format!("^{}", index + 1), &state.warriors[selected].name);
-                }
+                let text = dialogue(map, &state.warriors, parameter)?;
                 position.presentation = Some(Presentation::Dialogue {
                     id: parameter,
                     text,
@@ -1216,6 +1923,62 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                         regions[target..target + 2].copy_from_slice(&extra[source..source + 2]);
                     }
                 }
+            }
+            -12 => {
+                let extra = span(
+                    &map.combat.as_ref().unwrap().encounters,
+                    parameter.unsigned_abs() as usize * 10,
+                    10,
+                )?;
+                let target = i32::from(word(extra, 0)?);
+                let authored = content
+                    .map_at(state.mission.as_deref(), state.scenario_level, target)
+                    .ok_or("object clearing map unavailable")?;
+                let first = (i32::from(word(extra, 2)?), i32::from(word(extra, 6)?));
+                let last = (i32::from(word(extra, 4)?), i32::from(word(extra, 8)?));
+                OpeningMission::index(first.0, first.1)?;
+                OpeningMission::index(last.0, last.1)?;
+                let objects = if target == position.map {
+                    &mut position.objects
+                } else {
+                    &mut state
+                        .visited_maps
+                        .entry(target)
+                        .or_insert_with(|| MapState::authored(authored))
+                        .objects
+                };
+                for x in first.0..=last.0 {
+                    for y in first.1..=last.1 {
+                        objects[OpeningMission::index(x, y)?] = 0;
+                    }
+                }
+            }
+            69 => {
+                let extra = span(
+                    &map.combat
+                        .as_ref()
+                        .ok_or("script extra records unavailable")?
+                        .encounters,
+                    parameter.unsigned_abs() as usize * 10,
+                    10,
+                )?;
+                // newland 0x143ef6 copies the low byte of each EXTRA word.
+                state.psi_disabled = extra[1];
+                state.enemy_spell_disabled = extra[3];
+                state.energy_recovery_disabled = extra[5];
+            }
+            68 => {
+                let extra = span(
+                    &map.combat.as_ref().unwrap().encounters,
+                    parameter.unsigned_abs() as usize * 10,
+                    10,
+                )?;
+                position.fatigue = match word(extra, 0)? {
+                    1 => 135,
+                    2 => 4,
+                    3 => (word(extra, 4)? / 100).wrapping_mul(position.fatigue),
+                    _ => position.fatigue,
+                };
             }
             7 | 12 | 13 => {
                 let extra = span(
@@ -1293,42 +2056,29 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
             22 => {
                 let tables = map.combat.as_ref().unwrap();
                 let extra = span(&tables.encounters, parameter as usize * 10, 10)?;
-                let consumed = story_inventory::consume_party_items(
+                let consumed = story_inventory::consume_party_items_retained(
                     &state.warriors,
                     content,
                     &tables.race_moves,
                     extra,
+                    state.inventory_record.as_ref(),
                 )?;
-                if consumed.consumed != 0 {
+                if let Some(definition) = consumed.definition {
+                    state.loaded_item_field32 = Some(word(&definition, 32)?);
+                    state.ammunition_work.item = Some(definition);
+                } else if consumed.consumed != 0 {
+                    let loaded = word(extra, if word(extra, 4)? == 3 { 8 } else { 0 })?;
                     state.loaded_item_field32 =
-                        Some(state.ammunition_work.load_item(content, word(extra, 0)?)?);
+                        Some(state.ammunition_work.load_item(content, loaded)?);
                 }
+                state.inventory_record = consumed.record;
                 state.warriors = consumed.warriors;
-                effects.extend(
-                    consumed
-                        .sounds
-                        .into_iter()
-                        .map(|resource_id| Event::Sound { resource_id }),
-                );
+                effects.extend(consumed.events);
             }
             31 => {
                 position.presentation = Some(Presentation::WarriorChoice { extra: parameter });
                 effects.push(Event::StoryPresented);
                 return Ok(effects);
-            }
-            38 => {
-                let extra = span(
-                    &map.combat.as_ref().unwrap().encounters,
-                    parameter as usize * 10,
-                    10,
-                )?;
-                if story_inventory::item_prerequisite_matches(&state.warriors, extra)? {
-                    if word(extra, 4)? != 0 {
-                        return Err(unsupported("story.item_condition", "menu branches"));
-                    }
-                    script.record[8..].copy_from_slice(&map.script(word(extra, 6)?)?[8..]);
-                    script.cursor = 0;
-                }
             }
             45 => {
                 let extra = span(
@@ -1353,9 +2103,11 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                 };
                 OpeningMission::index(x, y)?;
                 if target != position.map {
-                    let authored = content.map(target).ok_or_else(|| {
-                        RuleError::Invalid("travel target map unavailable".into())
-                    })?;
+                    let authored = content
+                        .map_at(state.mission.as_deref(), state.scenario_level, target)
+                        .ok_or_else(|| {
+                            RuleError::Invalid("travel target map unavailable".into())
+                        })?;
                     let records = state
                         .visited_maps
                         .remove(&target)
@@ -1402,12 +2154,21 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
             }
             5 => {
                 script.menu = None;
-                position.presentation = Some(present_typed(map, script, parameter)?);
+                position.presentation = Some(present_typed(
+                    map,
+                    if state.typed_encounters.is_empty() {
+                        &map.typed_encounters
+                    } else {
+                        &state.typed_encounters
+                    },
+                    script,
+                    parameter,
+                )?);
                 effects.push(Event::Sound { resource_id: 20005 });
                 effects.push(Event::StoryPresented);
                 return Ok(effects);
             }
-            21 | 76 | 77 => {
+            21 | 76 | 77 | 85 | 87 => {
                 let extra = span(
                     &map.combat.as_ref().unwrap().encounters,
                     parameter as usize * 10,
@@ -1420,7 +2181,43 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                         state.flags = update.flags;
                         update.continuation
                     }
-                    _ => story_variables::variable_predicate(&state.flags, extra)?.continuation,
+                    77 => story_variables::variable_predicate(&state.flags, extra)?.continuation,
+                    85 => {
+                        for (offset, sound) in [(6, true), (8, false)] {
+                            let id = word(extra, offset)?;
+                            if id != 0 {
+                                if sound {
+                                    effects.push(Event::Sound { resource_id: id });
+                                } else {
+                                    effects.push(Event::Message {
+                                        id,
+                                        text: map.dialogue(id)?,
+                                    });
+                                }
+                            }
+                        }
+                        let target = state.random.range(word(extra, 2)?, word(extra, 4)?);
+                        story_variables::branch(word(extra, 0)?, target)
+                    }
+                    _ => {
+                        let matched = state
+                            .allies
+                            .as_chunks::<288>()
+                            .0
+                            .iter()
+                            .take(state.ally_count)
+                            .any(|record| {
+                                i16::from(record[0x103] as i8) == word(extra, 0).unwrap()
+                            });
+                        if matched || word(extra, 4)? == 0 {
+                            story_variables::branch(
+                                word(extra, 2)?,
+                                word(extra, if matched { 6 } else { 8 })?,
+                            )
+                        } else {
+                            story_variables::StoryContinuation::Continue
+                        }
+                    }
                 };
                 match continuation {
                     story_variables::StoryContinuation::Continue => {}
@@ -1443,7 +2240,16 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                     }
                     story_variables::StoryContinuation::TypedEncounter(id) => {
                         script.menu = None;
-                        position.presentation = Some(present_typed(map, script, id)?);
+                        position.presentation = Some(present_typed(
+                            map,
+                            if state.typed_encounters.is_empty() {
+                                &map.typed_encounters
+                            } else {
+                                &state.typed_encounters
+                            },
+                            script,
+                            id,
+                        )?);
                         effects.push(Event::StoryPresented);
                         return Ok(effects);
                     }
@@ -1475,13 +2281,67 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                     return Ok(effects);
                 }
             }
-            46 => {
+            33 | 38 | 42 | 46 => {
                 let extra = span(
                     &map.combat.as_ref().unwrap().encounters,
                     usize::from(parameter.unsigned_abs()) * 10,
                     10,
                 )?;
-                if let Some(jump) = story::flag_condition_jump(&state.flags, extra)? {
+                let jump = if opcode == 33 {
+                    let payment = crate::recovered_inventory::takegold(
+                        &crate::recovered_inventory::GoldState {
+                            party_gold: state.party_currency,
+                            highest_party_index: state.warriors.len() as i8 - 1,
+                            warriors: state.warriors.clone(),
+                        },
+                        word(extra, 0)?,
+                    )?;
+                    state.party_currency = payment.state.party_gold;
+                    state.warriors = payment.state.warriors;
+                    for effect in payment.effects {
+                        if let crate::recovered_inventory::InventoryEffect::Warning(index) = effect
+                        {
+                            effects.push(Event::Feedback(
+                                crate::feedback::NativeFeedback::Warning { index },
+                            ));
+                        }
+                    }
+                    let paid = payment.native_return != 0;
+                    if !paid && word(extra, 2)? == -1 {
+                        script.cursor = 6;
+                    }
+                    if matches!(word(extra, 2)?, 2)
+                        || (word(extra, 2)? == 0 && !paid)
+                        || (word(extra, 2)? == 1 && paid)
+                    {
+                        story::condition_jump(extra)?
+                    } else {
+                        None
+                    }
+                } else if opcode == 38 {
+                    if story_inventory::item_prerequisite_matches(&state.warriors, extra)? {
+                        story::condition_jump(extra)?
+                    } else {
+                        None
+                    }
+                } else if opcode == 42 {
+                    if state.random.bound(100) <= word(extra, 0)? {
+                        match word(extra, 2)? {
+                            -2 => {
+                                script.cursor = 8;
+                                None
+                            }
+                            1 => story::condition_jump(extra)?,
+                            2 => Some(story::ConditionalJump::EndMenu),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    story::flag_condition_jump(&state.flags, extra)?
+                };
+                if let Some(jump) = jump {
                     match jump {
                         story::ConditionalJump::ReplaceScript(id) => {
                             let replacement = map.script(id)?;
@@ -1510,6 +2370,29 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                             )?;
                             script.record[8..40].copy_from_slice(&story::dispatch_menu_branch(
                                 menu,
+                                branch as i8 + 1,
+                            )?);
+                            script.cursor = start;
+                        }
+                        story::ConditionalJump::TypedBranch { branch, start } => {
+                            let id = script
+                                .menu
+                                .as_ref()
+                                .filter(|m| m.typed)
+                                .ok_or("conditional branch has no active typed encounter")?
+                                .id;
+                            let table = if state.typed_encounters.is_empty() {
+                                &map.typed_encounters
+                            } else {
+                                &state.typed_encounters
+                            };
+                            let record = span(
+                                table,
+                                id as usize * typed_encounter::RECORD_BYTES,
+                                typed_encounter::RECORD_BYTES,
+                            )?;
+                            script.record[8..40].copy_from_slice(&story::dispatch_menu_branch(
+                                record,
                                 branch as i8 + 1,
                             )?);
                             script.cursor = start;
@@ -1562,10 +2445,13 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                 state.allies = removed.records;
                 state.ally_count = removed.count;
             }
-            39 => {
+            8 | 39 => {
                 let replacement = map.script(parameter)?;
-                script.record[8..].copy_from_slice(&replacement[8..]);
+                script.record[8..40].copy_from_slice(&replacement[8..40]);
                 script.cursor = 0;
+                if opcode == 8 {
+                    script.record[40] = replacement[40];
+                }
             }
             62 => {
                 if !map.movies.contains_key(&parameter) && parameter != 1000 {
@@ -1577,27 +2463,28 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                 effects.push(Event::StoryPresented);
                 return Ok(effects);
             }
-            10 => {
-                if parameter < 0 {
-                    return Err(RuleError::Invalid("negative treasure record".into()));
-                }
-                let treasure = span(&map.treasure, parameter as usize * 88, 88)?;
-                state.booty_items.fill(InventoryRecord([0; 22]));
-                let prepared = crate::story_treasure::prepare(
-                    &state.warriors,
-                    treasure,
-                    content,
-                    &mut state.random,
-                    state.difficulty,
+            111 => {
+                let extra = span(
+                    &map.combat.as_ref().unwrap().encounters,
+                    parameter.unsigned_abs() as usize * 10,
+                    10,
                 )?;
-                state.warriors = prepared.warriors;
-                for (slot, item) in prepared.items.into_iter().enumerate() {
-                    state.loaded_item_field32 =
-                        Some(state.ammunition_work.load_item(content, item.id())?);
-                    state.booty_items[slot] = item;
+                let id = word(extra, 0)?;
+                if id <= 0 {
+                    crate::shop::visit_restricted(state, content, extra)?;
+                    effects.push(Event::StoryPresented);
+                } else {
+                    state.loot_limit = if word(extra, 4)?.wrapping_add(1) != 0 {
+                        Some(word(extra, 2)?)
+                    } else {
+                        None
+                    };
+                    effects.extend(present_treasure(state, content, id)?);
                 }
-                position.presentation = Some(Presentation::Loot);
-                effects.push(Event::StoryPresented);
+                return Ok(effects);
+            }
+            10 => {
+                effects.extend(present_treasure(state, content, parameter)?);
                 return Ok(effects);
             }
             110 => {
@@ -1618,6 +2505,9 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                 return Ok(effects);
             }
             2 => {
+                if let Some(story) = state.combat_story.as_mut().filter(|s| s.shared_dispatch) {
+                    story.waiting_child = true;
+                }
                 effects.extend(super::combat::begin(state, content, parameter)?);
                 return Ok(effects);
             }

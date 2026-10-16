@@ -35,6 +35,11 @@ try {
         & "$PSScriptRoot/Run-Tests.ps1" -MaximumTestSeconds 600 @cargoOptions
     }
     if ($LASTEXITCODE) { throw 'Tests failed' }
+    if ($ExtendedScenarios -or ($Package -and $verifyOriginals)) {
+        if (!$verifyOriginals) { throw 'Campaign validation requires original-fixtures and installed Thunder content' }
+        & "$PSScriptRoot/Run-Tests.ps1" -Package centurions-core -TestTarget native_reference -OriginalFixtures -Filter complete_campaign_replays -Ignored -MaximumTestSeconds 600 @cargoOptions
+        if ($LASTEXITCODE) { throw 'Thunder campaign completion gate failed; local milestone packaging stopped' }
+    }
     & "$PSScriptRoot/Run-Tests.ps1" -ManifestPath vendor/miniquad/Cargo.toml -Library -TargetDirectory target/miniquad-check @cargoOptions
     if ($LASTEXITCODE) { throw 'Windows keyboard compatibility tests failed' }
     if ($verifyOriginals) {

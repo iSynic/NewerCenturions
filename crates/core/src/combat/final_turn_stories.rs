@@ -38,15 +38,48 @@ fn build_monster(
     difficulty: i16,
     random: &mut RandomState,
 ) -> Result<MonsterRecord, RuleError> {
-    if ![1, 2, 3, 5, 108, 109].contains(&id) {
-        return Err(unsupported("unverified summoned monster"));
-    }
     let mut monster = MonsterRecord::read(definitions, id)?;
     put_word(&mut monster.bytes, 0x10c, -1);
     let mut monster = super::monster::summon(monster, faction, difficulty, random)?;
     let chance = word(&monster.bytes, 0x5c)?;
     put_word(&mut monster.bytes, 0x5c, chance.wrapping_neg());
     Ok(monster)
+}
+
+/// Opcode120 preserves buildmonster's chance/context fields and its partial size refusal.
+pub fn replace_body(
+    combat: &mut Combat,
+    definitions: &[u8],
+    replacement: i16,
+    active: usize,
+    random: &mut RandomState,
+) -> Result<bool, RuleError> {
+    let faction = word(
+        &combat
+            .enemies
+            .records
+            .get(active)
+            .ok_or("replacement actor missing")?
+            .bytes,
+        14,
+    )?;
+    let mut transformed = super::monster::summon(
+        MonsterRecord::read(definitions, replacement)?,
+        faction,
+        combat.difficulty,
+        random,
+    )?;
+    let old = &mut combat.enemies.records[active].bytes;
+    let chance = word(old, 0x5c)?;
+    put_word(old, 0x5c, chance.wrapping_neg());
+    for offset in [0x118, 0x11a, 0x11c, 0x11e] {
+        transformed.bytes[offset..offset + 2].copy_from_slice(&old[offset..offset + 2]);
+    }
+    if word(&transformed.bytes, 0x10)? != word(old, 0x10)? {
+        return Ok(true);
+    }
+    combat.enemies.records[active] = transformed;
+    Ok(false)
 }
 
 fn passable(body: &footprint::PlacedBody, mission: &OpeningMission) -> Result<bool, RuleError> {
@@ -157,28 +190,6 @@ fn spawn(
     Ok(())
 }
 
-fn expected_script(id: i16) -> Result<&'static [(i16, i16)], RuleError> {
-    match id {
-        345 => Ok(&[(9, 431), (0, 0), (1, 1265), (124, 626), (124, 627)]),
-        276 => Ok(&[(9, 509), (1, 1264), (124, 525), (124, 526), (120, 527)]),
-        277 => Ok(&[(9, 509), (1, 1264), (124, 528), (124, 529), (120, 527)]),
-        _ => Err(unsupported("unverified enemy turn script")),
-    }
-}
-
-fn expected_extra(id: i16) -> Result<[i16; 5], RuleError> {
-    match id {
-        525 => Ok([0, 1, -2, 0, 500]),
-        526 => Ok([0, 5, -2, 500, 0]),
-        527 => Ok([-1, 0, 510, 0, 0]),
-        528 => Ok([0, 2, -2, 500, 0]),
-        529 => Ok([0, 3, -2, 500, 0]),
-        626 => Ok([0, 108, 1, 431, 0]),
-        627 => Ok([0, 109, 1, 431, 0]),
-        _ => Err(unsupported("unverified enemy turn extra")),
-    }
-}
-
 /// Original final encounter getup126938..126c3e; errors preserve all state and RNG.
 pub fn initialize(
     combat: &mut Combat,
@@ -211,42 +222,27 @@ pub fn initialize(
         .ok_or_else(|| RuleError::Invalid("turn story body outside roster".into()))?;
     let bytes = &combat.enemies.records[active].bytes;
     let script_id = word(bytes, 0x5e)?;
-    let expected = expected_script(script_id)?;
-    if [0xb3, 0xcf, 0xc9].iter().any(|offset| bytes[*offset] != 0) || word(bytes, 0x110)? <= 0 {
-        return Err(unsupported("inactive, confused or hasted enemy turn"));
+    if bytes[0xb3] != 0 || word(bytes, 0x110)? <= 0 {
+        return Err(unsupported("inactive enemy turn"));
     }
     let mut next = combat.clone();
+    next.selected_enemy = active;
     let mut next_warriors = warriors.to_vec();
     let mut next_random = random.clone();
     let mut result = FinalTurn::default();
     let chance = word(bytes, 0x5c)?;
     if next_random.bound(100) <= chance {
+        next.script_enemy = active;
         let script = span(&mission.door_scripts, script_id as usize * 42, 42)?;
         for i in 0..8 {
-            let actual = (word(script, 8 + i * 2)?, word(script, 24 + i * 2)?);
-            if actual != expected.get(i).copied().unwrap_or((0, 0)) {
-                return Err(unsupported(
-                    "enemy turn script differs from verified actions",
-                ));
-            }
-        }
-        for &(opcode, value) in expected {
+            let opcode = word(script, 8 + i * 2)?;
+            let value = word(script, 24 + i * 2)?;
             match opcode {
                 0 => {}
                 9 => result.effects.push(TurnEffect::Sound(value)),
                 1 => result.effects.push(TurnEffect::Text(value)),
                 124 | 120 => {
                     let extra = span(extras, value as usize * 10, 10)?;
-                    let words = [
-                        word(extra, 0)?,
-                        word(extra, 2)?,
-                        word(extra, 4)?,
-                        word(extra, 6)?,
-                        word(extra, 8)?,
-                    ];
-                    if words != expected_extra(value)? {
-                        return Err(unsupported("enemy turn extra differs from verified fields"));
-                    }
                     if opcode == 124 {
                         spawn(
                             &mut next,
@@ -262,29 +258,49 @@ pub fn initialize(
                         if text != 0 {
                             result.effects.push(TurnEffect::Text(text));
                         }
-                        let bytes = &mut next.enemies.records[active].bytes;
-                        put_word(bytes, 0x110, 0);
-                        put_word(bytes, 0x60, 0);
-                        let cleanup =
-                            death_scripts::cleanup_enemy(&mut next, &mut next_warriors, body)?;
-                        result.increment_kills = cleanup.increment_kills;
-                        result.effects.push(TurnEffect::SelfRemoval { body });
-                        result.skipped_turn = true;
+                        let replacement = word(extra, 0)?;
+                        if replacement == -1 {
+                            let bytes = &mut next.enemies.records[active].bytes;
+                            put_word(bytes, 0x110, 0);
+                            put_word(bytes, 0x60, 0);
+                            let cleanup =
+                                death_scripts::cleanup_enemy(&mut next, &mut next_warriors, body)?;
+                            result.increment_kills = cleanup.increment_kills;
+                            result.effects.push(TurnEffect::SelfRemoval { body });
+                            result.skipped_turn = true;
+                            break;
+                        }
+                        if replace_body(
+                            &mut next,
+                            definitions,
+                            replacement,
+                            active,
+                            &mut next_random,
+                        )? {
+                            break;
+                        }
+                        let sound = word(extra, 4)?;
+                        if sound != 0 {
+                            result.effects.push(TurnEffect::Sound(sound));
+                        }
+                        let text = word(extra, 8)?;
+                        if text != 0 {
+                            result.effects.push(TurnEffect::Text(text));
+                        }
                     }
                 }
-                _ => unreachable!(),
+                _ => return Err(unsupported("enemy turn operation lacks a rule adapter")),
             }
+        }
+        if !result.skipped_turn {
+            next.script_enemy = 0;
         }
     }
     if !result.skipped_turn {
         let bytes = &mut next.enemies.records[active].bytes;
-        put_word(bytes, 0x5c, chance.wrapping_abs());
-        bytes[0x109] = (bytes[0x109] as i8).min(1).wrapping_add(bytes[0x8a] as i8) as u8;
-        let mut movement = (word(bytes, 6)? as i8).wrapping_sub(bytes[0xb4] as i8);
-        if bytes[0xb8] != 0 {
-            movement /= 2;
-        }
-        bytes[0x106] = movement as u8;
+        let (skipped, hostile_change) = super::initialize_enemy_record(bytes, &mut next_random)?;
+        result.skipped_turn = skipped;
+        result.hostile_additions = result.hostile_additions.wrapping_add(hostile_change);
     }
     *combat = next;
     warriors.clone_from_slice(&next_warriors);

@@ -1,6 +1,6 @@
 use super::*;
 use attack::AttackResult;
-use damage::{DamageFlags, DamagePacket, resolve_damage};
+use damage::{DamageFlags, DamagePacket, resolve_damage, resolve_damage_with_amount};
 
 pub fn load_packet(attacks: &[u8], id: i16) -> Result<Vec<u8>, RuleError> {
     if id < 1101 {
@@ -54,6 +54,7 @@ pub struct SpellSelection {
     pub nearest: i16,
     pub distances: [i16; 112],
     pub targets: Vec<SpellTarget>,
+    pub rotation: u8,
 }
 
 fn position(combat: &Combat, body: usize) -> Option<(i16, i16)> {
@@ -95,13 +96,13 @@ fn best_choice(
     distances: &[i16; 112],
     range: i16,
 ) -> Result<Option<usize>, RuleError> {
-    if shape == 0 || side == 0 {
-        return Err(RuleError::Unsupported {
-            action: "combat.spell.target",
-            dependency: "zero-area or allied spell targeting",
-        });
-    }
-    let pattern = centurions_content::span(areas, (shape - 1) * 49, 49)?;
+    // WORD underflow reaches unmapped memory; the reference emulator zeroes fault reads.
+    let empty = [0; 49];
+    let pattern = if shape == 0 {
+        &empty[..]
+    } else {
+        centurions_content::span(areas, (shape - 1) * 49, 49)?
+    };
     let (mut best, mut best_friendly, mut best_hostile) = (None, 0, 0);
     for (candidate, distance) in distances.iter().enumerate().take(110) {
         if *distance > range {
@@ -156,7 +157,15 @@ fn best_choice(
                 }
             }
         }
-        if hostile >= best_hostile && (friendly <= best_friendly || hostile > best_hostile) {
+        let preferred = if side == 0 {
+            hostile >= best_hostile - best_friendly
+                && hostile > friendly
+                && ((hostile >= best_hostile && friendly <= best_friendly)
+                    || hostile - friendly > best_hostile)
+        } else {
+            hostile >= best_hostile && (friendly <= best_friendly || hostile > best_hostile)
+        };
+        if preferred {
             best = Some(candidate);
             best_friendly = friendly;
             best_hostile = hostile;
@@ -252,10 +261,10 @@ fn select_targets_impl(
     random: &mut RandomState,
 ) -> Result<SpellSelection, RuleError> {
     let (packet, firearm_count) = targeting;
-    if !matches!(packet[1], 0 | 1 | 3 | 6 | 9 | 10 | 12) || packet[7] != 0 {
+    if !matches!(packet[1], 0 | 1 | 3 | 6 | 9 | 10 | 12) {
         return Err(RuleError::Unsupported {
             action: "combat.spell.target",
-            dependency: "other spell targeting or rotated shapes",
+            dependency: "other spell targeting",
         });
     }
     let caster = combat
@@ -284,6 +293,7 @@ fn select_targets_impl(
         nearest: 127,
         distances: [127; 112],
         targets: vec![],
+        rotation: 0,
     };
     let mut available = 0;
     for body in (0..warriors.len()).chain(10..10 + combat.enemies.records.len()) {
@@ -340,7 +350,8 @@ fn select_targets_impl(
     } else {
         count
     };
-    if packet[1] > 1 && result.nearest < range {
+    let random_point = packet[1] == 3 && packet[31] == 10;
+    if !random_point && packet[1] > 1 && result.nearest < range {
         if let Some(body) = best_choice(
             combat,
             warriors,
@@ -357,7 +368,8 @@ fn select_targets_impl(
                 kind: 3,
             });
         }
-    } else if packet[1] < 2 && result.nearest <= range {
+    } else if (random_point && result.nearest < range) || (packet[1] < 2 && result.nearest <= range)
+    {
         for _ in 0..desired {
             let mut selected = None;
             for _ in 0..100 {
@@ -369,10 +381,20 @@ fn select_targets_impl(
                 }
             }
             let Some(body) = selected else { break };
-            result.targets.push(SpellTarget {
-                first: body as i16,
-                second: -1,
-                kind: if body < 9 { 1 } else { 2 },
+            result.targets.push(if random_point {
+                let target = position(combat, body)
+                    .ok_or_else(|| RuleError::Invalid("spell body position".into()))?;
+                SpellTarget {
+                    first: target.0.wrapping_add(combat.map.shift.0).wrapping_add(5),
+                    second: target.1.wrapping_add(combat.map.shift.1).wrapping_add(5),
+                    kind: 3,
+                }
+            } else {
+                SpellTarget {
+                    first: body as i16,
+                    second: -1,
+                    kind: if body < 9 { 1 } else { 2 },
+                }
             });
         }
     }
@@ -389,6 +411,9 @@ fn select_targets_impl(
         if firearm_count.is_some() {
             result.count = 1;
         }
+        if packet[7] != 0 {
+            result.rotation = (next_random.bound(4) - 1) as u8;
+        }
     }
     *random = next_random;
     Ok(result)
@@ -398,16 +423,8 @@ fn validate_direct(packet: &[u8]) -> Result<(), RuleError> {
     if packet.len() != 58 {
         return Err(RuleError::Invalid("spell packet size".into()));
     }
-    let compress = packet[1] == 0
-        && packet[4] == 8
-        && packet[9] == 3
-        && packet[11..17] == [0, 0, 1, 3, 0, 0]
-        && packet[19] == 8
-        && packet[20] == 8
-        && word(packet, 32)? == 1
-        && word(packet, 34)? == 8
-        && packet[42] == 1
-        && word(packet, 50)? == 0;
+    let unresisted_damage =
+        packet[9] == 3 && packet[19] == 8 && packet[20] == 8 && word(packet, 40)? == 0;
     let poison = packet[..11] == [0, 1, 6, 0, 0, 0, 0, 0, 0, 0, 0]
         && packet[11..23] == [0, 0, 0, 0, 1, 3, 5, 10, 1, 1, 1, 0]
         && packet[30..36] == [5, 0, 0, 0, 0, 0]
@@ -417,8 +434,9 @@ fn validate_direct(packet: &[u8]) -> Result<(), RuleError> {
         && packet[42..50].iter().all(|value| *value == 0)
         && word(packet, 50)? == 0x2000
         && packet[52..].iter().all(|value| *value == 0);
-    if (word(packet, 40)? != 0 && !poison)
-        || (!(0..=6).contains(&packet[19]) && !compress)
+    let scripted = word(packet, 40)? == 23 && packet[9] == 3 && matches!(packet[19], 7 | 8);
+    if (word(packet, 40)? != 0 && !poison && !scripted)
+        || (!(0..=6).contains(&packet[19]) && !unresisted_damage && !scripted)
         || packet[20] as i8 <= 0
         || packet[23..30].iter().any(|value| *value != 0)
         || !matches!(word(packet, 50)?, 0 | 0x2000)
@@ -586,19 +604,91 @@ pub fn resolve_player_support(
     count: i16,
     random: &mut RandomState,
 ) -> Result<SupportSpellResult, RuleError> {
+    resolve_support_with_context(
+        warriors,
+        enemies,
+        mask,
+        id,
+        &DirectSpell {
+            packet,
+            level: id % 1000 / 100 - 1,
+            count,
+            armor_filter: false,
+            weapon_sound: 0,
+        },
+        random,
+    )
+}
+
+pub fn resolve_support_with_context(
+    warriors: &[Warrior],
+    enemies: &[MonsterRecord],
+    mask: &[i16],
+    id: i16,
+    context: &DirectSpell<'_>,
+    random: &mut RandomState,
+) -> Result<SupportSpellResult, RuleError> {
+    resolve_support_for_caster(warriors, enemies, mask, id, context, None, random)
+}
+
+/// resist150588..150742 for nonphysical status categories7,8,10.
+fn status_resisted(
+    target: &[u8],
+    monster: bool,
+    context: &DirectSpell<'_>,
+    random: &mut RandomState,
+) -> Result<bool, RuleError> {
+    if context.armor_filter || !matches!(context.packet[9], 0 | 2) {
+        return Ok(false);
+    }
+    let immune = (context.level..7).any(|level| {
+        if monster {
+            target[0xc2 + level as usize] != 0
+        } else {
+            word(target, 0x7e + level as usize * 2).unwrap_or(1) != 0
+        }
+    });
+    let threshold = word(target, if monster { 0xa } else { 0x22 })?
+        .wrapping_add(i16::from(context.packet[10] as i8).wrapping_mul(context.count));
+    let roll = random.bound(100);
+    Ok(if monster {
+        roll <= threshold || immune
+    } else {
+        roll > threshold && immune
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_support_for_caster(
+    warriors: &[Warrior],
+    enemies: &[MonsterRecord],
+    mask: &[i16],
+    _id: i16,
+    context: &DirectSpell<'_>,
+    caster: Option<i16>,
+    random: &mut RandomState,
+) -> Result<SupportSpellResult, RuleError> {
+    let DirectSpell {
+        packet,
+        count,
+        armor_filter,
+        weapon_sound,
+        ..
+    } = *context;
     if !(1..=6).contains(&warriors.len())
         || enemies.len() > 100
         || mask.len() < 10 + enemies.len()
         || packet.len() != 58
-        || !matches!(count, 1..=4)
+        || !matches!(count, 1..=7)
+        || !(0..7).contains(&context.level)
     {
         return Err(RuleError::Invalid("support spell inputs".into()));
     }
     let effect = word(packet, 40)?;
-    if !matches!((id, effect), (1101, 57) | (1305, 13) | (1401, 57))
-        || packet[9] != 3
-        || packet[19] != 8
-        || packet[20] != 8
+    if !(effect == 57 || (1..=40).contains(&effect))
+        || packet[9] > 3
+        || !matches!(packet[19], 7 | 8 | 10)
+        || (packet[20] as i8) < 0
         || word(packet, 34)? != 0
         || packet[23..30].iter().any(|v| *v != 0)
     {
@@ -607,71 +697,44 @@ pub fn resolve_player_support(
             dependency: "other support packet",
         });
     }
-    if count > 2 {
-        let target = mask[..warriors.len()].iter().position(|value| *value > 0);
-        if id != 1101
-            || mask.iter().filter(|value| **value > 0).count() != 1
-            || target.is_none()
-            || !(-9..=0).contains(&word(&warriors[target.unwrap()].bytes, 0x50)?)
-        {
-            return Err(RuleError::Unsupported {
-                action: "combat.spell.support",
-                dependency: "other support power or target",
-            });
-        }
-    }
-    if id == 1401
-        && (count != 1
-            || packet[..11] != [1, 1, 4, 0, 0, 0, 0, 0, 0, 3, 0]
-            || packet[11..19] != [8, 16, 0, 0, 0, 0, 15, 6]
-            || packet[21..23] != [1, 1]
-            || packet[30..36] != [10, 1, 0, 0, 0, 0]
-            || word(packet, 36)? != 431
-            || word(packet, 38)? != 430
-            || packet[42..50].iter().any(|value| *value != 0)
-            || word(packet, 50)? != 0x2000
-            || packet[52..].iter().any(|value| *value != 0))
-    {
-        return Err(RuleError::Unsupported {
-            action: "combat.spell.support",
-            dependency: "other medical support packet or count",
-        });
-    }
-    if mask[warriors.len()..].iter().any(|value| *value > 0) {
-        return Err(RuleError::Unsupported {
-            action: "combat.spell.support",
-            dependency: "other support body",
-        });
-    }
-    for (member, warrior) in warriors.iter().enumerate() {
+    for warrior in warriors {
         centurions_content::span(&warrior.bytes, 0, 3138)?;
-        if mask[member] > 0 && word(&warrior.bytes, 0x9a)? != 0 {
-            return Err(RuleError::Unsupported {
-                action: "combat.spell.support",
-                dependency: "support spell reflection",
-            });
-        }
     }
     let mut next_random = random.clone();
-    let duration = next_random.range(i16::from(packet[13] as i8), i16::from(packet[14] as i8));
+    let mut amount = 0;
+    let mut duration = next_random.range(i16::from(packet[13] as i8), i16::from(packet[14] as i8));
+    if packet[15] != 0 {
+        for _ in 0..count {
+            duration = duration.wrapping_add(
+                next_random.range(i16::from(packet[15] as i8), i16::from(packet[16] as i8)),
+            );
+        }
+    }
     let mut result = SupportSpellResult {
         warriors: warriors.to_vec(),
         enemies: enemies.to_vec(),
-        sounds: vec![],
+        sounds: if matches!(packet[1], 9 | 10) {
+            vec![6001]
+        } else {
+            vec![]
+        },
         targets: vec![],
         healed: false,
         recovered: 0,
     };
-    for (member, warrior) in result.warriors.iter_mut().enumerate() {
-        if mask[member] <= 0 {
+    for (member, selected) in mask.iter().enumerate().take(result.warriors.len()) {
+        if *selected <= 0 {
             continue;
         }
-        let w = &mut warrior.bytes;
+        let w = &mut result.warriors[member].bytes;
         if race_is_excluded(packet, w, "combat.spell.support")? {
             result.sounds.push(651);
             continue;
         }
-        let damage = resolve_damage(
+        if status_resisted(w, false, context, &mut next_random)? {
+            continue;
+        }
+        let damage = resolve_damage_with_amount(
             w,
             false,
             &DamagePacket {
@@ -682,14 +745,23 @@ pub fn resolve_player_support(
                 shield: true,
                 armor: true,
                 saves: true,
-                armor_filter: false,
+                armor_filter,
             },
+            amount,
             &mut next_random,
         )?
         .total;
+        amount = damage;
         let mut sounds = vec![];
-        if id == 1305 {
-            spell_conditions::apply(w, false, 13, duration, &mut next_random)?;
+        let mut follow_up = None;
+        if (1..=40).contains(&effect) {
+            spell_conditions::add_duration(w, false, effect, duration)?;
+            let reflected = word(w, 0x9a)? != 0 && next_random.bound(100) < 34;
+            follow_up = Some(if reflected {
+                caster.unwrap_or(member as i16)
+            } else {
+                member as i16
+            });
             sounds.push(word(packet, 38)?);
         } else {
             let previous = word(w, 0x50)?;
@@ -719,6 +791,78 @@ pub fn resolve_player_support(
             member,
             AttackResult {
                 damage,
+                killed: false,
+                sounds,
+            },
+        ));
+        if let Some(body) = follow_up {
+            if body < 10 {
+                let target = result
+                    .warriors
+                    .get_mut(
+                        usize::try_from(body)
+                            .map_err(|_| RuleError::Invalid("negative condition body".into()))?,
+                    )
+                    .ok_or("condition body outside party")?;
+                spell_conditions::follow_up(&mut target.bytes, false, effect)?;
+            } else {
+                let target = result
+                    .enemies
+                    .get_mut((body - 10) as usize)
+                    .ok_or("condition body outside enemies")?;
+                spell_conditions::follow_up(&mut target.bytes, true, effect)?;
+            }
+        }
+    }
+    for (index, enemy) in result.enemies.iter_mut().enumerate() {
+        if mask[index + 10] <= 0 {
+            continue;
+        }
+        let m = &mut enemy.bytes;
+        centurions_content::span(m, 0, 288)?;
+        if status_resisted(m, true, context, &mut next_random)? {
+            continue;
+        }
+        let damage = resolve_damage_with_amount(
+            m,
+            true,
+            &DamagePacket {
+                bytes: packet.to_vec(),
+                attack_count: count,
+            },
+            DamageFlags {
+                shield: true,
+                armor: true,
+                saves: true,
+                armor_filter,
+            },
+            amount,
+            &mut next_random,
+        )?;
+        amount = damage.total;
+        let mut sounds = if damage.shield_sound {
+            vec![206]
+        } else {
+            vec![]
+        };
+        if (1..=40).contains(&effect) {
+            spell_conditions::apply(m, true, effect, duration, &mut next_random)?;
+            if damage.total == 0 {
+                sounds.push(word(packet, 38)?);
+            }
+        }
+        if damage.total < 0 && word(m, 0x110)? > 0 {
+            let health = word(m, 0x110)?.wrapping_sub(damage.total);
+            put_word(m, 0x110, health);
+            m[0x105] = 1;
+            sounds.push(word(packet, 38)?);
+            sounds.push(weapon_sound);
+            sounds.push(word(packet, 38)?);
+        }
+        result.targets.push((
+            index + 10,
+            AttackResult {
+                damage: damage.total,
                 killed: false,
                 sounds,
             },
@@ -778,6 +922,7 @@ pub fn reset_used(used: &[u8]) -> Result<Vec<u8>, RuleError> {
 }
 
 pub struct FieldCollision {
+    pub rotation: u8,
     pub packet: Vec<u8>,
     pub id: i16,
     pub count: i16,
@@ -848,12 +993,6 @@ pub fn collision_field(
     {
         return Ok(None);
     }
-    if field[17] != 0 {
-        return Err(RuleError::Unsupported {
-            action: "combat.spell.collision",
-            dependency: "rotated spell fields",
-        });
-    }
     let id = word(field, 8)?;
     let mut packet = load_packet(attacks, id)?;
     if packet[19] == 9 {
@@ -862,6 +1001,7 @@ pub fn collision_field(
     }
     packet[4] = 0;
     Ok(Some(FieldCollision {
+        rotation: field[17],
         packet,
         id,
         count: i16::from(field[16] as i8),
@@ -942,6 +1082,70 @@ pub fn target_mask(
     )
 }
 
+/// Original rotation selects one of four adjacent authored patterns.
+#[allow(clippy::too_many_arguments)]
+pub fn target_mask_rotated(
+    combat: &Combat,
+    warriors: &[Warrior],
+    areas: &[u8],
+    target: &SpellTarget,
+    context: &SpellContext<'_>,
+    fields: &[u8],
+    random: &mut RandomState,
+    rotation: u8,
+) -> Result<SpellMask, RuleError> {
+    target_mask_rotated_with_origin(
+        combat,
+        warriors,
+        areas,
+        (target, target),
+        context,
+        fields,
+        random,
+        rotation,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn target_mask_rotated_with_origin(
+    combat: &Combat,
+    warriors: &[Warrior],
+    areas: &[u8],
+    targets: (&SpellTarget, &SpellTarget),
+    context: &SpellContext<'_>,
+    fields: &[u8],
+    random: &mut RandomState,
+    rotation: u8,
+) -> Result<SpellMask, RuleError> {
+    if rotation > 3 {
+        return Err(RuleError::Invalid("spell rotation".into()));
+    }
+    let mut packet = context.packet.to_vec();
+    if packet.len() != 58 {
+        return Err(RuleError::Invalid("spell packet size".into()));
+    }
+    let rotated = packet[7] != 0;
+    if rotated {
+        packet[31] = packet[31]
+            .checked_add(rotation)
+            .ok_or("spell pattern overflow")?;
+    }
+    let adjusted = SpellContext {
+        packet: &packet,
+        ..*context
+    };
+    let mut result =
+        target_mask_with_origin(combat, warriors, areas, targets, &adjusted, fields, random)?;
+    if rotated
+        && packet[4] != 0
+        && !context.collision
+        && let Some(slot) = fields.as_chunks::<20>().0.iter().position(|f| f[15] == 0)
+    {
+        result.fields[slot * 20 + 17] = rotation;
+    }
+    Ok(result)
+}
+
 pub fn target_mask_with_origin(
     combat: &Combat,
     warriors: &[Warrior],
@@ -956,7 +1160,7 @@ pub fn target_mask_with_origin(
     if p.len() != 58 || fields.len() != 1200 || !(0..110).contains(&context.caster) {
         return Err(RuleError::Invalid("spell mask inputs".into()));
     }
-    if p[7] != 0 || word(p, 40)? == 58 {
+    if word(p, 40)? == 58 {
         return Err(RuleError::Unsupported {
             action: "combat.spell.mask",
             dependency: "rotated shapes or summon targeting",
@@ -1058,12 +1262,6 @@ pub fn target_mask_with_origin(
                         .bytes[0xd0]
                         != 0
                 };
-                if word(p, 40)? == 4 && reflective {
-                    return Err(RuleError::Unsupported {
-                        action: "combat.spell",
-                        dependency: "poison ward reflection",
-                    });
-                }
                 reflective && next_random.bound(100) < 34 && !context.collision
             } else {
                 false
@@ -1111,6 +1309,7 @@ pub fn resolve_warriors(
             weapon_sound: 0,
         },
         None,
+        &mut 0,
         random,
     )
     .map(|(party, _)| party)
@@ -1121,6 +1320,7 @@ fn resolve_party(
     mask: &[i16],
     context: &DirectSpell<'_>,
     mut usage: Option<&mut FieldUsage>,
+    amount: &mut i16,
     random: &mut RandomState,
 ) -> Result<(WarriorSpellResult, i16), RuleError> {
     let DirectSpell {
@@ -1135,15 +1335,7 @@ fn resolve_party(
         return Err(RuleError::Invalid("spell resolution inputs".into()));
     }
     let poison = word(packet, 40)? == 4;
-    if poison
-        && (level != 1
-            || !(1..=7).contains(&count)
-            || armor_filter
-            || usage.is_some()
-            || warriors.iter().enumerate().any(|(member, warrior)| {
-                mask[member] > 0 && word(&warrior.bytes, 0x9a).unwrap_or(1) != 0
-            }))
-    {
+    if poison && (level != 1 || !(1..=7).contains(&count) || usage.is_some()) {
         return Err(RuleError::Unsupported {
             action: "combat.spell",
             dependency: "other poison count, defense or field collision",
@@ -1199,7 +1391,7 @@ fn resolve_party(
             }
             usage.used[usage.slot + 1] = 1;
         }
-        let damage = resolve_damage(
+        let damage = resolve_damage_with_amount(
             w,
             false,
             &DamagePacket {
@@ -1212,15 +1404,19 @@ fn resolve_party(
                 saves: true,
                 armor_filter,
             },
+            *amount,
             &mut next_random,
         )?;
+        *amount = damage.total;
         let mut sounds = vec![];
         if damage.shield_sound {
             sounds.push(206);
         }
-        if poison {
-            spell_conditions::apply(w, false, 4, duration, &mut next_random)?;
-            sounds.push(word(packet, 38)?);
+        if poison || word(packet, 40)? == 23 {
+            spell_conditions::apply(w, false, word(packet, 40)?, duration, &mut next_random)?;
+            if poison || damage.total == 0 {
+                sounds.push(word(packet, 38)?);
+            }
         }
         let previous = word(w, 0x50)?;
         if damage.total != 0 && previous > -10 {
@@ -1425,11 +1621,13 @@ fn resolve_bodies_inner(
         }
     }
     let mut next_random = random.clone();
+    let mut amount = 0;
     let (party, duration) = resolve_party(
         warriors,
         mask,
         context,
         usage.as_deref_mut(),
+        &mut amount,
         &mut next_random,
     )?;
     let mut result = BodySpellResult {
@@ -1488,7 +1686,7 @@ fn resolve_bodies_inner(
             }
             usage.used[usage.slot + 1] = 1;
         }
-        let damage = resolve_damage(
+        let damage = resolve_damage_with_amount(
             m,
             true,
             &DamagePacket {
@@ -1501,15 +1699,19 @@ fn resolve_bodies_inner(
                 saves: true,
                 armor_filter,
             },
+            amount,
             &mut next_random,
         )?;
+        amount = damage.total;
         let mut sounds = vec![];
         if damage.shield_sound {
             sounds.push(206);
         }
-        if poison {
-            spell_conditions::apply(m, true, 4, duration, &mut next_random)?;
-            sounds.push(word(packet, 38)?);
+        if poison || word(packet, 40)? == 23 {
+            spell_conditions::apply(m, true, word(packet, 40)?, duration, &mut next_random)?;
+            if poison || damage.total == 0 {
+                sounds.push(word(packet, 38)?);
+            }
         }
         let previous = word(m, 0x110)?;
         if damage.total != 0 {

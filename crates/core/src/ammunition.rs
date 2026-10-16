@@ -127,34 +127,52 @@ fn item_definition(items: &[Vec<u8>], id: i16) -> Result<Vec<u8>, RuleError> {
     Ok(result)
 }
 
-fn ordinary_ammo(id: i16) -> Option<i16> {
-    match id.unsigned_abs() {
-        1 => Some(200),
-        2 => Some(201),
-        38 => Some(203),
-        165 => Some(280),
-        _ => None,
+fn validate_instance(record: &InventoryRecord, content: &Content) -> Result<i16, RuleError> {
+    let weapon = definition(content, record.id())?;
+    let category = word(&weapon, 26)?;
+    if !matches!(category, 2 | 15 | 20) {
+        return Err(unsupported("refill effects for this equipment category"));
     }
+    let loaded = word(&record.0, 4)?;
+    let compatible = |id| -> Result<bool, RuleError> {
+        let ammo = definition(content, id)?;
+        Ok(word(&ammo, 26)? == 26
+            && (category == 20 || word(&ammo, 18)? == 0)
+            && word(&weapon, 32)? == word(&ammo, 34)?)
+    };
+    if loaded != 0 {
+        if !(200..400).contains(&loaded) || !compatible(loaded)? {
+            return Err("incompatible loaded ammunition".into());
+        }
+        return Ok(loaded);
+    }
+    for id in 200..400 {
+        if compatible(id)? {
+            return Ok(id);
+        }
+    }
+    Err(unsupported("no compatible ammunition definition"))
 }
 
-fn validate_instance(record: &InventoryRecord, content: &Content) -> Result<i16, RuleError> {
-    let ammo = ordinary_ammo(record.id())
-        .ok_or_else(|| unsupported("other equipped item refill effects"))?;
-    let weapon = definition(content, record.id())?;
-    let ammo_definition = definition(content, ammo)?;
-    if record.0[10] != 15
-        || word(&weapon, 26)? != 15
-        || word(&ammo_definition, 26)? != 26
-        || word(&ammo_definition, 18)? != 0
-        || word(&weapon, 32)? != word(&ammo_definition, 34)?
-    {
-        return Err(unsupported("other weapon or ammunition definition"));
-    }
-    let loaded_ammo = word(&record.0, 4)?;
-    if loaded_ammo != 0 && loaded_ammo != ammo {
-        return Err(unsupported("other owned ammunition pair"));
-    }
-    Ok(ammo)
+pub fn compatible_ammunition(
+    content: &Content,
+    record: &InventoryRecord,
+) -> Result<Vec<i16>, RuleError> {
+    let item = definition(content, record.id())?;
+    let caliber = word(&item, 32)?;
+    (200..400)
+        .filter_map(|id| {
+            let ammo = match definition(content, id) {
+                Ok(ammo) => ammo,
+                Err(error) => return Some(Err(error)),
+            };
+            match (word(&ammo, 26), word(&ammo, 34)) {
+                (Ok(26), Ok(value)) if value == caliber => Some(Ok(id)),
+                (Ok(_), Ok(_)) => None,
+                (Err(error), _) | (_, Err(error)) => Some(Err(error.into())),
+            }
+        })
+        .collect()
 }
 
 fn initial(
@@ -191,6 +209,39 @@ fn partial_warning(result: &mut AmmunitionResult, enabled: bool) {
         result.warnings.push(49);
         result.sounds.push(6000);
     }
+}
+
+fn refill_energy(
+    result: &mut AmmunitionResult,
+    content: &Content,
+    slot: usize,
+    amount: i16,
+    remove_first: bool,
+) -> Result<(), RuleError> {
+    let offset = 0x132 + slot * 22;
+    if result.warrior.bytes[offset + 10] != 20 {
+        return Ok(());
+    }
+    if word(&result.warrior.bytes, offset + 2)? > 0 {
+        if remove_first {
+            result.warrior =
+                crate::editor_items::equipment_record(&result.warrior, content, slot, false)?.0;
+        }
+        put_word(&mut result.warrior.bytes, 0xee, 0);
+        result.warrior.bytes[offset + 9] = 0;
+        let (warrior, warnings) =
+            crate::editor_items::equipment_record(&result.warrior, content, slot, true)?;
+        result.warrior = warrior;
+        result.warnings.extend(warnings);
+        if result.warrior.bytes[offset + 9] != 0 {
+            let id = word(&result.warrior.bytes, offset)?;
+            result.sounds.push(word(&definition(content, id)?, 12)?);
+        }
+    } else {
+        let energy = word(&result.warrior.bytes, 0x26)?.wrapping_add(amount);
+        put_word(&mut result.warrior.bytes, 0x26, energy);
+    }
+    Ok(())
 }
 
 fn class_gate(
@@ -259,6 +310,7 @@ pub fn refit(
                 offset + 2,
                 loaded.wrapping_add(stock as i16),
             );
+            refill_energy(&mut result, content, slot, stock as i16, false)?;
             partial_warning(&mut result, flags.warnings);
         } else {
             put_word(
@@ -267,6 +319,7 @@ pub fn refit(
                 loaded.wrapping_add(needed),
             );
             result.reserves[index] = stock.wrapping_sub(i32::from(needed));
+            refill_energy(&mut result, content, slot, needed, false)?;
             refill_sound(&mut result, &mut next_random, flags.silent);
             if flags.force || flags.in_combat {
                 result.native_return = 1;
@@ -297,9 +350,6 @@ pub fn refit(
             if word(result.work.ammo.as_deref().unwrap(), 34)? != caliber {
                 continue;
             }
-            if Some(ammo) != ordinary_ammo(record.id()) {
-                return Err(unsupported("other compatible alternate ammunition"));
-            }
             let needed = capacity.wrapping_sub(loaded);
             if (stock as i16) <= needed {
                 refill_sound(&mut result, &mut next_random, flags.silent);
@@ -313,6 +363,7 @@ pub fn refit(
                     offset + 4,
                     (slot as i16).wrapping_add(200),
                 );
+                refill_energy(&mut result, content, slot, stock as i16, true)?;
                 partial_warning(&mut result, flags.warnings);
             } else {
                 put_word(
@@ -322,6 +373,7 @@ pub fn refit(
                 );
                 put_word(&mut result.warrior.bytes, offset + 4, ammo);
                 result.reserves[index] = stock.wrapping_sub(i32::from(needed));
+                refill_energy(&mut result, content, slot, needed, true)?;
                 refill_sound(&mut result, &mut next_random, flags.silent);
                 result.native_return = i16::from(flags.force || flags.in_combat);
             }
@@ -380,10 +432,11 @@ pub fn fit(
     let record = inventory
         .get(request.slot)
         .ok_or_else(|| RuleError::Invalid("ammunition inventory slot".into()))?;
-    let ordinary = validate_instance(record, content)?;
-    if request.reserve_index >= 200 || (request.reserve_index + 200) as i16 != ordinary {
-        return Err(unsupported("other selected ammunition candidate"));
+    validate_instance(record, content)?;
+    if request.reserve_index >= 200 {
+        return Err("ammunition candidate outside reserve table".into());
     }
+    let ordinary = (request.reserve_index + 200) as i16;
     let mut result = initial(warrior, reserves, work)?;
     let mut next_random = random.clone();
     let old_ammo = word(&record.0, 4)?;
@@ -419,7 +472,11 @@ pub fn fit(
     result.work.ammo = Some(definition(content, ordinary)?);
     let offset = 0x132 + request.slot * 22;
     let mut loaded = word(&record.0, 2)?;
-    if old_ammo != 0 && loaded >= 1 && old_ammo != request.reserve_index as i16 {
+    if word(result.work.ammo.as_deref().unwrap(), 18)? == 0
+        && old_ammo != 0
+        && loaded >= 1
+        && old_ammo != request.reserve_index as i16
+    {
         result.changed_ammo = true;
         result.work.ammo = Some(definition(content, old_ammo)?);
         let old_index = (old_ammo - 200) as usize;
@@ -446,6 +503,10 @@ pub fn fit(
     result.reserves[request.reserve_index] = stock.wrapping_sub(i32::from(needed));
     put_word(&mut result.warrior.bytes, offset + 4, ordinary);
     put_word(&mut result.warrior.bytes, 0x126, ordinary);
+    if word(result.work.ammo.as_deref().unwrap(), 18)? != 0 && record.0[9] != 0 {
+        let energy = word(&result.warrior.bytes, 0x26)?.wrapping_add(needed);
+        put_word(&mut result.warrior.bytes, 0x26, energy);
+    }
     if request.reserve_index != 0 || result.changed_ammo {
         result.sounds.push(403 + next_random.bound(2));
     }

@@ -2,14 +2,7 @@ use crate::prelude::*;
 
 use centurions_core::combat::*;
 
-fn positions(hex: &str) -> Vec<(i16, i16)> {
-    words(hex)
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|v| (v[0], v[1]))
-        .collect()
-}
+use crate::support::positions;
 fn origin(c: &serde_json::Value) -> (i16, i16) {
     let b = c.bytes("origin");
     (

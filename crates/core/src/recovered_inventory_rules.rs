@@ -3,7 +3,6 @@
 use crate::RuleError;
 use crate::recovered_feedback::{self, FeedbackEffect, FeedbackServices};
 use crate::recovered_files::{self, FileBuffer, FileContext, FileEffect, FileObservation};
-use crate::recovered_install::InstallMemory;
 use crate::recovered_navigation;
 use crate::recovered_records::{self, ITEM_TABLE_ADDRESSES, ItemTables, RecordWrite};
 use crate::recovered_rendering::RenderingMemory;
@@ -17,6 +16,9 @@ pub struct SaneRequest {
 }
 
 pub trait InventoryServices: FeedbackServices {
+    fn defer_warnings(&self) -> bool {
+        false
+    }
     /// Actual ordered external writes; this observer performs no host operation.
     fn sane(
         &self,
@@ -46,6 +48,7 @@ pub struct InventoryPlan {
     pub memory: RenderingMemory,
     pub effects: Vec<InventoryEffect>,
     pub native_return: u32,
+    pub warnings: Vec<i16>,
 }
 
 fn plan(memory: &RenderingMemory) -> InventoryPlan {
@@ -53,6 +56,7 @@ fn plan(memory: &RenderingMemory) -> InventoryPlan {
         memory: memory.clone(),
         effects: vec![],
         native_return: 0,
+        warnings: vec![],
     }
 }
 
@@ -162,6 +166,10 @@ fn warn(
     maximum_polls: usize,
     services: &(impl InventoryServices + ?Sized),
 ) -> Result<(), RuleError> {
+    if services.defer_warnings() {
+        result.warnings.push(message);
+        return Ok(());
+    }
     let child = recovered_feedback::warn(&result.memory, frame, message, maximum_polls, services)?;
     result.memory = child.memory;
     result
@@ -200,6 +208,25 @@ pub fn upgrade(
     frame: u32,
     maximum_polls: usize,
     services: &(impl InventoryServices + ?Sized),
+) -> Result<InventoryPlan, RuleError> {
+    upgrade_inner(memory, frame, maximum_polls, services, false)
+}
+
+/// The shared command boundary presents warnings after the native record effects.
+pub(crate) fn upgrade_rules(
+    memory: &RenderingMemory,
+    frame: u32,
+    services: &(impl InventoryServices + ?Sized),
+) -> Result<InventoryPlan, RuleError> {
+    upgrade_inner(memory, frame, 0, services, true)
+}
+
+fn upgrade_inner(
+    memory: &RenderingMemory,
+    frame: u32,
+    maximum_polls: usize,
+    services: &(impl InventoryServices + ?Sized),
+    defer_warnings: bool,
 ) -> Result<InventoryPlan, RuleError> {
     let mut result = plan(memory);
     let member = result.memory.word(frame.wrapping_add(8))?;
@@ -289,13 +316,17 @@ pub fn upgrade(
             .wrapping_add(sw(&result.memory, 0x47824a)?);
         if effective < 1 {
             add_byte(&mut result, node.wrapping_add(0x147), 1)?;
-            warn(
-                &mut result,
-                frame.wrapping_sub(48),
-                148,
-                maximum_polls,
-                services,
-            )?;
+            if defer_warnings {
+                result.warnings.push(148);
+            } else {
+                warn(
+                    &mut result,
+                    frame.wrapping_sub(48),
+                    148,
+                    maximum_polls,
+                    services,
+                )?;
+            }
             result.native_return = u32::MAX;
             return Ok(result);
         }
@@ -576,26 +607,7 @@ fn movecalc(result: &mut InventoryPlan, member: u16) -> Result<(), RuleError> {
         0xffff => 0x44721c,
         _ => member_address(member),
     };
-    let race = sw(&result.memory, warrior.wrapping_add(0x32))?.wrapping_sub(1);
-    let race_address = 0x435664_u32.wrapping_add(i32::from(race) as u32);
-    let start = warrior.min(race_address);
-    let end = warrior
-        .checked_add(WARRIOR_BYTES as u32)
-        .ok_or_else(|| RuleError::Invalid("movecalc projection wraps address space".into()))?
-        .max(race_address.checked_add(1).ok_or_else(|| {
-            RuleError::Invalid("movecalc race projection wraps address space".into())
-        })?);
-    let length = (end - start) as usize;
-    if length > 1024 * 1024 {
-        return Err(RuleError::Invalid(
-            "movecalc contiguous observation bridge exceeds one MiB".into(),
-        ));
-    }
-    let memory = InstallMemory {
-        base_address: start,
-        bytes: read(&result.memory, start, length)?,
-    };
-    let child = recovered_navigation::movecalc(&memory, member)?;
+    let child = recovered_navigation::projected_movecalc(&result.memory, warrior, member)?;
     for effect in child.writes {
         write(result, effect.address, &effect.bytes)?;
     }

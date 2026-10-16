@@ -12,9 +12,9 @@ fn accepted_stage_restoration_matches_complete_original_warriors() {
             .as_chunks::<3138>()
             .0
             .iter()
-            .map(|b| Warrior {
+            .map(|record| Warrior {
                 name: String::new(),
-                bytes: b.to_vec(),
+                bytes: record.to_vec(),
                 original_sha256: String::new(),
             })
             .collect();

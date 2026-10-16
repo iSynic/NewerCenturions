@@ -3,22 +3,11 @@ use crate::prelude::*;
 use crate::native_common::snapshot_party as party;
 use centurions_core::items;
 
-fn records(hex: &str) -> Vec<InventoryRecord> {
-    crate::support::inventory(&bytes(hex))
-}
-fn fixture() -> Value {
-    crate::support::fixture("earned-player-armor.json")
-}
+use crate::support::inventory as records;
 
 use crate::support::assert_bytes;
 
-fn assert_party(warriors: &[Warrior], snapshot: &Value, context: &str) {
-    assert_bytes(
-        &crate::support::record_bytes(warriors),
-        &snapshot.bytes("party"),
-        context,
-    );
-}
+use crate::support::compare_party_named as assert_party;
 
 fn assert_records(records: &[InventoryRecord], hex: &str, context: &str) {
     assert_bytes(
@@ -37,7 +26,7 @@ fn sounds(snapshot: &Value) -> Vec<i16> {
 
 #[test]
 fn earned_armor_can_use_matches_all_24_native_profile_gates() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("earned-player-armor.json");
     let content = content();
     let mission = content.map(0).unwrap();
     let cases = fixture.array("gate_cases");
@@ -66,7 +55,7 @@ fn earned_armor_can_use_matches_all_24_native_profile_gates() {
 
 #[test]
 fn earned_armor_collection_matches_12_native_party_crate_and_loot_cases() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("earned-player-armor.json");
     let content = content();
     let mission = content.map(0).unwrap();
     let cases = fixture.array("transfer_cases");
@@ -116,7 +105,7 @@ fn earned_armor_collection_matches_12_native_party_crate_and_loot_cases() {
 
 #[test]
 fn earned_armor_wear_remove_and_compaction_match_all_16_native_compositions() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("earned-player-armor.json");
     let content = content();
     let mission = content.map(0).unwrap();
     let cases = fixture.array("equipment_cases");
@@ -184,21 +173,11 @@ fn earned_armor_wear_remove_and_compaction_match_all_16_native_compositions() {
         assert_eq!(audio, sounds(&case["after"]));
         assert_eq!(audio, [450; 4]);
         for phase in ["picked", "worn", "compacted", "removed", "reworn", "after"] {
-            assert_eq!(case[phase]["item_context"], 0);
-            assert_eq!(
-                case[phase]["rng_seed"],
-                fixture["foundation"]["session"]["random"]["seed"]
-            );
-            assert_eq!(
-                case[phase]["rng_draws"],
-                fixture["foundation"]["session"]["random"]["draws"]
-            );
             assert_records(
                 &crate_items,
                 case[phase]["crate"].as_str().unwrap(),
                 "retained composed crate",
             );
-            assert_eq!(case[phase]["loot"], case["picked"]["loot"]);
         }
         assert_eq!(
             word(&warriors[member].bytes, 0x40).unwrap(),

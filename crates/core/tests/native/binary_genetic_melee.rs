@@ -2,13 +2,9 @@ use crate::prelude::*;
 
 use crate::support::items;
 
-fn fixture() -> serde_json::Value {
-    crate::support::fixture("genetic-melee.json")
-}
-
 #[test]
 fn genetic_loaded_melee178_matches_native_records_saves_and_both_attack_indices() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("genetic-melee.json");
     let items = items();
     let cases = fixture.array("melee_cases");
 
@@ -53,7 +49,7 @@ fn genetic_loaded_melee178_matches_native_records_saves_and_both_attack_indices(
 
 #[test]
 fn genetic_adjacent_melee178_caller_matches_native_action_count_and_cost() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("genetic-melee.json");
     let items = items();
     let cases = fixture.array("caller_cases");
 

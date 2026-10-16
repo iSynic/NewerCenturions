@@ -1,8 +1,5 @@
 use crate::prelude::*;
 
-fn fixture() -> Value {
-    crate::support::fixture("samples-enemy-spell.json")
-}
 use crate::native_common::snapshot_party as party;
 
 use crate::native_common::snapshot_enemies as enemies;
@@ -13,7 +10,7 @@ use crate::support::assert_bytes;
 
 #[test]
 fn samples_party_race_exclusion_matches_complete_native_records_rng_and_ordered_audio() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("samples-enemy-spell.json");
     let mut tested = 0;
     for (index, case) in fixture.array("cases").iter().enumerate() {
         if case.n::<bool>("complete_turn") {
@@ -78,12 +75,7 @@ fn samples_party_race_exclusion_matches_complete_native_records_rng_and_ordered_
         );
         assert_eq!(actual_random, random(after));
         let mut receipts = random(before);
-        for receipt in case.array("rng") {
-            crate::support::expect(
-                receipts.bound(receipt.n::<i16>("bound")),
-                &receipt["result"],
-            );
-        }
+        crate::support::replay_rng(&mut receipts, case.array("rng"));
         assert_eq!(receipts, actual_random);
 
         let mut ordered = result
@@ -106,7 +98,7 @@ fn samples_party_race_exclusion_matches_complete_native_records_rng_and_ordered_
 
 #[test]
 fn restricted_monster_targets_remain_diagnostic_without_native_alias_memory() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("samples-enemy-spell.json");
     let mut tested = 0;
     for case in fixture.array("cases") {
         if case.n::<bool>("complete_turn") {
@@ -171,7 +163,7 @@ fn restricted_monster_targets_remain_diagnostic_without_native_alias_memory() {
 
 #[test]
 fn collision_race_gate_precedes_usage_and_unsupported_restrictions_remain_atomic() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("samples-enemy-spell.json");
     let before = &fixture["cases"][1]["before"];
     let warriors = party(before);
     let monsters = enemies(before);

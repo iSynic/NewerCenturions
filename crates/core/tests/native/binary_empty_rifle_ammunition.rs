@@ -5,31 +5,18 @@ use centurions_core::ammunition::RefitFlags;
 use centurions_core::ammunition::WorkBuffers;
 use centurions_core::items;
 
-fn party(snapshot: &Value) -> Vec<Warrior> {
-    crate::support::warriors(&snapshot["party"])
-}
+use crate::native_common::snapshot_party as party;
 fn reserves(snapshot: &Value) -> Vec<i32> {
     crate::support::longs(&snapshot.bytes("ammunition"))
 }
-fn data() -> Value {
-    crate::support::fixture("empty-rifle-ammunition.json")
-}
 
-use crate::support::assert_bytes;
-
-fn assert_party(warriors: &[Warrior], snapshot: &Value, label: &str) {
-    assert_bytes(
-        &crate::support::record_bytes(warriors),
-        &snapshot.bytes("party"),
-        label,
-    );
-}
+use crate::support::compare_party_named as assert_party;
 fn sounds(snapshot: &Value) -> Vec<i16> {
     snapshot.n::<Vec<i16>>("sounds")
 }
 #[test]
 fn actual_empty_rifle_collection_wear_and_compaction_match_four_native_cases() {
-    let f = data();
+    let f = crate::support::fixture("empty-rifle-ammunition.json");
     let content = content();
     let map = f["foundations"][0]["session"]["exploration"]["map"]
         .as_u64()
@@ -78,7 +65,7 @@ fn actual_empty_rifle_collection_wear_and_compaction_match_four_native_cases() {
 }
 #[test]
 fn selected_203_ammunition_matches_24_native_callers_complete_party_stock_rng_and_audio() {
-    let f = data();
+    let f = crate::support::fixture("empty-rifle-ammunition.json");
     let content = content();
 
     for (i, case) in f.array("manual_cases").iter().enumerate() {
@@ -134,7 +121,7 @@ fn selected_203_ammunition_matches_24_native_callers_complete_party_stock_rng_an
 }
 #[test]
 fn automatic_empty_refit_matches_twelve_native_direct_helper_cases() {
-    let f = data();
+    let f = crate::support::fixture("empty-rifle-ammunition.json");
     let content = content();
 
     for (i, case) in f.array("refit_cases").iter().enumerate() {
@@ -213,9 +200,10 @@ fn automatic_empty_refit_matches_twelve_native_direct_helper_cases() {
             seed: before.n::<u32>("rng_seed"),
             draws: before.n::<u64>("rng_draws"),
         };
-        for draw in &after.array("draws")[before.array("draws").len()..] {
-            crate::support::expect(independent.bound(draw.n::<i16>("bound")), &draw["result"]);
-        }
+        crate::support::replay_rng(
+            &mut independent,
+            &after.array("draws")[before.array("draws").len()..],
+        );
         assert_eq!(random, independent);
         crate::support::native_expect! {
         scalar random.seed => &after["rng_seed"], "binary_empty_rifle_ammunition";

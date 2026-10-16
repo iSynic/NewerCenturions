@@ -7,26 +7,16 @@ use centurions_core::story_party::group_return;
 use centurions_core::story_party::select_party;
 use centurions_core::story_variables::StoryContinuation;
 
-fn fixture() -> Value {
-    crate::support::fixture("story-party.json")
-}
 use crate::support::warriors;
 
-fn positions(value: &Value) -> Vec<(i16, i16)> {
-    words(value)
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|record| (record[0], record[1]))
-        .collect()
-}
 use crate::support::assert_bytes;
+use crate::support::positions;
 
 use crate::support::record_bytes as flatten;
 
 #[test]
 fn party_selection_matches_original_masks_complete_records_and_randomness() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("story-party.json");
     for case in fixture.array("selection_cases") {
         let warriors = warriors(&case["before"]);
         let context = &case["context"];
@@ -55,11 +45,39 @@ fn party_selection_matches_original_masks_complete_records_and_randomness() {
         scalar random.draws => &case["draws"], "binary_story_party";
         }
     }
+    for case in crate::support::fixture("story-filter.json").array("cases") {
+        let mut content = crate::support::content();
+        let map = &mut content.scenario.as_mut().unwrap().maps[0];
+        std::sync::Arc::make_mut(&mut map.shared)
+            .combat
+            .as_mut()
+            .unwrap()
+            .encounters[..10]
+            .copy_from_slice(&case.bytes("extra"));
+        let mut state = crate::support::mission_session(&content);
+        state.warriors = warriors(&case["before"]);
+        state.random = RandomState::new(12);
+        state.party_mask = case.words("mask_before").try_into().unwrap();
+        let mut record = vec![0; 42];
+        record[10..12].copy_from_slice(&30_i16.to_be_bytes());
+        record[12..14].copy_from_slice(&1_i16.to_be_bytes());
+        let position = state.exploration.as_mut().unwrap();
+        position.presentation = Some(Presentation::Dialogue {
+            id: 0,
+            text: String::new(),
+        });
+        position.script = Some(crate::support::script_state(record, case.n::<u8>("action")));
+        apply(Command::Continue, &mut state, &content).unwrap();
+        assert_eq!(state.party_mask.as_slice(), case.words("mask_after"));
+        assert_eq!(state.random.seed, case.n::<u32>("seed"));
+        assert_eq!(state.random.draws, case.n::<u64>("draws"));
+        assert_eq!(flatten(&state.warriors), case.bytes("before"));
+    }
 }
 
 #[test]
 fn late_group_filter_matches_original_tiles_formation_order_and_complete_warriors() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("story-party.json");
     for case in fixture.array("group_cases") {
         let map = TacticalMap {
             tiles: case.words("tiles_before"),
@@ -97,7 +115,7 @@ fn late_group_filter_matches_original_tiles_formation_order_and_complete_warrior
 
 #[test]
 fn group_encounters_match_original_selection_and_post_combat_continuations() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("story-party.json");
     for case in fixture.array("return_cases") {
         let extra = case.bytes("extra");
         let mut random = RandomState::new(case.n::<u32>("seed_before"));

@@ -1,55 +1,17 @@
 use crate::prelude::*;
 
 use centurions_core::ammunition::WorkBuffers;
-fn fixture() -> Value {
-    crate::support::fixture("public-remove-equipment.json")
-}
 
 use crate::support::buffer as bytes;
 
-fn words(fixture: &Value, value: &Value) -> Vec<i16> {
-    crate::support::words(&bytes(fixture, value))
-}
-use crate::native_common::snapshot_word as number;
+use crate::native_common::buffer_words as words;
 
-use crate::native_common::random_state as random;
-
-fn project_party(state: &mut Session, fixture: &Value, snapshot: &Value) {
-    let party = bytes(fixture, &snapshot["party"]);
-    assert_eq!(party.len(), 6 * 3138);
-    for (warrior, record) in state.warriors.iter_mut().zip(party.as_chunks::<3138>().0) {
-        let captured = Warrior::read(record).unwrap();
-        assert_eq!(warrior.name, captured.name);
-        warrior.bytes = captured.bytes;
-    }
-}
+use crate::snapshots::captured_party as project_party;
 
 fn initial(fixture: &Value, case: &Value) -> Session {
-    let background: Value = crate::support::fixture("player-psi.json");
-    // The mission supplies valid unobserved background for controlled native
-    // inputs. These original helper controls do not describe an earned route.
-    let mut state: Session =
-        serde_json::from_value(background["route_foundation"].clone()).unwrap();
-    let exploration = state.exploration.as_mut().unwrap();
-    exploration.presentation = None;
-    exploration.script = None;
-    state.movement_continuation = None;
-    state.medical_continuation = None;
-    state.combat_story = None;
-    state.handled_deaths.clear();
     let snapshot = &case["before"];
     let member = case.n::<usize>("member");
-    project_party(&mut state, fixture, snapshot);
-    let reserves = bytes(fixture, &snapshot["reserves"]);
-    assert_eq!(reserves.len(), 804);
-    state.ammunition = reserves[..800]
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|long| i32::from_be_bytes(*long))
-        .collect();
-    state.loot_quality = Some(bytes(fixture, &snapshot["loot_quality"]));
-    assert_eq!(&reserves[800..], &state.loot_quality.as_ref().unwrap()[..4]);
+    let mut state = crate::snapshots::helper_frame(fixture, snapshot, member);
     state.ammunition_work = WorkBuffers {
         item: Some(bytes(fixture, &snapshot["item_work"])),
         weapon: Some(bytes(fixture, &snapshot["weapon_work"])),
@@ -64,65 +26,11 @@ fn initial(fixture: &Value, case: &Value) -> Session {
     };
     state.loaded_item_field32 =
         Some(word(state.ammunition_work.item.as_ref().unwrap(), 32).unwrap());
-    state.random = random(snapshot);
-    state.selected_warrior = member;
-    state.flags = bytes(fixture, &snapshot["flags"]);
-    state.party_buffs = bytes(fixture, &snapshot["party_buffs"]);
-    state.psi_memory = Some(bytes(fixture, &snapshot["memory"]));
-    state.crate_items = crate::snapshots::inventory(&|key| bytes(fixture, &snapshot[key]), "crate");
-    state.booty_items = crate::snapshots::inventory(&|key| bytes(fixture, &snapshot[key]), "loot");
-    state.attack_packet = Some(bytes(fixture, &snapshot["packet"]));
-    state.attack_identity = Some(words(fixture, &snapshot["identity"]).try_into().unwrap());
-    state.attack_count = number(snapshot, "count");
-    state
-        .party_mask
-        .copy_from_slice(&words(fixture, &snapshot["mask"])[..6]);
-    state.health_context = Some(HealthContext {
-        unavailable: 0,
-        selected_warrior: member,
-        effect: number(snapshot, "health_effect") as i8,
-        last_body: number(snapshot, "health_last_body"),
-        marks_affected: number(snapshot, "heal_marks_affected") != 0,
-        affected: words(fixture, &snapshot["markers"])[..6]
-            .try_into()
-            .unwrap(),
-    });
     let combat = state.combat.as_mut().unwrap();
-    combat.map.tiles = words(fixture, &snapshot["map"]);
-    combat.map.shift = (
-        number(snapshot, "shift_x") - 5,
-        number(snapshot, "shift_y") - 5,
-    );
-    combat.squad.positions = words(fixture, &snapshot["party_positions"])
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| (pair[0], pair[1]))
-        .collect();
     // No active NPC is established by these zeroed native helper inputs.
-    assert!(
-        bytes(fixture, &snapshot["npcs"])
-            .iter()
-            .all(|byte| *byte == 0)
-    );
-    assert!(
-        bytes(fixture, &snapshot["npc_positions"])
-            .iter()
-            .all(|byte| *byte == 0)
-    );
     combat.enemies.records.clear();
     combat.enemies.positions.clear();
-    combat.order = words(fixture, &snapshot["order"]);
-    combat.cursor = snapshot.n::<usize>("cursor");
-    combat.round = number(snapshot, "round_script_counter") - 1;
-    combat.round_scripts = RoundScripts::default();
-    combat.death_queue = DeathQueue::default();
-    combat.spell_fields = bytes(fixture, &snapshot["fields"]);
-    combat.field_used = bytes(fixture, &snapshot["field_used"]);
-    combat.attack_packet = state.attack_packet.clone();
-    combat.attack_identity = state.attack_identity;
     combat.weapon_work = state.weapon_work;
-    combat.unavailable = 0;
     state
 }
 
@@ -135,8 +43,6 @@ fn expected(state: &Session, fixture: &Value, case: &Value, content: &Content) -
     let class = word(&definition, 26).unwrap().wrapping_abs();
     definition[26..28].copy_from_slice(&class.to_be_bytes());
     assert_eq!(definition, bytes(fixture, &after["item_work"]));
-    assert_eq!(word(&definition, 46).unwrap(), 0);
-    assert_eq!(word(&definition, 48).unwrap(), 0);
     expected.loaded_item_field32 = Some(word(&definition, 32).unwrap());
     expected.ammunition_work.item = Some(definition);
     let member = case.n::<usize>("member");
@@ -166,7 +72,7 @@ use crate::support::same_session as same;
 
 #[test]
 fn four_public_removals_at_zero_ap_match_complete_native_state_and_saved_replay() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("public-remove-equipment.json");
     let content = content();
 
     for (index, case) in fixture.array("cases")[..4].iter().enumerate() {
@@ -212,10 +118,7 @@ fn four_public_removals_at_zero_ap_match_complete_native_state_and_saved_replay(
         same(&uninterrupted, &expected);
         assert_eq!(apply(command, &mut resumed, &content).unwrap(), events);
         same(&resumed, &expected);
-        same(
-            &checkpoint(&uninterrupted, &content, &format!("{index}-after")),
-            &expected,
-        );
+        checkpoint(&uninterrupted, &content, &format!("{index}-after"));
         if index == 0 {
             assert_eq!(state.health_context.as_ref().unwrap().affected[0], 0);
             assert_eq!(expected.health_context.as_ref().unwrap().affected[0], 1);

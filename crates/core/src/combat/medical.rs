@@ -36,10 +36,14 @@ fn unsupported(dependency: &'static str) -> RuleError {
     }
 }
 
-fn prepared_packet(content: &Content, mission: &OpeningMission) -> Result<Vec<u8>, RuleError> {
+fn prepared_packet(
+    content: &Content,
+    mission: &OpeningMission,
+    item: i16,
+) -> Result<Vec<u8>, RuleError> {
     let weapon = content
         .items
-        .get(700)
+        .get(item as usize)
         .ok_or_else(|| RuleError::Invalid("needle definition missing".into()))?;
     let ammunition = content
         .items
@@ -48,7 +52,7 @@ fn prepared_packet(content: &Content, mission: &OpeningMission) -> Result<Vec<u8
     if weapon.len() != 150
         || ammunition.len() != 150
         || word(weapon, 26)? != 28
-        || word(weapon, 42)? != -1
+        || word(weapon, 42)? != 699 - item
         || word(weapon, 44)? != 1401
         || word(weapon, 76)? != 1
         || word(weapon, 36)? != 5
@@ -146,16 +150,14 @@ pub fn begin(
         .get(request.warrior)
         .ok_or_else(|| RuleError::Invalid("medical warrior missing".into()))?;
     if word(&warrior.bytes, 0x40)? < 1 {
-        return Err(RuleError::Invalid(
-            "medical item requires an action point".into(),
-        ));
+        return Err(RuleError::Refused { feedback: vec![] });
     }
     let item = warrior
         .inventory()?
         .get(request.slot)
         .cloned()
         .ok_or_else(|| RuleError::Invalid("medical inventory slot missing".into()))?;
-    if item.id() != 700
+    if !(700..=703).contains(&item.id())
         || word(&item.0, 4)? != 0
         || word(&item.0, 6)? != 1
         || item.0[8] != 0
@@ -169,10 +171,7 @@ pub fn begin(
     }
     let quantity = word(&item.0, 2)?;
     if quantity <= 0 {
-        return Err(RuleError::Invalid("medical item is exhausted".into()));
-    }
-    if !matches!((item.0[10], quantity), (24, 1 | 2) | (28, 1)) {
-        return Err(unsupported("other owned medical item quantity"));
+        return Err(RuleError::Refused { feedback: vec![] });
     }
     let mission = content
         .map(
@@ -184,12 +183,12 @@ pub fn begin(
         .ok_or_else(|| RuleError::Invalid("medical mission missing".into()))?;
     let definition = content
         .items
-        .get(700)
+        .get(item.id() as usize)
         .ok_or_else(|| RuleError::Invalid("needle definition missing".into()))?;
     if !equipment::can_use(warrior, definition, mission)? {
         return Err(RuleError::Invalid("warrior cannot use medical item".into()));
     }
-    let packet = prepared_packet(content, mission)?;
+    let packet = prepared_packet(content, mission, item.id())?;
     if !player_psi::mode_allowed(&packet, true)? {
         return Err(RuleError::Invalid(
             "medical item unavailable in combat".into(),
@@ -214,7 +213,8 @@ pub fn begin(
         loaded_item_field32: word(definition, 32)?,
         packet,
         identity: [0, 3, 0],
-        count: 1,
+        // Combatchoice1190b8 replaces the outdoor power with the weapon burst count.
+        count: word(definition, 76)?,
         events: if quantity == 1 {
             vec![Event::Sound { resource_id: 655 }]
         } else {
@@ -236,7 +236,7 @@ pub fn begin_learned_heal(
             "learned Heal requires an unobstructed combat turn".into(),
         ));
     }
-    if !matches!(power, 1..=4) {
+    if !matches!(power, 1..=7) {
         return Err(unsupported("other learned portrait Heal power"));
     }
     let combat = state
@@ -276,9 +276,7 @@ pub fn begin_learned_heal(
             "insufficient psi for learned Heal".into(),
         ));
     }
-    if combat.weapon_work.armor_filter()? {
-        return Err(unsupported("retained armor-filter healing"));
-    }
+    combat.weapon_work.armor_filter()?;
     let mut result = warrior.clone();
     let w = &mut result.bytes;
     let remaining = word(w, 0x58)?.wrapping_sub(cost);
@@ -346,7 +344,7 @@ pub fn resolve(
         .ok_or_else(|| RuleError::Invalid("medical packet missing".into()))?;
     match pending.origin {
         MedicalOrigin::OwnedNeedle => {
-            if pending.item != 700
+            if !(700..=703).contains(&pending.item)
                 || pending.spell != 1401
                 || pending.power != 1
                 || combat.attack_identity != Some([0, 3, 0])
@@ -361,7 +359,7 @@ pub fn resolve(
         MedicalOrigin::LearnedHeal => {
             if pending.item != 0
                 || pending.spell != 1101
-                || !matches!(pending.power, 1..=4)
+                || !matches!(pending.power, 1..=7)
                 || combat.attack_identity != Some([0, 0, 0])
             {
                 return Err(unsupported("other learned medical continuation"));
@@ -375,9 +373,6 @@ pub fn resolve(
                 ));
             }
         }
-    }
-    if combat.weapon_work.armor_filter()? {
-        return Err(unsupported("other retained medical weapon work"));
     }
     let mut next_combat = combat.clone();
     let mut next_warriors = warriors.to_vec();
@@ -410,13 +405,7 @@ fn resolve_inner(
             let movement = word(w, 0x3c)?.wrapping_sub(3).max(0);
             put_word(w, 0x3c, movement);
             if pending.origin == MedicalOrigin::LearnedHeal {
-                let refund = match pending.power {
-                    1 => 3,
-                    2 => 7,
-                    3 => 11,
-                    4 => 15,
-                    _ => return Err(unsupported("other learned portrait Heal refund")),
-                };
+                let refund = pending.power.wrapping_mul(4).wrapping_sub(1);
                 let points = word(w, 0x58)?.wrapping_add(refund);
                 let counter = word(w, 0xac8)?.wrapping_sub(1);
                 put_word(w, 0x58, points);
@@ -443,18 +432,26 @@ fn resolve_inner(
             (warrior, true, vec![Event::Sound { resource_id: -141 }])
         }
         MedicalTarget::LivingPoint { x, y } => {
-            if word(&warriors[pending.actor].bytes, 0x40)? < 2 {
-                return Err(unsupported(
-                    "medical point targeting with less than two action points",
+            if word(&warriors[pending.actor].bytes, 0x40)? < 1 {
+                return Err(RuleError::Invalid(
+                    "medical continuation has no action point".into(),
                 ));
             }
             let from = combat.squad.positions[pending.actor];
             let packet = combat.attack_packet.as_ref().unwrap();
             if !player_psi::in_range(from, (x, y), player_psi::range(packet, pending.power)?) {
-                return Err(RuleError::Invalid("medical target outside range".into()));
+                return Err(RuleError::Refused {
+                    feedback: vec![crate::feedback::NativeFeedback::Combat {
+                        kind: crate::feedback::CombatRefusal::OutOfRange,
+                    }],
+                });
             }
             if !lifecycle::can_see(combat, mission, from, (x, y), 0)? {
-                return Err(RuleError::Invalid("medical target outside sight".into()));
+                return Err(RuleError::Refused {
+                    feedback: vec![crate::feedback::NativeFeedback::Combat {
+                        kind: crate::feedback::CombatRefusal::Blocked,
+                    }],
+                });
             }
             let cell = OpeningMission::index(
                 i32::from(x) + i32::from(combat.map.shift.0) + 5,
@@ -484,14 +481,20 @@ fn resolve_inner(
         }
     };
     let mut mask = [0; 110];
+    combat.inactive_rounds = 0;
     mask[member] = 1;
-    let result = spells::resolve_player_support(
+    let result = spells::resolve_support_with_context(
         warriors,
         &combat.enemies.records,
         &mask,
-        combat.attack_packet.as_ref().unwrap(),
         pending.spell,
-        pending.power,
+        &spells::DirectSpell {
+            packet: combat.attack_packet.as_ref().unwrap(),
+            level: pending.spell % 1000 / 100 - 1,
+            count: pending.power,
+            armor_filter: combat.weapon_work.armor_filter()?,
+            weapon_sound: 0,
+        },
         random,
     )?;
     warriors.clone_from_slice(&result.warriors);

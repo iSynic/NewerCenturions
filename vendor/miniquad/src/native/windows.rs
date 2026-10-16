@@ -98,6 +98,7 @@ use libopengl32::LibOpengl32;
 
 pub(crate) struct WindowsDisplay {
     fullscreen: bool,
+    windowed_placement: Option<WINDOWPLACEMENT>,
     dpi_aware: bool,
     window_resizable: bool,
     cursor_grabbed: bool,
@@ -203,6 +204,30 @@ impl WindowsDisplay {
         self.user_cursor = cursor_icon != CursorIcon::Default;
     }
     fn set_window_size(&mut self, new_width: u32, new_height: u32) {
+        if self.fullscreen {
+            // Keep fullscreen on its monitor; apply the requested client size when it exits.
+            let mut rect = RECT {
+                left: 0,
+                top: 0,
+                right: new_width as _,
+                bottom: new_height as _,
+            };
+            unsafe {
+                AdjustWindowRectEx(
+                    &mut rect,
+                    get_win_style(false, self.window_resizable),
+                    0,
+                    GetWindowLongA(self.wnd, GWL_EXSTYLE) as _,
+                );
+            }
+            if let Some(placement) = &mut self.windowed_placement {
+                placement.rcNormalPosition.right =
+                    placement.rcNormalPosition.left + rect.right - rect.left;
+                placement.rcNormalPosition.bottom =
+                    placement.rcNormalPosition.top + rect.bottom - rect.top;
+            }
+            return;
+        }
         let mut x = 0;
         let mut y = 0;
         let mut final_new_width = new_width;
@@ -266,6 +291,17 @@ impl WindowsDisplay {
     }
 
     fn set_fullscreen(&mut self, fullscreen: bool) {
+        if self.fullscreen == fullscreen {
+            return;
+        }
+        if fullscreen {
+            let mut placement: WINDOWPLACEMENT = unsafe { std::mem::zeroed() };
+            placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as _;
+            if unsafe { GetWindowPlacement(self.wnd, &mut placement) } == 0 {
+                return;
+            }
+            self.windowed_placement = Some(placement);
+        }
         self.fullscreen = fullscreen as _;
 
         let win_style: DWORD = get_win_style(self.fullscreen, self.window_resizable);
@@ -277,31 +313,34 @@ impl WindowsDisplay {
             SetWindowLong(self.wnd, GWL_STYLE, win_style as _);
 
             if self.fullscreen {
+                let mut monitor: MONITORINFO = std::mem::zeroed();
+                monitor.cbSize = std::mem::size_of::<MONITORINFO>() as _;
+                GetMonitorInfoW(
+                    MonitorFromWindow(self.wnd, MONITOR_DEFAULTTONEAREST),
+                    &mut monitor,
+                );
                 SetWindowPos(
                     self.wnd,
                     HWND_TOP,
-                    0,
-                    0,
-                    GetSystemMetrics(SM_CXSCREEN),
-                    GetSystemMetrics(SM_CYSCREEN),
-                    SWP_FRAMECHANGED,
+                    monitor.rcMonitor.left,
+                    monitor.rcMonitor.top,
+                    monitor.rcMonitor.right - monitor.rcMonitor.left,
+                    monitor.rcMonitor.bottom - monitor.rcMonitor.top,
+                    SWP_FRAMECHANGED | SWP_NOOWNERZORDER,
                 );
             } else {
-                let (w, h) = {
-                    let d = crate::native_display().lock().unwrap();
-                    (d.screen_width, d.screen_height)
-                };
-
                 SetWindowPos(
                     self.wnd,
                     HWND_TOP,
                     0,
                     0,
-                    // this is probably not correct: with high dpi content_width and window_width are actually different..
-                    w,
-                    h,
-                    SWP_FRAMECHANGED,
+                    0,
+                    0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
                 );
+                if let Some(placement) = self.windowed_placement.take() {
+                    SetWindowPlacement(self.wnd, &placement);
+                }
             }
 
             ShowWindow(self.wnd, SW_SHOW);
@@ -1175,7 +1214,7 @@ where
         }
         let (wnd, dc) = create_window(
             &conf.window_title,
-            conf.fullscreen,
+            false,
             conf.window_resizable,
             conf.window_width as _,
             conf.window_height as _,
@@ -1189,6 +1228,7 @@ where
         let (msg_wnd, msg_dc) = create_msg_window();
         let mut display = WindowsDisplay {
             fullscreen: false,
+            windowed_placement: None,
             dpi_aware: false,
             window_resizable: conf.window_resizable,
             cursor_grabbed: false,
@@ -1234,6 +1274,9 @@ where
 
         // IMPORTANT: Show window AFTER WGL context is created
         // This ensures IME initializes correctly when window gains focus
+        if conf.fullscreen {
+            display.set_fullscreen(true);
+        }
         ShowWindow(wnd, SW_SHOW);
 
         // Register for raw mouse input (needed for raw_mouse_motion event)

@@ -30,6 +30,7 @@ pub struct StoryTables {
     pub door_scripts: Vec<u8>,
     pub dialogue: Vec<u8>,
     pub treasure: Vec<u8>,
+    pub shops: Vec<u8>,
     pub prologue: String,
     pub item_descriptions: Vec<u8>,
     pub stock_item_descriptions: Vec<u8>,
@@ -40,6 +41,10 @@ pub struct StoryTables {
     pub typed_encounters: Vec<u8>,
     pub movies: std::collections::BTreeMap<i16, String>,
     pub combat: Option<crate::combat::CombatContent>,
+    pub creature_descriptions: Vec<u8>,
+    pub map_notes: Vec<u8>,
+    pub note_labels: Vec<String>,
+    pub unknown_note_labels: Vec<String>,
 }
 
 impl Deref for OpeningMission {
@@ -61,6 +66,11 @@ pub struct MissionStage {
 pub struct ScenarioContent {
     pub maps: Vec<OpeningMission>,
     pub stages: Vec<MissionStage>,
+    pub name: String,
+    pub level: u8,
+    pub opening_map: i32,
+    pub items: Vec<Vec<u8>>,
+    pub catalog: Arc<std::collections::BTreeMap<(String, u8), ScenarioContent>>,
 }
 
 impl ScenarioContent {
@@ -68,13 +78,29 @@ impl ScenarioContent {
         Self {
             maps: vec![map],
             stages: vec![],
+            name: "The Thunder of Guns".into(),
+            level: 0,
+            opening_map: 0,
+            items: vec![],
+            catalog: Default::default(),
         }
     }
 
     pub fn read(
         mut read: impl FnMut(&str) -> Result<Vec<u8>, ContentError>,
     ) -> Result<Self, ContentError> {
-        let opening = OpeningMission::read(&mut read)?;
+        Self::read_level(&mut read, "The Thunder of Guns", 0)
+    }
+
+    pub fn read_level(
+        mut read: impl FnMut(&str) -> Result<Vec<u8>, ContentError>,
+        name: &str,
+        level: u8,
+    ) -> Result<Self, ContentError> {
+        let directory = format!("TheNewCenturions/Scenarios/{name}/{level}/");
+        let mut selected = |path: &str| read(&path.replace(SCENARIO, &directory));
+        let read = &mut selected;
+        let opening = OpeningMission::read(&mut *read)?;
         let land = read(&format!("{SCENARIO}Data LD"))?;
         let headers = read(&format!("{SCENARIO}Data DD"))?;
         let regions = read(&format!("{SCENARIO}Data RD"))?;
@@ -156,7 +182,38 @@ impl ScenarioContent {
                 start_script: word(raw, 262)?,
             });
         }
-        Ok(Self { maps, stages })
+        let setup = read(&format!("{SCENARIO}Data CS"))?;
+        let opening_map = long(&setup, 8)?;
+        if opening_map < 0 || opening_map as usize >= maps.len() {
+            return Err(ContentError::Invalid("opening map unavailable".into()));
+        }
+        let items = span(
+            &read(&format!("{SCENARIO}Data NI"))?,
+            0,
+            200 * crate::ITEM_BYTES,
+        )?
+        .as_chunks::<{ crate::ITEM_BYTES }>()
+        .0
+        .iter()
+        .map(|row| row.to_vec())
+        .collect();
+        Ok(Self {
+            maps,
+            stages,
+            name: name.into(),
+            level,
+            opening_map,
+            items,
+            catalog: Default::default(),
+        })
+    }
+
+    pub fn selection(&self, name: &str, level: u8) -> Option<&Self> {
+        if self.name == name && self.level == level {
+            Some(self)
+        } else {
+            self.catalog.get(&(name.to_string(), level))
+        }
     }
 }
 
@@ -171,9 +228,6 @@ impl OpeningMission {
         mut read: impl FnMut(&str) -> Result<Vec<u8>, ContentError>,
     ) -> Result<Self, ContentError> {
         let setup = read(&format!("{SCENARIO}Data CS"))?;
-        if long(&setup, 8)? != 0 {
-            return Err(ContentError::Invalid("opening map must be map zero".into()));
-        }
         let start = (long(&setup, 12)?, long(&setup, 16)?);
         if !(0..90).contains(&start.0) || !(0..90).contains(&start.1) {
             return Err(ContentError::Invalid(
@@ -182,16 +236,10 @@ impl OpeningMission {
         }
         let mission = read(&format!("{SCENARIO}Data Mission"))?;
         let name_bytes = span(&mission, 7, usize::from(span(&mission, 6, 1)?[0]))?;
-        let name = String::from_utf8(name_bytes.to_vec())
-            .map_err(|_| ContentError::Invalid("mission name needs MacRoman decoding".into()))?;
+        let name = encoding_rs::MACINTOSH.decode(name_bytes).0.into_owned();
         let header = span(&read(&format!("{SCENARIO}Data DD"))?, 0, 4200)?.to_vec();
         let regions = span(&read(&format!("{SCENARIO}Data RD"))?, 0, 644)?.to_vec();
         let terrain = regions[0x208];
-        if terrain != 2 {
-            return Err(ContentError::Invalid(format!(
-                "opening terrain {terrain} is not recovered"
-            )));
-        }
         let data = read(&format!("{SCENARIO}Data LD"))?;
         let floor = span(&data, 0, MAP_CELLS * 2)?
             .as_chunks::<2>()
@@ -211,7 +259,19 @@ impl OpeningMission {
             .iter()
             .map(|v| i32::from_be_bytes(*v))
             .collect();
-        let properties = read("TheNewCenturions/Data Files/Data Swamp BD")?;
+        let filename = match terrain {
+            1 => "Data P BD",
+            2 => "Data Swamp BD",
+            3 => "Data Snow BD",
+            4 => "Data Sub BD",
+            5 => "Data Desert BD",
+            6 => "Data Lava BD",
+            7 => "Data Castle BD",
+            8 => "Data Techno BD",
+            9 => "Data Biologic BD",
+            _ => return Err(ContentError::Invalid(format!("unknown terrain {terrain}"))),
+        };
+        let properties = read(&format!("TheNewCenturions/Data Files/{filename}"))?;
         let schedule = read(&format!("{SCENARIO}Data TD3"))?;
         if schedule.is_empty() || !schedule.len().is_multiple_of(40) || schedule.len() > 151 * 40 {
             return Err(ContentError::Invalid(
@@ -238,6 +298,7 @@ impl OpeningMission {
                 door_scripts: read(&format!("{SCENARIO}Data ED3"))?,
                 dialogue: read(&format!("{SCENARIO}Data SD2"))?,
                 treasure: read(&format!("{SCENARIO}Data TD"))?,
+                shops: read(&format!("{SCENARIO}Data SD"))?,
                 prologue: String::new(),
                 item_descriptions: read(&format!("{SCENARIO}Data NI Des"))?,
                 stock_item_descriptions: read("TheNewCenturions/Data Files/Data ID DES")?,
@@ -259,6 +320,10 @@ impl OpeningMission {
                             .collect::<Result<Vec<_>, _>>()?
                     },
                 }),
+                creature_descriptions: read(&format!("{SCENARIO}Data DES"))?,
+                map_notes: read(&format!("{SCENARIO}Data MD2"))?,
+                note_labels: vec![],
+                unknown_note_labels: vec![],
             }),
         })
     }

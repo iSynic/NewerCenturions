@@ -11,6 +11,103 @@ pub struct PartySaveContext {
     pub mind_shield: bool,
 }
 
+/// newland108, 0x1414d8..0x141918, updates selected signed WORD statistics.
+pub fn adjust_statistics(
+    warriors: &[Warrior],
+    mask: &[i16; 6],
+    extra: &[u8],
+) -> Result<Vec<Warrior>, RuleError> {
+    let extra = span(extra, 0, 10)?;
+    if warriors.len() > mask.len() {
+        return Err("party exceeds six warriors".into());
+    }
+    let selector = word(extra, 0)?;
+    let amount = word(extra, 2)?;
+    let mut result = warriors.to_vec();
+    for (warrior, selected) in result.iter_mut().zip(mask) {
+        let bytes = &mut warrior.bytes;
+        span(bytes, 0, 3138)?;
+        if *selected == 0 {
+            continue;
+        }
+        let (offset, minimum, conditional, current) = match selector {
+            1 => (0x12, 0, false, None),
+            2 => (0xac6, 1, true, None),
+            3 => (0x3e, 3, false, Some(0x3c)),
+            4 => (0x0e, 0, false, None),
+            5 => (0x5a, 0, true, Some(0x58)),
+            6 => (0x0c, 1, true, None),
+            7 => (0x52, 2, false, Some(0x50)),
+            8 => (0x2c, 0, false, None),
+            9 => (0xb5a, 0, false, None),
+            10 => (0xb58, 0, false, None),
+            11 => (0xb60, 0, false, None),
+            _ => continue,
+        };
+        let previous = word(bytes, offset)?;
+        if conditional && previous == 0 {
+            continue;
+        }
+        let value = previous.wrapping_add(amount).max(minimum);
+        bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
+        if let Some(current) = current
+            && word(bytes, current)? > value
+        {
+            bytes[current..current + 2].copy_from_slice(&value.to_be_bytes());
+        }
+    }
+    Ok(result)
+}
+
+/// newland 30, 0x1447e0..0x144a5c, filters the existing party mask.
+pub fn filter_party(
+    warriors: &[Warrior],
+    mut mask: [i16; 6],
+    action: usize,
+    extra: &[u8],
+    random: &mut RandomState,
+) -> Result<[i16; 6], RuleError> {
+    if warriors.len() > 6 {
+        return Err("party exceeds six warriors".into());
+    }
+    let extra = span(extra, 0, 10)?;
+    for (member, warrior) in warriors.iter().enumerate() {
+        if word(extra, 4)? == 1 || (word(extra, 4)? == 2 && warrior.stamina()? > 0) {
+            mask[member] = 1;
+        }
+    }
+    let selector = word(extra, 0)?;
+    for (member, warrior) in warriors.iter().enumerate() {
+        if mask[member] == 0 {
+            continue;
+        }
+        mask[member] = 0;
+        let matched = if word(extra, 2)? == 0 {
+            let source = warriors.get(action).ok_or(RuleError::Unsupported {
+                action: "story.filter_party",
+                dependency: "native action-index skill alias beyond party records",
+            })?;
+            let skill = usize::try_from(selector)
+                .map_err(|_| RuleError::Invalid("negative skill selector".into()))?;
+            let chance = word(&source.bytes, 0xf4 + skill * 2)?
+                .wrapping_add(word(&source.bytes, 0xb62 + skill * 2)?)
+                .wrapping_add(word(extra, 2)?);
+            random.bound(100) <= chance
+        } else if (0..=6).contains(&selector) {
+            word(&warrior.bytes, 0x9e2 + selector as usize * 2)? > word(extra, 8)?
+        } else {
+            false
+        };
+        mask[member] = i16::from(matched);
+    }
+    if word(extra, 6)? != 0 {
+        for value in mask.iter_mut().take(warriors.len()) {
+            *value = i16::from(*value == 0);
+        }
+    }
+    Ok(mask)
+}
+
 /// newland 52 clears the party mask before testing each member.
 pub fn select_party(
     warriors: &[Warrior],

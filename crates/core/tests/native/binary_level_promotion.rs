@@ -6,16 +6,9 @@ use centurions_core::story_promotion;
 use centurions_core::story_promotion::LibraryRandom;
 use centurions_core::story_treasure;
 
-fn patched(mut input: Vec<u8>, patches: &Value) -> Vec<u8> {
-    for p in patches.as_array().unwrap() {
-        input[p[0].as_u64().unwrap() as usize] = p[1].as_u64().unwrap() as u8;
-    }
-    input
-}
-fn party(input: &[u8]) -> Vec<Warrior> {
-    crate::support::warriors(input)
-}
+use crate::native_common::patched;
 use crate::support::record_bytes as flatten;
+use crate::support::warriors as party;
 
 #[test]
 fn native_close_promotes_each_living_member_once_and_preserves_valid_spells() {
@@ -24,10 +17,12 @@ fn native_close_promotes_each_living_member_once_and_preserves_valid_spells() {
     let content = crate::support::content();
     let map = content.map(0).unwrap();
     let baseline = bytes(&fixture, "warriors");
+    let interactive = crate::support::fixture("interactive-promotion.json");
     let cases = fixture.array("cases");
 
     for (index, case) in cases
         .iter()
+        .chain(interactive.array("cases"))
         .enumerate()
         .filter(|(_, c)| c["kind"] == "close")
     {
@@ -48,9 +43,97 @@ fn native_close_promotes_each_living_member_once_and_preserves_valid_spells() {
         )
         .unwrap_or_else(|e| panic!("case{index}: {e:?}"));
         let expected = patched(before, &case["after_changes"]);
-        assert_eq!(flatten(&result.warriors), expected, "case{index}");
+        if case["controls"].is_null() {
+            assert_eq!(flatten(&result.warriors), expected, "case{index}");
+        }
         assert_eq!(digest(&expected), case["after_sha256"], "case{index}");
         assert_eq!(warriors, initial, "input party mutated");
+        if case.n::<bool>("registered") {
+            let mut state = crate::support::mission_session(&content);
+            state.warriors = initial;
+            state.library_random_seed = case.n("library_seed_before");
+            let position = state.exploration.as_mut().unwrap();
+            position.presentation = Some(Presentation::Loot);
+            position.script = None;
+            state.movement_continuation = None;
+            let random = state.random.clone();
+            let mut events = apply(Command::BeginPromotion, &mut state, &content).unwrap();
+            if let Some(controls) = case["controls"].as_array() {
+                for item in &controls[..controls.len() - 1] {
+                    events.extend(
+                        apply(
+                            Command::PromotionControl {
+                                item: item.as_u64().unwrap() as u16,
+                            },
+                            &mut state,
+                            &content,
+                        )
+                        .unwrap(),
+                    );
+                }
+            }
+            let checkpoint = std::env::temp_dir()
+                .join(format!("centurions-promotion-{}.json", std::process::id()));
+            while state.promotion.is_some() {
+                events.extend(
+                    apply(Command::PromotionControl { item: 32 }, &mut state, &content).unwrap(),
+                );
+                if state.promotion.as_ref().is_some_and(|p| p.question) {
+                    let draft = state.promotion.clone();
+                    apply(
+                        Command::PromotionAnswer { yes: false },
+                        &mut state,
+                        &content,
+                    )
+                    .unwrap();
+                    assert!(!state.promotion.as_ref().unwrap().question);
+                    apply(Command::PromotionControl { item: 32 }, &mut state, &content).unwrap();
+                    assert_eq!(state.promotion, draft);
+                    save(&checkpoint, &state, &content).unwrap();
+                    let mut resumed = load(&checkpoint, &content).unwrap();
+                    assert_eq!(state, resumed);
+                    let next = apply(Command::PromotionAnswer { yes: true }, &mut state, &content)
+                        .unwrap();
+                    assert_eq!(
+                        next,
+                        apply(
+                            Command::PromotionAnswer { yes: true },
+                            &mut resumed,
+                            &content
+                        )
+                        .unwrap()
+                    );
+                    events.extend(next);
+                    assert_eq!(state, resumed);
+                }
+            }
+            let _ = std::fs::remove_file(checkpoint);
+            assert_eq!(
+                flatten(&state.warriors),
+                expected,
+                "command promotion case{index}"
+            );
+            assert_eq!(state.random, random);
+            if let Some(sounds) = case["sounds"].as_array() {
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter_map(|event| match event {
+                            Event::Sound { resource_id } => Some(*resource_id),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>(),
+                    sounds
+                        .iter()
+                        .map(|s| s.as_i64().unwrap() as i16)
+                        .collect::<Vec<_>>()
+                );
+            }
+            assert_eq!(
+                (state.library_random_seed, state.library_random_draws),
+                (library.seed, library.draws)
+            );
+        }
         crate::support::native_expect! {
         scalar library.seed => &case["library_seed_after"], "binary_level_promotion";
         scalar library.draws => &case["library_draws"], "binary_level_promotion";

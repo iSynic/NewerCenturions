@@ -8,25 +8,17 @@ fn session(content: &Content) -> Session {
     let p = state.exploration.as_mut().unwrap();
     p.x = 43;
     p.y = 84;
-    p.script = Some(ScriptState {
-        record: content.map(0).unwrap().script(6).unwrap().to_vec(),
-        cursor: 0,
-        map_slot: 0,
-        scheduled: true,
-        menu: None,
-        persist: false,
-        origin: None,
-    });
+    p.script = Some(crate::support::script_state(
+        content.map(0).unwrap().script(6).unwrap().to_vec(),
+        0,
+    ));
     state
-}
-fn fixture() -> serde_json::Value {
-    crate::support::fixture("opening-stories.json")
 }
 
 #[test]
 fn leader_death_stories_match_original_complete_enemy_map_and_order_records() {
     let content = content();
-    for case in fixture()["cases"]
+    for case in crate::support::fixture("opening-stories.json")["cases"]
         .as_array()
         .unwrap()
         .iter()
@@ -35,12 +27,10 @@ fn leader_death_stories_match_original_complete_enemy_map_and_order_records() {
         let mut state = session(&content);
         state.phase = Phase::Combat;
         state.warriors[0].bytes[0x40..0x42].copy_from_slice(&4_i16.to_be_bytes());
-        let positions = words(case.text("positions"))
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|v| (v[0], v[1]))
-            .collect();
+        let positions = crate::support::positions(case.text("positions"));
+        let mut health = centurions_core::story_health::context(&state.warriors, 0, None);
+        health.last_body = 10; // VerifyOpeningStories sets native DAT408574 to body10.
+        state.health_context = Some(health);
         state.combat = Some(Combat {
             battle: 1,
             map: TacticalMap {
@@ -92,7 +82,10 @@ fn leader_death_stories_match_original_complete_enemy_map_and_order_records() {
             events
         );
         assert_eq!(state, restored);
-        assert_eq!(events, vec![Event::Sound { resource_id: 409 }]);
+        assert_eq!(
+            crate::support::event_sounds(&events),
+            case.n::<Vec<i16>>("sounds")
+        );
         let c = state.combat.as_ref().unwrap();
         crate::support::native_expect! {
         bytes crate::support::record_bytes(&c.enemies.records) => &case["after_enemies"], format!("script {} variant {}",case["script"],case["variant"]);
@@ -119,7 +112,7 @@ fn leader_death_stories_match_original_complete_enemy_map_and_order_records() {
 #[test]
 fn peaceful_camp_choice_teleport_and_cancel_match_original_newland() {
     let content = content();
-    let fixture = fixture();
+    let fixture = crate::support::fixture("opening-stories.json");
     let case = fixture
         .array("cases")
         .iter()

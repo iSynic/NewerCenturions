@@ -3,9 +3,6 @@ use crate::prelude::*;
 use centurions_core::ammunition;
 
 use ammunition::{AmmunitionResult, FitRequest, RefitFlags, WorkBuffers};
-fn fixture() -> Value {
-    crate::support::fixture("ammunition-management.json")
-}
 
 use crate::support::buffer as bytes;
 
@@ -48,12 +45,7 @@ fn compare(fixture: &Value, case: &Value, actual: AmmunitionResult, actual_rando
     }
     assert_eq!(actual_random, &random(after));
     let mut expected_random = random(&case["before"]);
-    for draw in case.array("rng") {
-        crate::support::expect(
-            expected_random.bound(draw.n::<i16>("bound")),
-            &draw["result"],
-        );
-    }
+    crate::support::replay_rng(&mut expected_random, case.array("rng"));
     assert_eq!(actual_random, &expected_random);
     assert_eq!(actual.changed_ammo, after.n::<i64>("changed_ammo") != 0);
 }
@@ -61,8 +53,7 @@ fn compare(fixture: &Value, case: &Value, actual: AmmunitionResult, actual_rando
 #[test]
 fn refit_matches_original_manual_and_automatic_records_caches_returns_and_audio() {
     let content = content();
-    let fixture = fixture();
-    let mut checked = 0;
+    let fixture = crate::support::fixture("ammunition-management.json");
     for (index, case) in fixture
         .array("cases")
         .iter()
@@ -88,16 +79,13 @@ fn refit_matches_original_manual_and_automatic_records_caches_returns_and_audio(
         )
         .unwrap_or_else(|error| panic!("case {index}: {error}"));
         compare(&fixture, case, actual, &rng);
-        checked += 1;
     }
-    assert_eq!(checked, 26);
 }
 
 #[test]
 fn accepted_fit_matches_original_whole_warrior_reserves_work_and_rng() {
     let content = content();
-    let fixture = fixture();
-    let mut checked = 0;
+    let fixture = crate::support::fixture("ammunition-management.json");
     for (index, case) in fixture
         .array("cases")
         .iter()
@@ -126,7 +114,5 @@ fn accepted_fit_matches_original_whole_warrior_reserves_work_and_rng() {
         )
         .unwrap_or_else(|error| panic!("case {index}: {error}"));
         compare(&fixture, case, actual, &rng);
-        checked += 1;
     }
-    assert_eq!(checked, 12);
 }

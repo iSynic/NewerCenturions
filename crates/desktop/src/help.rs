@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 pub struct Help {
+    pub(crate) settings: serde_json::Value,
     pub enabled: bool,
     pub page: Option<usize>,
     seen: BTreeSet<usize>,
@@ -17,6 +18,7 @@ mod tests;
 impl Default for Help {
     fn default() -> Self {
         Self {
+            settings: serde_json::json!({}),
             enabled: true,
             page: None,
             seen: BTreeSet::new(),
@@ -43,6 +45,10 @@ impl Help {
         let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
         let value: serde_json::Value =
             serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+        if !value.is_object() {
+            return Err("Invalid UI preferences object.".into());
+        }
+        self.settings = value.clone();
         self.enabled = value["enabled"].as_bool().unwrap_or(true);
         self.seen = value["seen"]
             .as_array()
@@ -57,17 +63,18 @@ impl Help {
         Ok(())
     }
 
-    fn save(&self) -> Result<(), String> {
+    pub(crate) fn save(&self) -> Result<(), String> {
         let Some(path) = &self.path else {
             return Ok(());
         };
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
-        let bytes =
-            serde_json::to_vec(&serde_json::json!({"enabled": self.enabled, "seen": self.seen}))
-                .map_err(|error| error.to_string())?;
-        std::fs::write(path, bytes).map_err(|error| error.to_string())
+        let mut value = self.settings.clone();
+        value["enabled"] = self.enabled.into();
+        value["seen"] = serde_json::to_value(&self.seen).map_err(|error| error.to_string())?;
+        let bytes = serde_json::to_vec(&value).map_err(|error| error.to_string())?;
+        centurions_core::atomic_write(path, &bytes).map_err(|error| error.to_string())
     }
 
     pub fn open(&mut self, first: usize, last: usize) -> Result<(), String> {

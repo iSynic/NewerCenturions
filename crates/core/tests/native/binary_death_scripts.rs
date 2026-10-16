@@ -5,18 +5,12 @@ use centurions_core::combat::death_scripts::DeathStoryFrame;
 use centurions_core::combat::death_scripts::EncounterBattleFrame;
 use centurions_core::combat::death_scripts::cleanup_enemy;
 
-fn bytes(case: &serde_json::Value, key: &str) -> Vec<u8> {
-    decode(case[key].as_str().unwrap())
-}
-fn fixture() -> serde_json::Value {
-    crate::support::fixture("death-scripts.json")
-}
+use crate::support::field_bytes as bytes;
 fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>) {
     let mut order = vec![-1; 110];
     order[1] = 10;
     (
         Combat {
-            difficulty: 0,
             map: TacticalMap {
                 tiles: words(&bytes(case, "map_before")),
                 shift: (0, 0),
@@ -35,22 +29,13 @@ fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>) {
             order,
             ..crate::support::battle()
         },
-        bytes(case, "warriors_before")
-            .as_chunks::<3138>()
-            .0
-            .iter()
-            .map(|w| Warrior {
-                name: "fixture".into(),
-                original_sha256: String::new(),
-                bytes: w.to_vec(),
-            })
-            .collect(),
+        crate::support::warriors(&case["warriors_before"]),
     )
 }
 
 #[test]
 fn native_large_death_cleanup_matches_record_map_order_and_queue() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("death-scripts.json");
     for case in fixture.array("cases") {
         let (mut combat, mut warriors) = input(case);
         let result = cleanup_enemy(&mut combat, &mut warriors, 10).unwrap();
@@ -108,7 +93,7 @@ fn story(
 
 #[test]
 fn native_queue_child_reset_and_parent_restore_match_composite_cases() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("death-scripts.json");
     for case in fixture.array("cases") {
         let (mut combat, mut warriors) = input(case);
         let result = cleanup_enemy(&mut combat, &mut warriors, 10).unwrap();

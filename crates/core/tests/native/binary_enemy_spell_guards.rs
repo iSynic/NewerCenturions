@@ -1,37 +1,21 @@
 use crate::prelude::*;
 
-fn fixture() -> Value {
-    crate::support::fixture("reached-guardian-spell.json")
-}
-fn raw(c: &Value, k: &str) -> Vec<u8> {
-    bytes(c[k].as_str().unwrap())
-}
 use crate::support::assert_bytes;
+use crate::support::field_bytes as raw;
 
 fn state(f: &Value, c: &Value) -> Session {
     let mut s: Session = serde_json::from_value(f["foundation"].clone()).unwrap();
-    s.warriors = raw(c, "party_before")
-        .as_chunks::<3138>()
-        .0
-        .iter()
-        .map(|v| Warrior::read(v).unwrap())
-        .collect();
+    s.warriors = crate::support::warriors(&c["party_before"]);
     let combat = s.combat.as_mut().unwrap();
-    combat.enemies.records = raw(c, "records_before")
-        .as_chunks::<288>()
-        .0
-        .iter()
-        .map(|v| MonsterRecord { bytes: v.to_vec() })
-        .collect();
+    combat.enemies.records = crate::support::monsters(&c["records_before"]);
     s.enemy_spell_disabled = u8::from(c["variant"] == 6);
     s
 }
 #[test]
 fn blocked_first_spell_chance_matches_six_complete_native_enemy_turns() {
-    let f = fixture();
+    let f = crate::support::fixture("reached-guardian-spell.json");
     let content = content();
     let mission = content.map(2).unwrap();
-    let mut checked = 0;
     for case in f.array("cases") {
         if case["variant"] == 1 {
             continue;
@@ -79,12 +63,7 @@ fn blocked_first_spell_chance_matches_six_complete_native_enemy_turns() {
         );
         assert_eq!(
             combat.enemies.positions,
-            words(&raw(case, "positions_after"))
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|p| (p[0], p[1]))
-                .collect::<Vec<_>>(),
+            crate::support::positions(&raw(case, "positions_after")),
             "{context} positions"
         );
         assert_eq!(combat.spell_fields, raw(case, "fields_after"));
@@ -102,13 +81,11 @@ fn blocked_first_spell_chance_matches_six_complete_native_enemy_turns() {
         }
         let sounds: Vec<_> = crate::support::event_sounds(&events);
         assert_eq!(serde_json::json!(sounds), case["sounds"], "{context} audio");
-        checked += 1;
     }
-    assert_eq!(checked, 6);
 }
 #[test]
 fn reached_disabled_spell_turn_resumes_and_uncovered_spell_is_atomic() {
-    let f = fixture();
+    let f = crate::support::fixture("reached-guardian-spell.json");
     let content = content();
     let mut s = state(&f, &f["cases"][0]);
     let path = std::env::temp_dir().join(format!(

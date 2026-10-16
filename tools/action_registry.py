@@ -430,6 +430,7 @@ def main():
                                       dict(id='combat.target_bounds_fix', implementation='crates/core/src/combat/runtime.rs',
                                            verification='crates/core/tests/native/enemy_target_bounds.rs; fixture opening-enemy-prefix.json; intentional original bounds deviation')],
                     deferred=['whole live-original battle parity', 'player weapons and ammunition beyond registered contracts', 'maps and story opcodes beyond registered contracts', 'interactive active schedules and campaign prerequisites', 'spell fields and targeting beyond registered contracts', 'complete normal production campaign replay', 'original campaign saves'])
+    document['native_capture_provenance'] = 'evidence/native-capture-provenance.json'
     static_rows = [
         ('foundation.import_starters', '0x1538ba', 'crates/core/src/lib.rs', 'Six hash-verified original warrior files', '3138-byte content records', 'Six runtime warrior records', 'No RNG; StartersImported'),
         ('exploration.enter_mission', '0x1538ba', 'crates/core/src/lib.rs', 'Six imported starters and opening scenario', 'Data CS/DD/RD/LD and warrior bytes', 'Mission, exploration, initialized warrior fields', 'No RNG; MissionEntered; setup checked against guest snapshot'),

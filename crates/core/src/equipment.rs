@@ -6,6 +6,7 @@ pub struct EquipmentResult {
     pub changed: bool,
     pub sounds: Vec<i16>,
     pub warnings: Vec<i16>,
+    pub record: Option<InventoryRecord>,
 }
 
 fn unsupported(dependency: &'static str) -> RuleError {
@@ -15,12 +16,81 @@ fn unsupported(dependency: &'static str) -> RuleError {
     }
 }
 
+/// Display copies all nine visible rows; updateshop20 then copies a selected owned row.
+pub(crate) fn inspect(
+    state: &mut Session,
+    members: [usize; 2],
+    scroll: [usize; 2],
+    selected: Option<(usize, usize)>,
+) -> Result<Vec<Event>, RuleError> {
+    if state.exploration.as_ref().is_some_and(|position| {
+        position.presentation.as_ref().is_some_and(|presentation| {
+            !matches!(
+                presentation,
+                crate::Presentation::Shop | crate::Presentation::Typed { .. }
+            )
+        })
+    }) {
+        return Err(RuleError::Refused { feedback: vec![] });
+    }
+    let shop = state
+        .exploration
+        .as_ref()
+        .is_some_and(|position| position.presentation == Some(crate::Presentation::Shop));
+    for side in 0..2 {
+        if shop && side == 1 {
+            // Shop rows partially overwrite the previous temporary record.
+            state.inventory_record = None;
+            continue;
+        }
+        let warrior = state
+            .warriors
+            .get(members[side])
+            .ok_or("inventory member missing")?;
+        let row = scroll[side]
+            .checked_add(8)
+            .filter(|row| *row < 100)
+            .ok_or("inventory scroll outside native rows")?;
+        state.inventory_record = Some(InventoryRecord(
+            span(&warrior.bytes, 0x132 + row * 22, 22)?
+                .try_into()
+                .unwrap(),
+        ));
+    }
+    if let Some((side, slot)) = selected {
+        if side > 1 || slot >= if shop && side == 1 { 1000 } else { 100 } {
+            return Err("inventory selection outside native rows".into());
+        }
+        if !(shop && side == 1) {
+            state.inventory_record = Some(
+                state.warriors[members[side]]
+                    .inventory()?
+                    .get(slot)
+                    .cloned()
+                    .ok_or("inventory selection missing")?,
+            );
+        }
+    }
+    Ok(vec![])
+}
+
 fn item_definition(content: &Content, id: i16) -> Result<&[u8], RuleError> {
     content
         .items
         .get(usize::from(id.unsigned_abs()))
         .map(Vec::as_slice)
         .ok_or_else(|| RuleError::Invalid("equipment definition missing".into()))
+}
+
+/// removeitem checks the battery dependency after its charge-minus-one shortcut.
+pub(crate) fn removal_blocked(
+    warrior: &Warrior,
+    slot: usize,
+    definition: &[u8],
+) -> Result<bool, RuleError> {
+    Ok(word(definition, 26)?.wrapping_abs() == 20
+        && word(&warrior.bytes, 0x134 + slot * 22)? != -1
+        && (word(&warrior.bytes, 0xe0)? != 0 || word(&warrior.bytes, 0xe2)? != 0))
 }
 
 pub(crate) fn calculate_weight(warrior: &mut Warrior, content: &Content) -> Result<(), RuleError> {
@@ -103,114 +173,12 @@ fn earned_unloaded_firearm(item: &InventoryRecord) -> bool {
         ]
 }
 
-fn supported_firearm_instance(item: &InventoryRecord) -> Result<(), RuleError> {
-    if earned_unloaded_firearm(item) {
-        return Ok(());
-    }
-    let (capacity, ammunition, accuracy) = match item.id() {
-        1 => (12, 200, 0),
-        2 => (12, 201, 0),
-        38 => (3, 203, 35),
-        165 => (1, 280, 0),
-        _ => return Err(unsupported("other secondary firearm definition")),
-    };
-    if item.0[10] != 15
-        || word(&item.0, 6)? != capacity
-        || word(&item.0, 2)? < 0
-        || !matches!(word(&item.0, 4)?, 0) && word(&item.0, 4)? != ammunition
-        || item.0[9] > 1
-        || item.0[14] != 0
-        || item.0[15] != accuracy
-        || item.0[16..18].iter().any(|value| *value != 0)
-        || item.0[19..22].iter().any(|value| *value != 0)
-        || (item.0[18] != 0 && !(item.id() == 165 && item.0[18] == 10))
-    {
-        return Err(unsupported("other secondary firearm instance modifiers"));
-    }
-    Ok(())
-}
-
-fn supported_instance(item: &InventoryRecord) -> Result<(), RuleError> {
-    if earned_unloaded_firearm(item) {
-        return Ok(());
-    }
-    if matches!(item.id(), 165 | 700) {
-        let supported = item.0[8] == 0
-            && item.0[9] <= 1
-            && item.0[11..13].iter().all(|value| *value == 0)
-            && word(&item.0, 2)? == 1
-            && word(&item.0, 6)? == 1
-            && if item.id() == 165 {
-                item.0[10] == 15
-                    && word(&item.0, 4)? == 280
-                    && matches!((item.0[13], item.0[18]), (2, 0) | (3, 10))
-                    && item.0[14..18].iter().all(|value| *value == 0)
-                    && item.0[19..].iter().all(|value| *value == 0)
-            } else {
-                item.0[10] == 28
-                    && word(&item.0, 4)? == 0
-                    && item.0[13] == 1
-                    && item.0[14..].iter().all(|value| *value == 0)
-            };
-        return if supported {
-            Ok(())
-        } else {
-            Err(unsupported(
-                "other earned equipment instance or enhancement",
-            ))
-        };
-    }
-    let expected = match item.id() {
-        2 => (15, 1, 0),
-        38 => (15, 4, 35),
-        400 | 403 => (7, 1, 0),
-        420 => (6, 3, 0),
-        440 => (4, 1, 0),
-        460 => (10, 1, 0),
-        600 => (13, 1, 0),
-        637 => (20, 2, 0),
-        _ => return Err(unsupported("other item definition")),
-    };
-    if item.0[10] != expected.0
-        || item.0[13] != expected.1
-        || item.0[15] != expected.2
-        || item.0[14] != 0
-        || item.0[16..22].iter().any(|value| *value != 0)
-        || (matches!(item.id(), 600 | 637)
-            && (item.0[8] != 0 || item.0[9] > 1 || item.0[11..13].iter().any(|value| *value != 0)))
-        || (item.id() == 2
-            && (word(&item.0, 6)? != 12
-                || !((word(&item.0, 4)? == 0 && word(&item.0, 2)? == 0)
-                    || (word(&item.0, 4)? == 201 && (0..=12).contains(&word(&item.0, 2)?)))))
-        || (item.id() == 38
-            && (word(&item.0, 6)? != 3
-                || (word(&item.0, 4)? != 203
-                    && !(word(&item.0, 4)? == 0 && word(&item.0, 2)? == 0))))
-        || (item.id() == 637
-            && (word(&item.0, 6)? != 250
-                || !((word(&item.0, 4)? == 0 && word(&item.0, 2)? == 0)
-                    || (word(&item.0, 4)? == 307 && (0..=250).contains(&word(&item.0, 2)?)))))
-        || (matches!(item.id(), 400 | 403 | 440 | 460 | 600)
-            && item.0[2..8].iter().any(|value| *value != 0))
-    {
-        return Err(unsupported("other equipment instance or enhancement"));
-    }
-    Ok(())
-}
-
 pub fn collect_item(
     warrior: &Warrior,
     item: &InventoryRecord,
     content: &Content,
     mission: &OpeningMission,
 ) -> Result<Collection, RuleError> {
-    supported_instance(item)?;
-    if item.id() == 2 && (word(&item.0, 2)? != 0 || word(&item.0, 4)? != 0) {
-        return Err(unsupported("collection of loaded ordinary firearm"));
-    }
-    if item.id() == 637 && (word(&item.0, 2)? != 0 || word(&item.0, 4)? != 0) {
-        return Err(unsupported("collection of charged battery"));
-    }
     let definition = item_definition(content, item.id())?;
     let mut result = Collection {
         warrior: warrior.clone(),
@@ -280,117 +248,22 @@ fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
 }
 
-fn armor_slot(definition: &[u8]) -> Result<usize, RuleError> {
-    let class = word(definition, 26)?;
-    if !matches!(class, 4 | 6 | 7 | 10 | 13 | 20) {
-        return Err(unsupported("other armor class"));
-    }
-    Ok(0xc6 + class as usize * 2)
-}
-
-fn adjust_armor(
-    warrior: &mut [u8],
-    definition: &[u8],
-    item: &InventoryRecord,
-    equipped: bool,
+pub(crate) fn remove_inner(
+    warrior: &mut Warrior,
+    slot: usize,
+    content: &Content,
+    mission: &OpeningMission,
 ) -> Result<(), RuleError> {
-    let armor = word(warrior, 0x2c)?;
-    let increment = word(definition, 94)?;
-    let enhancement = i16::from(item.0[19] as i8);
-    let armor = if equipped {
-        armor.wrapping_add(increment).wrapping_add(enhancement)
-    } else {
-        armor.wrapping_sub(increment).wrapping_sub(enhancement)
-    };
-    put_word(warrior, 0x2c, armor.max(0));
-    let movement = word(warrior, 0x30)?;
-    let increment = i16::from(definition[5] as i8);
-    put_word(
-        warrior,
-        0x30,
-        if equipped {
-            movement.wrapping_add(increment)
-        } else {
-            movement.wrapping_sub(increment)
-        },
-    );
-    for (source, destination) in [(140, 0x114), (64, 0x116), (66, 0x118)] {
-        let increment = word(definition, source)?;
-        if increment < 0 {
-            let previous = word(warrior, destination)?;
-            put_word(
-                warrior,
-                destination,
-                if equipped {
-                    previous.wrapping_sub(increment)
-                } else {
-                    previous.wrapping_add(increment)
-                },
-            );
-        }
+    let shortcut = word(&warrior.bytes, 0x134 + slot * 22)? == -1;
+    *warrior = crate::editor_items::equipment_record(warrior, content, slot, false)?.0;
+    if !shortcut {
+        combat::calculate_movement(warrior, race_movement(warrior, mission)?)?;
     }
     Ok(())
 }
 
-fn adjust_shield(
-    warrior: &mut [u8],
-    definition: &[u8],
-    item: &InventoryRecord,
-    equipped: bool,
-) -> Result<(), RuleError> {
-    let chance = word(definition, 88)?.wrapping_add(i16::from(item.0[14] as i8));
-    let cost = word(definition, 92)?.wrapping_add(i16::from(item.0[21] as i8));
-    for (offset, increment) in [(0x24, chance), (0x2a, cost)] {
-        let previous = word(warrior, offset)?;
-        let next = if equipped {
-            previous.wrapping_add(increment)
-        } else {
-            previous.wrapping_sub(increment)
-        };
-        put_word(warrior, offset, next.max(0));
-    }
-    if word(definition, 90)? != 0 {
-        for (offset, increment) in [
-            (0x28, word(definition, 148)?.wrapping_add(word(&item.0, 6)?)),
-            (0x26, word(&item.0, 2)?),
-        ] {
-            let previous = word(warrior, offset)?;
-            let next = if equipped {
-                previous.wrapping_add(increment)
-            } else {
-                previous.wrapping_sub(increment)
-            };
-            put_word(warrior, offset, next.max(0));
-        }
-    }
-    adjust_armor(warrior, definition, item, equipped)?;
-    let defense = i16::from(definition[3] as i8).wrapping_add(i16::from(item.0[16] as i8));
-    let previous = word(warrior, 8)?;
-    let next = if equipped {
-        previous.wrapping_add(defense)
-    } else {
-        previous.wrapping_sub(defense).max(0)
-    };
-    put_word(warrior, 8, next);
-    for (source, destination) in [(68, 0x11a), (70, 0x11c), (72, 0x11e)] {
-        let increment = word(definition, source)?;
-        if increment < 0 {
-            let previous = word(warrior, destination)?;
-            put_word(
-                warrior,
-                destination,
-                if equipped {
-                    previous.wrapping_sub(increment)
-                } else {
-                    previous.wrapping_add(increment)
-                },
-            );
-        }
-    }
-    Ok(())
-}
-
-fn remove_inner(
+/// dropitem 0x121152 retains the original 29-slot shift and empty-record fill.
+pub(crate) fn drop(
     warrior: &mut Warrior,
     slot: usize,
     content: &Content,
@@ -400,42 +273,59 @@ fn remove_inner(
         .inventory()?
         .get(slot)
         .cloned()
-        .ok_or_else(|| RuleError::Invalid("equipment slot missing".into()))?;
-    if matches!(item.id(), 1 | 2 | 38 | 165) {
-        supported_firearm_instance(&item)?;
-    } else {
-        supported_instance(&item)?;
+        .ok_or("drop slot missing")?;
+    drop_record(warrior, slot, &item, content, mission, false)
+}
+
+pub(crate) fn force_drop(
+    warrior: &mut Warrior,
+    slot: usize,
+    content: &Content,
+    mission: &OpeningMission,
+) -> Result<(), RuleError> {
+    let item = InventoryRecord(
+        span(&warrior.bytes, 0x132 + slot * 22, 22)?
+            .try_into()
+            .unwrap(),
+    );
+    drop_record(warrior, slot, &item, content, mission, true)
+}
+
+fn drop_record(
+    warrior: &mut Warrior,
+    slot: usize,
+    item: &InventoryRecord,
+    content: &Content,
+    mission: &OpeningMission,
+    forced: bool,
+) -> Result<(), RuleError> {
+    if item.0[9] != 0 {
+        if forced {
+            *warrior = crate::editor_items::equipment_record_forced(warrior, content, slot)?.0;
+        } else {
+            remove_inner(warrior, slot, content, mission)?;
+        }
     }
     let definition = item_definition(content, item.id())?;
-    let w = &mut warrior.bytes;
-    if matches!(item.id(), 1 | 2 | 38 | 165) {
-        for offset in [0xe4, 0x126, 0x12c] {
-            put_word(w, offset, 0);
-        }
-        w[0x9dd] = 0;
-        let value = word(w, 4)?.wrapping_sub(i16::from(item.0[15] as i8));
-        put_word(w, 4, value);
-        let range = word(w, 0x130)?
-            .wrapping_sub(i16::from(item.0[20] as i8).wrapping_add(word(definition, 60)?));
-        put_word(w, 0x130, range);
-    } else {
-        put_word(w, armor_slot(definition)?, 0);
-        if matches!(item.id(), 600 | 637) {
-            adjust_shield(w, definition, &item, false)?;
-            if word(w, 0xe0)? == 0 && word(w, 0xe2)? == 0 {
-                put_word(w, 0x24, 0);
-                put_word(w, 0x2a, 0);
-            }
-            if word(w, 0xee)? == 0 {
-                put_word(w, 0x24, 0);
-            }
-        } else {
-            adjust_armor(w, definition, &item, false)?;
-        }
+    let weight = word(definition, 36)?
+        .wrapping_mul(word(&item.0, 2)?)
+        .wrapping_add(word(definition, 16)?);
+    let remaining = word(&warrior.bytes, 0x1a)?.wrapping_sub(1);
+    let total = word(&warrior.bytes, 0x9d6)?.wrapping_sub(weight);
+    for index in slot..29 {
+        warrior.bytes.copy_within(
+            0x132 + (index + 1) * 22..0x132 + (index + 2) * 22,
+            0x132 + index * 22,
+        );
     }
-    w[0x132 + slot * 22 + 9] = 0;
-    let movement = race_movement(warrior, mission)?;
-    combat::calculate_movement(warrior, movement)
+    // Original DATA at 0x41fc32 is the 22-byte zero record.
+    let empty = &[0; 22];
+    for index in remaining as usize..100 {
+        warrior.bytes[0x132 + index * 22..0x132 + (index + 1) * 22].copy_from_slice(empty);
+    }
+    put_word(&mut warrior.bytes, 0x1a, remaining);
+    put_word(&mut warrior.bytes, 0x9d6, total);
+    combat::calculate_movement(warrior, race_movement(warrior, mission)?)
 }
 
 pub fn wear(
@@ -445,19 +335,30 @@ pub fn wear(
     slot: usize,
     in_combat: bool,
 ) -> Result<EquipmentResult, RuleError> {
+    wear_retained(warrior, content, mission, slot, in_combat, None)
+}
+
+fn wear_retained(
+    warrior: &Warrior,
+    content: &Content,
+    mission: &OpeningMission,
+    slot: usize,
+    in_combat: bool,
+    retained: Option<&InventoryRecord>,
+) -> Result<EquipmentResult, RuleError> {
     let item = warrior
         .inventory()?
         .get(slot)
         .cloned()
         .ok_or_else(|| RuleError::Invalid("equipment slot missing".into()))?;
-    let firearm = matches!(item.id(), 1 | 2 | 38 | 165);
-    if firearm {
-        supported_firearm_instance(&item)?;
-    } else {
-        supported_instance(&item)?;
-    }
     if item.0[9] != 0 {
-        return Err(unsupported("already equipped selection"));
+        return Ok(EquipmentResult {
+            warrior: warrior.clone(),
+            changed: false,
+            sounds: vec![],
+            warnings: vec![],
+            record: retained.cloned(),
+        });
     }
     let definition = item_definition(content, item.id())?;
     let mut result = EquipmentResult {
@@ -465,6 +366,7 @@ pub fn wear(
         changed: false,
         sounds: vec![],
         warnings: vec![],
+        record: retained.cloned(),
     };
     if !can_use(warrior, definition, mission)? {
         result.warnings.push(29);
@@ -475,55 +377,21 @@ pub fn wear(
         result.sounds.push(6000);
         return Ok(result);
     }
-    if !firearm && word(&warrior.bytes, armor_slot(definition)?)? != 0 {
-        return Err(unsupported("replacement armor"));
+    let worn = crate::editor_items::retained_equipment(
+        warrior,
+        content,
+        slot,
+        true,
+        false,
+        retained.unwrap_or(&item),
+    )?;
+    result.warrior = worn.warrior;
+    result.warnings = worn.warnings;
+    result.record = retained.map(|_| worn.record);
+    if result.warrior.bytes[0x132 + slot * 22 + 9] == 0 {
+        result.changed = result.warrior != *warrior;
+        return Ok(result);
     }
-    if item.id() == 600 {
-        if word(&warrior.bytes, 0xea)? == 0 && word(&warrior.bytes, 0xe2)? != 0 {
-            result.warnings.push(146);
-            return Ok(result);
-        }
-        if word(&warrior.bytes, 0x26)?
-            < word(&warrior.bytes, 0x2a)?.wrapping_add(word(definition, 92)?)
-        {
-            result.warnings.push(144);
-            return Ok(result);
-        }
-    }
-    if firearm && word(&warrior.bytes, 0xe4)? != 0 {
-        let old_slot = warrior
-            .inventory()?
-            .iter()
-            .position(|old| old.0[10] == 15 && old.0[9] != 0)
-            .ok_or_else(|| RuleError::Invalid("equipped secondary record missing".into()))?;
-        remove_inner(&mut result.warrior, old_slot, content, mission)?;
-    }
-    let w = &mut result.warrior.bytes;
-    if firearm {
-        for (offset, value) in [
-            (0xe4, item.id()),
-            (0x12c, item.id()),
-            (0x126, word(&item.0, 4)?),
-        ] {
-            put_word(w, offset, value);
-        }
-        let range = word(w, 0x130)?
-            .wrapping_add(i16::from(item.0[20] as i8).wrapping_add(word(definition, 60)?));
-        put_word(w, 0x130, range);
-        w[0x9dd] = 1;
-        let value = word(w, 4)?.wrapping_add(i16::from(item.0[15] as i8));
-        put_word(w, 4, value);
-    } else {
-        put_word(w, armor_slot(definition)?, word(definition, 102)?);
-        if matches!(item.id(), 600 | 637) {
-            adjust_shield(w, definition, &item, true)?;
-        } else {
-            adjust_armor(w, definition, &item, true)?;
-        }
-    }
-    w[0x132 + slot * 22 + 9] = 1;
-    let movement = race_movement(warrior, mission)?;
-    combat::calculate_movement(&mut result.warrior, movement)?;
     if in_combat {
         let ap = word(&result.warrior.bytes, 0x40)?.wrapping_sub(1);
         put_word(&mut result.warrior.bytes, 0x40, ap);
@@ -539,25 +407,31 @@ pub fn remove(
     mission: &OpeningMission,
     slot: usize,
 ) -> Result<EquipmentResult, RuleError> {
+    remove_retained(warrior, content, mission, slot, None)
+}
+
+fn remove_retained(
+    warrior: &Warrior,
+    content: &Content,
+    mission: &OpeningMission,
+    slot: usize,
+    retained: Option<&InventoryRecord>,
+) -> Result<EquipmentResult, RuleError> {
     let item = warrior
         .inventory()?
         .get(slot)
         .cloned()
         .ok_or_else(|| RuleError::Invalid("equipment slot missing".into()))?;
-    if matches!(item.id(), 1 | 2 | 38 | 165) {
-        supported_firearm_instance(&item)?;
-    } else {
-        supported_instance(&item)?;
-    }
     if item.0[9] == 0 {
         return Err(unsupported("unequipped selection"));
     }
-    if item.id() == 637 && (word(&warrior.bytes, 0xe0)? != 0 || word(&warrior.bytes, 0xe2)? != 0) {
+    if removal_blocked(warrior, slot, item_definition(content, item.id())?)? {
         return Ok(EquipmentResult {
             warrior: warrior.clone(),
             changed: false,
             sounds: vec![],
             warnings: vec![145],
+            record: retained.cloned(),
         });
     }
     let mut result = EquipmentResult {
@@ -565,8 +439,16 @@ pub fn remove(
         changed: true,
         sounds: vec![word(item_definition(content, item.id())?, 12)?],
         warnings: vec![],
+        record: retained.cloned(),
     };
-    remove_inner(&mut result.warrior, slot, content, mission)?;
+    if let Some(record) = retained {
+        let removed =
+            crate::editor_items::retained_equipment(warrior, content, slot, false, false, record)?;
+        result.warrior = removed.warrior;
+        result.record = Some(removed.record);
+    } else {
+        remove_inner(&mut result.warrior, slot, content, mission)?;
+    }
     Ok(result)
 }
 
@@ -577,24 +459,26 @@ fn mission<'a>(state: &Session, content: &'a Content) -> Result<&'a OpeningMissi
 }
 
 fn admission(state: &Session, warrior: usize, needs_ap: bool) -> Result<(), RuleError> {
-    if warrior >= state.warriors.len()
-        || !matches!(state.phase, Phase::Exploration | Phase::Combat)
+    if warrior >= state.warriors.len() {
+        return Err("inventory warrior outside squad".into());
+    }
+    if !matches!(state.phase, Phase::Exploration | Phase::Combat)
         || state
             .exploration
             .as_ref()
             .is_some_and(|p| p.presentation.is_some())
     {
-        return Err(RuleError::Invalid(
-            "items require unobstructed mission".into(),
-        ));
+        return Err(RuleError::Refused { feedback: vec![] });
     }
     if state.phase == Phase::Combat
-        && (state.combat.as_ref().and_then(combat::Combat::active_body) != Some(warrior as i16)
-            || (needs_ap && word(&state.warriors[warrior].bytes, 0x40)? < 1))
+        && state.combat.as_ref().and_then(combat::Combat::active_body) != Some(warrior as i16)
     {
-        return Err(RuleError::Invalid(
-            "items require active warrior with an action point".into(),
-        ));
+        return Err(RuleError::Refused {
+            feedback: vec![crate::feedback::NativeFeedback::Warning { index: 10 }],
+        });
+    }
+    if state.phase == Phase::Combat && needs_ap && word(&state.warriors[warrior].bytes, 0x40)? < 1 {
+        return Err(RuleError::Refused { feedback: vec![] });
     }
     Ok(())
 }
@@ -609,6 +493,61 @@ fn events(sounds: Vec<i16>, warnings: Vec<i16>) -> Vec<Event> {
                 .map(|warning| Event::CollectionRejected { warning }),
         )
         .collect()
+}
+
+/// moveicon's owned-item route collects into the destination before dropping the source.
+pub fn transfer(
+    state: &mut Session,
+    content: &Content,
+    from: usize,
+    to: usize,
+    slot: usize,
+) -> Result<Vec<Event>, RuleError> {
+    if state.phase == Phase::Combat
+        && state.combat.as_ref().and_then(combat::Combat::active_body) != Some(from as i16)
+    {
+        return Err(RuleError::Refused { feedback: vec![] });
+    }
+    admission(state, from, false)?;
+    if from == to || to >= state.warriors.len() {
+        return Err(RuleError::Refused { feedback: vec![] });
+    }
+    let mission = mission(state, content)?;
+    let item = state.warriors[from]
+        .inventory()?
+        .get(slot)
+        .cloned()
+        .ok_or("transfer slot missing")?;
+    if state.inventory_record.is_some() {
+        state.inventory_record = Some(item.clone());
+    }
+    state.load_item_work(content, item.id())?;
+    if state.warriors[to].inventory()?.len() >= 30 {
+        return Ok(vec![Event::Feedback(
+            crate::feedback::NativeFeedback::Warning { index: 19 },
+        )]);
+    }
+    let collected = if word(item_definition(content, item.id())?, 26)? == 23 {
+        crate::story_collection::collect_story_item(
+            &state.warriors[to],
+            &item,
+            content,
+            race_movement(&state.warriors[to], mission)?,
+        )?
+    } else {
+        collect_item(&state.warriors[to], &item, content, mission)?
+    };
+    let mut effects = events(collected.sounds, collected.warnings);
+    state.warriors[to] = collected.warrior;
+    if collected.collected {
+        drop(&mut state.warriors[from], slot, content, mission)?;
+        effects.push(Event::ItemTransferred {
+            from,
+            to,
+            item: item.id(),
+        });
+    }
+    Ok(effects)
 }
 
 pub fn take_crate(
@@ -661,17 +600,22 @@ pub fn equip(
         .cloned()
         .ok_or_else(|| RuleError::Invalid("equipment slot missing".into()))?;
     let item_id = item.id();
-    let mut result = wear(
+    if state.inventory_record.is_some() {
+        state.inventory_record = Some(item.clone());
+    }
+    let mut result = wear_retained(
         &state.warriors[warrior],
         content,
         mission(state, content)?,
         slot,
         state.phase == Phase::Combat,
+        state.inventory_record.as_ref(),
     )?;
+    state.inventory_record = result.record.take();
     if !result.changed {
-        return Err(RuleError::Invalid(
-            "warrior cannot equip selected item".into(),
-        ));
+        state.warriors[warrior] = result.warrior;
+        state.load_item_work(content, item_id)?;
+        return Ok(events(result.sounds, result.warnings));
     }
     items::compact(&mut result.warrior)?;
     state.warriors[warrior] = result.warrior;
@@ -700,16 +644,21 @@ pub fn unequip(
         .cloned()
         .ok_or_else(|| RuleError::Invalid("equipment slot missing".into()))?;
     let item_id = item.id();
-    let mut result = remove(
+    if state.inventory_record.is_some() {
+        state.inventory_record = Some(item.clone());
+    }
+    let mut result = remove_retained(
         &state.warriors[warrior],
         content,
         mission(state, content)?,
         slot,
+        state.inventory_record.as_ref(),
     )?;
+    state.inventory_record = result.record.take();
     if !result.changed {
-        return Err(RuleError::Invalid(
-            "warrior cannot remove selected item".into(),
-        ));
+        state.warriors[warrior] = result.warrior;
+        state.load_item_work(content, item_id)?;
+        return Ok(events(result.sounds, result.warnings));
     }
     items::compact(&mut result.warrior)?;
     state.warriors[warrior] = result.warrior;

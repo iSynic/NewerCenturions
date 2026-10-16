@@ -284,18 +284,26 @@ pub fn move_enemy(
     enemy_index: usize,
     random: &mut RandomState,
 ) -> Result<BodyMovement, RuleError> {
+    move_enemy_before_place(combat, mission, enemy_index, random, &mut |_, _, _| Ok(()))
+}
+
+type DepartureReaction<'a> =
+    dyn FnMut(&mut combat::Combat, &mut RandomState, (i16, i16)) -> Result<(), RuleError> + 'a;
+
+pub(crate) fn move_enemy_before_place(
+    combat: &combat::Combat,
+    mission: &OpeningMission,
+    enemy_index: usize,
+    random: &mut RandomState,
+    before_place: &mut DepartureReaction<'_>,
+) -> Result<BodyMovement, RuleError> {
     let monster = combat
         .enemies
         .records
         .get(enemy_index)
         .ok_or_else(|| RuleError::Invalid("enemy movement record unavailable".into()))?;
     let size = size(monster)?;
-    if monster.bytes[0xb2] != 0 {
-        return Err(RuleError::Unsupported {
-            action: "combat.enemy_move",
-            dependency: "fleeing enemy",
-        });
-    }
+    let fleeing = monster.bytes[0xb2] != 0;
     let target = word(&monster.bytes, 0x10c)?;
     let target_position = if (0..6).contains(&target) {
         combat.squad.positions.get(target as usize)
@@ -320,6 +328,10 @@ pub fn move_enemy(
     let mut next_random = random.clone();
     let mut dx = (target_position.0 - position.0).signum() as i8;
     let mut dy = (target_position.1 - position.1).signum() as i8;
+    if fleeing {
+        dx = -dx;
+        dy = -dy;
+    }
     result.combat.enemies.records[enemy_index].bytes[0x107] = dx as u8;
     result.combat.enemies.records[enemy_index].bytes[0x108] = dy as u8;
     let mut cost = 0;
@@ -380,7 +392,14 @@ pub fn move_enemy(
         if cost > i16::from(monster.bytes[0x106] as i8) {
             continue;
         }
-        let map = restore(&combat.map, monster, position)?;
+        if fleeing {
+            before_place(&mut result.combat, &mut next_random, next)?;
+        }
+        let map = restore(
+            &result.combat.map,
+            &result.combat.enemies.records[enemy_index],
+            position,
+        )?;
         let placed = place(
             &map,
             &result.combat.enemies.records[enemy_index],
@@ -403,10 +422,15 @@ pub fn move_enemy(
             next.1.wrapping_add(combat.map.shift.1).wrapping_add(5),
         );
         if !(2..=87).contains(&absolute.0) || !(2..=87).contains(&absolute.1) {
-            return Err(RuleError::Unsupported {
-                action: "combat.enemy_move",
-                dependency: "enemy leaving the tactical field",
-            });
+            if word(bytes, 0x5a)? == -1 {
+                bytes[0x107] = (dx.wrapping_neg()) as u8;
+                bytes[0x108] = (dy.wrapping_neg()) as u8;
+            } else {
+                bytes[0x104] = 0;
+                bytes[0x106] = 0;
+                put_word(bytes, 0x46, 101);
+                result.combat.cursor = result.combat.cursor.saturating_sub(1);
+            }
         }
         result.moved = true;
         *random = next_random;

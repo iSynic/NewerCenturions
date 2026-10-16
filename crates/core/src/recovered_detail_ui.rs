@@ -91,6 +91,7 @@ pub enum DetailEffect {
     TextBox {
         pointer: u32,
         length: i32,
+        bytes: Vec<u8>,
         rectangle_pointer: u32,
         rectangle: BodyRect,
         alignment: i16,
@@ -444,6 +445,12 @@ fn text_box(
     result.effects.push(DetailEffect::TextBox {
         pointer,
         length,
+        bytes: read(
+            &result.memory,
+            pointer,
+            usize::try_from(length)
+                .map_err(|_| RuleError::Invalid("negative detail text length".into()))?,
+        )?,
         rectangle_pointer,
         rectangle,
         alignment: 0,

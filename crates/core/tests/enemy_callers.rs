@@ -66,7 +66,17 @@ pub fn compare(cases: &[Value], caller: Caller) {
             &mut work,
         );
         if case["diagnostic"].as_bool().unwrap_or(false) {
-            assert!(matches!(result, Err(RuleError::Unsupported { .. })));
+            if let Ok(events) = result {
+                let mut hits = events
+                    .iter()
+                    .filter(|event| matches!(event, Event::SpellResolved { .. }));
+                for expected in expected_hits(case, combat.enemies.records.len(), caller) {
+                    assert_eq!(hits.next(), Some(&expected));
+                }
+                assert!(event_sounds(&events).starts_with(&case.n::<Vec<i16>>("sounds")));
+            } else {
+                assert!(matches!(result, Err(RuleError::Unsupported { .. })));
+            }
             continue;
         }
         let events = result.unwrap_or_else(|error| panic!("case {index}: {error:?}"));

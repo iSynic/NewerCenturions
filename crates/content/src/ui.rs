@@ -4,6 +4,19 @@ pub const PANEL_PICTURES: &[i16] = &[
     153, 154, 156, 166, 174, 228, 168, 171, 172, 189, 197, 199, 220, 224, 227,
 ];
 
+pub fn c_string(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|v| *v == 0).unwrap_or(bytes.len());
+    encoding_rs::MACINTOSH.decode(&bytes[..end]).0.into_owned()
+}
+
+pub fn pascal_text(bytes: &[u8]) -> Result<String, ContentError> {
+    let length = usize::from(span(bytes, 0, 1)?[0]);
+    Ok(encoding_rs::MACINTOSH
+        .decode(span(bytes, 1, length)?)
+        .0
+        .into_owned())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Menu {
     pub id: i16,

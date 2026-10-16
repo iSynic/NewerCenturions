@@ -11,6 +11,28 @@ pub fn upgrade_cost(
     selector: u16,
     profile: &[u8],
 ) -> Result<(i32, i32), RuleError> {
+    let (cost, percent) = upgrade_price(warrior, selector, profile)?;
+    Ok((cost.trunc() as i32, percent))
+}
+
+/// upgradewarrior 0x163200..0x1632f8 compares SINGLE-rounded points and truncates the debit.
+pub fn upgrade_payment(
+    warrior: &Warrior,
+    selector: u16,
+    profile: &[u8],
+) -> Result<Option<i32>, RuleError> {
+    let (cost, _) = upgrade_cost(warrior, selector, profile)?;
+    let cost = cost as f32;
+    let points = i32::from_be_bytes(span(&warrior.bytes, 0x9d2, 4)?.try_into().unwrap());
+    let rounded = points as f32;
+    Ok((rounded >= cost).then(|| (f64::from(points) - f64::from(cost)).trunc() as i32))
+}
+
+fn upgrade_price(
+    warrior: &Warrior,
+    selector: u16,
+    profile: &[u8],
+) -> Result<(f32, i32), RuleError> {
     const BASE: [i16; 33] = [
         100, 100, 100, 100, 100, 100, 100, 50, 200, 200, 150, 150, 150, 150, 150, 150, 175, 125,
         200, 175, 100, 100, 300, 250, 350, 400, 100, 100, 100, 200, 250, 300, 1000,
@@ -49,10 +71,10 @@ pub fn upgrade_cost(
         cost = (f64::from(cost) * f64::from(factor)) as f32;
         if cost >= 50_000_000. {
             // Nonnegative percentages cannot fall back below the original final cap.
-            return Ok((50_000_000, i32::from(percent)));
+            return Ok((50_000_000., i32::from(percent)));
         }
     }
-    Ok((cost.trunc() as i32, i32::from(percent)))
+    Ok((cost, i32::from(percent)))
 }
 
 /// CODE 1 applyupgrade, 0x1634f8. The caller owns costs and eligibility.

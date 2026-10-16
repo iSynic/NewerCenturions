@@ -9,14 +9,7 @@ fn spell_resolution_matches_original_ordered_party_and_monster_records() {
 
 #[test]
 fn additional_spells_match_original_ordered_party_and_monster_records() {
-    let fixture: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../evidence/fixtures/additional-spells.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let fixture: serde_json::Value = crate::support::fixture("additional-spells.json");
     assert_resolution(&fixture);
 }
 
@@ -70,14 +63,7 @@ fn assert_resolution(fixture: &serde_json::Value) {
 #[test]
 fn enemy_firearms_match_original_scientist_records_sounds_and_randomness() {
     use centurions_core::combat::{firearm::PreparedFirearm, spells::resolve_enemy_firearm_body};
-    let fixture: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../evidence/fixtures/enemy-firearm-bodies.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let fixture: serde_json::Value = crate::support::fixture("enemy-firearm-bodies.json");
     for (index, case) in fixture.array("cases").iter().enumerate() {
         let caster = MonsterRecord {
             bytes: case.bytes("caster_before"),
@@ -113,14 +99,7 @@ fn global_spell_masks_match_original_faction_and_living_body_rules() {
     use centurions_core::combat::{
         Combat, EnemySetup, SquadPlacement, TacticalMap, spells::global_targets,
     };
-    let fixture: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../evidence/fixtures/additional-spells.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let fixture: serde_json::Value = crate::support::fixture("additional-spells.json");
     for (index, case) in fixture.array("mask_cases").iter().enumerate() {
         let warriors = crate::support::warriors(&case.bytes("warriors"));
         let enemies = crate::support::monsters(&case.bytes("enemies_before"));

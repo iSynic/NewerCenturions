@@ -23,6 +23,11 @@ fn supplied_startup_and_squad_pictures_decode_at_their_original_dimensions() {
         (179, 13, 13),
         (183, 50, 50),
         (216, 70, 35),
+        (148, 640, 73),
+        (170, 114, 387),
+        (175, 50, 37),
+        (226, 800, 120),
+        (227, 80, 73),
     ] {
         let resource = content
             .resources
@@ -48,5 +53,38 @@ fn supplied_startup_and_squad_pictures_decode_at_their_original_dimensions() {
                 .iter()
                 .all(|pixel| pixel[3] == 255)
         );
+    }
+    // Newly connected dialogs must not make desktop startup fail on their original pictures.
+    for dialog in [128, 131, 132, 133, 136, 158, 161, 167, 177, 190] {
+        let resource = content
+            .resources
+            .iter()
+            .find(|r| r.r#type == "DITL" && r.id == dialog && r.original.ends_with("/Cargo Pod"))
+            .unwrap();
+        for item in
+            centurions_content::ui::dialog_items(&read_resource(&extracted, resource).unwrap())
+                .unwrap()
+        {
+            if item.kind == 64 && item.data.len() == 2 {
+                let id = i16::from_be_bytes(item.data[..2].try_into().unwrap());
+                if id > 0 {
+                    let resource = content
+                        .resources
+                        .iter()
+                        .find(|r| {
+                            r.r#type == "PICT" && r.id == id && r.original.ends_with("/Cargo Pod")
+                        })
+                        .unwrap();
+                    decode_pict(&read_resource(&extracted, resource).unwrap()).unwrap();
+                }
+            }
+        }
+    }
+    for resource in content.resources.iter().filter(|resource| {
+        resource.r#type == "PICT"
+            && resource.original.contains("/Scenarios/")
+            && resource.original.ends_with("/Scenario")
+    }) {
+        decode_pict(&read_resource(&extracted, resource).unwrap()).unwrap();
     }
 }

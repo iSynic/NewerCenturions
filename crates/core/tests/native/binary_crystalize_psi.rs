@@ -1,16 +1,10 @@
 use crate::prelude::*;
 use crate::support::positions;
 
-fn party(s: &Value) -> Vec<Warrior> {
-    crate::support::warriors(&s["party"])
-}
-fn data() -> Value {
-    crate::support::fixture("crystalize-psi.json")
-}
+use crate::native_common::snapshot_party as party;
 
 fn combat(s: &Value) -> Combat {
     Combat {
-        difficulty: 0,
         battle: 85,
         map: TacticalMap {
             tiles: words(s.text("map")),
@@ -38,7 +32,7 @@ fn combat(s: &Value) -> Combat {
 }
 #[test]
 fn learned_crystalize_matches_complete_native_cast_field_creation_cost_rng_and_audio() {
-    let f = data();
+    let f = crate::support::fixture("crystalize-psi.json");
     let content = content();
     let mission = content.map(0).unwrap();
 
@@ -62,6 +56,7 @@ fn learned_crystalize_matches_complete_native_cast_field_creation_cost_rng_and_a
             &mut memory,
             0,
             CastRequest {
+                rotation: 0,
                 spell: 2101,
                 power,
                 target: Some(target),
@@ -132,9 +127,7 @@ fn learned_crystalize_matches_complete_native_cast_field_creation_cost_rng_and_a
         crate::support::expect(result, &cast["last_amount"]);
 
         let mut receipt_rng = RandomState::new(case.n::<u32>("seed_before"));
-        for draw in cast.array("rng_records") {
-            crate::support::expect(receipt_rng.bound(draw.n::<i16>("bound")), &draw["result"]);
-        }
+        crate::support::replay_rng(&mut receipt_rng, cast.array("rng_records"));
         assert_eq!(receipt_rng, random);
     }
 }

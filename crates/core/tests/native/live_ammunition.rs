@@ -33,6 +33,7 @@ fn authored_pack_collection_matches_live_records_reserve_and_rng() {
         record: vec![0; 42],
         cursor: 0,
         map_slot: 0,
+        item_return: false,
         scheduled: false,
         menu: None,
         persist: false,

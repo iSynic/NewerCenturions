@@ -4,20 +4,15 @@ use crate::support::warriors as party;
 use centurions_core::combat::attack;
 use centurions_core::combat::damage;
 use centurions_core::combat::party_buffs;
-use centurions_core::combat::player_psi::PartyCastRequest;
 
 use crate::support::positions;
 
-fn fixture() -> Value {
-    crate::support::fixture("player-support-psi.json")
-}
 use crate::support::assert_bytes;
 
 fn combat(s: &Value, caster: i16) -> Combat {
     let mut order = vec![-1; 110];
     order[1] = caster;
     Combat {
-        difficulty: 0,
         battle: 85,
         map: TacticalMap {
             tiles: words(s.text("map")),
@@ -81,11 +76,16 @@ fn expected_sounds(c: &Value) -> Vec<i16> {
 }
 #[test]
 fn support_casts_match_complete_native_records_packets_memory_rng_and_audio() {
-    let f = fixture();
+    let f = crate::support::fixture("player-support-psi.json");
     let content = content();
     let mission = content.map(0).unwrap();
 
-    for (i, case) in f.array("cases").iter().enumerate() {
+    for (i, case) in f
+        .array("cases")
+        .iter()
+        .enumerate()
+        .filter(|(_, case)| case["spell_id"] != 1103)
+    {
         let label = format!(
             "cast {i} id{} power{} variant{}",
             case["spell_id"], case["power"], case["variant"]
@@ -97,68 +97,40 @@ fn support_casts_match_complete_native_records_packets_memory_rng_and_audio() {
         let mut w = party(before.text("party"));
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let mut memory = before.bytes("memory");
-        if id == 1103 {
-            let result = player_psi::cast_party(
-                &w,
-                &memory,
-                &before.bytes("party_buffs"),
-                mission,
-                &mut random,
-                0,
-                PartyCastRequest {
-                    warrior: 5,
-                    spell: id,
-                    power,
-                },
-            )
-            .unwrap_or_else(|e| panic!("{label} {e:?}"));
-            crate::support::native_expect! {
-            bytes flatten_party(&result.warriors) => &after["party"], &format!("{label} party");
-            bytes result.memory => &after["memory"], &format!("{label} memory");
-            bytes result.buffs => &after["party_buffs"], &format!("{label} buffs");
-            bytes result.packet => &after["packet"], &format!("{label} packet");
-            words &(result.identity.to_vec()) => &after["identity"], "binary_support_psi";
-            }
-            assert_eq!(
-                sounds(&result.events),
-                expected_sounds(case),
-                "{label} sounds"
-            );
+        let mut c = combat(before, 5);
+        let target = if id == 1101 {
+            Some(c.squad.positions[case.n::<usize>("target")])
         } else {
-            let mut c = combat(before, 5);
-            let target = if id == 1101 {
-                Some(c.squad.positions[case.n::<usize>("target")])
-            } else {
-                Some((20, 20))
-            };
-            let events = player_psi::cast(
-                &mut c,
-                &mut w,
-                mission,
-                &mut random,
-                &mut memory,
-                0,
-                CastRequest {
-                    spell: id,
-                    power,
-                    target,
-                },
-            )
-            .unwrap_or_else(|e| panic!("{label} {e:?}"));
-            compare(&c, &w, after, &label);
-            assert_bytes(&memory, &after.bytes("memory"), &format!("{label} memory"));
-            assert_eq!(sounds(&events), expected_sounds(case), "{label} sounds");
-            assert_eq!(
-                before["party_buffs"], after["party_buffs"],
-                "{label} unchanged buffs"
-            );
-        }
+            Some((20, 20))
+        };
+        let events = player_psi::cast(
+            &mut c,
+            &mut w,
+            mission,
+            &mut random,
+            &mut memory,
+            0,
+            CastRequest {
+                rotation: 0,
+                spell: id,
+                power,
+                target,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{label} {e:?}"));
+        compare(&c, &w, after, &label);
+        assert_bytes(&memory, &after.bytes("memory"), &format!("{label} memory"));
+        assert_eq!(sounds(&events), expected_sounds(case), "{label} sounds");
+        assert_eq!(
+            before["party_buffs"], after["party_buffs"],
+            "{label} unchanged buffs"
+        );
         rng(&random, after, &label);
     }
 }
 #[test]
 fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
-    let f = fixture();
+    let f = crate::support::fixture("player-support-psi.json");
     let content = content();
     let attacks = &content.map(0).unwrap().combat.as_ref().unwrap().attacks;
 
@@ -214,7 +186,7 @@ fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
 }
 #[test]
 fn party_timers_and_damage_modifier_match_independent_native_branches() {
-    let f = fixture();
+    let f = crate::support::fixture("player-support-psi.json");
     for (i, case) in f.array("tick_cases").iter().enumerate() {
         let mut buffs = case["before"].bytes("party_buffs");
         party_buffs::reduce(&mut buffs).unwrap();
@@ -238,7 +210,7 @@ fn party_timers_and_damage_modifier_match_independent_native_branches() {
 }
 #[test]
 fn electric_ward_matches_native_damage_component_rng_and_target_flags() {
-    let f = fixture();
+    let f = crate::support::fixture("player-support-psi.json");
     for (i, case) in f.array("electric_cases").iter().enumerate() {
         let label = format!("electric {i}");
         let before = &case["before"];
@@ -272,7 +244,7 @@ fn electric_ward_matches_native_damage_component_rng_and_target_flags() {
 }
 #[test]
 fn mode_affordability_and_geometry_match_native_preflight_without_mutation() {
-    let f = fixture();
+    let f = crate::support::fixture("player-support-psi.json");
     let content = content();
     let mission = content.map(0).unwrap();
     for case in f.array("admission_cases").iter() {

@@ -10,7 +10,7 @@ pub enum StoryContinuation {
     EndScript,
 }
 
-fn branch(mode: i16, target: i16) -> StoryContinuation {
+pub(crate) fn branch(mode: i16, target: i16) -> StoryContinuation {
     match mode {
         0 => StoryContinuation::ReplaceScript(target),
         1 => StoryContinuation::Encounter(target),

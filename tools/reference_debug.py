@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--loaded", help="controlled warrior:loaded-rounds input for the equipped starter firearm")
     parser.add_argument("--condition", action="append", default=[], help="controlled warrior:hex-offset:duration input (0x5e or 0x66)")
     parser.add_argument("--receipt", type=Path)
+    parser.add_argument("--guest-read", help="read-only address:length at the owned emulator RAM mapping")
     args = parser.parse_args()
     if args.seed is not None and not 1 <= args.seed < 2147483647:
         parser.error("controlled RNG seed must be between 1 and 2147483646")
@@ -88,6 +89,16 @@ def main():
         registers = struct.unpack("<19I", read(module_base+0x3d7620, 76))
         receipt = dict(pid=pid, a5=a5, code1=code, pc=registers[17]-ram_host,
                        registers=list(registers[:16]), emulator_sha256=emulator_hash)
+        if args.guest_read:
+            address, length = (int(value, 0) for value in args.guest_read.split(":"))
+            if not 0 <= address < 2**32 or not 1 <= length <= 4096:
+                raise ValueError("invalid read-only guest range")
+            capture = dict(address=address, length=length, host_address=ram_host+address)
+            try:
+                capture["hex"] = read(ram_host+address, length).hex()
+            except OSError as error:
+                capture["read_error"] = str(error)
+            receipt["guest_read"] = capture
         if controlled:
             writes=[]
             def field(offset, value, size, label):

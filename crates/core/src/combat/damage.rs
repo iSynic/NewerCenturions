@@ -29,21 +29,21 @@ pub fn resolve_damage(
     flags: DamageFlags,
     random: &mut RandomState,
 ) -> Result<DamageResult, RuleError> {
+    resolve_damage_with_amount(target, monster, packet, flags, 0, random)
+}
+
+/// resolvedamage150e7a reads the caller's previous WORD amount for negative NPC saves.
+pub fn resolve_damage_with_amount(
+    target: &mut [u8],
+    monster: bool,
+    packet: &DamagePacket,
+    flags: DamageFlags,
+    previous_amount: i16,
+    random: &mut RandomState,
+) -> Result<DamageResult, RuleError> {
     let p = &packet.bytes;
     if p.len() != 58 || target.len() != if monster { 288 } else { 3138 } {
         return Err(RuleError::Invalid("damage record size".into()));
-    }
-    if flags.saves
-        && monster
-        && target[0x8c..0x93]
-            .iter()
-            .zip(&p[23..30])
-            .any(|(v, damage)| (*v as i8) < 0 && *damage != 0)
-    {
-        return Err(RuleError::Unsupported {
-            action: "combat.damage",
-            dependency: "monster percentage resistance",
-        });
     }
     let mut components = [0_i16; 9];
     let maximum = word(p, 34)?;
@@ -160,6 +160,11 @@ pub fn resolve_damage(
         }
         if monster {
             for (i, damage) in components.iter_mut().enumerate().skip(2) {
+                let resistance = target[0x8a + i] as i8;
+                if *damage != 0 && resistance < 0 {
+                    let multiplier = f32::from(i16::from(resistance).wrapping_abs()) / 100. + 1.;
+                    *damage = ((f32::from(previous_amount) * multiplier) as i32) as i16;
+                }
                 if (target[0x8a + i] as i8) > 100 {
                     *damage = 0;
                 }

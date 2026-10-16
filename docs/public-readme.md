@@ -43,8 +43,10 @@ cargo test --workspace
 cargo build --workspace --release --locked
 ```
 
-The four crates separate content readers, deterministic rules, inspection/replay
-tools and native presentation. Desktop and replay use the same atomic command
+The workspace separates content readers, deterministic rules, inspection/replay
+tools, native presentation and three expanded translation libraries. A composition
+crate owns the full routine registry; essential tests depend on the small runtime.
+Desktop and replay use the same atomic command
 boundary. Unsupported gameplay reports its missing dependency without changing
 the represented state or random stream.
 
@@ -85,27 +87,68 @@ beside the executable. The inspection tool also defaults to its own folder:
 ./centurions-tools.exe inspect
 ```
 
-Versioned reconstruction saves go to
-`%LOCALAPPDATA%/NewCenturions/saves/session.json`. Original warriors and Mac saves
+Save Current Game and Load A Saved Game open Windows file dialogs, allowing
+multiple named, versioned reconstruction saves. The initial directory is
+`%LOCALAPPDATA%/NewCenturions/saves`; Fast Save reuses the last successfully
+saved or loaded file. Cancellation leaves the session unchanged. Existing Mac
+saves and original data directories cannot be overwritten. `--save-path` keeps
+the fixed-file workflow for command-line use. Original warriors and Mac saves
 remain separate. The prepared extraction layout remains supported for existing
 local development and native-comparison workflows. Installers and archives must
 be extracted with resource forks preserved before running the Windows binary.
 
+Created warriors and mission-end warrior updates are stored separately in
+`%LOCALAPPDATA%/NewCenturions/warriors.json`. The Character menu connects the
+original creation dialogs, initial Psi selection, starting equipment, squad
+ordering and squad modification. Ending a mission returns to the title screen
+after preserving its warriors. UI preferences are saved in
+`%LOCALAPPDATA%/NewCenturions/ui.json`; original files remain read-only.
+
+Windows starts in a movable window. Alt+Enter toggles fullscreen, including
+while a dialog is open; holding the shortcut does not repeat. The original
+Hide The Desktop control changes fullscreen for the current session. Changing
+the 640×480/800×600 preference returns to windowed mode at the chosen size.
+
 ## Playable scope
 
 After the logo, select Mission → Begin New Mission, add the six supplied warriors
-and choose Done. Normal difficulty is supported. The selection order becomes
+and choose Done. All five original difficulty levels can be selected. The selection order becomes
 the squad order. The briefing scrolls, supports dragging and closes on
 double-click. Open menus track the pointer across menu-bar headings.
 
 Arrow/numpad keys move; Enter/Space advances ordinary story pages. Equipment,
 ammunition, psi and medical actions are available for the recovered contracts.
-Unavailable original menu actions remain disabled. Original file dialogs,
-music, full text styling and complete campaign behavior remain unfinished.
+The Warrior Editor uses the original activation/deactivation messages. Warrior
+information connects to paid upgrades and free editor upgrades; portraits and
+tactical icons can be changed through their original selection dialog. Music
+uses the original sound resources and playlist menu. Sound effects and music
+have separate, persisted volume controls, including mute. Technical failures
+appear in a separate error dialog, not the scrolling story text.
+
+Archives, Allies, Maps/Notes, character creation, squad management and mission
+ending now have connected handlers. Original Mac save import has a read-only
+foundation, but complete compatibility with populated original saves is not
+certified. Additional mission-pack compatibility remains unfinished.
+
+The current functionality checkpoint passes six assisted Thunder routes across
+all six stages, both ending branches and the mission reset. These checks use
+explicit setup and battle cleanup to test functionality; they do not establish
+that every combat, ability, equipment or story branch works.
+
+Known gaps include a failure when collecting authored credit chests, omitted
+learned Psi choices and encounter effects, restricted occupied-target reloads,
+conditioned party entry, some enemy weapons and recruited allies, retained
+equipment/death-script contexts, original text input and the About menu.
+Native-reference coverage and live Windows visual, audio, input and resource-use
+acceptance remain separate. This beta is not certified for reliable complete
+campaign play. See [the current limitations](docs/reconstruction.md#current-functionality-checkpoint).
 
 ## Original-data verification and packaging
 
-Native fixture source is retained under `crates/*/tests` and `tools/ghidra`.
+Native reference runners are retained under `crates/*/tests`. Maintained capture
+support is under `tools/ghidra` and `tests/native`; superseded capture generators
+are retired while their historical provenance and private reference data remain
+preserved.
 The `original-fixtures` feature enables those tests only when the corresponding
 private fixtures and prepared game data are available locally. Keep them out
 of public Git history:

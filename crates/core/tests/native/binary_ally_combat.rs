@@ -4,19 +4,12 @@ use centurions_core::combat::allies::place_allies;
 use centurions_core::combat::allies::synchronize;
 use centurions_core::combat::runtime::neighbors;
 
-fn bytes(case: &serde_json::Value, field: &str) -> Vec<u8> {
-    decode(case[field].as_str().unwrap())
-}
-fn records(bytes: &[u8]) -> Vec<MonsterRecord> {
-    crate::support::monsters(bytes)
-}
-fn fixture() -> serde_json::Value {
-    crate::support::fixture("ally-combat.json")
-}
+use crate::support::field_bytes as bytes;
+use crate::support::monsters as records;
 
 #[test]
 fn ally_placement_matches_original_records_positions_and_map() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("ally-combat.json");
     let properties = bytes(&fixture, "properties");
     let mission = OpeningMission {
         tile_properties: properties[64..12064].to_vec(),
@@ -72,7 +65,7 @@ fn ally_placement_matches_original_records_positions_and_map() {
 
 #[test]
 fn original_bodycount_preserves_selection_order_rng_and_empty_survivor_quirk() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("ally-combat.json");
     for case in fixture
         .array("cases")
         .iter()
@@ -115,7 +108,7 @@ fn original_bodycount_preserves_selection_order_rng_and_empty_survivor_quirk() {
 
 #[test]
 fn adjacent_faction_targets_match_original_warrior_scientist_and_hostile_lists() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("ally-combat.json");
     for case in fixture
         .array("cases")
         .iter()

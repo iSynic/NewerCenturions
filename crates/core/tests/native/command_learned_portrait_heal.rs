@@ -1,56 +1,27 @@
 use crate::prelude::*;
 
-fn fixture() -> (Content, Value) {
-    (
-        crate::support::content(),
-        crate::support::fixture("learned-portrait-heal.json"),
-    )
-}
-
-fn project(state: &mut Session, snapshot: &Value) {
-    for (warrior, record) in state
-        .warriors
-        .iter_mut()
-        .zip(snapshot.bytes("party").as_chunks::<3138>().0)
-    {
-        warrior.bytes = Warrior::read(record).unwrap().bytes;
-    }
-    for (target, key) in [
-        (&mut state.crate_items, "crate"),
-        (&mut state.booty_items, "loot"),
-    ] {
-        *target = crate::support::inventory(&bytes(&snapshot[key]));
-    }
-    state.ammunition = crate::support::longs(&snapshot.bytes("ammunition"));
-    state.random.seed = snapshot.n::<u32>("seed");
-    state.random.draws = snapshot.n::<u64>("draws");
-    state.selected_warrior = snapshot.n::<usize>("selected_member");
-    state.loaded_item_field32 = Some(snapshot.n::<i16>("item_context"));
-    state.attack_count = snapshot.n::<i16>("count");
-    state.attack_packet = Some(snapshot.bytes("packet"));
-    state.attack_identity = Some(snapshot.words("identity").try_into().unwrap());
-    state.psi_memory = Some(snapshot.bytes("memory"));
-    state.party_buffs = snapshot.bytes("party_buffs");
-    state
-        .party_mask
-        .copy_from_slice(&snapshot.words("mask")[..6]);
-    state.bandage_ready = Some(snapshot.n::<i16>("aid_gate"));
-    let weapon = snapshot.bytes("weapon_work");
-    let ammo = snapshot.bytes("ammo_work");
-    state.weapon_work = WeaponWork {
-        sound: Some(word(&weapon, 14).unwrap()),
-        weapon_armor_filter: Some(word(&weapon, 136).unwrap()),
-        ammunition_armor_filter: Some(word(&ammo, 136).unwrap()),
-    };
+pub(super) fn project(state: &mut Session, snapshot: &Value) {
+    let read = |key: &str| snapshot.bytes(key);
+    crate::snapshots::party_work(state, snapshot, &read);
+    crate::snapshots::carried_items(state, &read);
+    state.ammunition = crate::support::longs(&read("ammunition"));
+    state.selected_warrior = snapshot.n("selected_member");
+    state.loaded_item_field32 = Some(snapshot.n("item_context"));
+    state.bandage_ready = Some(snapshot.n("aid_gate"));
+    state.weapon_work = crate::snapshots::weapon_work(&read);
     let arena = state.combat.as_mut().unwrap();
     crate::snapshots::records(arena, &|key| snapshot.bytes(key));
     crate::snapshots::geometry(arena, &|key| snapshot.bytes(key), (0, 0));
+    if let Some(rounds) = snapshot.get("inactive_rounds") {
+        arena.inactive_rounds = rounds.as_i64().unwrap() as i16;
+    }
     arena.cursor = snapshot.n::<usize>("cursor");
     arena.round = snapshot.n::<i16>("round");
-    arena.round_scripts.counter = arena.round as i8;
+    arena.round_scripts.counter = snapshot
+        .get("round_counter")
+        .map_or(arena.round as i8, |value| value.as_i64().unwrap() as i8);
     arena.round_scripts.slots = snapshot.words("round_slots").try_into().unwrap();
-    arena.spell_fields = snapshot.bytes("fields");
-    arena.field_used = snapshot.bytes("used");
+    crate::snapshots::spell_work(arena, &read);
     arena.unavailable = snapshot.n::<i8>("unavailable");
     arena.attack_packet = state.attack_packet.clone();
     arena.attack_identity = state.attack_identity;
@@ -67,6 +38,7 @@ fn project(state: &mut Session, snapshot: &Value) {
         .copy_from_slice(&snapshot.words("markers")[..6]);
     health.effect = state.attack_packet.as_ref().unwrap()[18] as i8;
     state.health_context = Some(health);
+    crate::snapshots::actor_work(state, snapshot);
 }
 
 fn input(fixture: &Value, snapshot: &Value) -> Session {
@@ -91,9 +63,38 @@ fn native_sounds(case: &Value) -> Vec<i16> {
 }
 use crate::support::checkpoint;
 
+fn assert_native_damage(case: &Value, events: &[Event]) {
+    if matches!(case.text("kind"), "actual" | "actual_portrait") {
+        let damage = case
+            .array("effect_events")
+            .iter()
+            .find(|event| event["address"] == "1518d4")
+            .unwrap()
+            .n::<u32>("d0") as u16 as i16;
+        let resolved: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::SpellResolved {
+                    caster,
+                    spell,
+                    target,
+                    damage,
+                    defeated,
+                } => Some((*caster, *spell, *target, *damage, *defeated)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            resolved,
+            vec![(Some(5), 1101, case.n("target"), damage, false)]
+        );
+    }
+}
+
 #[test]
 fn native_learned_portrait_continuations_match_full_session_and_saved_replay() {
-    let (content, fixture) = fixture();
+    let content = crate::support::content();
+    let fixture: Value = crate::support::fixture("learned-portrait-heal.json");
     for (index, case) in fixture.array("cases").iter().enumerate() {
         let mut state = input(&fixture, &case["before"]);
         let initial = state.clone();
@@ -104,12 +105,7 @@ fn native_learned_portrait_continuations_match_full_session_and_saved_replay() {
             continue;
         }
         let mut restored = checkpoint(&state, &content, &format!("before-{index}"));
-        let mut events = apply(begin.clone(), &mut state, &content).unwrap();
-        assert_eq!(
-            events,
-            apply(begin.clone(), &mut restored, &content).unwrap()
-        );
-        same(&state, &restored);
+        let mut events = replay_command(begin.clone(), &mut state, &mut restored, &content);
         let mut expected = initial.clone();
         project(&mut expected, &case["after_preparation"]);
         source_item_refresh(&mut expected, &content);
@@ -152,12 +148,7 @@ fn native_learned_portrait_continuations_match_full_session_and_saved_replay() {
             same(&state, &restored);
             continue;
         }
-        let result = apply(command.clone(), &mut state, &content).unwrap();
-        assert_eq!(
-            result,
-            apply(command.clone(), &mut restored, &content).unwrap()
-        );
-        same(&state, &restored);
+        let result = replay_command(command.clone(), &mut state, &mut restored, &content);
         events.extend(result);
         let mut expected = initial;
         project(&mut expected, &case["after"]);
@@ -165,6 +156,7 @@ fn native_learned_portrait_continuations_match_full_session_and_saved_replay() {
         expected.psi_menu_choices[actor] = Some(choice);
         same(&state, &expected);
         assert_eq!(sounds(&events), native_sounds(case), "learned case {index}");
+        assert_native_damage(case, &events);
         atomic(&state, &content, command);
         checkpoint(&state, &content, &format!("after-{index}"));
     }
@@ -172,38 +164,51 @@ fn native_learned_portrait_continuations_match_full_session_and_saved_replay() {
 
 #[test]
 fn learned_preparation_rejects_unknown_powers_and_preserves_inventory() {
-    let (content, fixture) = fixture();
+    let content = crate::support::content();
+    let fixture: Value = crate::support::fixture("learned-portrait-heal.json");
     let state = input(&fixture, &fixture["cases"][0]["before"]);
-    for power in [-1, 0, 5, i16::MAX] {
+    for power in [-1, 0, 8, i16::MAX] {
         atomic(&state, &content, Command::BeginLearnedHeal { power });
     }
+    let mut unknown = state.clone();
+    unknown.combat.as_mut().unwrap().weapon_work = WeaponWork::default();
+    atomic(&unknown, &content, Command::BeginLearnedHeal { power: 1 });
     let mut marking = state.clone();
     marking.health_context.as_mut().unwrap().marks_affected = true;
-    atomic(&marking, &content, Command::BeginLearnedHeal { power: 1 });
+    let mut unmarked = state.clone();
+    for candidate in [&mut marking, &mut unmarked] {
+        apply(Command::BeginLearnedHeal { power: 1 }, candidate, &content).unwrap();
+    }
+    let target = fixture["cases"][0].n::<usize>("target");
+    let command = Command::SelectMedicalTarget {
+        selection: MedicalTarget::Portrait { warrior: target },
+    };
+    assert_eq!(
+        apply(command.clone(), &mut marking, &content).unwrap(),
+        apply(command, &mut unmarked, &content).unwrap()
+    );
+    assert_eq!(marking.warriors, unmarked.warriors);
+    assert_eq!(marking.random, unmarked.random);
+    assert_eq!(
+        marking.health_context.as_ref().unwrap().affected[target],
+        -1
+    );
     let mut other_menu = state.clone();
     other_menu.psi_menu_choices[5] = Some(centurions_core::PsiMenuChoice {
         row: 1,
         column: 0,
-        power: 5,
+        power: 8,
     });
     atomic(
         &other_menu,
         &content,
         Command::BeginLearnedHeal { power: 1 },
     );
-    for power in [1, 2] {
-        let mut prepared = state.clone();
-        apply(Command::BeginLearnedHeal { power }, &mut prepared, &content).unwrap();
-        for (before, after) in state.warriors.iter().zip(&prepared.warriors) {
-            assert_eq!(before.inventory().unwrap(), after.inventory().unwrap());
-        }
-        assert_eq!(state.random, prepared.random);
-    }
 }
 
 #[test]
 fn consecutive_native_heals_restore_saved_menu_power_without_repeating_costs() {
-    let (content, _) = fixture();
+    let content = crate::support::content();
     let fixture: Value = crate::support::fixture("learned-heal-memory.json");
     for (index, case) in fixture.array("cases").iter().enumerate() {
         let mut state: Session =
@@ -248,9 +253,7 @@ fn consecutive_native_heals_restore_saved_menu_power_without_repeating_costs() {
         .enumerate()
         {
             let mut restored = checkpoint(&state, &content, &format!("memory-{index}-{step}"));
-            let result = apply(command.clone(), &mut state, &content).unwrap();
-            assert_eq!(result, apply(command, &mut restored, &content).unwrap());
-            same(&state, &restored);
+            let result = replay_command(command, &mut state, &mut restored, &content);
             events.extend(result);
             let mut expected = initial.clone();
             project(&mut expected, &case[snapshot]);
@@ -277,7 +280,7 @@ fn consecutive_native_heals_restore_saved_menu_power_without_repeating_costs() {
 
 #[test]
 fn owned_prior_spell_row_matches_native_heal_menu_and_saved_continuation() {
-    let (content, _) = fixture();
+    let content = crate::support::content();
     let fixture: Value = crate::support::fixture("learned-heal-row.json");
     for (index, case) in fixture.array("cases").iter().enumerate() {
         let mut state: Session =
@@ -306,9 +309,7 @@ fn owned_prior_spell_row_matches_native_heal_menu_and_saved_continuation() {
         .enumerate()
         {
             let mut restored = checkpoint(&state, &content, &format!("row-{index}-{step}"));
-            let result = apply(command.clone(), &mut state, &content).unwrap();
-            assert_eq!(result, apply(command, &mut restored, &content).unwrap());
-            same(&state, &restored);
+            let result = replay_command(command, &mut state, &mut restored, &content);
             events.extend(result);
             let mut expected = initial.clone();
             project(&mut expected, &case[snapshot]);
@@ -335,9 +336,17 @@ fn owned_prior_spell_row_matches_native_heal_menu_and_saved_continuation() {
 
 #[test]
 fn higher_portrait_powers_match_native_full_session_and_saved_continuations() {
-    let (content, _) = fixture();
+    let content = crate::support::content();
     let fixture: Value = crate::support::fixture("learned-portrait-power.json");
-    for (index, case) in fixture.array("cases").iter().enumerate() {
+    let armored = crate::support::fixture("armored-portrait-heal.json");
+    let full = crate::support::fixture("full-portrait-power.json");
+    for (index, case) in fixture
+        .array("cases")
+        .iter()
+        .chain(armored.array("cases"))
+        .chain(full.array("cases"))
+        .enumerate()
+    {
         let mut state = input(&fixture, &case["before"]);
         let initial = state.clone();
         let power = case.n::<i16>("power");
@@ -360,9 +369,7 @@ fn higher_portrait_powers_match_native_full_session_and_saved_continuations() {
             continue;
         }
         let mut restored = checkpoint(&state, &content, &format!("power-before-{index}"));
-        let mut events = apply(begin.clone(), &mut state, &content).unwrap();
-        assert_eq!(events, apply(begin, &mut restored, &content).unwrap());
-        same(&state, &restored);
+        let mut events = replay_command(begin, &mut state, &mut restored, &content);
         let choice = centurions_core::PsiMenuChoice {
             row: 0,
             column: 0,
@@ -404,12 +411,7 @@ fn higher_portrait_powers_match_native_full_session_and_saved_continuations() {
             }
         };
         let command = Command::SelectMedicalTarget { selection };
-        let result = apply(command.clone(), &mut state, &content).unwrap();
-        assert_eq!(
-            result,
-            apply(command.clone(), &mut restored, &content).unwrap()
-        );
-        same(&state, &restored);
+        let result = replay_command(command.clone(), &mut state, &mut restored, &content);
         events.extend(result);
         let mut expected = initial;
         project(&mut expected, &case["after"]);
@@ -417,7 +419,11 @@ fn higher_portrait_powers_match_native_full_session_and_saved_continuations() {
         expected.psi_menu_choices[actor] = Some(choice);
         same(&state, &expected);
         assert_eq!(sounds(&events), native_sounds(case), "power case {index}");
+        assert_native_damage(case, &events);
         atomic(&state, &content, command);
         checkpoint(&state, &content, &format!("power-after-{index}"));
+        if power > 4 && kind == "confirmed_cancel" {
+            apply(Command::BeginLearnedHeal { power: 1 }, &mut state, &content).unwrap();
+        }
     }
 }

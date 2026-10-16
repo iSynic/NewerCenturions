@@ -236,7 +236,25 @@ fn supplied_extended_sound_preserves_signed_pcm_and_wave_layout() {
     assert_eq!(u16::from_le_bytes(wave[32..34].try_into().unwrap()), 2);
     assert_eq!(u16::from_le_bytes(wave[34..36].try_into().unwrap()), 16);
     assert_eq!(&wave[44..], sample.samples);
-    for (offset, replacement) in [(20 + 4, 2i32), (20, 1)] {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let installation =
+        crate::installation::Installation::open(&root.join("NewCenturions/TheNewCenturions"))
+            .unwrap();
+    let resource = installation
+        .content
+        .resources
+        .iter()
+        .find(|r| r.r#type == "snd " && r.id == 219 && r.original.ends_with("/Weapon Sounds"))
+        .unwrap();
+    let bytes_stereo = crate::read_resource(&installation.resource_root, resource).unwrap();
+    let stereo = decode_snd(&bytes_stereo).unwrap();
+    assert_eq!((stereo.channels, stereo.bits_per_sample), (2, 8));
+    assert_eq!(stereo.samples, bytes_stereo[84..]);
+    assert_eq!(
+        u16::from_le_bytes(stereo.wave()[22..24].try_into().unwrap()),
+        2
+    );
+    for (offset, replacement) in [(20 + 4, 3i32), (20, 1)] {
         let mut unsupported = bytes.clone();
         unsupported[offset..offset + 4].copy_from_slice(&replacement.to_be_bytes());
         assert!(decode_snd(&unsupported).is_err());

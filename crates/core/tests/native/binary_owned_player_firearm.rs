@@ -2,9 +2,6 @@ use crate::prelude::*;
 
 use centurions_core::items;
 
-fn fixture() -> Value {
-    crate::support::fixture("owned-player-firearm.json")
-}
 use crate::native_common::snapshot_party as party;
 
 use crate::native_common::snapshot_ammunition as stock;
@@ -45,15 +42,13 @@ fn state(fixture: &Value, snapshot: &Value) -> Session {
 fn compare_receipts(initial: &RandomState, after: &Value, before: &Value) {
     let mut expected = initial.clone();
     let draws = after.array("draws");
-    for draw in &draws[before.array("draws").len()..] {
-        crate::support::expect(expected.bound(draw.n::<i16>("bound")), &draw["result"]);
-    }
+    crate::support::replay_rng(&mut expected, &draws[before.array("draws").len()..]);
     assert_eq!(expected, random(after));
 }
 
 #[test]
 fn earned_pair_profiles_and_serial_collection_wear_fit_match_complete_native_records() {
-    let f = fixture();
+    let f = crate::support::fixture("owned-player-firearm.json");
     let content = content();
     let mission = content.map(3).unwrap();
     for case in f.array("gate_cases") {
@@ -84,22 +79,14 @@ fn earned_pair_profiles_and_serial_collection_wear_fit_match_complete_native_rec
                 .collect::<Vec<_>>()
         );
         assert_party(&state.warriors, &stage["picked"]);
-        let actual_crate = state
-            .crate_items
-            .iter()
-            .flat_map(|item| item.0)
-            .collect::<Vec<_>>();
-        let expected_crate = stage["worn"].bytes("crate");
-        assert!(
-            actual_crate == expected_crate,
-            "crate differences {:?}",
-            actual_crate
+        crate::support::assert_bytes(
+            &state
+                .crate_items
                 .iter()
-                .zip(&expected_crate)
-                .enumerate()
-                .filter(|(_, (a, b))| a != b)
-                .take(10)
-                .collect::<Vec<_>>()
+                .flat_map(|item| item.0)
+                .collect::<Vec<_>>(),
+            &stage["worn"].bytes("crate"),
+            "owned firearm crate",
         );
         let slot = state.warriors[member].inventory().unwrap().len() - 1;
         let worn =
@@ -145,7 +132,7 @@ fn earned_pair_profiles_and_serial_collection_wear_fit_match_complete_native_rec
 
 #[test]
 fn complete_preparation_and_four_controlled_resolutions_match_native_packet_records_and_rng() {
-    let f = fixture();
+    let f = crate::support::fixture("owned-player-firearm.json");
     let content = content();
     let attacks = &content.map(3).unwrap().combat.as_ref().unwrap().attacks;
     assert_eq!(word(&content.items[201], 60).unwrap(), -1);
@@ -207,7 +194,7 @@ fn complete_preparation_and_four_controlled_resolutions_match_native_packet_reco
 
 #[test]
 fn manual_full_partial_cancel_and_combat_fills_match_complete_native_records() {
-    let f = fixture();
+    let f = crate::support::fixture("owned-player-firearm.json");
     let content = content();
     for case in f.array("ammunition_cases") {
         let kind = case.text("kind");
@@ -243,7 +230,7 @@ fn manual_full_partial_cancel_and_combat_fills_match_complete_native_records() {
 
 #[test]
 fn independent_silent_reload_full_partial_and_wrong_caliber_match_native_records() {
-    let f = fixture();
+    let f = crate::support::fixture("owned-player-firearm.json");
     let mut compared = 0;
     for case in f.array("ammunition_cases") {
         let kind = case.text("kind");
@@ -275,8 +262,8 @@ fn independent_silent_reload_full_partial_and_wrong_caliber_match_native_records
 }
 
 #[test]
-fn pickup_rejections_and_uncertified_instances_are_atomic() {
-    let f = fixture();
+fn native_pickup_rejections_and_empty_preparation_are_atomic() {
+    let f = crate::support::fixture("owned-player-firearm.json");
     let content = content();
     let mission = content.map(3).unwrap();
     for case in f
@@ -294,41 +281,7 @@ fn pickup_rejections_and_uncertified_instances_are_atomic() {
         assert_eq!(result.sounds, added_sounds(&case["before"], &case["after"]));
         assert_eq!(result.warnings, numbers(&case["after"]["warnings"]));
     }
-    let base = &f["equipment_cases"][0]["equipment"][0];
-    for (offset, value) in [(13, 2), (14, 1), (15, 1), (18, 1), (20, 1)] {
-        let mut item = InventoryRecord(base["before"].bytes("crate")[66..88].try_into().unwrap());
-        item.0[offset] = value;
-        let warrior = party(&base["before"])[2].clone();
-        let before = warrior.clone();
-        assert!(equipment::collect_item(&warrior, &item, &content, mission).is_err());
-        assert_eq!(warrior, before);
-    }
-    let after = &base["fitted"];
     let attacks = &mission.combat.as_ref().unwrap().attacks;
-    for (offset, value) in [
-        (4, 1),
-        (5, 219),
-        (6, 1),
-        (7, 13),
-        (14, 1),
-        (15, 1),
-        (18, 1),
-        (20, 1),
-    ] {
-        let mut warrior = party(after)[2].clone();
-        warrior.bytes[0x132 + offset] = value;
-        let before = warrior.clone();
-        let mut rng = random(after);
-        let before_rng = rng.clone();
-        assert!(
-            firearm::fit_ammunition(&warrior, 0, &content, &stock(after), false, &mut rng).is_err()
-        );
-        assert_eq!(warrior, before);
-        assert_eq!(rng, before_rng);
-        assert!(
-            firearm::prepare(&warrior, &content.items[2], &content.items[201], attacks).is_err()
-        );
-    }
     let empty = f
         .array("ammunition_cases")
         .iter()
@@ -338,20 +291,4 @@ fn pickup_rejections_and_uncertified_instances_are_atomic() {
     assert!(firearm::prepare(&warrior, &content.items[2], &content.items[201], attacks).is_err());
     assert_party(&party(&empty["before"]), &empty["after"]);
     assert_eq!(random(&empty["before"]), random(&empty["after"]));
-    let mut loaded = party(after)[2].clone();
-    let initial = loaded.clone();
-    let mut enhanced = loaded.clone();
-    enhanced.bytes[0x132 + 14] = 1;
-    let initial_enhanced = enhanced.clone();
-    assert!(equipment::remove(&enhanced, &content, mission, 0).is_err());
-    assert_eq!(enhanced, initial_enhanced);
-    assert_eq!(loaded, initial);
-    let mut reserve = 276;
-    let initial_reserve = reserve;
-    let mut rng = random(after);
-    let initial_rng = rng.clone();
-    assert!(firearm::reload(&mut loaded, &mut reserve, true, &mut rng).is_err());
-    assert_eq!(loaded, initial);
-    assert_eq!(reserve, initial_reserve);
-    assert_eq!(rng, initial_rng);
 }

@@ -7,8 +7,6 @@ pub const ROW_Y: f32 = 22.;
 pub const ROW_HEIGHT: f32 = 50.;
 pub const INFORMATION: Rect = Rect::new(488., 324., 308., 104.);
 pub const MESSAGE: Rect = Rect::new(0., 449., 468., 139.);
-pub const ITEMS: Rect = Rect::new(709., 453., 85., 22.);
-pub const CONDITIONS: Rect = Rect::new(709., 477., 85., 22.);
 pub const COMBAT_ITEMS: Rect = Rect::new(233., 475., 69., 22.);
 pub const COMBAT_CONDITIONS: Rect = Rect::new(154., 475., 75., 22.);
 pub const FIREARM: Rect = Rect::new(480., 540., 70., 48.);
@@ -26,7 +24,8 @@ pub struct Canvas {
 }
 impl Canvas {
     pub fn new(width: f32, height: f32) -> Self {
-        let scale = (width / SIZE.x).min(height / SIZE.y).floor().max(1.);
+        let fit = (width / SIZE.x).min(height / SIZE.y);
+        let scale = if fit < 1. { fit.max(0.1) } else { fit.floor() };
         Self {
             scale,
             offset: vec2(
@@ -59,4 +58,9 @@ impl Canvas {
 }
 pub fn row(index: usize) -> Rect {
     Rect::new(ROW_X, ROW_Y + index as f32 * ROW_HEIGHT, 308., ROW_HEIGHT)
+}
+
+/// centerpictlarge 0x10f1c4 uses cell8 and native origin limits75/76.
+pub fn outdoor_origin(x: i32, y: i32) -> (i32, i32) {
+    ((x - 8).clamp(0, 75), (y - 8).clamp(0, 76))
 }

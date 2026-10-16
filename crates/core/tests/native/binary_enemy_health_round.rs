@@ -3,10 +3,6 @@ use crate::prelude::*;
 use centurions_core::combat::lifecycle;
 use centurions_core::combat::natural_conditions::enemy_drain_tick;
 
-fn fixture() -> Value {
-    crate::support::fixture("enemy-health-round.json")
-}
-
 fn decrement_conditions(record: &mut [u8]) {
     for value in &mut record[0xb2..0xda] {
         if (*value as i8) > 0 {
@@ -16,42 +12,26 @@ fn decrement_conditions(record: &mut [u8]) {
 }
 
 #[test]
-fn enemy_health_drain_matches_all_native_admission_and_signed_amount_cases() {
-    let fixture = fixture();
-    let cases = fixture.array("cases");
-
-    for (index, case) in cases.iter().enumerate() {
-        let records = decode(&case["before"]["records"]);
-        let mut record = records[288..576].to_vec();
-        decrement_conditions(&mut record);
-        let before = record.clone();
-        let tick = enemy_drain_tick(&record).unwrap();
-        assert_eq!(record, before, "pure helper, case {index}");
-        let native_tick = case.array("results").iter().find(|result| result[1] == 29);
-        assert_eq!(tick.is_some(), native_tick.is_some(), "case {index}");
-        if let Some(tick) = tick {
-            let after = decode(&case["after"]["records"]);
-            assert_eq!(tick.health, word(&after[288..576], 0x110).unwrap());
-            assert_eq!(tick.killed, !case.array("kills").is_empty());
-            assert_eq!(
-                i64::from(word(&record, 0x110).unwrap().wrapping_sub(tick.health)),
-                native_tick.unwrap()[2].as_i64().unwrap(),
-                "native amount, case {index}"
-            );
-        }
-        assert_eq!(case["draws"], serde_json::json!([]));
-    }
-    assert!(enemy_drain_tick(&[0; 287]).is_err());
-}
-
-#[test]
 fn enemy_health_drain_and_death_cleanup_match_complete_native_monster_slices() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("enemy-health-round.json");
     let foundation: Combat =
         serde_json::from_value(fixture["foundation"]["combat"].clone()).unwrap();
     let mut verified = 0;
     for case in fixture.array("cases").iter() {
         if case.n::<bool>("full") {
+            let raw = decode(&case["before"]["records"]);
+            let mut record = raw[288..576].to_vec();
+            decrement_conditions(&mut record);
+            let tick = enemy_drain_tick(&record).unwrap();
+            let native_tick = case.array("results").iter().find(|result| result[1] == 29);
+            assert_eq!(tick.is_some(), native_tick.is_some());
+            if let Some(tick) = tick {
+                assert_eq!(
+                    tick.health,
+                    word(&decode(&case["after"]["records"])[288..576], 0x110).unwrap()
+                );
+                assert_eq!(tick.killed, !case.array("kills").is_empty());
+            }
             continue;
         }
         let before = &case["before"];
@@ -105,4 +85,28 @@ fn enemy_health_drain_and_death_cleanup_match_complete_native_monster_slices() {
         verified += 1;
     }
     assert_eq!(verified, 208);
+    let content = content();
+    for case in crate::support::fixture("enemy-psi-round.json").array("cases") {
+        let mut combat = crate::support::battle();
+        combat.enemies.records = vec![MonsterRecord {
+            bytes: case.bytes("before"),
+        }];
+        combat.enemies.positions = vec![(20, 20)];
+        let mut warriors = crate::support::mission_session(&content).warriors;
+        combat.squad.positions.fill((20, 21));
+        let mut random = RandomState::new(12);
+        runtime::reduce_enemy_round_with_fields(
+            &mut combat,
+            &mut warriors,
+            &mut random,
+            None,
+            &mut 0,
+            &mut [0; 6],
+            0,
+        )
+        .unwrap();
+        assert_eq!(combat.enemies.records[0].bytes, case.bytes("after"));
+        assert_eq!(random.seed, case.n::<u32>("seed"));
+        assert_eq!(random.draws, case.n::<u64>("draws"));
+    }
 }

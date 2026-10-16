@@ -77,6 +77,7 @@ pub fn set_mission_flag(flags: &[u8], parameter: i16) -> Result<Vec<u8>, RuleErr
 pub enum ConditionalJump {
     ReplaceScript(i16),
     MenuBranch { branch: u8, start: u8 },
+    TypedBranch { branch: u8, start: u8 },
     EndMenu,
     LastAction,
 }
@@ -100,10 +101,14 @@ pub fn flag_condition_jump(
     if !matched {
         return Ok(None);
     }
+    condition_jump(extra)
+}
+
+pub fn condition_jump(extra: &[u8]) -> Result<Option<ConditionalJump>, RuleError> {
     Ok(match word(extra, 4)? {
         -1 => Some(ConditionalJump::LastAction),
         0 => Some(ConditionalJump::ReplaceScript(word(extra, 6)?)),
-        1 => {
+        1 | 2 => {
             let branch = word(extra, 6)?;
             let start = word(extra, 8)?;
             if !(0..4).contains(&branch) || !(0..=8).contains(&start) {
@@ -111,16 +116,18 @@ pub fn flag_condition_jump(
                     "conditional menu branch is unavailable".into(),
                 ));
             }
-            Some(ConditionalJump::MenuBranch {
-                branch: branch as u8,
-                start: start as u8,
-            })
-        }
-        2 => {
-            return Err(RuleError::Unsupported {
-                action: "story.flag_condition",
-                dependency: "NPC encounter branches",
-            });
+            let branch = if word(extra, 4)? == 1 {
+                ConditionalJump::MenuBranch {
+                    branch: branch as u8,
+                    start: start as u8,
+                }
+            } else {
+                ConditionalJump::TypedBranch {
+                    branch: branch as u8,
+                    start: start as u8,
+                }
+            };
+            Some(branch)
         }
         3 => Some(ConditionalJump::EndMenu),
         _ => None,

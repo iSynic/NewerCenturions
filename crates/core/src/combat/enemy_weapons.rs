@@ -21,11 +21,7 @@ pub fn prepare(
         return Err(RuleError::Invalid("enemy weapon record size".into()));
     }
     let id = word(&enemy.bytes, 0x26)?;
-    if !matches!(
-        id,
-        2 | 3 | 5 | 9 | 12 | 26 | 28 | 29 | 37 | 38 | 50 | 100 | 165 | 680 | 683
-    ) || !matches!(word(weapon, 44)?, 4101 | 4102)
-    {
+    if id <= 0 || !matches!(word(weapon, 44)?, 4101 | 4102) {
         return Err(RuleError::Unsupported {
             action: "combat.enemy_firearm",
             dependency: "enemy firearm outside recovered definitions",

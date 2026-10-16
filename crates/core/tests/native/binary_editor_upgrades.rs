@@ -29,6 +29,16 @@ fn upgrade_costs_match_original_numeric_dialog_order() {
             case["numbers"]
         );
     }
+    for case in crate::support::fixture("application-feedback.json").array("payments") {
+        let warrior = Warrior::read(&case.bytes("warrior")).unwrap();
+        let balance =
+            centurions_core::character::upgrade_payment(&warrior, 0, &case.bytes("profile"))
+                .unwrap();
+        assert_eq!(
+            balance,
+            case["paid"].as_bool().unwrap().then(|| case.n("balance"))
+        );
+    }
 }
 
 // Protects editor promotion without experience/scan changes and its separate C rand stream.

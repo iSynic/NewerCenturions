@@ -10,6 +10,31 @@ pub struct ScenarioItemUse {
     pub warnings: Vec<i16>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ScriptItemContext {
+    Exploration,
+    Encounter,
+}
+
+/// Items12ac14 warns for non-activating samples;12ad9a skips their effects.
+pub(crate) fn reject_inert_item(definition: &[u8]) -> Result<(), RuleError> {
+    let class = word(definition, 26)?.wrapping_abs();
+    let effect = word(definition, 44)?;
+    if class != 23 && effect <= 1100 {
+        return Err(RuleError::Refused {
+            feedback: if matches!(class, 24 | 25) && effect < 1100 {
+                vec![
+                    crate::feedback::NativeFeedback::Warning { index: 88 },
+                    crate::feedback::NativeFeedback::Warning { index: 89 },
+                ]
+            } else {
+                vec![]
+            },
+        });
+    }
+    Ok(())
+}
+
 /// items 12ac90 uses class 23 and buttonchoice 10a9f4 decodes its script return.
 pub fn use_scenario_item(
     warriors: &[Warrior],
@@ -17,6 +42,7 @@ pub fn use_scenario_item(
     slot: usize,
     content: &Content,
     race_movements: &[i8],
+    context: ScriptItemContext,
 ) -> Result<ScenarioItemUse, RuleError> {
     let warrior = warriors
         .get(member)
@@ -35,6 +61,7 @@ pub fn use_scenario_item(
         .items
         .get(id.unsigned_abs() as usize)
         .ok_or_else(|| RuleError::Invalid("selected item definition unavailable".into()))?;
+    reject_inert_item(definition)?;
     if word(definition, 0x1a)?.wrapping_abs() != 23 {
         return Err(RuleError::Unsupported {
             action: "item.use",
@@ -56,7 +83,7 @@ pub fn use_scenario_item(
         return_code,
         script: (return_code <= -100).then(|| return_code.wrapping_abs().wrapping_sub(100)),
         sounds: vec![],
-        warnings: if word(definition, 0x2c)? < 1100 {
+        warnings: if context == ScriptItemContext::Exploration && word(definition, 0x2c)? < 1100 {
             vec![88, 89]
         } else {
             vec![]

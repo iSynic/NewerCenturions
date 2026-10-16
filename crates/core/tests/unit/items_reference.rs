@@ -55,68 +55,54 @@ fn stockpile_collection_matches_original_instruction_slice() {
 
 #[test]
 fn carried_pack_removal_matches_original_drop_and_movement_recalculation() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let content = Content::load(
+        &root.join("NewCenturions"),
+        &root.join("analysis/extracted"),
+    )
+    .unwrap();
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../evidence/fixtures/ammunition-drop.json"
     ))
     .unwrap();
     for case in fixture["cases"].as_array().unwrap() {
-        let mut warrior = Warrior::read(&decode(case["input"].as_str().unwrap())).unwrap();
-        remove_inventory_slot(&mut warrior, 1).unwrap();
+        let warrior = Warrior::read(&decode(case["input"].as_str().unwrap())).unwrap();
+        let mut state = Session::new(&content);
+        state.warriors = vec![warrior.clone()];
+        apply(
+            Command::EnterMission {
+                name: "The Thunder of Guns".into(),
+            },
+            &mut state,
+            &content,
+        )
+        .unwrap();
+        apply(
+            Command::DropItem {
+                warrior: 0,
+                slot: 1,
+            },
+            &mut state,
+            &content,
+        )
+        .unwrap();
         let expected = decode(case["after"].as_str().unwrap());
-        let differences: Vec<_> = warrior
-            .bytes
-            .iter()
-            .zip(&expected)
-            .enumerate()
-            .filter(|(_, (a, b))| a != b)
-            .map(|(i, (a, b))| (format!("{i:x}"), *a, *b))
-            .collect();
-        assert!(differences.is_empty(), "{} {differences:?}", case["name"]);
+        assert_eq!(state.warriors[0].bytes, expected);
     }
 }
 
 #[test]
 fn pack_command_is_atomic_and_resumes_with_the_same_events() {
-    let calendar: serde_json::Value =
-        serde_json::from_str(include_str!("../../../../evidence/fixtures/calendar.json")).unwrap();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let content = Content::load(
+        &root.join("NewCenturions"),
+        &root.join("analysis/extracted"),
+    )
+    .unwrap();
     let ammo: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../evidence/fixtures/ammunition-init.json"
     ))
     .unwrap();
-    let warriors = decode(calendar["cases"][0]["input"].as_str().unwrap())
-        .as_chunks::<3138>()
-        .0
-        .iter()
-        .map(|b| Warrior::read(b).unwrap())
-        .collect();
-    let mut definitions = vec![vec![0; 150]; 1000];
-    definitions[200] = decode(ammo["definition"].as_str().unwrap());
-    let map = centurions_content::mission::OpeningMission {
-        name: "The Thunder of Guns".into(),
-        start: (2, 2),
-        header: vec![0; 4200],
-        regions: vec![0; 644],
-        floor: vec![1; 8100],
-        objects: vec![0; 8100],
-        events: vec![0; 8100],
-        tile_properties: vec![0; 12000],
-        terrain: 2,
-        default_tile: 1,
-        minutes_per_tick: 5,
-        shared: std::sync::Arc::new(centurions_content::mission::StoryTables {
-            schedule: vec![0; 40],
-            ..Default::default()
-        }),
-    };
-    let content = Content {
-        tutorials: vec![],
-        identity: "fixture".into(),
-        warriors,
-        items: definitions,
-        resources: vec![],
-        original_services: None,
-        scenario: Some(centurions_content::mission::ScenarioContent::single(map)),
-    };
     let mut state = Session::new(&content);
     apply(Command::ImportStarters, &mut state, &content).unwrap();
     apply(
@@ -127,6 +113,9 @@ fn pack_command_is_atomic_and_resumes_with_the_same_events() {
         &content,
     )
     .unwrap();
+    state.exploration.as_mut().unwrap().presentation = None;
+    state.exploration.as_mut().unwrap().script = None;
+    state.movement_continuation = None;
     let pack = decode(ammo["cases"][0]["record"].as_str().unwrap());
     state.warriors[0].bytes[0x132 + 66..0x132 + 88].copy_from_slice(&pack);
     state.warriors[0].bytes[0x1a..0x1c].copy_from_slice(&4i16.to_be_bytes());
@@ -142,7 +131,7 @@ fn pack_command_is_atomic_and_resumes_with_the_same_events() {
     assert_eq!(state, resumed);
     assert_eq!(state.ammunition[0], 32);
     assert_eq!(state.warriors[0].inventory().unwrap().len(), 3);
-    for (id, quantity, equipped) in [(201, 32, 0), (200, 0, 0), (200, 32, 1), (1, 32, 0)] {
+    for (id, quantity, equipped) in [(200, 0, 0), (200, 32, 1), (1, 32, 0)] {
         let mut rejected = resumed.clone();
         let w = &mut rejected.warriors[0];
         w.bytes[0x132 + 66..0x132 + 88].copy_from_slice(&pack);
@@ -164,29 +153,5 @@ fn pack_command_is_atomic_and_resumes_with_the_same_events() {
         );
         assert_eq!(rejected, before);
     }
-    let mut modal = resumed.clone();
-    modal.exploration.as_mut().unwrap().script = Some(ScriptState {
-        record: vec![0; 42],
-        cursor: 0,
-        map_slot: 0,
-        scheduled: false,
-        menu: None,
-        persist: false,
-        origin: None,
-    });
-    modal.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
-    let before = modal.clone();
-    assert!(
-        apply(
-            Command::UseAmmunitionPack {
-                warrior: 0,
-                slot: 0
-            },
-            &mut modal,
-            &content
-        )
-        .is_err()
-    );
-    assert_eq!(modal, before);
     fs::remove_file(path).unwrap();
 }

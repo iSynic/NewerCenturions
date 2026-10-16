@@ -1,22 +1,34 @@
+use crate::native_common::raw_word as word;
 use crate::prelude::*;
+use crate::support::{assert_bytes, items};
 
-use crate::support::items;
-
-fn fixture() -> serde_json::Value {
-    crate::support::fixture("endgame-weapons.json")
-}
-use crate::support::assert_bytes;
 #[test]
-fn required_endgame_enemy_preparation_matches_native_item_context_and_packet() {
-    let fixture = fixture();
-
-    crate::binary_endgame_weapons::compare_required_endgame_enemy_preparation_matches_native_item_context_and_packet(fixture);
+fn endgame_weapon_corpus_matches_original() {
+    corpus("endgame-weapons.json", true);
 }
 
-pub(super) fn compare_required_endgame_enemy_preparation_matches_native_item_context_and_packet(
-    fixture: Value,
-) {
-    let attacks = attacks();
+pub(super) fn corpus(name: &str, native_melee_audio: bool) {
+    let fixture = crate::support::fixture(name);
+    if fixture.get("preparation_cases").is_some() {
+        preparation(&fixture);
+        firearms(&fixture);
+    }
+    if let Some(cases) = fixture
+        .get("melee_cases")
+        .or_else(|| fixture.get("attack_cases"))
+    {
+        melee(cases.as_array().unwrap(), native_melee_audio);
+    }
+    if fixture.get("caller_cases").is_some() {
+        neighbors(&fixture, native_melee_audio);
+    }
+    if fixture.get("body_cases").is_some() {
+        friendly(&fixture);
+    }
+}
+
+pub(super) fn preparation(fixture: &Value) {
+    let attacks = data("Data S");
     let cases = fixture.array("preparation_cases");
 
     for case in cases.iter() {
@@ -36,17 +48,9 @@ pub(super) fn compare_required_endgame_enemy_preparation_matches_native_item_con
         }
     }
 }
-#[test]
-fn required_endgame_enemy_firearms_match_whole_party_and_native_randomness() {
-    let fixture = fixture();
 
-    crate::binary_endgame_weapons::compare_required_endgame_enemy_firearms_match_whole_party_and_native_randomness(fixture);
-}
-
-pub(super) fn compare_required_endgame_enemy_firearms_match_whole_party_and_native_randomness(
-    fixture: Value,
-) {
-    let attacks = attacks();
+pub(super) fn firearms(fixture: &Value) {
+    let attacks = data("Data S");
     let cases = fixture.array("firearm_cases");
 
     for (index, case) in cases.iter().enumerate() {
@@ -77,18 +81,9 @@ pub(super) fn compare_required_endgame_enemy_firearms_match_whole_party_and_nati
         }
     }
 }
-#[test]
-fn required_endgame_default_melee_selection_matches_native_records_saves_and_both_attack_indices() {
-    let fixture = fixture();
 
-    crate::binary_endgame_weapons::compare_required_endgame_default_melee_selection_matches_native_records_saves_and_both_attack_indices(fixture);
-}
-
-pub(super) fn compare_required_endgame_default_melee_selection_matches_native_records_saves_and_both_attack_indices(
-    fixture: Value,
-) {
+pub(super) fn melee(cases: &[Value], native_audio: bool) {
     let items = items();
-    let cases = fixture.array("melee_cases");
 
     for (index, case) in cases.iter().enumerate() {
         let mut party = case.bytes("warriors_before");
@@ -97,7 +92,12 @@ pub(super) fn compare_required_endgame_default_melee_selection_matches_native_re
         let mut enemy = MonsterRecord {
             bytes: case.bytes("enemy_before"),
         };
-        let mut random = RandomState::new(case.n::<u32>("seed_before"));
+        let mut random = RandomState::new(
+            case.get("seed_before")
+                .unwrap_or(&case["seed"])
+                .as_u64()
+                .unwrap() as u32,
+        );
         let weapon = i16::from_be_bytes(enemy.bytes[0x28..0x2a].try_into().unwrap()) as usize;
         let (result, packet) = enemy_weapons::melee_with_packet(
             &mut warrior,
@@ -107,7 +107,7 @@ pub(super) fn compare_required_endgame_default_melee_selection_matches_native_re
             0,
             0,
             40 + member as i16,
-            &attacks(),
+            &data("Data S"),
             &[0; 58],
         )
         .unwrap();
@@ -123,28 +123,24 @@ pub(super) fn compare_required_endgame_default_melee_selection_matches_native_re
         scalar random.seed => &case["seed_after"], "binary_endgame_weapons";
         scalar random.draws => &case["rng_draws"], "binary_endgame_weapons";
         }
-        assert_eq!(
-            case.n::<Vec<i16>>("sounds"),
-            vec![if result.damage != 0 {
-                i16::from_be_bytes(items[weapon][14..16].try_into().unwrap())
-            } else {
-                650
-            }],
-            "case{index} native melee hit/miss audio"
-        );
-        assert!(result.sounds.is_empty());
+        if native_audio {
+            assert_eq!(
+                case.n::<Vec<i16>>("sounds"),
+                vec![if result.damage != 0 {
+                    i16::from_be_bytes(items[weapon][14..16].try_into().unwrap())
+                } else {
+                    650
+                }],
+                "case{index} native melee hit/miss audio"
+            );
+            assert!(result.sounds.is_empty());
+        } else {
+            assert_eq!(result.sounds, case.n::<Vec<i16>>("sounds"));
+        }
     }
 }
-#[test]
-fn required_endgame_adjacent_melee_caller_matches_native_action_count_and_cost() {
-    let fixture = fixture();
 
-    crate::binary_endgame_weapons::compare_required_endgame_adjacent_melee_caller_matches_native_action_count_and_cost(fixture);
-}
-
-pub(super) fn compare_required_endgame_adjacent_melee_caller_matches_native_action_count_and_cost(
-    fixture: Value,
-) {
+pub(super) fn neighbors(fixture: &Value, native_audio: bool) {
     let items = items();
     let cases = fixture.array("caller_cases");
 
@@ -190,7 +186,10 @@ pub(super) fn compare_required_endgame_adjacent_melee_caller_matches_native_acti
         crate::support::native_expect! {
         scalar random.seed => &case["seed_after"], "binary_endgame_weapons";
         scalar random.draws => &case["rng_draws"], "binary_endgame_weapons";
-        scalar (crate::support::event_sounds(&events)) => &case["sounds"], "binary_endgame_weapons";
+        }
+        // Earlier probes intercept result-audio; their empty list is not a silence oracle.
+        if native_audio {
+            crate::support::expect(crate::support::event_sounds(&events), &case["sounds"]);
         }
         let resolved: Vec<_> = events
             .iter()
@@ -214,18 +213,10 @@ pub(super) fn compare_required_endgame_adjacent_melee_caller_matches_native_acti
         );
     }
 }
-#[test]
-fn required_endgame_enemy_firearms_match_native_friendly_body_targets() {
-    let fixture = fixture();
 
-    crate::binary_endgame_weapons::compare_required_endgame_enemy_firearms_match_native_friendly_body_targets(fixture);
-}
-
-pub(super) fn compare_required_endgame_enemy_firearms_match_native_friendly_body_targets(
-    fixture: Value,
-) {
+pub(super) fn friendly(fixture: &Value) {
     let items = items();
-    let attacks = attacks();
+    let attacks = data("Data S");
     let cases = fixture.array("body_cases");
 
     for (index, case) in cases.iter().enumerate() {
@@ -262,7 +253,6 @@ pub(super) fn compare_required_endgame_enemy_firearms_match_native_friendly_body
         }
     }
 }
-use crate::native_common::raw_word as word;
 
 #[test]
 fn required_endgame_ranged_to_natural_fallback_matches_original_full_records_and_randomness() {

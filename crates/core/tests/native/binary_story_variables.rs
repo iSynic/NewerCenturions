@@ -4,10 +4,6 @@ use centurions_core::story_variables::{
     StoryContinuation, party_item_condition, update_variable, variable_predicate,
 };
 
-fn fixture() -> serde_json::Value {
-    crate::support::fixture("story-variables.json")
-}
-
 fn continuation(case: &serde_json::Value) -> StoryContinuation {
     if case["local_action_index"] == 99 {
         return StoryContinuation::EndScript;
@@ -40,7 +36,7 @@ fn party_item_conditions_match_original_complete_warriors_and_continuations() {
 
 #[test]
 fn variable_updates_match_original_complete_bytes_and_continuations() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("story-variables.json");
 
     for case in fixture.array("update_cases") {
         let before = case.bytes("before");
@@ -62,7 +58,7 @@ fn variable_updates_match_original_complete_bytes_and_continuations() {
 
 #[test]
 fn variable_predicates_match_original_signed_comparisons_and_targets() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("story-variables.json");
 
     for case in fixture.array("predicate_cases") {
         let before = case.bytes("before");

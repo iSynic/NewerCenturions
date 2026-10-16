@@ -90,20 +90,10 @@ fn verify(ranged: bool) {
             &content.items,
         )
         .unwrap();
-        let actual: Vec<_> = crate::support::record_bytes(&warriors);
-        let expected = case.bytes("after_warriors");
-        let differences: Vec<_> = actual
-            .iter()
-            .zip(&expected)
-            .enumerate()
-            .filter(|(_, (a, b))| a != b)
-            .map(|(i, (a, b))| (i / 3138, format!("{:x}", i % 3138), a, b))
-            .collect();
-        assert!(
-            differences.is_empty(),
-            "warrior differences case {index}: {differences:?} seed {:?} draws {}",
-            random.seed,
-            random.draws
+        crate::support::assert_bytes(
+            &crate::support::record_bytes(&warriors),
+            &case.bytes("after_warriors"),
+            &format!("enemy turn case{index}"),
         );
         crate::support::native_expect! {
         bytes combat.enemies.records[0].bytes => &case["after"], "enemy case {index}";

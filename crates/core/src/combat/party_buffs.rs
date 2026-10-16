@@ -9,9 +9,47 @@ pub(crate) fn validate(buffs: &[u8]) -> Result<(), RuleError> {
 }
 
 pub fn extend_inertial(buffs: &mut [u8], duration: i16) -> Result<(), RuleError> {
+    extend(buffs, 2, duration)
+}
+
+/// resolvespell15130e writes beyond the directory NUL for short scenario names.
+pub(crate) fn extend_scenario_tail(
+    state: &mut crate::Session,
+    duration: i16,
+) -> Result<(), RuleError> {
+    if state
+        .mission
+        .as_ref()
+        .is_none_or(|name| name.len() + b":Scenarios:".len() >= 50)
+    {
+        return Err(RuleError::Unsupported {
+            action: "psi.party",
+            dependency: "indexed duration overlaps scenario-directory text",
+        });
+    }
+    let previous = match state.scenario_duration_tail {
+        Some(value) => value,
+        None => state
+            .native_import
+            .as_ref()
+            .map(|records| records.scenario_duration_tail())
+            .transpose()?
+            .unwrap_or(0),
+    };
+    state.scenario_duration_tail = Some(previous.max(duration));
+    Ok(())
+}
+
+/// resolvespell15133c retains the greater signed duration in the selected party slot.
+pub fn extend(buffs: &mut [u8], effect: i16, duration: i16) -> Result<(), RuleError> {
     validate(buffs)?;
-    let duration = word(buffs, 4)?.max(duration);
-    buffs[4..6].copy_from_slice(&duration.to_be_bytes());
+    let offset = usize::try_from(effect)
+        .ok()
+        .filter(|slot| *slot < 10)
+        .ok_or_else(|| RuleError::Invalid("party effect outside duration table".into()))?
+        * 2;
+    let duration = word(buffs, offset)?.max(duration);
+    buffs[offset..offset + 2].copy_from_slice(&duration.to_be_bytes());
     Ok(())
 }
 

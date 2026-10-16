@@ -6,15 +6,8 @@ use centurions_core::combat::ally_turns::natural_attack_enemy;
 use centurions_core::combat::ally_turns::result_audio;
 use centurions_core::combat::ally_turns::scientist_turn_with_item_context;
 
-fn bytes(c: &serde_json::Value, k: &str) -> Vec<u8> {
-    decode(c[k].as_str().unwrap())
-}
-fn records(b: &[u8]) -> Vec<MonsterRecord> {
-    crate::support::monsters(b)
-}
-fn fixture() -> serde_json::Value {
-    crate::support::fixture("ally-turns.json")
-}
+use crate::support::field_bytes as bytes;
+use crate::support::monsters as records;
 fn mission(f: &serde_json::Value, content: &centurions_content::Content) -> OpeningMission {
     let p = bytes(f, "properties");
     let mut m = content.map(0).unwrap().clone();
@@ -25,7 +18,6 @@ fn mission(f: &serde_json::Value, content: &centurions_content::Content) -> Open
 }
 fn combat(case: &serde_json::Value, distance: i16) -> Combat {
     Combat {
-        difficulty: 0,
         battle: 8,
         map: TacticalMap {
             tiles: if case["map_before"].is_string() {
@@ -55,7 +47,7 @@ use crate::support::event_sounds as sounds;
 
 #[test]
 fn scientist_turn_matches_original_records_map_and_rng() {
-    let f = fixture();
+    let f = crate::support::fixture("ally-turns.json");
     let content = content();
     let mission = mission(&f, &content);
     for (index, case) in f.array("turn_cases").iter().enumerate() {
@@ -71,21 +63,10 @@ fn scientist_turn_matches_original_records_map_and_rng() {
             case["item_context"].as_i64().unwrap_or(0) as i16,
         )
         .unwrap();
-        let expected = bytes(case, "records_after");
-        let actual = record_bytes(&c);
-        let diff: Vec<_> = actual
-            .iter()
-            .zip(&expected)
-            .enumerate()
-            .filter(|(_, (a, b))| a != b)
-            .map(|(i, (a, b))| (i, a, b))
-            .collect();
-        assert!(
-            diff.is_empty(),
-            "case{index} differences{diff:?} draws{} seed{} sounds{:?}",
-            random.draws,
-            random.seed,
-            sounds(&events)
+        crate::support::assert_bytes(
+            &record_bytes(&c),
+            &bytes(case, "records_after"),
+            &format!("ally turn case{index}"),
         );
         assert_eq!(
             crate::support::record_bytes(&w),
@@ -110,7 +91,7 @@ fn scientist_turn_matches_original_records_map_and_rng() {
 }
 #[test]
 fn monster_natural_attack_matches_original_scientist_damage() {
-    let f = fixture();
+    let f = crate::support::fixture("ally-turns.json");
     for (index, case) in f.array("attack_cases").iter().enumerate() {
         let mut c = combat(case, 0);
         c.enemies.positions = vec![(0, 0); 2];
@@ -157,7 +138,7 @@ fn monster_natural_attack_matches_original_scientist_damage() {
 
 #[test]
 fn item_work_context_matches_original_load_and_weight_calculation() {
-    let f = fixture();
+    let f = crate::support::fixture("ally-turns.json");
     let content = content();
     for case in f["context_cases"].as_array().expect("context cases") {
         let result = if case["kind"] == "loaditem" {

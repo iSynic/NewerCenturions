@@ -1,13 +1,14 @@
 use crate::prelude::*;
 use crate::support::assert_bytes;
 
-fn fixture() -> serde_json::Value {
-    crate::support::fixture("spell-fields.json")
-}
-
 #[test]
 fn field_timers_and_usage_reset_match_original_complete_buffers() {
-    for (index, case) in fixture()["ticks"].as_array().unwrap().iter().enumerate() {
+    for (index, case) in crate::support::fixture("spell-fields.json")["ticks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
         let fields = case.bytes("fields_before");
         let used = case.bytes("used_before");
         let cursor = case.n::<i16>("cursor_before");
@@ -29,12 +30,12 @@ fn field_timers_and_usage_reset_match_original_complete_buffers() {
 
 #[test]
 fn complete_collisions_match_original_all_bodies_fields_usage_and_randomness() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("spell-fields.json");
     let mission = OpeningMission {
         shared: std::sync::Arc::new(centurions_content::mission::StoryTables {
             areas: fixture.bytes("areas"),
             combat: Some(centurions_content::combat::CombatContent {
-                attacks: attacks(),
+                attacks: data("Data S"),
                 encounters: vec![],
                 battles: vec![],
                 monsters: vec![],
@@ -44,7 +45,8 @@ fn complete_collisions_match_original_all_bodies_fields_usage_and_randomness() {
         }),
         ..crate::support::mission()
     };
-    for (index, case) in fixture.array("cases").iter().enumerate() {
+    let rotated = crate::support::fixture("rotated-fields.json");
+    for case in fixture.array("cases").iter().chain(rotated.array("cases")) {
         let mut warriors = crate::support::warriors(&case["warriors_before"]);
         let mut combat = Combat {
             battle: 28,
@@ -66,31 +68,15 @@ fn complete_collisions_match_original_all_bodies_fields_usage_and_randomness() {
             field_used: case.bytes("used_before"),
             ..crate::support::battle()
         };
+        combat.weapon_work = centurions_core::combat::weapon_work::WeaponWork::zero();
+        if case.get("armor").and_then(Value::as_i64) == Some(1) {
+            combat
+                .weapon_work
+                .load_weapon(&content().items[130])
+                .unwrap();
+        }
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let mut count = 6;
-        if index == 0 {
-            let mut blocked = combat.clone();
-            let field = blocked.spell_fields[..20].to_vec();
-            blocked.spell_fields[40..60].copy_from_slice(&field);
-            blocked.spell_fields[57] = 1;
-            let mut party = warriors.clone();
-            let mut rng = random.clone();
-            let mut count = 6;
-            let unchanged = (blocked.clone(), party.clone(), rng.clone());
-            assert!(
-                runtime::collide_fields(
-                    &mut blocked,
-                    &mut party,
-                    &mission,
-                    &mut count,
-                    &mut rng,
-                    case.n::<i16>("body")
-                )
-                .is_err()
-            );
-            assert_eq!((blocked, party, rng), unchanged);
-            assert_eq!(count, 6);
-        }
         let events = runtime::collide_fields(
             &mut combat,
             &mut warriors,

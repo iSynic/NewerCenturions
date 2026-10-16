@@ -27,15 +27,7 @@ fn authored_terminal_choice_matches_native_records_and_resumes() {
     );
     position.x = 40;
     position.y = 80;
-    position.script = Some(ScriptState {
-        record: fixture.bytes("script"),
-        cursor: 0,
-        map_slot: 0,
-        scheduled: true,
-        menu: None,
-        persist: false,
-        origin: None,
-    });
+    position.script = Some(crate::support::script_state(fixture.bytes("script"), 0));
     position.presentation = Some(Presentation::Dialogue {
         id: 0,
         text: String::new(),

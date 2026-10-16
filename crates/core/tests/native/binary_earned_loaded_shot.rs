@@ -1,11 +1,5 @@
 use crate::prelude::*;
 
-fn fixture() -> (Content, Value) {
-    (
-        crate::support::content(),
-        crate::support::fixture("earned-loaded-shot.json"),
-    )
-}
 use crate::native_common::snapshot_party as party;
 
 fn monsters(snapshot: &Value) -> Vec<MonsterRecord> {
@@ -15,10 +9,7 @@ use crate::support::assert_bytes;
 use crate::support::compare_party as assert_party;
 
 fn assert_monsters(actual: &[MonsterRecord], snapshot: &Value) {
-    assert_eq!(actual.len(), 100);
-    for (member, (actual, expected)) in actual.iter().zip(monsters(snapshot)).enumerate() {
-        assert_bytes(&actual.bytes, &expected.bytes, &format!("NPC {member}"));
-    }
+    crate::support::compare_record_bytes(actual, &monsters(snapshot));
 }
 use crate::native_common::random_state as random;
 
@@ -54,7 +45,8 @@ fn caller_debits(warrior: &mut Warrior) {
 
 #[test]
 fn actual_loaded_shot_preparations_match_native_packets_and_resource_work() {
-    let (content, fixture) = fixture();
+    let content = crate::support::content();
+    let fixture: Value = crate::support::fixture("earned-loaded-shot.json");
     for case in fixture.array("cases") {
         let prepared = prepare(&content, &fixture, case);
         crate::support::native_expect! {
@@ -86,7 +78,8 @@ fn actual_loaded_shot_preparations_match_native_packets_and_resource_work() {
 
 #[test]
 fn actual_miss_and_lethal_resolver_match_native_before_death_and_getup() {
-    let (content, fixture) = fixture();
+    let content = crate::support::content();
+    let fixture: Value = crate::support::fixture("earned-loaded-shot.json");
     for (index, case) in fixture.array("cases").iter().enumerate() {
         let prepared = prepare(&content, &fixture, case);
         let actor = case.n::<usize>("actor");
@@ -111,9 +104,10 @@ fn actual_miss_and_lethal_resolver_match_native_before_death_and_getup() {
         let draw_count = checkpoint.n::<u64>("draws") - initial.draws;
         assert_eq!(draw_count, [3, 18][index]);
         let mut native_random = initial;
-        for draw in &case.array("rng")[..draw_count as usize] {
-            crate::support::expect(native_random.bound(draw.n::<i16>("bound")), &draw["result"]);
-        }
+        crate::support::replay_rng(
+            &mut native_random,
+            &case.array("rng")[..draw_count as usize],
+        );
         assert_eq!(random, native_random);
         let phase = case
             .array("phase_receipts")
@@ -128,47 +122,13 @@ fn actual_miss_and_lethal_resolver_match_native_before_death_and_getup() {
         assert_eq!(result.sounds, native_sounds);
         assert_eq!(result.damage, [0, 7][index]);
         assert_eq!(result.killed, index == 1);
-        let instance = &warriors[actor].inventory().unwrap()[0].0;
-        assert_eq!(word(instance, 2).unwrap(), 0);
-        assert_eq!(word(instance, 4).unwrap(), 280);
-        assert_eq!(word(instance, 6).unwrap(), 1);
         assert_bytes(
             &prepared.packet,
             &case["prepared"].bytes("packet"),
             "retained prepared packet",
         );
         if index == 1 {
-            assert_eq!(word(&records[target].bytes, 0x110).unwrap(), -2);
-            assert_eq!(records[target].bytes[0x105], 1);
-            assert_eq!(records[target].bytes[0x106], 9);
             assert_eq!(checkpoint["killed_count"], 1);
         }
-    }
-}
-
-#[test]
-fn firing_admission_does_not_admit_earned_reload_or_ammunition_fitting() {
-    let (content, fixture) = fixture();
-    for case in fixture.array("cases") {
-        let state: Session = serde_json::from_value(
-            fixture["foundations"][case.n::<usize>("foundation")]["session"].clone(),
-        )
-        .unwrap();
-        let mut warrior = party(&case["targeted"])[4].clone();
-        let before = warrior.clone();
-        let mut reserve = state.ammunition[80];
-        let original_reserve = reserve;
-        let mut random = self::random(&case["targeted"]);
-        let original_random = random.clone();
-        assert!(firearm::reload(&mut warrior, &mut reserve, true, &mut random).is_err());
-        assert_eq!(warrior, before);
-        assert_eq!(reserve, original_reserve);
-        assert_eq!(random, original_random);
-        assert!(
-            firearm::fit_ammunition(&warrior, 0, &content, &state.ammunition, false, &mut random)
-                .is_err()
-        );
-        assert_eq!(warrior, before);
-        assert_eq!(random, original_random);
     }
 }

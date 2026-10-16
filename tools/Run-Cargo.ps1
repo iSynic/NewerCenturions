@@ -1,6 +1,7 @@
 #requires -Version 7.0
 param(
-    [ValidateSet('Test', 'Check', 'Clippy', 'Build', 'Rustc')][string]$Action = 'Test',
+    [ValidateSet('Test', 'Check', 'Clippy', 'Build', 'Rustc', 'Run')][string]$Action = 'Test',
+    [ValidateSet('centurions-replay-recorder')][string]$Binary,
     [string]$Package,
     [string]$Filter,
     [string]$TestTarget,
@@ -8,6 +9,7 @@ param(
     [string]$ManifestPath,
     [string]$TargetDirectory,
     [switch]$Library,
+    [switch]$Ignored,
     [switch]$AllTargets,
     [switch]$Release,
     [ValidateRange(1, 64)][int]$BuildJobs = [Math]::Min(64, [Environment]::ProcessorCount),
@@ -23,6 +25,8 @@ param(
     [ValidateRange(1, 600)][int]$MaximumTestSeconds = 60
 )
 $ErrorActionPreference = 'Stop'
+if ($Action -eq 'Run' -and ($Package -ne 'centurions-core' -or !$Binary)) { throw 'Run requires the headless core recorder.' }
+if ($Binary -and $Action -ne 'Run') { throw 'The recorder binary requires Run.' }
 if ($CompilerPhaseDiagnostics -and $Action -ne 'Rustc') { throw 'Compiler phase diagnostics require -Action Rustc.' }
 if ($Filter -and $Action -ne 'Test') { throw 'A test filter requires -Action Test.' }
 if ($TestTarget -and ($Action -ne 'Test' -or $Library)) { throw 'A named test target requires -Action Test without -Library.' }
@@ -35,6 +39,10 @@ $startInfo.CreateNoWindow = $true
 $startInfo.RedirectStandardOutput = $true
 $startInfo.RedirectStandardError = $true
 foreach ($argument in @($Action.ToLowerInvariant(), '--jobs', $BuildJobs.ToString())) { $startInfo.ArgumentList.Add($argument) }
+if ($Binary) {
+    $startInfo.ArgumentList.Add('--example')
+    $startInfo.ArgumentList.Add($Binary)
+}
 if ($Timings) { $startInfo.ArgumentList.Add('--timings') }
 if ($JsonDiagnostics) {
     $startInfo.ArgumentList.Add('--message-format')
@@ -67,6 +75,7 @@ if ($Release) { $startInfo.ArgumentList.Add('--release') }
 if ($Filter) { $startInfo.ArgumentList.Add($Filter) }
 if ($Action -eq 'Test') {
     foreach ($argument in @('--', '--test-threads=1', '--nocapture')) { $startInfo.ArgumentList.Add($argument) }
+    if ($Ignored) { $startInfo.ArgumentList.Add('--ignored') }
 } elseif ($Action -eq 'Clippy') {
     foreach ($argument in @('--', '-D', 'warnings')) { $startInfo.ArgumentList.Add($argument) }
 }
@@ -294,7 +303,8 @@ try {
                 }
                 if (-not $AllowCompilerParallelism) { $ownedProcess.ProcessorAffinity = [IntPtr]1 }
                 $executable = $ownedProcess.MainModule.FileName
-                if ($executable -notmatch '[\\/]deps[\\/][^\\/]+\.exe$' -and
+                $headlessRecorder = $Action -eq 'Run' -and [IO.Path]::GetFileName($executable) -ieq "$Binary.exe"
+                if (!$headlessRecorder -and $executable -notmatch '[\\/]deps[\\/][^\\/]+\.exe$' -and
                     $executable -notmatch '[\\/]rustdoctest[^\\/]*[\\/].*\.exe$' -and
                     [IO.Path]::GetFileName($executable) -ine 'rust_out.exe') { continue }
                 $ownedProcess.ProcessorAffinity = [IntPtr]1

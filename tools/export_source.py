@@ -33,8 +33,9 @@ def export(source: Path, destination: Path) -> int:
     source, destination = source.resolve(), destination.resolve()
     if destination.exists() or destination == source or destination.is_relative_to(source):
         raise ValueError("Destination must be a fresh directory outside the source checkout")
-    tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=source).decode().split("\0")
-    selected = [name for name in tracked if name and public_path(name)]
+    tracked = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=source).decode().split("\0")
+    deleted = set(subprocess.check_output(["git", "ls-files", "--deleted", "-z"], cwd=source).decode().split("\0"))
+    selected = [name for name in tracked if name and name not in deleted and public_path(name)]
     required = {"Cargo.toml", "Cargo.lock", "LICENSE", "THIRD_PARTY.md", "docs/public-readme.md", "tools/Build.ps1", "tools/audit_public.py"}
     if not required.issubset(selected):
         raise ValueError(f"Missing tracked public inputs: {sorted(required.difference(selected))}")

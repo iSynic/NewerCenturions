@@ -11,6 +11,14 @@ struct Case {
     fatigue_after: i16,
     hour_after: i16,
     minute_after: i16,
+    #[serde(default)]
+    extra: Option<String>,
+    #[serde(default)]
+    controls: String,
+    #[serde(default)]
+    allies_before: String,
+    #[serde(default)]
+    allies_after: String,
 }
 fn decode(hex: &str) -> Vec<u8> {
     (0..hex.len())
@@ -20,60 +28,98 @@ fn decode(hex: &str) -> Vec<u8> {
 }
 #[test]
 fn hourly_update_matches_original_instruction_execution() {
-    let fixture: Fixture =
-        serde_json::from_str(include_str!("../../../../evidence/fixtures/time.json")).unwrap();
-    for case in fixture.cases {
-        let content = Content {
-            tutorials: vec![],
-            identity: "hourly".into(),
-            warriors: vec![],
-            items: vec![],
-            resources: vec![],
-            original_services: None,
-            scenario: None,
-        };
-        let mut state = Session::new(&content);
-        state.warriors = decode(&case.input)
-            .as_chunks::<3138>()
-            .0
-            .iter()
-            .map(|record| Warrior::read(record).unwrap())
-            .collect();
-        state.exploration = Some(Exploration {
-            map: 0,
-            x: 2,
-            y: 2,
-            day: 1,
-            hour: 12,
-            minute: 55,
-            fatigue: case.fatigue_before,
-            facing: 0,
-            last_move: [0; 2],
-            script: None,
-            presentation: None,
-            event_headers: vec![0; 4200],
-            schedule: vec![],
-            region_state: vec![0; 644],
-            visibility: vec![0; 8100],
-            floor: vec![],
-            objects: vec![],
-            events: vec![],
-        });
-        advance(&mut state, &content, 1, 5).unwrap();
-        let position = state.exploration.unwrap();
-        assert_eq!(
-            (position.hour, position.minute, position.fatigue),
-            (case.hour_after, case.minute_after, case.fatigue_after)
-        );
-        assert_eq!(
-            state
-                .warriors
-                .into_iter()
-                .flat_map(|warrior| warrior.bytes)
-                .collect::<Vec<_>>(),
-            decode(&case.output)
-        );
-        assert_eq!(state.random.draws, 0);
+    for source in [
+        include_str!("../../../../evidence/fixtures/time.json"),
+        include_str!("../../../../evidence/fixtures/hourly-energy-controls.json"),
+        include_str!("../../../../evidence/fixtures/hourly-energy-reduction.json"),
+    ] {
+        let fixture: Fixture = serde_json::from_str(source).unwrap();
+        for case in fixture.cases {
+            let mut content = calendar_content(vec![]);
+            let mut state = calendar_state(&content, &case.input, 12, 55);
+            state.exploration.as_mut().unwrap().fatigue = case.fatigue_before;
+            if let Some(extra) = &case.extra {
+                state.allies = decode(&case.allies_before);
+                state.ally_count = 6;
+                let tables = std::sync::Arc::make_mut(
+                    &mut content.scenario.as_mut().unwrap().maps[0].shared,
+                );
+                tables.combat = Some(centurions_content::combat::CombatContent {
+                    encounters: decode(extra),
+                    battles: vec![],
+                    monsters: vec![],
+                    race_moves: vec![],
+                    attacks: vec![],
+                });
+                let mut record = vec![0; 42];
+                put(&mut record, 8, 69);
+                state.exploration.as_mut().unwrap().script = Some(ScriptState {
+                    record,
+                    cursor: 0,
+                    map_slot: 0,
+                    item_return: false,
+                    scheduled: true,
+                    menu: None,
+                    persist: false,
+                    origin: None,
+                });
+                state.exploration.as_mut().unwrap().presentation = Some(Presentation::Dialogue {
+                    id: 0,
+                    text: String::new(),
+                });
+                apply(Command::Continue, &mut state, &content).unwrap();
+                assert_eq!(
+                    [
+                        state.psi_disabled,
+                        state.energy_recovery_disabled,
+                        state.enemy_spell_disabled
+                    ],
+                    decode(&case.controls).as_slice(),
+                );
+                let path = std::env::temp_dir()
+                    .join(format!("centurions-energy-{}.json", std::process::id()));
+                save(&path, &state, &content).unwrap();
+                let mut restored = load(&path, &content).unwrap();
+                let events = apply(Command::Move { dx: 1, dy: 0 }, &mut state, &content).unwrap();
+                assert_eq!(
+                    apply(Command::Move { dx: 1, dy: 0 }, &mut restored, &content).unwrap(),
+                    events
+                );
+                assert_eq!(state, restored);
+                let mut legacy: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                legacy["schema_version"] = 5.into();
+                fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+                assert_eq!(
+                    load(&path, &content).is_err(),
+                    state.energy_recovery_disabled != 0
+                );
+                legacy["session"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("energy_recovery_disabled");
+                fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+                assert_eq!(load(&path, &content).unwrap().energy_recovery_disabled, 0);
+                fs::remove_file(path).unwrap();
+                assert_eq!(state.allies, decode(&case.allies_after));
+            } else {
+                advance(&mut state, &content, 1, 5).unwrap();
+            }
+            let position = state.exploration.unwrap();
+            assert_eq!(
+                (position.hour, position.minute, position.fatigue),
+                (case.hour_after, case.minute_after, case.fatigue_after),
+            );
+            assert_eq!(
+                state
+                    .warriors
+                    .into_iter()
+                    .flat_map(|warrior| warrior.bytes)
+                    .collect::<Vec<_>>(),
+                decode(&case.output),
+            );
+            assert_eq!(state.random.draws, 0);
+        }
     }
 }
 
@@ -222,6 +268,44 @@ fn calendar_save_resume_and_legacy_migration_preserve_trigger_history() {
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../../../../evidence/fixtures/calendar.json")).unwrap();
     let case = &fixture["cases"][5];
+    for eligible in [false, true] {
+        let mut content = calendar_content(decode(case["schedule_before"].as_str().unwrap()));
+        let map = &mut content.scenario.as_mut().unwrap().maps[0];
+        let tables = std::sync::Arc::make_mut(&mut map.shared);
+        tables.dialogue = vec![0; 512];
+        for (offset, value) in [(18, 2_i16), (20, 1), (8, 0), (10, 0)] {
+            put(&mut tables.schedule, offset, value);
+        }
+        for (offset, value) in [(8, 1_i16), (10, 109), (24, 1), (26, 1)] {
+            put(&mut tables.scheduled_scripts, 117 * 42 + offset, value);
+        }
+        map.regions[..8].copy_from_slice(&[0, 0, 0, 0, 0, 10, 0, 10]);
+        let mut state = calendar_state(&content, case["input"].as_str().unwrap(), 23, 55);
+        state.flags[2] = u8::from(eligible);
+        apply(Command::Move { dx: 1, dy: 0 }, &mut state, &content).unwrap();
+        assert_eq!(state.time_continuation.is_some(), eligible);
+        let path = std::env::temp_dir().join(format!(
+            "centurions-scheduled-dialogue-{}-{eligible}.json",
+            std::process::id()
+        ));
+        save(&path, &state, &content).unwrap();
+        let mut resumed = load(&path, &content).unwrap();
+        for _ in 0..3 {
+            if state.exploration.as_ref().unwrap().presentation.is_none() {
+                break;
+            }
+            assert_eq!(
+                apply(Command::Continue, &mut state, &content).unwrap(),
+                apply(Command::Continue, &mut resumed, &content).unwrap()
+            );
+            assert_eq!(state, resumed);
+        }
+        assert!(state.time_continuation.is_none());
+        assert_eq!(state.mission_score, i16::from(eligible));
+        let p = state.exploration.as_ref().unwrap();
+        assert_eq!((p.day, p.hour, p.minute), (2, 0, 0));
+        fs::remove_file(path).unwrap();
+    }
     let content = calendar_content(decode(case["schedule_before"].as_str().unwrap()));
     let mut state = calendar_state(&content, case["input"].as_str().unwrap(), 23, 55);
     let path =
@@ -299,13 +383,4 @@ fn hourly_party_protection_ticks_without_changing_other_rules_and_resumes() {
         assert_eq!(state, baseline);
         fs::remove_file(path).unwrap();
     }
-    let mut state = calendar_state(&content, case["input"].as_str().unwrap(), 13, 55);
-    state.party_buffs[4..6].copy_from_slice(&20_i16.to_be_bytes());
-    state.warriors[0].bytes[0x8a..0x8c].copy_from_slice(&1_i16.to_be_bytes());
-    let before = state.clone();
-    assert!(matches!(
-        apply(Command::Move { dx: 1, dy: 0 }, &mut state, &content),
-        Err(RuleError::Unsupported { .. })
-    ));
-    assert_eq!(state, before);
 }

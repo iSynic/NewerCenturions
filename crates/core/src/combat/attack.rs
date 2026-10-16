@@ -37,6 +37,7 @@ pub fn unarmed_attack(
         default_attack_packet(),
         &[0; 58],
         difficulty,
+        None,
     )?
     .0)
 }
@@ -62,11 +63,32 @@ pub fn unarmed_attack_with_packet(
         base,
         retained,
         difficulty,
+        None,
     )?;
     *warrior = next_warrior;
     *enemy = next_enemy;
     *random = next_random;
-    Ok(result)
+    Ok((result.0, result.1))
+}
+
+pub(crate) fn warrior_attack_with_packet(
+    warrior: &mut Warrior,
+    enemy: &mut MonsterRecord,
+    random: &mut RandomState,
+    attacks: &[u8],
+    retained: &[u8],
+    difficulty: i16,
+    weapon: Option<&[u8]>,
+) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
+    unarmed_attack_inner(
+        warrior,
+        enemy,
+        random,
+        attack_packet(attacks)?,
+        retained,
+        difficulty,
+        weapon,
+    )
 }
 
 fn unarmed_attack_inner(
@@ -76,11 +98,12 @@ fn unarmed_attack_inner(
     base: Vec<u8>,
     retained: &[u8],
     difficulty: i16,
-) -> Result<(AttackResult, Vec<u8>), RuleError> {
+    weapon: Option<&[u8]>,
+) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
     let mut packet = retained.to_vec();
     let w = &mut warrior.bytes;
     let m = &mut enemy.bytes;
-    if word(w, 0xca)? != 0 || m[0xd1] != 0 || word(m, 0xc)? != 0 {
+    if word(w, 0xca)? != 0 && weapon.is_none() {
         return Err(RuleError::Unsupported {
             action: "combat.attack",
             dependency: "equipped weapon, damage reflection or weapon immunity",
@@ -94,6 +117,7 @@ fn unarmed_attack_inner(
                 sounds: vec![45],
             },
             packet,
+            false,
         ));
     }
     packet = base;
@@ -140,13 +164,31 @@ fn unarmed_attack_inner(
                 sounds: vec![],
             },
             packet,
+            false,
         ));
     }
-    put_word(&mut packet, 32, word(w, 0x9e)?.wrapping_add(1));
-    put_word(&mut packet, 34, word(w, 0x9e)?.wrapping_add(word(w, 0xc)?));
+    let immunity = word(m, 0xc)?;
+    let armed = weapon.is_some();
+    let rejected = immunity == -1 && armed && word(weapon.unwrap(), 100)? != -1
+        || immunity == -2 && armed && word(weapon.unwrap(), 100)? != -2
+        || !matches!(immunity, -2..=0)
+            && weapon.map_or(Ok(0), |w| word(w, 102))?.wrapping_sub(1024) != immunity;
+    if rejected {
+        return Ok((
+            AttackResult {
+                damage: 0,
+                killed: false,
+                sounds: vec![],
+            },
+            packet,
+            false,
+        ));
+    }
+    let reflected = m[0xd1] != 0 && random.bound(100) < 34;
+    super::warrior_attack::prepare_packet(&mut packet, w, weapon, w)?;
     let resolved = resolve_damage(
-        m,
-        true,
+        if reflected { &mut *w } else { &mut *m },
+        !reflected,
         &DamagePacket {
             bytes: packet.clone(),
             attack_count: 0,
@@ -159,6 +201,13 @@ fn unarmed_attack_inner(
         random,
     )?;
     let mut damage = resolved.total;
+    if weapon.is_some() && !reflected {
+        for i in 0..8 {
+            if m[0xa8 + i] != 0 {
+                damage = damage.wrapping_add(word(w, 0xae + i * 2)? / 5);
+            }
+        }
+    }
     if damage <= 0 {
         increment_long(w, 0xa52, 1);
         return Ok((
@@ -168,10 +217,36 @@ fn unarmed_attack_inner(
                 sounds: vec![],
             },
             packet,
+            reflected,
         ));
     }
     if random.bound(100) <= word(w, 0xfa)?.wrapping_add(word(w, 0xb68)?) {
         damage = damage.wrapping_mul(2);
+    }
+    if reflected {
+        if word(w, 0x60)? != 0 {
+            damage = word(w, 0x50)?;
+        }
+        let health = word(w, 0x50)?.wrapping_sub(damage);
+        put_word(w, 0x50, health);
+        put_word(w, 0x14, 1);
+        increment_long(w, 0xa42, i32::from(damage));
+        if (-9..=0).contains(&health) {
+            w[0x9de] = 1;
+        }
+        let sound = match weapon {
+            Some(weapon) => word(weapon, 14)?,
+            None => random.bound(2).wrapping_add(401),
+        };
+        return Ok((
+            AttackResult {
+                damage,
+                killed: health < 1,
+                sounds: vec![sound],
+            },
+            packet,
+            true,
+        ));
     }
     if m[0xb3] != 0 {
         damage = word(m, 0x110)?;
@@ -185,7 +260,10 @@ fn unarmed_attack_inner(
     if killed {
         increment_long(w, 0xa5a, 1);
     }
-    let sound = random.bound(2).wrapping_add(401);
+    let sound = match weapon {
+        Some(weapon) => word(weapon, 14)?,
+        None => random.bound(2).wrapping_add(401),
+    };
     Ok((
         AttackResult {
             damage,
@@ -193,6 +271,7 @@ fn unarmed_attack_inner(
             sounds: vec![sound],
         },
         packet,
+        false,
     ))
 }
 
@@ -289,10 +368,8 @@ fn natural_attack_inner(
         0x93 + attack_index * 4
     };
     let condition = m[0x96 + attack_index * 4];
-    if !matches!(
-        word(m, 0x4e)?,
-        0 | 2 | 3 | 5 | 9 | 12 | 26 | 28 | 29 | 37 | 38 | 50 | 100 | 165 | 680 | 681 | 683
-    ) || !matches!(word(m, 0x28)?, 0 | 9)
+    // attack2102038 clears any previously loaded ranged ID before natural damage.
+    if !matches!(word(m, 0x28)?, 0 | 9)
         || (word(m, 0x28)? == 9 && !matches!(word(m, 0x4e)?, 0 | 9))
         || !matches!(condition, 0 | 4 | 5 | 9 | 14)
         || word(w, 0x9c)? != 0

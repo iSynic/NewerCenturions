@@ -285,7 +285,11 @@ pub fn prepare(
 ) -> Result<PreparedFirearm, RuleError> {
     let w = &warrior.bytes;
     let id = word(w, 0xe4)?;
-    if w[0x9dd] != 1 || !matches!(id, 1 | 2 | 38 | 165) || weapon.len() != 150 || ammo.len() != 150
+    if w[0x9dd] != 1
+        || weapon.len() != 150
+        || ammo.len() != 150
+        || word(weapon, 26)?.wrapping_abs() != 15
+        || word(weapon, 102)?.wrapping_abs() != id.wrapping_abs()
     {
         return Err(RuleError::Unsupported {
             action: "combat.firearm.prepare",
@@ -298,52 +302,26 @@ pub fn prepare(
         .position(|i| i.id() == id && i.0[9] == 1)
         .ok_or_else(|| RuleError::Invalid("equipped firearm absent from inventory".into()))?;
     let item = 0x132 + slot * 22;
-    let ammunition = match id {
-        2 => 201,
-        38 => 203,
-        165 => 280,
-        _ => 200,
-    };
-    if word(w, item + 4)? != ammunition
-        || (id != 165 && w[item + 18] != 0)
-        || w[item + 20] != 0
-        || (id == 38 && (w[item + 15] != 35 || word(w, item + 6)? != 3))
-        || (id == 2
-            && (w[item + 10] != 15
-                || w[item + 13] != 1
-                || w[item + 14..item + 22].iter().any(|value| *value != 0)
-                || word(w, item + 6)? != 12
-                || !(1..=12).contains(&word(w, item + 2)?)))
-        || (id == 165
-            && (w[item + 8] != 0
-                || w[item + 10] != 15
-                || w[item + 11..item + 13].iter().any(|value| *value != 0)
-                || !matches!((w[item + 13], w[item + 18]), (2, 0) | (3, 10))
-                || w[item + 14..item + 18].iter().any(|value| *value != 0)
-                || w[item + 19..item + 22].iter().any(|value| *value != 0)
-                || word(w, item + 2)? != 1
-                || word(w, item + 6)? != 1
-                || word(weapon, 102)? != 165
-                || word(weapon, 32)? != 16
-                || word(ammo, 102)? != 280
-                || word(ammo, 34)? != 16))
+    if word(w, item + 4)?.wrapping_abs() != word(ammo, 102)?.wrapping_abs()
+        || word(weapon, 32)? != word(ammo, 34)?
+        || word(ammo, 26)?.wrapping_abs() != 26
     {
-        return Err(RuleError::Unsupported {
-            action: "combat.firearm.prepare",
-            dependency: "other ammunition or inventory weapon enhancements",
-        });
+        return Err(RuleError::Invalid(
+            "firearm ammunition definition mismatch".into(),
+        ));
     }
     let descriptor = word(weapon, 44)?;
-    if descriptor != 4101 {
+    if !matches!(descriptor, 4101 | 4102) {
         return Err(RuleError::Unsupported {
             action: "combat.firearm.prepare",
             dependency: "other attack descriptors",
         });
     }
-    let p = prepare_packet_with_enhancement(weapon, ammo, attacks, w[item + 18] as i8)?;
+    let mut p = prepare_packet_with_enhancement(weapon, ammo, attacks, w[item + 18] as i8)?;
+    p[2] = p[2].wrapping_add(w[item + 20]);
     let rounds = word(weapon, 22)?;
     let impact = word(&p, 38)?;
-    if p[19] != 9 || p[20] != 9 || word(&p, 40)? != 0 || p[23..30].iter().any(|v| *v != 0) {
+    if p[19] != 9 || p[20] != 9 || word(&p, 40)? != 0 {
         return Err(RuleError::Unsupported {
             action: "combat.firearm.prepare",
             dependency: "nonphysical firearm effects",
@@ -570,82 +548,82 @@ pub fn resolve(
     random: &mut RandomState,
     difficulty: i16,
 ) -> Result<AttackResult, RuleError> {
-    if word(&warrior.bytes, 0xe4)? == 165 {
-        validate_earned_shot(warrior, enemy, prepared, difficulty)?;
-        let mut next_warrior = warrior.clone();
-        let mut next_enemy = enemy.clone();
-        let mut next_random = random.clone();
-        let result = resolve_inner(
-            &mut next_warrior,
-            &mut next_enemy,
-            prepared,
-            &mut next_random,
-            difficulty,
-        )?;
-        *warrior = next_warrior;
-        *enemy = next_enemy;
-        *random = next_random;
-        return Ok(result);
+    centurions_content::span(&warrior.bytes, 0, 3138)?;
+    centurions_content::span(&enemy.bytes, 0, 288)?;
+    centurions_content::span(&prepared.packet, 0, 58)?;
+    if prepared.slot >= warrior.inventory()?.len() || !(-2..=2).contains(&difficulty) {
+        return Err("invalid firearm resolver context".into());
     }
-    resolve_inner(warrior, enemy, prepared, random, difficulty)
+    let mut next_warrior = warrior.clone();
+    let mut next_enemy = enemy.clone();
+    let mut next_random = random.clone();
+    let result = resolve_inner(
+        &mut next_warrior,
+        &mut next_enemy,
+        prepared,
+        &mut next_random,
+        difficulty,
+    )?;
+    *warrior = next_warrior;
+    *enemy = next_enemy;
+    *random = next_random;
+    Ok(result)
 }
 
-fn validate_earned_shot(
-    warrior: &Warrior,
-    enemy: &MonsterRecord,
+pub(crate) fn resolve_friendly_after_duration(
+    attacker: &Warrior,
+    target: &mut Warrior,
     prepared: &PreparedFirearm,
+    random: &mut RandomState,
     difficulty: i16,
-) -> Result<(), RuleError> {
-    let unsupported = || RuleError::Unsupported {
-        action: "combat.firearm.resolve",
-        dependency: "other earned firearm shot instance",
-    };
-    let w = &warrior.bytes;
-    if w.len() != 3138
-        || enemy.bytes.len() != 288
-        || w[0x9dd] != 1
-        || word(w, 0x126)? != 280
-        || word(&enemy.bytes, 0x110)? <= 0
-        || !(-2..=2).contains(&difficulty)
-        || prepared.slot != 0
-        || prepared.shots != 1
-        || prepared.rounds != 1
-        || prepared.weight != 0
-        || prepared.sound != 406
-        || prepared.armor_filter
-    {
-        return Err(unsupported());
+) -> Result<AttackResult, RuleError> {
+    let w = &mut target.bytes;
+    let a = &attacker.bytes;
+    let p = &prepared.packet;
+    if !prepared.armor_filter && word(w, 0x60)? == 0 {
+        let hit = 33_i16
+            .wrapping_add(word(a, 4)?)
+            .wrapping_add(word(a, 0xb58)?)
+            .wrapping_sub(word(w, 8)?.wrapping_add(word(w, 0xb5c)?))
+            .wrapping_sub(5)
+            .wrapping_sub(random.bound(word(w, 0x9e8)? / 3))
+            .wrapping_sub(word(w, 0x16)?.wrapping_mul(word(w, 0x3a)?));
+        if random.bound(100) > crate::rules::pin(hit, 15 - difficulty * 5, 90 - difficulty * 5) {
+            return Ok(AttackResult {
+                damage: 0,
+                killed: false,
+                sounds: vec![],
+            });
+        }
     }
-    let inventory = warrior.inventory()?;
-    let item = inventory.first().ok_or_else(unsupported)?;
-    if item.id() != 165
-        || word(&item.0, 2)? != 0
-        || word(&item.0, 4)? != 280
-        || word(&item.0, 6)? != 1
-        || item.0[8] != 0
-        || item.0[9] != 1
-        || item.0[10] != 15
-        || item.0[11..13].iter().any(|value| *value != 0)
-        || item.0[14..18].iter().any(|value| *value != 0)
-        || item.0[19..].iter().any(|value| *value != 0)
-    {
-        return Err(unsupported());
+    let result = resolve_damage(
+        w,
+        false,
+        &DamagePacket {
+            bytes: p.clone(),
+            attack_count: prepared.shots,
+        },
+        DamageFlags {
+            shield: true,
+            armor: true,
+            saves: true,
+            armor_filter: prepared.armor_filter,
+        },
+        random,
+    )?;
+    let previous = word(w, 0x50)?;
+    if result.total != 0 && previous >= 0 {
+        put_word(w, 0x50, previous.wrapping_sub(result.total));
     }
-    let maximum = match (item.0[13], item.0[18]) {
-        (2, 0) => 20,
-        (3, 10) => 22,
-        _ => return Err(unsupported()),
-    };
-    const PACKET: [u8; 58] = [
-        1, 1, 18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 9, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 1, 0, 1, 0, 20, 1, 166, 1, 150, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ];
-    let mut expected = PACKET;
-    put_word(&mut expected, 34, maximum);
-    if prepared.packet != expected {
-        return Err(unsupported());
-    }
-    Ok(())
+    Ok(AttackResult {
+        damage: result.total,
+        killed: previous > 0 && word(w, 0x50)? < 1,
+        sounds: if result.shield_sound {
+            vec![206]
+        } else {
+            vec![]
+        },
+    })
 }
 
 fn resolve_inner(
@@ -655,15 +633,27 @@ fn resolve_inner(
     random: &mut RandomState,
     difficulty: i16,
 ) -> Result<AttackResult, RuleError> {
+    random.range(
+        prepared.packet[13] as i8 as i16,
+        prepared.packet[14] as i8 as i16,
+    );
+    resolve_after_duration(warrior, enemy, prepared, random, difficulty)
+}
+
+pub(crate) fn resolve_after_duration(
+    warrior: &mut Warrior,
+    enemy: &mut MonsterRecord,
+    prepared: &PreparedFirearm,
+    random: &mut RandomState,
+    difficulty: i16,
+) -> Result<AttackResult, RuleError> {
     let w = &mut warrior.bytes;
     let m = &mut enemy.bytes;
     let p = &prepared.packet;
-    // resolvespell draws the effect duration even when the duration range is zero.
-    random.range(p[13] as i8 as i16, p[14] as i8 as i16);
     let mut hit = 33_i16
         .wrapping_add(word(w, 4)?)
         .wrapping_add(word(w, 0xb58)?);
-    if m[0xb3] == 0 {
+    if !prepared.armor_filter && m[0xb3] == 0 {
         hit = hit
             .wrapping_sub(word(m, 0x62)?)
             .wrapping_sub(random.bound(word(m, 4)? / 3));
@@ -696,7 +686,7 @@ fn resolve_inner(
             shield: true,
             armor: true,
             saves: true,
-            ..Default::default()
+            armor_filter: prepared.armor_filter,
         },
         random,
     )?;
@@ -852,62 +842,43 @@ pub fn reload_command(
         )?;
         return crate::ammunition::commit_result(state, index, result);
     }
-    let warrior = state
-        .warriors
-        .get_mut(index)
-        .ok_or_else(|| RuleError::Invalid("warrior outside squad".into()))?;
-    let ammo = word(&warrior.bytes, 0x126)?;
-    let reserve_index = match ammo {
-        200 => 0,
-        201 => 1,
-        203 => 3,
-        _ => {
-            return Err(RuleError::Unsupported {
-                action: "combat.reload",
-                dependency: "other ammunition",
-            });
-        }
-    };
-    let inventory = warrior.inventory()?;
-    let ammunition_loads: Vec<_> = inventory
-        .iter()
-        .filter(|item| {
-            item.0[9] != 0
-                && word(&item.0, 2).unwrap_or(0) < word(&item.0, 6).unwrap_or(0)
-                && word(&item.0, 4).unwrap_or(0) != 0
-        })
-        .map(|item| word(&item.0, 4))
-        .collect::<Result<_, _>>()?;
-    let owned_firearm = word(&warrior.bytes, 0xe4)? == 2;
-    let (complete, sounds) = reload(
+    let warrior = state.warriors.get(index).ok_or("warrior outside squad")?;
+    let id = word(
+        &warrior.bytes,
+        if warrior.bytes[0x9dd] != 0 {
+            0xe4
+        } else {
+            0xca
+        },
+    )?;
+    let mut work = state.ammunition_work.clone();
+    work.load_weapon(&content.items, id)?;
+    if work.item.is_none() {
+        work.item = Some(crate::ammunition::definition(content, 0)?);
+    }
+    let result = crate::ammunition::refit(
         warrior,
-        &mut state.ammunition[reserve_index],
-        owned_firearm,
+        &state.ammunition,
+        content,
+        crate::ammunition::RefitFlags {
+            in_combat: true,
+            force: true,
+            silent: false,
+            warnings: true,
+        },
+        &work,
         &mut state.random,
     )?;
-    let work = if let Some(combat) = state.combat.as_mut() {
-        &mut combat.weapon_work
-    } else {
-        &mut state.weapon_work
-    };
-    if owned_firearm {
-        // The reload preflight loads the equipped weapon before the empty-clip return.
-        work.load_weapon(&content.items[2])?;
-    }
-    for ammunition in ammunition_loads {
-        work.load_ammunition(
-            content
-                .items
-                .get(ammunition as usize)
-                .ok_or_else(|| RuleError::Invalid("reload ammunition definition missing".into()))?,
-        )?;
-    }
-    let mut events: Vec<_> = sounds
-        .into_iter()
-        .map(|resource_id| Event::Sound { resource_id })
-        .collect();
-    if owned_firearm && !complete {
-        events.push(Event::CollectionRejected { warning: 25 });
+    let complete = result.native_return != 0;
+    let mut events = crate::ammunition::commit_result(state, index, result)?;
+    if !complete {
+        put_word(&mut state.warriors[index].bytes, 0x90, 0);
+        if !events
+            .iter()
+            .any(|event| matches!(event, Event::CollectionRejected { warning: 25 }))
+        {
+            events.push(Event::CollectionRejected { warning: 25 });
+        }
     }
     Ok(events)
 }

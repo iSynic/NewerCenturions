@@ -3,32 +3,11 @@ use crate::prelude::*;
 use centurions_core::combat::mission_deaths;
 use centurions_core::combat::mission_deaths::DeathContext;
 
-fn bytes(value: &serde_json::Value, key: &str) -> Vec<u8> {
-    let hex = value[key].as_str().unwrap();
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
-        .collect()
-}
-fn fixture() -> serde_json::Value {
-    crate::support::fixture("mission-deaths.json")
-}
-fn mission(fixture: &serde_json::Value) -> OpeningMission {
-    OpeningMission {
-        name: "native fixture".into(),
-        start: (0, 0),
-        default_tile: 1155,
-        shared: Arc::new(StoryTables {
-            door_scripts: bytes(fixture, "scripts"),
-            ..Default::default()
-        }),
-        ..crate::support::mission()
-    }
-}
+use crate::native_common::script_mission as mission;
+use crate::support::field_bytes as bytes;
 fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>, i8) {
     (
         Combat {
-            difficulty: 0,
             battle: 146,
             map: TacticalMap {
                 tiles: words(&bytes(case, "map_before")),
@@ -46,16 +25,7 @@ fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>, i8) {
             order: words(&bytes(case, "order_before")),
             ..crate::support::battle()
         },
-        bytes(case, "warriors_before")
-            .as_chunks::<3138>()
-            .0
-            .iter()
-            .map(|record| Warrior {
-                name: "fixture".into(),
-                original_sha256: String::new(),
-                bytes: record.to_vec(),
-            })
-            .collect(),
+        crate::support::warriors(&case.bytes("warriors_before")),
         case.n::<i8>("unavailable_before"),
     )
 }
@@ -74,7 +44,7 @@ fn context(case: &serde_json::Value) -> DeathContext {
 
 #[test]
 fn original_direct_and_queued_death_story_phases_match_complete_native_state() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("mission-deaths.json");
     let mission = mission(&fixture);
     let extras = bytes(&fixture, "extras");
     for (index, case) in fixture.array("cases").iter().enumerate() {
@@ -125,7 +95,7 @@ fn original_direct_and_queued_death_story_phases_match_complete_native_state() {
 
 #[test]
 fn altered_death_script_and_invalid_actor_are_transactional_diagnostics() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("mission-deaths.json");
     let mission = mission(&fixture);
     let extras = bytes(&fixture, "extras");
     let case = &fixture["cases"][0];

@@ -2,9 +2,6 @@ use crate::prelude::*;
 
 use centurions_core::items;
 
-fn fixture() -> Value {
-    crate::support::fixture("personal-shield.json")
-}
 use crate::native_common::snapshot_party as party;
 
 use crate::native_common::snapshot_ammunition as stock;
@@ -85,8 +82,8 @@ fn collect(
 }
 
 #[test]
-fn twelve_profile_gates_and_two_manual_equipment_compositions_match_native_records() {
-    let f = fixture();
+fn profile_gates_and_manual_and_automatic_equipment_match_native_records() {
+    let f = crate::support::fixture("personal-shield.json");
     let content = content();
     let mission = content.map(3).unwrap();
 
@@ -104,169 +101,124 @@ fn twelve_profile_gates_and_two_manual_equipment_compositions_match_native_recor
         assert_party(&warriors, &case["after"]);
         assert_eq!(random(&case["before"]), random(&case["after"]));
     }
-    let mut checked = 0;
-    for case in f
-        .array("equipment_cases")
-        .iter()
-        .filter(|case| case["kind"] == "manual")
-    {
-        checked += 1;
-        let mut warriors = party(&case["before"]);
-        let mut crate_items: Vec<_> = crate::support::inventory(&case["before"].bytes("crate"));
-        collect(
-            &mut warriors,
-            &mut crate_items,
-            600,
-            &content,
-            &case["before"],
-            &case["shield_picked"],
-        );
-        let result = equipment::wear(
-            &warriors[3],
-            &content,
-            mission,
-            slot(&warriors[3], 600),
-            false,
-        )
-        .unwrap();
-        assert_equipment(
-            result,
-            &mut warriors,
-            &case["shield_picked"],
-            &case["empty_shield_worn"],
-            false,
-        );
-        collect(
-            &mut warriors,
-            &mut crate_items,
-            637,
-            &content,
-            &case["empty_shield_worn"],
-            &case["battery_picked"],
-        );
-        let result = equipment::wear(
-            &warriors[3],
-            &content,
-            mission,
-            slot(&warriors[3], 637),
-            false,
-        )
-        .unwrap();
-        assert_equipment(
-            result,
-            &mut warriors,
-            &case["battery_picked"],
-            &case["battery_worn"],
-            true,
-        );
-        let mut actual = random(&case["battery_worn"]);
-        let result = firearm::fit_ammunition(
-            &warriors[3],
-            slot(&warriors[3], 637),
-            &content,
-            &stock(&case["battery_worn"]),
-            false,
-            &mut actual,
-        )
-        .unwrap();
-        assert!(result.loaded);
-        assert_eq!(result.loaded_item_field32, 24);
-        assert_eq!(
-            result.sounds,
-            added(&case["battery_worn"], &case["refitted"], "sounds")
-        );
-        warriors[3] = result.warrior;
-        assert_party(&warriors, &case["refitted"]);
-        assert_eq!(result.ammunition, stock(&case["refitted"]));
-        assert_eq!(actual, random(&case["refitted"]));
-
-        let result = equipment::wear(
-            &warriors[3],
-            &content,
-            mission,
-            slot(&warriors[3], 600),
-            false,
-        )
-        .unwrap();
-        assert_equipment(
-            result,
-            &mut warriors,
-            &case["refitted"],
-            &case["worn"],
-            true,
-        );
-        items::compact(&mut warriors[3]).unwrap();
-        assert_party(&warriors, &case["compacted"]);
-        assert_eq!(
-            word(&warriors[3].bytes, 0x126).unwrap(),
-            if case["source"] == 12 { 201 } else { 200 }
-        );
-        let result =
-            equipment::remove(&warriors[3], &content, mission, slot(&warriors[3], 637)).unwrap();
-        assert_equipment(
-            result,
-            &mut warriors,
-            &case["compacted"],
-            &case["battery_remove_rejected"],
-            false,
-        );
-        let result =
-            equipment::remove(&warriors[3], &content, mission, slot(&warriors[3], 600)).unwrap();
-        assert_equipment(
-            result,
-            &mut warriors,
-            &case["battery_remove_rejected"],
-            &case["shield_removed"],
-            true,
-        );
-        let result =
-            equipment::remove(&warriors[3], &content, mission, slot(&warriors[3], 637)).unwrap();
-        assert_equipment(
-            result,
-            &mut warriors,
-            &case["shield_removed"],
-            &case["battery_removed"],
-            true,
-        );
-        let result = equipment::wear(
-            &warriors[3],
-            &content,
-            mission,
-            slot(&warriors[3], 637),
-            false,
-        )
-        .unwrap();
-        assert_equipment(
-            result,
-            &mut warriors,
-            &case["battery_removed"],
-            &case["battery_reworn"],
-            true,
-        );
-        let result = equipment::wear(
-            &warriors[3],
-            &content,
-            mission,
-            slot(&warriors[3], 600),
-            false,
-        )
-        .unwrap();
-        assert_equipment(
-            result,
-            &mut warriors,
-            &case["battery_reworn"],
-            &case["after"],
-            true,
-        );
-        items::compact(&mut warriors[3]).unwrap();
-        assert_party(&warriors, &case["after"]);
+    enum Step {
+        Collect(i16),
+        Wear(i16, bool),
+        Remove(i16, bool),
+        Refit,
+        Compact,
     }
-    assert_eq!(checked, 2);
+    for case in f.array("equipment_cases") {
+        let mut warriors = party(&case["before"]);
+        let mut crate_items = crate::support::inventory(&case["before"].bytes("crate"));
+        let mut before = &case["before"];
+        for (action, snapshot) in [
+            (Step::Collect(600), "shield_picked"),
+            (Step::Wear(600, false), "empty_shield_worn"),
+            (Step::Collect(637), "battery_picked"),
+            (Step::Wear(637, true), "battery_worn"),
+            (Step::Refit, "refitted"),
+            (Step::Wear(600, true), "worn"),
+            (Step::Compact, "compacted"),
+            (Step::Remove(637, false), "battery_remove_rejected"),
+            (Step::Remove(600, true), "shield_removed"),
+            (Step::Remove(637, true), "battery_removed"),
+            (Step::Wear(637, true), "battery_reworn"),
+            (Step::Wear(600, true), "after"),
+            (Step::Compact, "after"),
+        ] {
+            let after = &case[snapshot];
+            match action {
+                Step::Collect(id) => {
+                    collect(&mut warriors, &mut crate_items, id, &content, before, after)
+                }
+                Step::Wear(id, changed) | Step::Remove(id, changed) => {
+                    let slot = slot(&warriors[3], id);
+                    let result = if matches!(action, Step::Wear(..)) {
+                        equipment::wear(&warriors[3], &content, mission, slot, false)
+                    } else {
+                        equipment::remove(&warriors[3], &content, mission, slot)
+                    }
+                    .unwrap();
+                    assert_equipment(result, &mut warriors, before, after, changed);
+                }
+                Step::Refit => {
+                    let mut actual = random(before);
+                    if case["kind"] == "automatic" {
+                        use centurions_core::ammunition::WorkBuffers;
+                        let work = |snapshot: &Value| WorkBuffers {
+                            item: Some(snapshot.bytes("item_work")),
+                            ammo: Some(snapshot.bytes("ammo")),
+                            weapon: Some(snapshot.bytes("weapon")),
+                        };
+                        let foundation = usize::from(case["source"] == 1);
+                        let mut state: Session =
+                            serde_json::from_value(f["foundations"][foundation]["session"].clone())
+                                .unwrap();
+                        state.warriors = warriors.clone();
+                        state.ammunition = stock(before);
+                        state.ammunition_work = work(before);
+                        state.random = actual;
+                        let mut resumed =
+                            crate::support::checkpoint(&state, &content, "shield-refit");
+                        let events = crate::support::replay_command(
+                            Command::Reload { warrior: 3 },
+                            &mut state,
+                            &mut resumed,
+                            &content,
+                        );
+                        let mut sounds = added(before, after, "sounds");
+                        // This capture stubs warn; ammunition-management executes its sound.
+                        sounds.push(6000);
+                        let expected: Vec<_> = sounds
+                            .into_iter()
+                            .map(|resource_id| Event::Sound { resource_id })
+                            .chain(
+                                added(before, after, "warnings")
+                                    .into_iter()
+                                    .map(|warning| Event::CollectionRejected { warning }),
+                            )
+                            .collect();
+                        assert_eq!(events, expected);
+                        assert_eq!(state.ammunition, stock(after));
+                        assert_eq!(state.ammunition_work, work(after));
+                        assert_eq!(state.random, random(after));
+                        warriors = state.warriors.clone();
+                        assert_party(&warriors, after);
+                        crate::support::checkpoint(&state, &content, "shield-refitted");
+                        before = after;
+                        continue;
+                    }
+                    let result = firearm::fit_ammunition(
+                        &warriors[3],
+                        slot(&warriors[3], 637),
+                        &content,
+                        &stock(before),
+                        false,
+                        &mut actual,
+                    )
+                    .unwrap();
+                    assert!(result.loaded);
+                    assert_eq!(result.loaded_item_field32, 24);
+                    assert_eq!(result.sounds, added(before, after, "sounds"));
+                    warriors[3] = result.warrior;
+                    assert_party(&warriors, after);
+                    assert_eq!(result.ammunition, stock(after));
+                    assert_eq!(actual, random(after));
+                }
+                Step::Compact => {
+                    items::compact(&mut warriors[3]).unwrap();
+                    assert_party(&warriors, after);
+                }
+            }
+            before = after;
+        }
+    }
 }
 
 #[test]
 fn five_native_manual_controls_match_full_records_stock_rng_audio_and_charge_gate() {
-    let f = fixture();
+    let f = crate::support::fixture("personal-shield.json");
     let content = content();
     let mission = content.map(3).unwrap();
 

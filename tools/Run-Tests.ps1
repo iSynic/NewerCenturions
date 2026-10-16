@@ -7,6 +7,7 @@ param(
     [string]$ManifestPath,
     [string]$TargetDirectory,
     [switch]$Library,
+    [switch]$Ignored,
     [ValidateRange(1, 64)][int]$BuildJobs = [Math]::Min(64, [Environment]::ProcessorCount),
     [switch]$AllowCompilerParallelism = $true,
     [switch]$Timings,

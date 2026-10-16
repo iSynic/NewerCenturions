@@ -3,16 +3,9 @@ use crate::prelude::*;
 use crate::support::field_bytes as bytes;
 use centurions_core::combat::rewards;
 
-fn patched(mut input: Vec<u8>, patches: &Value) -> Vec<u8> {
-    for patch in patches.as_array().unwrap() {
-        input[patch[0].as_u64().unwrap() as usize] = patch[1].as_u64().unwrap() as u8;
-    }
-    input
-}
-fn party(input: &[u8]) -> Vec<Warrior> {
-    crate::support::warriors(input)
-}
+use crate::native_common::patched;
 use crate::support::record_bytes as flatten;
+use crate::support::warriors as party;
 
 #[test]
 fn complete_original_reward_table_cash_drops_and_ordinary_close() {

@@ -79,22 +79,81 @@ pub struct AllySynchronization {
     pub sounds: Vec<i16>,
 }
 
-pub fn synchronize(
-    menu: &[u8],
-    count: usize,
-    records: &mut [MonsterRecord],
-    random: &mut RandomState,
-) -> Result<AllySynchronization, RuleError> {
-    if menu.len() != 20 * 288
-        || count > 20
-        || records.len() > 100
-        || records.iter().any(|record| record.bytes.len() != 288)
-    {
-        return Err(RuleError::Invalid(
-            "invalid ally synchronization input".into(),
-        ));
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SurvivorSelection {
+    pub eligible: Vec<usize>,
+    pub selected: Vec<bool>,
+    pub limit: usize,
+}
+
+impl SurvivorSelection {
+    pub fn validate(&self, records: &[MonsterRecord]) -> Result<(), RuleError> {
+        if self.eligible.is_empty()
+            || self.eligible.len() > 32
+            || self.selected.len() != self.eligible.len()
+            || !(4..=18).contains(&self.limit)
+            || self.selected.iter().filter(|selected| **selected).count() > self.limit
+            || self.eligible.iter().enumerate().any(|(position, index)| {
+                self.eligible[..position].contains(index)
+                    || records.get(*index).is_none_or(|record| {
+                        record.stamina().unwrap_or(0) <= 0
+                            || word(&record.bytes, 14).unwrap_or(1) != 0
+                            || word(&record.bytes, 0x5a).unwrap_or(0) == 0
+                    })
+            })
+        {
+            return Err(RuleError::Invalid("invalid survivor selection".into()));
+        }
+        Ok(())
     }
-    let mut menu = menu.to_vec();
+
+    pub fn toggle(
+        &mut self,
+        row: usize,
+        records: &[MonsterRecord],
+        random: &mut RandomState,
+    ) -> Result<Vec<Event>, RuleError> {
+        self.validate(records)?;
+        if row >= 32 {
+            return Err(RuleError::Invalid("survivor row unavailable".into()));
+        }
+        let mut events = vec![];
+        let warning = if row >= self.eligible.len()
+            || (!self.selected[row]
+                && self.selected.iter().filter(|selected| **selected).count() >= self.limit)
+        {
+            Some(0x404002)
+        } else {
+            self.selected[row] = !self.selected[row];
+            events.push(Event::Sound { resource_id: 141 });
+            (!self.selected[row] && word(&records[self.eligible[row]].bytes, 0x5a)? == -1)
+                .then_some(0x403fb0)
+        };
+        if let Some(address) = warning {
+            events.extend([
+                Event::Feedback(crate::feedback::NativeFeedback::DialogText {
+                    dialog: 173,
+                    item: 41,
+                    address,
+                    wait: 80,
+                }),
+                Event::Sound { resource_id: 6000 },
+                Event::Delay { ticks: 80 },
+                Event::Sound {
+                    resource_id: 29999_i16.wrapping_add(random.bound(4)),
+                },
+            ]);
+        }
+        Ok(events)
+    }
+}
+
+pub fn prepare_survivors(
+    records: &mut [MonsterRecord],
+) -> Result<Option<SurvivorSelection>, RuleError> {
+    if records.len() > 100 || records.iter().any(|record| record.bytes.len() != 288) {
+        return Err(RuleError::Invalid("invalid survivor roster".into()));
+    }
     let mut eligible = vec![];
     for (index, record) in records.iter_mut().enumerate() {
         let bytes = &mut record.bytes;
@@ -113,13 +172,7 @@ pub fn synchronize(
         }
     }
     if eligible.is_empty() {
-        normalize_menu(&mut menu, count);
-        return Ok(AllySynchronization {
-            menu,
-            count,
-            modal: false,
-            sounds: vec![],
-        });
+        return Ok(None);
     }
     for _ in 0..eligible.len() - 1 {
         for position in 0..eligible.len() - 1 {
@@ -146,8 +199,64 @@ pub fn synchronize(
             selected_count += 1;
         }
     }
+    Ok(Some(SurvivorSelection {
+        eligible,
+        selected,
+        limit,
+    }))
+}
+
+pub fn synchronize(
+    menu: &[u8],
+    count: usize,
+    records: &mut [MonsterRecord],
+    random: &mut RandomState,
+) -> Result<AllySynchronization, RuleError> {
+    if menu.len() != 20 * 288 || count > 20 {
+        return Err(RuleError::Invalid(
+            "invalid ally synchronization input".into(),
+        ));
+    }
+    let selection = prepare_survivors(records)?;
+    let sounds = if selection.is_some() {
+        vec![29999_i16.wrapping_add(random.bound(4))]
+    } else {
+        vec![]
+    };
+    let mut result = commit_survivors(menu, count, records, selection.as_ref())?;
+    result.sounds = sounds;
+    Ok(result)
+}
+
+pub fn commit_survivors(
+    menu: &[u8],
+    count: usize,
+    records: &mut [MonsterRecord],
+    selection: Option<&SurvivorSelection>,
+) -> Result<AllySynchronization, RuleError> {
+    if menu.len() != 20 * 288
+        || count > 20
+        || records.len() > 100
+        || records.iter().any(|record| record.bytes.len() != 288)
+    {
+        return Err(RuleError::Invalid(
+            "invalid ally synchronization input".into(),
+        ));
+    }
+    let mut menu = menu.to_vec();
+    let Some(selection) = selection else {
+        normalize_menu(&mut menu, count);
+        return Ok(AllySynchronization {
+            menu,
+            count,
+            modal: false,
+            sounds: vec![],
+        });
+    };
+    selection.validate(records)?;
+    let (eligible, selected) = (selection.eligible.clone(), selection.selected.clone());
+    let mut selected_count = selected.iter().filter(|selected| **selected).count();
     let count = selected_count;
-    let sounds = vec![29999_i16.wrapping_add(random.bound(4))];
     for (index, selected) in eligible.into_iter().zip(selected) {
         if !selected {
             continue;
@@ -176,7 +285,7 @@ pub fn synchronize(
         menu,
         count,
         modal: true,
-        sounds,
+        sounds: vec![],
     })
 }
 

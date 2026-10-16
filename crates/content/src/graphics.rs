@@ -90,6 +90,34 @@ fn bounds(bytes: &[u8], offset: usize) -> Result<(usize, usize), ContentError> {
     Ok(((right - left) as usize, (bottom - top) as usize))
 }
 
+/// The original targeting overlay copies the cicn monochrome bitmap with srcXor.
+pub fn decode_cicn_bitmap(bytes: &[u8]) -> Result<Image, ContentError> {
+    span(bytes, 0, 82)?;
+    let (width, height) = bounds(bytes, 70)?;
+    let row = (word(bytes, 68)? as u16 & 0x3fff) as usize;
+    let mask_row = (word(bytes, 54)? as u16 & 0x3fff) as usize;
+    if row * 8 < width || bounds(bytes, 56)? != (width, height) {
+        return Err(ContentError::Invalid("target bitmap dimensions".into()));
+    }
+    let bitmap = span(bytes, 82 + mask_row * height, row * height)?;
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let bit = bitmap[y * row + x / 8] & (0x80 >> (x % 8)) != 0;
+            rgba.extend_from_slice(if bit {
+                &[255, 255, 255, 255]
+            } else {
+                &[0, 0, 0, 0]
+            });
+        }
+    }
+    Ok(Image {
+        width: width as u16,
+        height: height as u16,
+        rgba,
+    })
+}
+
 pub fn decode_cicn(bytes: &[u8]) -> Result<Image, ContentError> {
     span(bytes, 0, 82)?;
     let (width, height) = bounds(bytes, 6)?;
@@ -193,6 +221,10 @@ pub fn decode_pict(bytes: &[u8]) -> Result<Image, ContentError> {
                 }
                 span(bytes, cursor, size)?;
                 cursor += size;
+            }
+            0xa0 => {
+                span(bytes, cursor, 2)?;
+                cursor += 2;
             }
             0xa1 => {
                 let size = word(bytes, cursor + 2)? as u16 as usize;

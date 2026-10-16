@@ -12,7 +12,7 @@ pub(crate) fn advance(
     minutes_per_tick: i16,
 ) -> Result<Vec<Event>, RuleError> {
     let mut events = Vec::new();
-    for _ in 0..ticks {
+    for tick in 0..ticks {
         let position = state.exploration.as_mut().unwrap();
         position.minute = position.minute.wrapping_add(minutes_per_tick);
         if position.minute < 60 {
@@ -25,27 +25,37 @@ pub(crate) fn advance(
             state.selected_warrior,
             state.health_context.as_ref(),
         );
-        let reduced =
-            crate::story_reduce::reduce_outdoors(&state.warriors, &context, &mut state.random)?;
-        if reduced
+        let reduced = crate::story_reduce::reduce_outdoors(
+            &state.warriors,
+            &context,
+            &mut state.random,
+            state.energy_recovery_disabled,
+        )?;
+        let lost = reduced
             .events
             .iter()
-            .any(|event| matches!(event, crate::story_health::HealthEvent::PartyLost))
-        {
-            return Err(RuleError::Unsupported {
-                action: "time.conditions",
-                dependency: "party defeat transition",
-            });
-        }
+            .any(|event| matches!(event, crate::story_health::HealthEvent::PartyLost));
         state.warriors = reduced.warriors;
         state.health_context = Some(reduced.context);
-        events.extend(reduced.events.into_iter().filter_map(|event| {
-            if let crate::story_health::HealthEvent::Sound(resource_id) = event {
+        events.extend(reduced.events.into_iter().filter_map(|event| match event {
+            crate::story_health::HealthEvent::Sound(resource_id) => {
                 Some(Event::Sound { resource_id })
-            } else {
-                None
             }
+            crate::story_health::HealthEvent::Flash { address, sound } => {
+                Some(Event::Feedback(crate::feedback::NativeFeedback::Flash {
+                    address,
+                    x: 100,
+                    y: 30,
+                    wait: 100,
+                    sound,
+                }))
+            }
+            _ => None,
         }));
+        if lost {
+            events.extend(crate::mission::defeat(state, content));
+            return Ok(events);
+        }
         position.minute -= 60;
         position.hour += 1;
         position.fatigue = position.fatigue.saturating_add(1).clamp(4, 135);
@@ -53,7 +63,11 @@ pub(crate) fn advance(
             let bytes = &mut warrior.bytes;
             let energy = word(bytes, 0x58)?;
             let maximum = word(bytes, 0x5a)?;
-            if energy < maximum && word(bytes, 0x50)? > 0 && word(bytes, 0x90)? == 0 {
+            if state.energy_recovery_disabled == 0
+                && energy < maximum
+                && word(bytes, 0x50)? > 0
+                && word(bytes, 0x90)? == 0
+            {
                 let level = word(bytes, 0x3a)?;
                 let amount = (level.wrapping_add((level as u16 >> 15) as i16) >> 1) as i8;
                 put(
@@ -63,44 +77,37 @@ pub(crate) fn advance(
                 );
             }
         }
+        if state.energy_recovery_disabled == 0 {
+            for bytes in state.allies[..state.ally_count * story_allies::ALLY_BYTES]
+                .as_chunks_mut::<{ story_allies::ALLY_BYTES }>()
+                .0
+            {
+                let energy = word(bytes, 0x10e)?;
+                let maximum = word(bytes, 0x52)?;
+                if energy < maximum {
+                    let level = word(bytes, 0)?;
+                    let amount = (level.wrapping_add((level as u16 >> 15) as i16) >> 1) as i8;
+                    put(
+                        bytes,
+                        0x10e,
+                        energy.wrapping_add(i16::from(amount.max(1))).min(maximum),
+                    );
+                }
+            }
+        }
         if position.hour == 24 {
             position.hour = 0;
             position.day = position.day.wrapping_add(1);
-            let mut cursor = 0;
-            loop {
-                let selected = scan_schedule(state, &mut cursor, &mut events)?;
-                recover(state, content)?;
-                let Some(script_id) = selected else { break };
-                let map = content
-                    .map(
-                        state
-                            .exploration
-                            .as_ref()
-                            .map_or(0, |position| position.map),
-                    )
-                    .ok_or_else(|| RuleError::Invalid("schedule content unavailable".into()))?;
-                let record = centurions_content::span(
-                    &map.scheduled_scripts,
-                    usize::from(script_id.unsigned_abs()) * 42,
-                    42,
-                )?
-                .to_vec();
-                state.exploration.as_mut().unwrap().script = Some(ScriptState {
-                    record,
-                    cursor: 0,
-                    map_slot: 0,
-                    scheduled: true,
-                    menu: None,
-                    persist: false,
-                    origin: None,
-                });
-                events.extend(super::exploration::run_script(state, content)?);
-                if state.exploration.as_ref().unwrap().presentation.is_some() {
-                    return Err(RuleError::Unsupported {
-                        action: "time.schedule",
-                        dependency: "interactive scheduled-event continuation",
-                    });
+            let mut pending = TimeContinuation {
+                remaining_ticks: ticks - tick - 1,
+                minutes_per_tick,
+                schedule_cursor: 0,
+            };
+            if scheduled_events(state, content, &mut pending, &mut events)? {
+                if state.exploration.is_some() {
+                    state.time_continuation = Some(pending);
                 }
+                return Ok(events);
             }
         } else if position.hour == 12 {
             recover(state, content)?;
@@ -112,6 +119,85 @@ pub(crate) fn advance(
             minute: position.minute,
         });
     }
+    Ok(events)
+}
+
+fn scheduled_events(
+    state: &mut Session,
+    content: &Content,
+    pending: &mut TimeContinuation,
+    events: &mut Vec<Event>,
+) -> Result<bool, RuleError> {
+    loop {
+        let selected = scan_schedule(state, &mut pending.schedule_cursor, events)?;
+        recover(state, content)?;
+        let Some(script_id) = selected else {
+            return Ok(false);
+        };
+        let map = state
+            .map(
+                content,
+                state
+                    .exploration
+                    .as_ref()
+                    .ok_or("schedule position missing")?
+                    .map,
+            )
+            .ok_or("schedule content unavailable")?;
+        let record = centurions_content::span(
+            &map.scheduled_scripts,
+            usize::from(script_id.unsigned_abs()) * 42,
+            42,
+        )?
+        .to_vec();
+        state.exploration.as_mut().unwrap().script = Some(ScriptState {
+            record,
+            cursor: 0,
+            map_slot: 0,
+            item_return: false,
+            scheduled: true,
+            menu: None,
+            persist: false,
+            origin: None,
+        });
+        events.extend(super::exploration::run_script(state, content)?);
+        if state.phase != Phase::Exploration
+            || state
+                .exploration
+                .as_ref()
+                .is_none_or(|p| p.presentation.is_some() || p.script.is_some())
+        {
+            return Ok(true);
+        }
+    }
+}
+
+pub(crate) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+    let Some(mut pending) = state.time_continuation.take() else {
+        return Ok(vec![]);
+    };
+    let mut events = vec![];
+    if scheduled_events(state, content, &mut pending, &mut events)? {
+        if state.exploration.is_some() {
+            state.time_continuation = Some(pending);
+        }
+        return Ok(events);
+    }
+    let p = state
+        .exploration
+        .as_ref()
+        .ok_or("schedule position missing")?;
+    events.push(Event::TimeAdvanced {
+        day: p.day,
+        hour: p.hour,
+        minute: p.minute,
+    });
+    events.extend(advance(
+        state,
+        content,
+        pending.remaining_ticks,
+        pending.minutes_per_tick,
+    )?);
     Ok(events)
 }
 
@@ -217,10 +303,12 @@ fn scan_schedule(
             });
         }
         if eligible && word(&record, 18)? >= 0 {
-            return Err(RuleError::Unsupported {
-                action: "time.schedule",
-                dependency: "mission flag prerequisite",
-            });
+            let flag = word(&record, 18)? as usize;
+            eligible = *state
+                .flags
+                .get(flag)
+                .ok_or("schedule flag outside mission state")?
+                != 0;
         }
         if eligible && word(&record, 20)? > 0 {
             let position = state.exploration.as_ref().unwrap();
@@ -229,10 +317,12 @@ fn scan_schedule(
             }
             let region = word(&record, 10)?;
             if region >= 0 {
-                return Err(RuleError::Unsupported {
-                    action: "time.schedule",
-                    dependency: "schedule region prerequisite",
-                });
+                let rectangle =
+                    centurions_content::span(&position.region_state, region as usize * 8, 8)?;
+                eligible = position.y >= i32::from(word(rectangle, 0)?)
+                    && position.x >= i32::from(word(rectangle, 2)?)
+                    && position.y < i32::from(word(rectangle, 4)?)
+                    && position.x < i32::from(word(rectangle, 6)?);
             }
             let x = word(&record, 12)?;
             if x >= 0 && (position.x != i32::from(x) || position.y != i32::from(word(&record, 14)?))

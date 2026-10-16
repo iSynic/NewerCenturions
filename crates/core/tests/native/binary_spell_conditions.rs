@@ -6,15 +6,7 @@ fn patches(bytes: &mut [u8], values: &serde_json::Value) {
     }
 }
 
-fn assert_bytes(actual: &[u8], expected: &[u8], case: usize, name: &str) {
-    assert_eq!(actual.len(), expected.len());
-    if let Some(index) = actual.iter().zip(expected).position(|(a, b)| a != b) {
-        panic!(
-            "case {case} {name} byte {index}: {} != {}",
-            actual[index], expected[index]
-        );
-    }
-}
+use crate::support::assert_bytes;
 
 #[test]
 fn effect_36_matches_original_all_body_slots_and_ordered_random_consumption() {
@@ -22,21 +14,20 @@ fn effect_36_matches_original_all_body_slots_and_ordered_random_consumption() {
     let party = fixture.bytes("party");
     let monsters = fixture.bytes("monsters");
     let packet = fixture.bytes("packet");
-    for (index, case) in fixture.array("cases").iter().enumerate() {
+    for case in fixture.array("cases") {
         let mut before = party.clone();
         let mut records = monsters.clone();
         patches(&mut before, &case["party_input"]);
         patches(&mut records, &case["monster_input"]);
         let warriors = crate::support::warriors(&before);
         let enemies = crate::support::monsters(&records);
-        let mask = case.n::<Vec<i16>>("mask");
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let result = spell_conditions::resolve_1703(
             &warriors,
             &enemies,
             &packet,
             case.n::<i16>("count"),
-            &mask,
+            &case.n::<Vec<i16>>("mask"),
             &mut random,
         )
         .unwrap();
@@ -45,7 +36,6 @@ fn effect_36_matches_original_all_body_slots_and_ordered_random_consumption() {
         assert_bytes(
             &crate::support::record_bytes(&result.warriors),
             &expected,
-            index,
             "party",
         );
         let mut expected = records;
@@ -53,7 +43,6 @@ fn effect_36_matches_original_all_body_slots_and_ordered_random_consumption() {
         assert_bytes(
             &crate::support::record_bytes(&result.enemies),
             &expected,
-            index,
             "roster",
         );
         crate::support::native_expect! {

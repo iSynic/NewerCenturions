@@ -10,23 +10,36 @@ pub enum Inspection {
     Crate,
     FireTargets,
     Conditions,
+    Modifiers,
+    Specials,
     Psi,
     PsiTargets,
     Bandage,
 }
 #[derive(Default)]
 pub struct UiState {
+    pub inventory: crate::inventory::Inventory,
+    pub preferences: crate::preferences::Preferences,
+    pub feedback: VecDeque<centurions_core::feedback::NativeFeedback>,
+    pub feedback_started: Option<f64>,
+    pub feedback_until: f64,
+    pub help_request: Option<(usize, usize)>,
+    pub technical_error: Option<String>,
+    pub diagnostic_path: Option<std::path::PathBuf>,
     pub movement: crate::input::MovementInput,
     pub selected: usize,
     pub inspection: Option<Inspection>,
+    pub return_information: Option<usize>,
     pub page: usize,
-    pub messages: VecDeque<String>,
     pub typed_text: String,
     pub effects: VecDeque<OutdoorAnimation>,
     pub delay_until: f64,
     pub psi_power: i16,
     pub psi_choice: Option<(i16, i16)>,
     pub psi_pending: Option<(i16, i16)>,
+    pub psi_rotation: u8,
+    pub psi_preview: Option<(i16, i16)>,
+    pub firearm_map_target: bool,
     pub medical_cancel: bool,
 }
 pub struct OutdoorAnimation {
@@ -39,19 +52,25 @@ pub struct OutdoorAnimation {
 }
 #[derive(Clone)]
 pub enum Action {
+    Inventory(crate::inventory::InventoryAction),
     Application(crate::application::ApplicationAction),
     Command(Command),
     Save,
+    FastSave,
     Load,
     Select(usize),
     Open(Inspection),
+    InformationInspection(usize, Inspection),
     Close,
     Page(i32),
     ChoosePsi(i16),
     PsiPower(i16),
     PsiMapTarget,
+    RotatePsi,
+    FireMapTarget,
     MedicalCancel,
     KeepMedicalTarget,
+    Drop(usize, usize),
 }
 fn authored_text(text: &str, warriors: &[Warrior]) -> String {
     let mut text = text.to_owned();
@@ -69,6 +88,98 @@ fn authored_text(text: &str, warriors: &[Warrior]) -> String {
     text
 }
 
+fn draw_clinic(
+    state: &Session,
+    assets: &Assets,
+    member: usize,
+    percent: i16,
+    controls: &mut Vec<Control>,
+) {
+    assets.draw_dialog(159);
+    for item in [6, 7, 11, 15, 16, 17, 18, 20, 21, 22] {
+        controls.push(Control {
+            rect: assets.dialog_rect(159, item),
+            enabled: true,
+            action: Action::Command(Command::ClinicControl { item: item as u16 }),
+        });
+    }
+    for (item, action) in [
+        (2, Action::Open(Inspection::Conditions)),
+        (
+            3,
+            Action::Application(crate::application::ApplicationAction::OpenEditor(member)),
+        ),
+        (
+            5,
+            Action::Application(crate::application::ApplicationAction::OpenInformation(
+                member,
+            )),
+        ),
+    ] {
+        controls.push(Control {
+            rect: assets.dialog_rect(159, item),
+            enabled: true,
+            action,
+        });
+    }
+    let field = |item, text: String| {
+        assets.wrapped_color(&text, assets.dialog_rect(159, item), 12, 14., YELLOW)
+    };
+    for (index, price) in centurions_core::clinic::prices(percent).iter().enumerate() {
+        if matches!(index, 0..=3 | 5..=7) {
+            field(46 + index, price.to_string());
+        }
+    }
+    let warrior = &state.warriors[member];
+    field(55, state.party_currency.to_string());
+    field(65, warrior.name.clone());
+    field(66, word(&warrior.bytes, 0x50).unwrap_or(0).to_string());
+    field(67, word(&warrior.bytes, 0x52).unwrap_or(0).to_string());
+    for (row, index) in (0..40)
+        .filter(|i| word(&warrior.bytes, 0x5e + i * 2).unwrap_or(0) != 0)
+        .take(5)
+        .enumerate()
+    {
+        field(
+            59 + row,
+            assets.conditions.get(index).cloned().unwrap_or_default(),
+        );
+    }
+    let rect = assets.dialog_rect(159, 14);
+    if let Some(portrait) = assets
+        .portraits
+        .get(&word(&warrior.bytes, 0x54).unwrap_or(0))
+    {
+        draw_texture_ex(
+            portrait,
+            rect.x,
+            rect.y,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(rect.size()),
+                ..Default::default()
+            },
+        );
+    }
+    let health = word(&warrior.bytes, 0x50).unwrap_or(0);
+    if health < 1 {
+        for id in [2019, if health < -9 { 2015 } else { 177 }] {
+            if let Some(icon) = assets.icons.get(&id) {
+                draw_texture_ex(
+                    icon,
+                    rect.x,
+                    rect.y,
+                    WHITE,
+                    DrawTextureParams {
+                        dest_size: Some(rect.size()),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
+}
+
 pub struct Control {
     pub rect: Rect,
     pub action: Action,
@@ -76,18 +187,93 @@ pub struct Control {
 }
 
 impl UiState {
-    pub fn message(&mut self, text: String) {
-        if !text.is_empty() {
-            self.messages.push_back(text);
-            while self.messages.len() > 4 {
-                self.messages.pop_front();
+    pub fn resolve_inventory(
+        &mut self,
+        action: Option<Action>,
+        state: &Session,
+        content: &Content,
+        now: f64,
+    ) -> Result<Option<Action>, centurions_core::RuleError> {
+        match action {
+            Some(Action::Inventory(command)) => {
+                let category = matches!(command, crate::inventory::InventoryAction::Category(_));
+                let result = self.inventory.handle(command, state, content, now)?;
+                if category {
+                    self.feedback
+                        .push_back(centurions_core::feedback::NativeFeedback::Sound {
+                            resource_id: 141,
+                        });
+                }
+                Ok(result)
             }
+            other => Ok(other),
         }
     }
-    pub fn events(&mut self, events: &[Event], assets: &Assets) {
+    pub fn error(&mut self, text: String) {
+        self.movement.refuse();
+        if self.technical_error.as_ref() != Some(&text) {
+            eprintln!("{text}");
+            if let Some(path) = &self.diagnostic_path {
+                use std::io::Write;
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if std::fs::metadata(path).is_ok_and(|m| m.len() > 1024 * 1024) {
+                    let _ = std::fs::remove_file(path);
+                }
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                {
+                    let _ = writeln!(file, "{text}");
+                }
+            }
+            self.technical_error = Some(text);
+        }
+    }
+    pub fn failure(&mut self, error: centurions_core::RuleError) {
+        if let centurions_core::RuleError::Refused { feedback }
+        | centurions_core::RuleError::RefusedAfterEffects { feedback } = error
+        {
+            self.feedback.extend(feedback);
+            self.movement.refuse();
+        } else {
+            self.error(error.to_string());
+        }
+    }
+    pub fn medical_result(&mut self, state: &Session, events: &[Event]) {
+        if events
+            .iter()
+            .any(|event| matches!(event, Event::ItemUpgraded { .. }))
+        {
+            return;
+        }
+        if state.medical_continuation.is_some() || state.outdoor_psi.is_some() {
+            self.selected = state.selected_warrior;
+        }
+        self.inspection = None;
+        self.psi_pending = None;
+        self.medical_cancel = false;
+    }
+
+    pub fn events(&mut self, events: &[Event]) {
         for event in events {
+            if matches!(event, Event::ItemUpgraded { .. }) {
+                self.inventory.selected = None;
+            }
+            if let Event::Feedback(feedback) = event {
+                self.movement.refuse();
+                self.feedback.push_back(feedback.clone());
+            }
             if let Event::Delay { ticks } = event {
-                self.delay_until = self.delay_until.max(get_time()) + f64::from(*ticks) / 60.;
+                self.delay_until = self.delay_until.max(get_time())
+                    + f64::from(*ticks)
+                        / if self.preferences.enabled(10) {
+                            120.
+                        } else {
+                            60.
+                        };
             }
             if let Event::OutdoorEffect {
                 effect,
@@ -107,15 +293,19 @@ impl UiState {
                     y: *y,
                     size: *size,
                     started,
-                    frame_seconds: f64::from((*delay).max(1)) / 60.,
+                    frame_seconds: f64::from((*delay).max(1))
+                        / if self.preferences.enabled(9) {
+                            120.
+                        } else {
+                            60.
+                        },
                 });
             }
-            if let Event::CollectionRejected { warning } = event
-                && let Some(text) = warning
-                    .checked_sub(1)
-                    .and_then(|index| assets.warnings.get(index as usize))
-            {
-                self.message(text.clone());
+            if let Event::CollectionRejected { warning } = event {
+                self.feedback
+                    .push_back(centurions_core::feedback::NativeFeedback::Warning {
+                        index: *warning,
+                    });
             }
         }
     }
@@ -161,6 +351,104 @@ fn field(w: &Warrior, offset: usize) -> String {
     word(&w.bytes, offset)
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "?".into())
+}
+
+fn draw_survivors(state: &Session, assets: &Assets, controls: &mut Vec<Control>) {
+    assets.draw_dialog(173);
+    controls.push(Control {
+        rect: assets.dialog_rect(173, 2),
+        enabled: true,
+        action: Action::Command(Command::Continue),
+    });
+    let (Some(selection), Some(combat)) = (&state.survivors, &state.combat) else {
+        return;
+    };
+    for row in 0..32 {
+        let rect = assets.dialog_rect(173, row + 3);
+        controls.push(Control {
+            rect,
+            enabled: true,
+            action: Action::Command(Command::SelectSurvivor { row }),
+        });
+        let Some(index) = selection.eligible.get(row) else {
+            continue;
+        };
+        let bytes = &combat.enemies.records[*index].bytes;
+        if word(bytes, 0x5a).unwrap_or(0) == -1
+            && let Some(icon) = assets.icons.get(&2003)
+        {
+            draw_texture(icon, rect.x + 3., rect.y + 3., WHITE);
+        }
+        if let Some(icon) = assets.icons.get(&word(bytes, 80).unwrap_or(0)) {
+            let (horizontal, vertical) = match word(bytes, 0x10).unwrap_or(0) {
+                0 => (19., 19.),
+                1 => (19., 3.),
+                2 => (3., 19.),
+                _ => (3., 3.),
+            };
+            draw_texture_ex(
+                icon,
+                rect.x + horizontal,
+                rect.y + vertical,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(vec2(rect.w - horizontal * 2., rect.h - vertical * 2.)),
+                    ..Default::default()
+                },
+            );
+        }
+        let (light, dark) = if selection.selected[row] {
+            (DARKGRAY, LIGHTGRAY)
+        } else {
+            (LIGHTGRAY, DARKGRAY)
+        };
+        draw_line(rect.x, rect.y, rect.right() - 1., rect.y, 1., light);
+        draw_line(rect.x, rect.y, rect.x, rect.bottom() - 1., 1., light);
+        draw_line(
+            rect.right() - 1.,
+            rect.y + 1.,
+            rect.right() - 1.,
+            rect.bottom() - 1.,
+            1.,
+            dark,
+        );
+        draw_line(
+            rect.x + 1.,
+            rect.bottom() - 1.,
+            rect.right() - 1.,
+            rect.bottom() - 1.,
+            1.,
+            dark,
+        );
+        for (offset, x, y) in [
+            (0x110, 5., 14.),
+            (0x112, 40., 14.),
+            (0x10e, 5., 29.),
+            (0x52, 40., 29.),
+        ] {
+            assets.text(
+                &word(bytes, offset).unwrap_or(0).to_string(),
+                rect.x + x,
+                rect.bottom() + y,
+                12,
+                YELLOW,
+            );
+        }
+    }
+    let remaining = selection.limit
+        - selection
+            .selected
+            .iter()
+            .filter(|selected| **selected)
+            .count();
+    assets.panel(
+        if remaining <= 7 {
+            147 + remaining as i16
+        } else {
+            147
+        },
+        assets.dialog_rect(173, 36),
+    );
 }
 
 pub fn tactical_view(session: &Session) -> Option<(i16, i16)> {
@@ -211,7 +499,7 @@ fn map(content: &Content, state: &Session, assets: &Assets) {
     let (vx, vy) = combat
         .and_then(|_| tactical_view(state))
         .map(|(x, y)| (i32::from(x), i32::from(y)))
-        .unwrap_or(((position.x - 7).clamp(0, 75), (position.y - 6).clamp(0, 77)));
+        .unwrap_or(layout::outdoor_origin(position.x, position.y));
     for y in 0..13 {
         for x in 0..15 {
             let sx = layout::MAP.x + x as f32 * 32.;
@@ -296,7 +584,7 @@ fn draw_outdoor_effect(state: &Session, assets: &Assets, ui: &UiState) {
     let Some(position) = state.exploration.as_ref() else {
         return;
     };
-    let (vx, vy) = ((position.x - 7).clamp(0, 75), (position.y - 6).clamp(0, 77));
+    let (vx, vy) = layout::outdoor_origin(position.x, position.y);
     let size = f32::from(effect.size);
     draw_texture_ex(
         texture,
@@ -315,8 +603,44 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
     let mut controls = Vec::new();
     map(content, state, assets);
     draw_outdoor_effect(state, assets, ui);
+    if let (Some((spell, power)), Some(point), Some((vx, vy))) =
+        (ui.psi_pending, ui.psi_preview, tactical_view(state))
+        && let Some(mission) = content.map(state.exploration.as_ref().map_or(0, |p| p.map))
+        && let Some(tables) = mission.combat.as_ref()
+        && let Ok(packet) = centurions_core::combat::spells::load_packet(&tables.attacks, spell)
+    {
+        let shape = match packet[1] {
+            3 => {
+                i16::from(packet[31])
+                    + if packet[7] != 0 {
+                        i16::from(ui.psi_rotation)
+                    } else {
+                        0
+                    }
+            }
+            4 => power,
+            _ => 1,
+        };
+        assets.target_pattern(
+            shape,
+            vec2(
+                layout::MAP.x + f32::from(point.0 - 3 - vx) * 32. - 2.,
+                layout::MAP.y + f32::from(point.1 - 3 - vy) * 32. - 2.,
+            ),
+            layout::MAP,
+        );
+    }
     assets.panel(197, Rect::new(480., 429., 320., 19.));
-    assets.panel(220, layout::MESSAGE);
+    let outdoor_idle = state.phase == Phase::Exploration
+        && state
+            .exploration
+            .as_ref()
+            .is_some_and(|p| p.presentation.is_none());
+    assets.panel(if outdoor_idle { 222 } else { 220 }, layout::MESSAGE);
+    if outdoor_idle && let Some(warrior) = state.warriors.get(ui.selected) {
+        let points = i32::from_be_bytes(warrior.bytes[0x9d2..0x9d6].try_into().unwrap());
+        assets.text(&points.to_string(), 215., 528., 14, YELLOW);
+    }
     assets.panel(224, Rect::new(480., 449., 320., 140.));
     assets.panel(224, layout::INFORMATION);
     let selected = state
@@ -343,7 +667,21 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                 },
             );
         }
-        assets.text(&w.name, rect.x + 87., rect.y + 21., 12, YELLOW);
+        let name = if ui.preferences.enabled(17) {
+            let mos = word(&w.bytes, 0x34).unwrap_or(0);
+            let names = assets
+                .character_strings
+                .get(&131)
+                .and_then(|b| centurions_content::ui::string_list(b).ok())
+                .unwrap_or_default();
+            names
+                .get(mos.saturating_sub(1) as usize)
+                .filter(|n| !n.is_empty())
+                .map_or_else(|| w.name.clone(), |n| format!("{} {n}", w.name))
+        } else {
+            w.name.clone()
+        };
+        assets.text(&name, rect.x + 87., rect.y + 21., 12, YELLOW);
         assets.text(
             &field(
                 w,
@@ -472,7 +810,7 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
     let (items_rect, conditions_rect) = if state.phase == Phase::Combat {
         (layout::COMBAT_ITEMS, layout::COMBAT_CONDITIONS)
     } else {
-        (layout::ITEMS, layout::CONDITIONS)
+        (assets.main_controls[&168], assets.main_controls[&169])
     };
     if state.phase == Phase::Combat {
         draw_combat_information(content, state, assets, selected);
@@ -498,48 +836,63 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
             .combat
             .as_ref()
             .and_then(|c| c.active_body())
-            .is_some_and(|b| (0..6).contains(&b));
+            .is_some_and(|b| (0..6).contains(&b))
+            && centurions_core::combat::runtime::controlled_warrior(state).is_none();
         let unobstructed = state
             .exploration
             .as_ref()
             .is_some_and(|p| p.presentation.is_none())
             && (state.phase == Phase::Exploration || player);
         let firearm = state.warriors[selected].bytes[0x9dd] != 0;
-        button(
-            assets,
-            &mut controls,
-            if firearm { "Fists [F]" } else { "Firearm [F]" },
-            layout::FIREARM,
-            player,
-            Action::Command(Command::SetFirearmMode {
-                warrior: selected,
-                enabled: !firearm,
-            }),
-        );
-        button(
-            assets,
-            &mut controls,
-            "Load [R]",
-            layout::RELOAD,
-            unobstructed,
-            crate::input::refill_action(state, selected),
-        );
-        button(
-            assets,
-            &mut controls,
-            "End [Space]",
-            layout::END_TURN,
-            player,
-            Action::Command(Command::EndTurn),
-        );
-        button(
-            assets,
-            &mut controls,
-            "Psi [P]",
-            Rect::new(486., 516., 126., 26.),
-            unobstructed && (state.phase == Phase::Exploration || player),
-            Action::Open(Inspection::Psi),
-        );
+        if state.phase == Phase::Combat {
+            button(
+                assets,
+                &mut controls,
+                if firearm { "Fists [F]" } else { "Firearm [F]" },
+                layout::FIREARM,
+                player,
+                Action::Command(Command::SetFirearmMode {
+                    warrior: selected,
+                    enabled: !firearm,
+                }),
+            );
+            button(
+                assets,
+                &mut controls,
+                "Load [R]",
+                layout::RELOAD,
+                unobstructed,
+                crate::input::refill_action(state, content, selected),
+            );
+            button(
+                assets,
+                &mut controls,
+                "End [Space]",
+                layout::END_TURN,
+                player,
+                Action::Command(Command::EndTurn),
+            );
+        }
+        if state.phase == Phase::Exploration {
+            let rect = assets.main_controls[&300];
+            let enabled =
+                unobstructed && word(&state.warriors[selected].bytes, 0x36).unwrap_or(0) != 0;
+            assets.panel(if enabled { 162 } else { 154 }, rect);
+            controls.push(Control {
+                rect,
+                enabled,
+                action: Action::Open(Inspection::Psi),
+            });
+        } else {
+            button(
+                assets,
+                &mut controls,
+                "Psi [P]",
+                Rect::new(486., 516., 126., 26.),
+                unobstructed && (state.phase == Phase::Exploration || player),
+                Action::Open(Inspection::Psi),
+            );
+        }
         if state.phase == Phase::Combat {
             button(
                 assets,
@@ -562,7 +915,7 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                 assets,
                 &mut controls,
                 "Encounter [E]",
-                Rect::new(624., 516., 126., 26.),
+                assets.main_controls[&306],
                 unobstructed,
                 Action::Command(Command::Encounter),
             );
@@ -584,8 +937,6 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                     && word(&state.warriors[selected].bytes, 0x40).unwrap_or(0) >= 2,
                 Action::Command(Command::Guard),
             );
-        } else {
-            assets.text("Unavailable", 708., 561., 12, GRAY);
         }
         if let Some(p) = state
             .exploration
@@ -611,7 +962,7 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                         16.,
                     );
                 }
-                Presentation::Question { text, .. } => {
+                Presentation::Question { text, .. } | Presentation::Avoidance { text, .. } => {
                     assets.wrapped(
                         &authored_text(text, &state.warriors),
                         Rect::new(12., 467., 444., 82.),
@@ -706,17 +1057,57 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                         true,
                         Action::Command(Command::CancelMenu),
                     );
+                    for (index, action) in [
+                        (1, Action::Open(Inspection::Psi)),
+                        (3, Action::Command(Command::BeginEncounterActions)),
+                        (4, Action::Open(Inspection::Items)),
+                    ] {
+                        let item_rect = Rect::new(25. + index as f32 * 50., 390., 50., 50.);
+                        let enabled =
+                            centurions_core::typed_record(state, content).is_ok_and(|record| {
+                                if index == 1 {
+                                    centurions_content::word(record, 106).is_ok_and(|id| id != 0)
+                                } else if index == 3 {
+                                    record[96] != 0
+                                } else {
+                                    centurions_content::word(record, 136).is_ok_and(|id| id != 0)
+                                }
+                            });
+                        if let Some(item) =
+                            assets.dialogs.get(&153).and_then(|items| items.get(index))
+                            && let Ok(id) = centurions_content::word(&item.data, 0)
+                        {
+                            assets.panel(id, item_rect);
+                            if !enabled {
+                                draw_rectangle(
+                                    item_rect.x,
+                                    item_rect.y,
+                                    item_rect.w,
+                                    item_rect.h,
+                                    Color::new(0., 0., 0., 0.6),
+                                );
+                            }
+                            controls.push(Control {
+                                rect: item_rect,
+                                enabled,
+                                action,
+                            });
+                        }
+                    }
                 }
-                Presentation::Loot => {}
+                Presentation::Loot | Presentation::Shop | Presentation::Clinic { .. } => {}
                 Presentation::Survivors => {}
             }
             if !matches!(
                 p,
                 Presentation::Question { .. }
+                    | Presentation::Avoidance { .. }
                     | Presentation::Menu { .. }
                     | Presentation::Typed { .. }
                     | Presentation::StageChange { .. }
                     | Presentation::WarriorChoice { .. }
+                    | Presentation::Clinic { .. }
+                    | Presentation::Survivors
             ) {
                 let keep_spells = matches!(p, Presentation::Loot)
                     && centurions_core::needs_spell_confirmation(state);
@@ -727,36 +1118,92 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                     layout::CONTINUE,
                     !state.booty_items.iter().any(|i| i.id() != 0),
                     Action::Command(if keep_spells {
-                        Command::KeepCurrentSpells
+                        Command::BeginPromotion
                     } else {
                         Command::Continue
                     }),
                 );
             }
-        } else if state.phase == Phase::Combat {
-            assets.wrapped(
-                &ui.messages.iter().cloned().collect::<Vec<_>>().join("\n"),
-                Rect::new(490., 462., 304., 68.),
-                12,
-                16.,
-            );
-        } else {
-            assets.wrapped(
-                &ui.messages.iter().cloned().collect::<Vec<_>>().join("\n"),
-                Rect::new(12., 467., 444., 99.),
-                12,
-                17.,
-            );
         }
     }
+    if state
+        .exploration
+        .as_ref()
+        .is_some_and(|p| p.presentation == Some(Presentation::Shop))
+    {
+        ui.inventory.draw(content, state, assets, &mut controls);
+        return controls;
+    }
+    if let Some(Presentation::Clinic { member, percent }) = state
+        .exploration
+        .as_ref()
+        .and_then(|p| p.presentation.as_ref())
+    {
+        controls.clear();
+        draw_clinic(state, assets, *member, *percent, &mut controls);
+        if ui.inspection.is_none() {
+            return controls;
+        }
+    }
+    if state
+        .exploration
+        .as_ref()
+        .is_some_and(|position| position.presentation == Some(Presentation::Survivors))
+    {
+        controls.clear();
+        draw_survivors(state, assets, &mut controls);
+        return controls;
+    }
+    if let Some(selected) = state.encounter_actions {
+        controls.clear();
+        assets.draw_dialog(148);
+        if let Ok(record) = centurions_core::typed_record(state, content) {
+            for (index, chosen) in selected.into_iter().enumerate() {
+                assets.panel(156, assets.dialog_rect(148, index + 9));
+                let checkbox = assets.dialog_rect(148, index + 1);
+                assets.panel(179, checkbox);
+                if chosen {
+                    draw_rectangle(
+                        checkbox.x + 2.,
+                        checkbox.y + 2.,
+                        checkbox.w - 4.,
+                        checkbox.h - 4.,
+                        YELLOW,
+                    );
+                }
+                let label = &record[156 + index * 40..196 + index * 40];
+                let text =
+                    centurions_content::ui::c_string(&label[1..1 + usize::from(label[0]).min(39)]);
+                assets.wrapped_color(&text, assets.dialog_rect(148, index + 19), 12, 14., YELLOW);
+            }
+        }
+        for item in 9..=18 {
+            controls.push(Control {
+                rect: assets.dialog_rect(148, item),
+                enabled: true,
+                action: Action::Command(Command::EncounterActionControl { item: item as u16 }),
+            });
+        }
+        return controls;
+    }
     if let Some(inspection) = ui.inspection {
+        if inspection == Inspection::Items
+            && state
+                .exploration
+                .as_ref()
+                .is_some_and(|position| position.presentation.is_none())
+        {
+            ui.inventory.draw(content, state, assets, &mut controls);
+            return controls;
+        }
         controls.clear();
         draw_rectangle(0., 20., 800., 580., Color::from_rgba(0, 0, 0, 160));
         assets.panel(224, layout::INSPECT);
         let title = match inspection {
             Inspection::Items | Inspection::Crate => "Items",
-            Inspection::FireTargets => "Firearm targets",
+            Inspection::FireTargets => "Target",
             Inspection::Conditions => "Conditions",
+            Inspection::Modifiers | Inspection::Specials => "",
             Inspection::Psi | Inspection::PsiTargets => "Psi",
             Inspection::Bandage => "Stop bleeding",
         };
@@ -773,6 +1220,16 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                 .unwrap_or(ui.selected)
         } else {
             ui.selected
+        };
+        let title = if matches!(inspection, Inspection::Modifiers | Inspection::Specials) {
+            assets.information_dialog[if inspection == Inspection::Modifiers {
+                4
+            } else {
+                3
+            }]
+            .text()
+        } else {
+            title.to_owned()
         };
         assets.text(
             &format!("{title} — {}", state.warriors[inspected].name),
@@ -800,7 +1257,7 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
         {
             0
         } else {
-            6
+            state.warriors.len()
         } {
             button(
                 assets,
@@ -813,6 +1270,8 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
         }
         match inspection {
             Inspection::Conditions => draw_conditions(state, assets, ui),
+            Inspection::Modifiers => draw_modifiers(state, assets, ui),
+            Inspection::Specials => draw_specials(state, assets, ui),
             Inspection::Bandage => draw_bandage(state, assets, &mut controls),
             Inspection::Items | Inspection::Crate => {
                 draw_items(content, state, assets, ui, &mut controls)
@@ -822,6 +1281,20 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                 draw_psi(content, state, assets, ui, &mut controls, inspected)
             }
         }
+    }
+    if let Some(progress) = &state.promotion {
+        controls.clear();
+        crate::editor::ScanEditor::draw_promotion(progress, content, assets, &mut controls);
+    }
+    if state.outdoor_psi.is_some() {
+        controls.clear();
+        draw_outdoor_psi(state, assets, &mut controls);
+    }
+    if state.psi_selection.is_some() {
+        controls.clear();
+        draw_rectangle(0., 20., 800., 580., Color::from_rgba(0, 0, 0, 180));
+        assets.panel(224, layout::INSPECT);
+        draw_psi_selection(content, state, assets, ui, &mut controls);
     }
     if state.medical_continuation.is_some() {
         controls.clear();
@@ -844,6 +1317,9 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
             true,
             Action::Load,
         );
+    }
+    for control in &mut controls {
+        control.enabled &= crate::input::available(state, ui.selected, &control.action);
     }
     controls
 }
@@ -886,6 +1362,164 @@ fn draw_bandage(state: &Session, assets: &Assets, controls: &mut Vec<Control>) {
         true,
         Action::Command(Command::StopBleeding { warrior: None }),
     );
+}
+
+fn draw_outdoor_psi(state: &Session, assets: &Assets, controls: &mut Vec<Control>) {
+    draw_rectangle(0., 20., 800., 580., Color::from_rgba(0, 0, 0, 180));
+    assets.panel(224, layout::INSPECT);
+    let item_prompt = state
+        .outdoor_psi
+        .as_ref()
+        .filter(|pending| pending.item.is_some())
+        .and_then(|_| assets.native_text.text(0x4033f6, false).ok());
+    assets.wrapped_color(
+        item_prompt
+            .as_deref()
+            .unwrap_or_else(|| assets.warnings.get(46).map_or("", String::as_str)),
+        Rect::new(48., 80., 674., 72.),
+        14,
+        18.,
+        YELLOW,
+    );
+    for (member, warrior) in state.warriors.iter().enumerate() {
+        let y = 165. + member as f32 * 48.;
+        if let Ok(id) = word(&warrior.bytes, 0x54)
+            && let Some(texture) = assets.portraits.get(&id)
+        {
+            draw_texture_ex(
+                texture,
+                48.,
+                y,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(vec2(44., 44.)),
+                    ..Default::default()
+                },
+            );
+        }
+        button(
+            assets,
+            controls,
+            &warrior.name,
+            Rect::new(100., y, 622., 44.),
+            true,
+            Action::Command(Command::SelectOutdoorPsiTarget { warrior: member }),
+        );
+        let rank = state.party_mask[member];
+        if rank > 0 {
+            assets.text(&rank.to_string(), 685., y + 28., 18, YELLOW);
+        }
+    }
+    button(
+        assets,
+        controls,
+        &assets.native_text.text(0x4001ec, true).unwrap_or_default(),
+        Rect::new(48., 485., 110., 26.),
+        true,
+        Action::Command(Command::CancelOutdoorPsi),
+    );
+}
+
+fn draw_psi_selection(
+    content: &Content,
+    state: &Session,
+    assets: &Assets,
+    ui: &UiState,
+    controls: &mut Vec<Control>,
+) {
+    let pending = state.psi_selection.as_ref().unwrap();
+    assets.text(
+        assets
+            .spell_names
+            .get(&pending.spell)
+            .map_or("", String::as_str),
+        48.,
+        70.,
+        18,
+        YELLOW,
+    );
+    if ui.medical_cancel {
+        let prompt = assets.native_text.text(0x403c72, false).unwrap_or_default();
+        assets.wrapped_color(&prompt, Rect::new(48., 110., 674., 130.), 14, 18., YELLOW);
+        for (x, address, action) in [
+            (48., 0x400fb2, Action::Command(Command::CancelPsiSelection)),
+            (252., 0x400fae, Action::KeepMedicalTarget),
+        ] {
+            button(
+                assets,
+                controls,
+                &assets.native_text.text(address, true).unwrap_or_default(),
+                Rect::new(x, 250., 188., 32.),
+                true,
+                action,
+            );
+        }
+        return;
+    }
+    let arena = state.combat.as_ref().unwrap();
+    let targets: Vec<_> = state
+        .warriors
+        .iter()
+        .enumerate()
+        .map(|(index, w)| (index as i16, w.name.clone(), arena.squad.positions[index]))
+        .chain(arena.enemies.records.iter().enumerate().map(|(index, m)| {
+            (
+                index as i16 + 10,
+                centurions_content::ui::c_string(&m.bytes[218..]),
+                arena.enemies.positions[index],
+            )
+        }))
+        .collect();
+    let selected = pending
+        .targets
+        .iter()
+        .filter_map(|body| targets.iter().find(|(id, _, _)| id == body))
+        .map(|(_, name, _)| name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    assets.text(&selected, 48., 145., 14, YELLOW);
+    for (row, (_, name, position)) in targets.iter().skip(ui.page * 8).take(8).enumerate() {
+        button(
+            assets,
+            controls,
+            name,
+            Rect::new(48., 181. + row as f32 * 35., 674., 30.),
+            centurions_core::combat::psi_selection::admit_target(state, content, *position).is_ok(),
+            Action::Command(Command::SelectPsiTarget {
+                x: position.0,
+                y: position.1,
+            }),
+        );
+    }
+    button(
+        assets,
+        controls,
+        &assets.upgrade_dialog[0].text(),
+        Rect::new(48., 485., 110., 26.),
+        !pending.targets.is_empty(),
+        Action::Command(Command::FirePsiSelection),
+    );
+    button(
+        assets,
+        controls,
+        &assets.native_text.text(0x4001ec, true).unwrap_or_default(),
+        Rect::new(166., 485., 110., 26.),
+        true,
+        Action::MedicalCancel,
+    );
+    for (x, change, enabled, glyph) in [
+        (530., -1, ui.page > 0, "<"),
+        (648., 1, (ui.page + 1) * 8 < targets.len(), ">"),
+    ] {
+        button(
+            assets,
+            controls,
+            glyph,
+            Rect::new(x, 485., 74., 26.),
+            enabled,
+            Action::Page(change),
+        );
+    }
 }
 
 fn draw_medical_target(
@@ -985,50 +1619,108 @@ fn draw_psi(
     selected: usize,
 ) {
     let warrior = &state.warriors[selected];
-    let power = ui.psi_power.clamp(1, 4);
+    let power = ui.psi_power.clamp(1, 7);
     let psi = warrior.psi_points().unwrap_or(0);
     let combat = state.combat.as_ref();
     let Some(mission) = state.exploration.as_ref().and_then(|p| content.map(p.map)) else {
         return;
     };
     assets.text(&format!("Psi {psi}   Power {power}"), 48., 116., 14, WHITE);
+    if ui.preferences.enabled(11)
+        && let Some((spell, _)) = ui.psi_choice
+    {
+        let school = spell / 1000;
+        let tier = (spell % 1000 / 100).saturating_sub(1) as usize;
+        let column = (spell % 100).saturating_sub(1) as usize;
+        if let Ok(text) = mission.scan_description(school, tier, column) {
+            assets.wrapped_color(&text, Rect::new(48., 470., 674., 78.), 12, 14., YELLOW);
+        }
+    }
     if ui.inspection == Some(Inspection::Psi) {
-        for (value, x) in [(1, 48.), (2, 166.), (3, 284.), (4, 402.)] {
+        for value in 1..=7 {
+            let x = 48. + (value - 1) as f32 * 96.;
             button(
                 assets,
                 controls,
                 &format!("Power {value}"),
-                Rect::new(x, 136., 110., 25.),
-                value <= 2
-                    || (combat.is_some()
-                        && warrior.knows_spell(1101).unwrap_or(false)
-                        && psi >= 6 * value),
+                Rect::new(x, 136., 90., 25.),
+                value <= 7,
                 Action::PsiPower(value),
             );
         }
         let mut y = 182.;
-        for (spell, cost, outdoors, portrait) in [
-            (1101, 6, false, false),
-            (1101, 6, false, true),
-            (1103, 15, true, false),
-            (1305, 8, false, false),
-            (2101, 8, false, false),
-            (2204, 25, false, false),
-            (2302, 25, false, false),
-        ] {
-            if !warrior.knows_spell(spell).unwrap_or(false) || outdoors != combat.is_none() {
-                continue;
-            }
-            let action = if outdoors {
+        let encounter = centurions_core::typed_record(state, content).is_ok();
+        let mut choices: Vec<_> = [(1101, false, false), (1101, false, true)]
+            .into_iter()
+            .chain(
+                centurions_core::combat::player_psi::PARTY_SPELLS
+                    .iter()
+                    .copied()
+                    .map(|id| (id, true, false)),
+            )
+            .chain(
+                centurions_core::combat::player_psi::OUTDOOR_TARGET_SPELLS
+                    .iter()
+                    .copied()
+                    .map(|id| (id, true, false)),
+            )
+            .chain(
+                centurions_core::combat::player_psi::OUTDOOR_PARTY_SPELLS
+                    .iter()
+                    .copied()
+                    .map(|id| (id, true, false)),
+            )
+            .chain(
+                centurions_core::combat::player_psi::COMBAT_SPELLS
+                    .iter()
+                    .copied()
+                    .filter(|id| *id != 1101)
+                    .map(|id| (id, false, false)),
+            )
+            .filter(|(spell, outdoors, _)| {
+                warrior.knows_spell(*spell).unwrap_or(false) && *outdoors == combat.is_none()
+            })
+            .collect();
+        if encounter {
+            let school = centurions_content::word(&warrior.bytes, 0x36).unwrap_or(0);
+            choices = (1..=7)
+                .flat_map(|row| (1..=7).map(move |column| school * 1000 + row * 100 + column))
+                .filter(|spell| warrior.knows_spell(*spell).unwrap_or(false))
+                .map(|spell| (spell, true, false))
+                .collect();
+        }
+        for (spell, outdoors, portrait) in choices.iter().copied().skip(ui.page * 7).take(7) {
+            let packet = mission
+                .combat
+                .as_ref()
+                .and_then(|t| centurions_core::combat::spells::load_packet(&t.attacks, spell).ok());
+            let cost = packet
+                .as_ref()
+                .and_then(|p| centurions_core::combat::player_psi::cost(p, power).ok())
+                .unwrap_or(i16::MAX);
+            let global = packet
+                .as_ref()
+                .is_some_and(|packet| packet[1] == 7 || packet[1] >= 9);
+            let multi = packet.as_ref().is_some_and(|packet| packet[1] == 0);
+            let action = if encounter {
+                Action::Command(Command::CastEncounterPsi {
+                    warrior: selected,
+                    spell,
+                    power,
+                })
+            } else if outdoors {
                 Action::Command(Command::CastPartyPsi {
                     warrior: selected,
                     spell,
                     power,
                 })
+            } else if multi {
+                Action::Command(Command::BeginPsiSelection { spell, power })
             } else if portrait {
                 Action::Command(Command::BeginLearnedHeal { power })
-            } else if spell == 2302 {
+            } else if global || spell == 2302 {
                 Action::Command(Command::CastPsi {
+                    rotation: ui.psi_rotation,
                     spell,
                     power,
                     target: None,
@@ -1036,29 +1728,39 @@ fn draw_psi(
             } else {
                 Action::ChoosePsi(spell)
             };
-            let enabled = (portrait || power <= 2)
-                && psi >= cost * power
-                && if let Some(combat) = combat {
-                    centurions_core::combat::player_psi::can_cast(
-                        &state.warriors,
-                        selected as i16,
-                        state.psi_disabled,
-                    )
-                    .unwrap_or(false)
-                        && combat.active_body() == Some(selected as i16)
-                } else {
-                    centurions_core::combat::player_psi::validate_party(
-                        &state.warriors,
-                        mission,
-                        state.psi_disabled,
-                        centurions_core::combat::player_psi::PartyCastRequest {
-                            warrior: selected,
-                            spell,
-                            power,
-                        },
-                    )
-                    .is_ok()
-                };
+            let enabled = if encounter {
+                centurions_core::typed_encounter::validate_spell(
+                    state, content, selected, spell, power,
+                )
+                .is_ok()
+            } else {
+                psi >= cost
+                    && packet.as_ref().is_some_and(|p| {
+                        centurions_core::combat::player_psi::mode_allowed(p, combat.is_some())
+                            .unwrap_or(false)
+                    })
+                    && if let Some(combat) = combat {
+                        centurions_core::combat::player_psi::can_cast(
+                            &state.warriors,
+                            selected as i16,
+                            state.psi_disabled,
+                        )
+                        .unwrap_or(false)
+                            && combat.active_body() == Some(selected as i16)
+                    } else {
+                        centurions_core::combat::player_psi::validate_party(
+                            &state.warriors,
+                            mission,
+                            state.psi_disabled,
+                            centurions_core::combat::player_psi::PartyCastRequest {
+                                warrior: selected,
+                                spell,
+                                power,
+                            },
+                        )
+                        .is_ok()
+                    }
+            };
             button(
                 assets,
                 controls,
@@ -1069,6 +1771,22 @@ fn draw_psi(
             );
             y += 38.;
         }
+        button(
+            assets,
+            controls,
+            "Previous",
+            Rect::new(48., 485., 110., 26.),
+            ui.page > 0,
+            Action::Page(-1),
+        );
+        button(
+            assets,
+            controls,
+            "Next",
+            Rect::new(166., 485., 110., 26.),
+            (ui.page + 1) * 7 < choices.len(),
+            Action::Page(1),
+        );
     } else if let (Some(combat), Some((spell, power))) = (combat, ui.psi_choice) {
         if spell != 1101 {
             button(
@@ -1081,7 +1799,7 @@ fn draw_psi(
             );
         }
         let mut targets = Vec::new();
-        if matches!(spell, 1101 | 1305) {
+        {
             for (body, warrior) in state.warriors.iter().enumerate() {
                 if warrior.stamina().unwrap_or(-10) > -10 {
                     targets.push((
@@ -1092,7 +1810,7 @@ fn draw_psi(
                 }
             }
         }
-        if spell != 1101 {
+        {
             for (index, monster) in combat.enemies.records.iter().enumerate() {
                 if monster.stamina().unwrap_or(0) > 0 {
                     targets.push((
@@ -1110,6 +1828,7 @@ fn draw_psi(
                 mission,
                 state.psi_disabled,
                 centurions_core::combat::player_psi::CastRequest {
+                    rotation: ui.psi_rotation,
                     spell,
                     power,
                     target: Some(*position),
@@ -1123,6 +1842,7 @@ fn draw_psi(
                 Rect::new(48., 181. + row as f32 * 35., 674., 30.),
                 enabled,
                 Action::Command(Command::CastPsi {
+                    rotation: ui.psi_rotation,
                     spell,
                     power,
                     target: Some(*position),
@@ -1247,6 +1967,39 @@ fn draw_conditions(state: &Session, assets: &Assets, ui: &UiState) {
         WHITE,
     );
 }
+fn draw_modifiers(state: &Session, assets: &Assets, ui: &UiState) {
+    let labels = assets
+        .character_strings
+        .get(&132)
+        .and_then(|bytes| centurions_content::ui::string_list(bytes).ok())
+        .unwrap_or_default();
+    let warrior = &state.warriors[ui.selected];
+    let mut y = 146.;
+    for (index, label) in labels.iter().take(12).enumerate() {
+        let value = word(&warrior.bytes, 0xae + index * 2).unwrap_or(0);
+        if value != 0 && !label.is_empty() {
+            assets.text(&format!("{value:+} {label}"), 48., y, 14, WHITE);
+            y += 20.;
+        }
+    }
+}
+
+fn draw_specials(state: &Session, assets: &Assets, ui: &UiState) {
+    let warrior = &state.warriors[ui.selected];
+    let mut y = 146.;
+    if let Some(labels) = assets.reference_strings.get(&1201) {
+        for (index, label) in labels.iter().take(14).enumerate() {
+            let value = word(&warrior.bytes, 0xf4 + index * 2).unwrap_or(0);
+            if value > 0 && !label.is_empty() {
+                let value =
+                    value.wrapping_add(word(&warrior.bytes, 0xb62 + index * 2).unwrap_or(0));
+                assets.text(&format!("{label} {value}"), 48., y, 14, WHITE);
+                y += 20.;
+            }
+        }
+    }
+}
+
 fn draw_items(
     content: &Content,
     state: &Session,
@@ -1303,6 +2056,15 @@ fn draw_items(
     }
     for (row, (slot, item)) in items.iter().skip(ui.page * 8).take(8).enumerate() {
         let y = 159. + row as f32 * 39.;
+        if !loot && !crate_view && state.phase == Phase::Exploration {
+            let rect = Rect::new(412., y + 3., 28., 26.);
+            assets.panel(7, rect);
+            controls.push(Control {
+                rect,
+                enabled: true,
+                action: Action::Drop(ui.selected, *slot),
+            });
+        }
         if let Some(def) = content.items.get(item.id().unsigned_abs() as usize)
             && let Ok(icon) = word(def, 10)
             && let Some(texture) = assets.icons.get(&icon)
@@ -1356,7 +2118,7 @@ fn draw_items(
                 controls,
                 if ammo { "Collect ammo" } else { "Take" },
                 Rect::new(518., y + 3., 102., 26.),
-                ammo || item.0[10] == 23 || (item.id() == 700 && item.0[10] == 28),
+                true,
                 Action::Command(Command::TakeLoot {
                     slot: *slot,
                     warrior: ui.selected,
@@ -1370,24 +2132,28 @@ fn draw_items(
                 true,
                 Action::Command(Command::StoreLoot { slot: *slot }),
             );
-        } else if matches!(
-            item.id(),
-            1 | 2 | 38 | 165 | 400 | 403 | 420 | 440 | 460 | 600 | 637
-        ) {
+        } else if matches!(item.0[10], 1..=20) {
             let equipped = item.0[9] != 0;
             let eligible = state.phase == Phase::Exploration
                 || state.combat.as_ref().and_then(|c| c.active_body()) == Some(ui.selected as i16);
-            if matches!(item.id(), 1 | 2 | 38 | 165) && equipped {
-                let (ammunition, reserve) = match item.id() {
-                    1 => (200, 0),
-                    2 => (201, 1),
-                    38 => (203, 3),
-                    165 => (280, 80),
-                    _ => unreachable!(),
-                };
+            if matches!(item.0[10], 2 | 15) && equipped {
+                let ammunition = centurions_core::ammunition::compatible_ammunition(content, item)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|id| state.ammunition[(*id - 200) as usize] > 0)
+                    .min_by_key(|id| {
+                        if *id == word(&item.0, 4).unwrap_or(0) {
+                            0
+                        } else {
+                            *id
+                        }
+                    })
+                    .unwrap_or(200);
+                let reserve = (ammunition - 200) as usize;
                 let loaded = word(&item.0, 2).unwrap_or(-1);
                 let selected = word(&item.0, 4).unwrap_or(-1);
-                let native_instance = loaded >= 0 && (selected == 0 || selected == ammunition);
+                let native_instance =
+                    loaded >= 0 && (selected == 0 || (200..400).contains(&selected));
                 button(
                     assets,
                     controls,
@@ -1401,7 +2167,12 @@ fn draw_items(
                     }),
                 );
             }
-            if item.id() == 637 && equipped {
+            if item.0[10] == 20 && equipped {
+                let ammunition = centurions_core::ammunition::compatible_ammunition(content, item)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|id| state.ammunition[(*id - 200) as usize] > 0)
+                    .unwrap_or(307);
                 button(
                     assets,
                     controls,
@@ -1409,13 +2180,12 @@ fn draw_items(
                     Rect::new(504., y + 3., 108., 26.),
                     eligible
                         && state.phase == Phase::Exploration
-                        && word(&item.0, 2).unwrap_or(-1) == 0
-                        && word(&item.0, 4).unwrap_or(-1) == 0
-                        && state.ammunition[107] > 0,
+                        && word(&item.0, 2).unwrap_or(-1) < word(&item.0, 6).unwrap_or(0)
+                        && state.ammunition[(ammunition - 200) as usize] > 0,
                     Action::Command(Command::FitAmmunition {
                         warrior: ui.selected,
                         slot: *slot,
-                        ammunition: 307,
+                        ammunition,
                     }),
                 );
             }
@@ -1439,15 +2209,16 @@ fn draw_items(
             );
         } else {
             let scripted = item.0[10] == 23;
-            let medical = item.id() == 700 && state.phase == Phase::Combat;
+            let medical = (700..=703).contains(&item.id());
             let medical_available = medical
-                && matches!(
-                    (item.0[10], word(&item.0, 2).unwrap_or(0)),
-                    (24, 1 | 2) | (28, 1)
-                )
-                && state.combat.as_ref().and_then(|c| c.active_body()) == Some(ui.selected as i16)
-                && word(&state.warriors[ui.selected].bytes, 0x40).unwrap_or(0) >= 1;
-            let available = item.id() == 200
+                && matches!(item.0[10], 24 | 28)
+                && word(&item.0, 2).unwrap_or(0) > 0
+                && (state.phase == Phase::Exploration
+                    || (state.combat.as_ref().and_then(|c| c.active_body())
+                        == Some(ui.selected as i16)
+                        && word(&state.warriors[ui.selected].bytes, 0x40).unwrap_or(0) >= 1));
+            let available = (200..400).contains(&item.id())
+                && item.0[10] == 26
                 && item.0[9] != 1
                 && word(&item.0, 2).unwrap_or(0) > 0
                 && state.phase == Phase::Exploration
@@ -1472,12 +2243,7 @@ fn draw_items(
                             .exploration
                             .as_ref()
                             .is_some_and(|p| p.presentation.is_none() && p.script.is_none())),
-                Action::Command(if medical {
-                    Command::BeginMedicalItem {
-                        warrior: ui.selected,
-                        slot: *slot,
-                    }
-                } else if scripted {
+                Action::Command(if medical || scripted {
                     Command::UseItem {
                         warrior: ui.selected,
                         slot: *slot,
@@ -1519,7 +2285,7 @@ fn draw_items(
 }
 
 fn draw_fire_targets(
-    _content: &Content,
+    content: &Content,
     state: &Session,
     assets: &Assets,
     ui: &UiState,
@@ -1532,35 +2298,68 @@ fn draw_fire_targets(
         return;
     };
     let warrior = &state.warriors[body as usize];
-    let targets: Vec<_> = combat
-        .enemies
-        .records
+    let targets: Vec<_> = state
+        .warriors
         .iter()
         .enumerate()
-        .filter(|(_, m)| m.stamina().unwrap_or(0) > 0 && word(&m.bytes, 0xe).unwrap_or(0) != 0)
+        .filter(|(_, w)| w.bytes[0x9df] != 0 && w.stamina().unwrap_or(0) > 0)
+        .map(|(index, w)| (index as i16, w.name.clone()))
+        .chain(
+            combat
+                .enemies
+                .records
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.stamina().unwrap_or(0) > 0 && m.bytes[0xb0] != 255)
+                .map(|(index, m)| {
+                    (
+                        index as i16 + 10,
+                        centurions_content::ui::c_string(&m.bytes[218..]),
+                    )
+                }),
+        )
         .collect();
     assets.text(&warrior.name, 48., 142., 14, YELLOW);
-    let origin = combat.squad.positions[body as usize];
-    for (row, (index, monster)) in targets.iter().skip(ui.page * 8).take(8).enumerate() {
-        let p = combat.enemies.positions[*index];
-        let distance = ((f32::from(p.0 - origin.0).powi(2) + f32::from(p.1 - origin.1).powi(2))
-            .sqrt()
-            .trunc()) as i16;
+    if centurions_core::combat::shooting::location_targeting(state, content) {
         button(
             assets,
             controls,
-            &format!(
-                "Enemy {}: HP {}   ({}, {})   Distance {distance}",
-                index + 1,
-                monster.stamina().unwrap_or(0),
-                p.0,
-                p.1
-            ),
+            "Target",
+            Rect::new(530., 485., 110., 26.),
+            true,
+            Action::FireMapTarget,
+        );
+    }
+    if let Some(selection) = &combat.firearm_selection {
+        let names = selection
+            .targets
+            .iter()
+            .map(|body| {
+                targets
+                    .iter()
+                    .find(|(id, _)| id == body)
+                    .map_or("", |(_, name)| name.as_str())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        assets.text(&names, 48., 164., 12, YELLOW);
+        button(
+            assets,
+            controls,
+            "Target",
+            Rect::new(530., 485., 110., 26.),
+            true,
+            Action::Command(Command::FireSelectedTargets),
+        );
+    }
+    for (row, (target, name)) in targets.iter().skip(ui.page * 8).take(8).enumerate() {
+        button(
+            assets,
+            controls,
+            name,
             Rect::new(48., 181. + row as f32 * 35., 674., 30.),
             true,
-            Action::Command(Command::ShootEnemy {
-                body: *index as i16 + 10,
-            }),
+            Action::Command(Command::ShootEnemy { body: *target }),
         );
     }
     button(

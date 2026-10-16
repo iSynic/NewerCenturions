@@ -1,5 +1,11 @@
 use super::*;
 
+fn refusal(kind: crate::feedback::CombatRefusal) -> RuleError {
+    RuleError::Refused {
+        feedback: vec![crate::feedback::NativeFeedback::Combat { kind }],
+    }
+}
+
 fn spell_identity(id: i16) -> [i16; 3] {
     [id / 1000 - 1, id % 1000 / 100 - 1, id % 100 - 1]
 }
@@ -30,7 +36,8 @@ fn hostile(c: &Combat, w: &[Warrior], a: i16, b: i16) -> Result<bool, RuleError>
 }
 fn alive(c: &Combat, w: &[Warrior], body: i16) -> bool {
     if (0..6).contains(&body) {
-        w[body as usize].bytes[0x9df] != 0
+        w.get(body as usize)
+            .is_some_and(|warrior| warrior.bytes[0x9df] != 0)
     } else if body >= 10 {
         c.enemies
             .records
@@ -63,9 +70,13 @@ fn neighbors_at(
     };
     for dy in minimum_y..=1 {
         for dx in minimum_x..=1 {
+            let absolute = (p.0 + dx + c.map.shift.0 + 5, p.1 + dy + c.map.shift.1 + 5);
+            if !(0..90).contains(&absolute.0) || !(0..90).contains(&absolute.1) {
+                continue;
+            }
             let cell = centurions_content::mission::OpeningMission::index(
-                i32::from(p.0 + dx + c.map.shift.0 + 5),
-                i32::from(p.1 + dy + c.map.shift.1 + 5),
+                i32::from(absolute.0),
+                i32::from(absolute.1),
             )?;
             let other = c.map.tiles[cell].wrapping_abs();
             if other < 110
@@ -86,7 +97,7 @@ fn resolve_attack(
     w: &mut [Warrior],
     random: &mut RandomState,
     a: i16,
-    b: i16,
+    mut b: i16,
     index: usize,
     actor: i16,
     items: Option<&[Vec<u8>]>,
@@ -102,22 +113,33 @@ fn resolve_attack(
         });
         return Ok(vec![]);
     }
+    c.inactive_rounds = 0;
     let retained = c.attack_packet.clone().unwrap_or_else(|| vec![0; 58]);
     let result = if a < 10 && b >= 10 {
+        let weapon = super::warrior_attack::weapon(&w[a as usize].bytes, items.unwrap_or(&[]))?;
         if word(&w[a as usize].bytes, 0xacc)? < word(&w[a as usize].bytes, 0xaca)? {
-            load_natural_work(c, items, buffers)?;
+            if let Some(weapon) = weapon {
+                c.weapon_work.load_weapon(weapon)?;
+                buffers.load_weapon(items.unwrap(), word(&w[a as usize].bytes, 0xca)?)?;
+            } else {
+                load_natural_work(c, items, buffers)?;
+            }
         }
         if let Some(attacks) = attacks {
             let copies_packet =
                 word(&w[a as usize].bytes, 0xacc)? < word(&w[a as usize].bytes, 0xaca)?;
-            let (result, packet) = attack::unarmed_attack_with_packet(
+            let (result, packet, reflected) = attack::warrior_attack_with_packet(
                 &mut w[a as usize],
                 &mut c.enemies.records[(b - 10) as usize],
                 random,
                 attacks,
                 &retained,
                 c.difficulty,
+                weapon,
             )?;
+            if reflected {
+                b = a;
+            }
             if copies_packet {
                 c.attack_packet = Some(packet);
             }
@@ -267,10 +289,30 @@ fn resolve_attack(
             super::ally_turns::natural_attack_enemy(c, w, random, a, b, index)?
         }
     } else {
-        return Err(RuleError::Unsupported {
-            action: "combat.attack",
-            dependency: "combat between bodies of the same record type",
-        });
+        let weapon = super::warrior_attack::weapon(&w[a as usize].bytes, items.unwrap_or(&[]))?;
+        let copies_packet = word(&w[a as usize].bytes, 0xacc)? < word(&w[a as usize].bytes, 0xaca)?;
+        if copies_packet {
+            if let Some(weapon) = weapon {
+                c.weapon_work.load_weapon(weapon)?;
+                buffers.load_weapon(items.unwrap(), word(&w[a as usize].bytes, 0xca)?)?;
+            } else {
+                load_natural_work(c, items, buffers)?;
+            }
+        }
+        let (result, packet, actual) = super::warrior_attack::attack(
+            w,
+            a as usize,
+            b as usize,
+            attacks.ok_or("warrior melee attack table missing")?,
+            items.unwrap_or(&[]),
+            c.difficulty,
+            random,
+        )?;
+        if copies_packet {
+            c.attack_packet = Some(packet);
+        }
+        b = actual as i16;
+        result
     };
     if result.killed {
         lifecycle::kill_body(c, w, b)?;
@@ -661,7 +703,9 @@ fn warrior_departure_inner(
     buffers: &mut crate::ammunition::WorkBuffers,
     display_writers: bool,
 ) -> Result<Vec<Event>, RuleError> {
-    if word(&w[body as usize].bytes, 0x8e)? != 0 {
+    if (body < 10 && word(&w[body as usize].bytes, 0x8e)? != 0)
+        || (body >= 10 && c.enemies.records[(body - 10) as usize].bytes[0xca] != 0)
+    {
         return Ok(vec![]);
     }
     let mut previous = neighbors(c, w, body)?;
@@ -680,7 +724,7 @@ fn warrior_departure_inner(
             let m = &mut c.enemies.records[(other - 10) as usize].bytes;
             if m[0xb3] != 0
                 || m[0xb0] == 255
-                || matches!(word(&w[body as usize].bytes, 0x34)?, 4 | 5)
+                || (body < 10 && matches!(word(&w[body as usize].bytes, 0x34)?, 4 | 5))
             {
                 continue;
             }
@@ -713,6 +757,51 @@ fn warrior_departure_inner(
     }
     Ok(events)
 }
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn move_actor_with_reactions(
+    c: &mut Combat,
+    w: &mut [Warrior],
+    mission: &centurions_content::mission::OpeningMission,
+    random: &mut RandomState,
+    body: i16,
+    items: &[Vec<u8>],
+    buffs: &[u8],
+    buffers: &mut crate::ammunition::WorkBuffers,
+    display_writers: bool,
+    events: &mut Vec<Event>,
+) -> Result<enemy::EnemyMove, RuleError> {
+    let moved = super::footprint::move_enemy_before_place(
+        c,
+        mission,
+        (body - 10) as usize,
+        random,
+        &mut |projected, rng, destination| {
+            events.extend(warrior_departure_inner(
+                projected,
+                w,
+                rng,
+                body,
+                destination,
+                items,
+                &mission
+                    .combat
+                    .as_ref()
+                    .ok_or_else(|| RuleError::Invalid("combat tables missing".into()))?
+                    .attacks,
+                buffs,
+                buffers,
+                display_writers,
+            )?);
+            Ok(())
+        },
+    )?;
+    *c = moved.combat;
+    Ok(enemy::EnemyMove {
+        moved: moved.moved,
+        sounds: moved.sounds,
+    })
+}
+
 pub fn enemy_action(
     c: &mut Combat,
     w: &mut [Warrior],
@@ -828,15 +917,10 @@ fn enemy_action_with_context(
             return Ok(events);
         }
         m[0x104] = u8::from((m[0x109] as i8) >= 1);
-        if m[0xb2] != 0 {
-            return Err(RuleError::Unsupported {
-                action: "combat.enemy",
-                dependency: "fleeing enemy",
-            });
-        }
+        let fleeing = m[0xb2] != 0;
         let mut skip_neighbors = false;
         let weapon = word(m, 0x48)?;
-        if random.bound(100) <= weapon {
+        if !fleeing && random.bound(100) <= weapon {
             match enemy_fire(c, w, mission, random, (items, work), body, &mut events)? {
                 FireOutcome::Physical => continue,
                 FireOutcome::Spell => {
@@ -854,7 +938,7 @@ fn enemy_action_with_context(
                 FireOutcome::Failed => {}
             }
             attempt += 1;
-        } else {
+        } else if !fleeing {
             let spell = word(m, 0x42)?;
             if random.bound(100) <= spell {
                 let blocked = work.spell_disabled != 0
@@ -881,7 +965,7 @@ fn enemy_action_with_context(
                 }
             }
         }
-        let adjacent = if skip_neighbors || c.enemies.records[e].bytes[0xb3] != 0 {
+        let adjacent = if fleeing || skip_neighbors || c.enemies.records[e].bytes[0xb3] != 0 {
             vec![]
         } else {
             check_neighbors_with_items(
@@ -915,7 +999,18 @@ fn enemy_action_with_context(
                 break;
             }
             select_enemy_target(c, w, mission, random, body)?;
-            let moved = enemy::move_enemy(c, mission, e, random)?;
+            let moved = move_actor_with_reactions(
+                c,
+                w,
+                mission,
+                random,
+                body,
+                items,
+                buffs,
+                &mut work.buffers,
+                work.display_writers,
+                &mut events,
+            )?;
             events.extend(
                 moved
                     .sounds
@@ -1008,7 +1103,7 @@ fn enemy_death_sound(monster: &MonsterRecord) -> Result<i16, RuleError> {
     Ok(word(&monster.bytes, 0x6a)?)
 }
 
-fn append_spell_outcomes(
+pub(crate) fn append_spell_outcomes(
     c: &mut Combat,
     w: &mut [Warrior],
     targets: Vec<(usize, super::attack::AttackResult)>,
@@ -1031,6 +1126,7 @@ fn append_spell_outcomes(
         );
         // Native result audio follows surviving party hits at 151bca/1587b8.
         if identity.2[19] == 8
+            && word(identity.2, 40)? == 0
             && target < w.len()
             && identity.3[target] >= 0
             && !outcome.killed
@@ -1075,7 +1171,7 @@ fn append_spell_outcomes(
     Ok(())
 }
 
-fn resolve_spell_mask(
+pub(crate) fn resolve_spell_mask(
     c: &mut Combat,
     w: &mut [Warrior],
     random: &mut RandomState,
@@ -1085,6 +1181,7 @@ fn resolve_spell_mask(
     memory: super::spells::RestrictionMemoryView<'_>,
 ) -> Result<Vec<Event>, RuleError> {
     let (id, packet, count) = spell;
+    c.inactive_rounds = 0;
     if id == 1703 {
         let result = super::spell_conditions::resolve_1703(
             w,
@@ -1246,9 +1343,6 @@ fn enemy_spell_continue(
         let memory =
             super::spells::RestrictionMemoryView::ordinary_startup(&mission.item_cache, alias);
 
-        if packet[7] != 0 {
-            random.bound(4);
-        }
         work.attack_count = work.attack_count.max(1);
         let mut origin = selection.targets[0].clone();
         for target in selection.targets {
@@ -1263,7 +1357,7 @@ fn enemy_spell_continue(
             events.push(Event::Sound {
                 resource_id: word(&packet, 36)?,
             });
-            let mask = super::spells::target_mask_with_origin(
+            let mask = super::spells::target_mask_rotated_with_origin(
                 c,
                 w,
                 &mission.areas,
@@ -1271,6 +1365,7 @@ fn enemy_spell_continue(
                 &context,
                 &c.spell_fields,
                 random,
+                selection.rotation,
             )?;
             origin.first = -1;
             origin.second = -1;
@@ -1370,6 +1465,7 @@ fn enemy_fire(
     if !selection.cast {
         return Ok(FireOutcome::Failed);
     }
+    c.inactive_rounds = 0;
     c.enemies.records[e] = selection.caster;
     if work.display_writers {
         refresh_enemy_item_alias(c, e, items, work)?;
@@ -1596,6 +1692,28 @@ pub fn player_attack(
     content: &Content,
     target: i16,
 ) -> Result<Vec<Event>, RuleError> {
+    player_attack_inner(state, content, target, false)
+}
+
+pub fn player_attack_friend(
+    state: &mut Session,
+    content: &Content,
+    target: i16,
+) -> Result<Vec<Event>, RuleError> {
+    if !super::interaction::is_friendly_neighbor(state, target)? {
+        return Err(RuleError::Refused {
+            feedback: vec![crate::feedback::NativeFeedback::Silent],
+        });
+    }
+    player_attack_inner(state, content, target, true)
+}
+
+fn player_attack_inner(
+    state: &mut Session,
+    content: &Content,
+    target: i16,
+    friendly: bool,
+) -> Result<Vec<Event>, RuleError> {
     let c = state
         .combat
         .as_mut()
@@ -1603,10 +1721,10 @@ pub fn player_attack(
     let body = c
         .active_body()
         .ok_or_else(|| RuleError::Invalid("active warrior missing".into()))?;
-    if !(0..6).contains(&body) || !neighbors(c, &state.warriors, body)?.contains(&target) {
-        return Err(RuleError::Invalid(
-            "target is not adjacent to active warrior".into(),
-        ));
+    if !(0..6).contains(&body)
+        || !friendly && !neighbors(c, &state.warriors, body)?.contains(&target)
+    {
+        return Err(refusal(crate::feedback::CombatRefusal::OutOfRange));
     }
     let w = &mut state.warriors[body as usize].bytes;
     if word(w, 0x40)? < 2 {
@@ -1753,12 +1871,126 @@ pub fn enemy_turn(state: &mut Session, content: &Content) -> Result<Vec<Event>, 
     Ok(events)
 }
 
+pub fn controlled_warrior(state: &Session) -> Option<usize> {
+    let body = state.combat.as_ref()?.active_body()?;
+    let member = usize::try_from(body).ok()?;
+    let warrior = state.warriors.get(member)?;
+    (state.phase == Phase::Combat
+        && warrior.bytes[0x9df] != 0
+        && warrior.stamina().ok()? > 0
+        && [0x90, 0x10, 0x5e]
+            .iter()
+            .any(|offset| word(&warrior.bytes, *offset).is_ok_and(|value| value != 0)))
+    .then_some(member)
+}
+
+/// Automatic combatchoice movement; each command completes a move, an attack, or the turn.
+pub fn controlled_turn(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+    let member = controlled_warrior(state).ok_or("no controlled warrior turn")?;
+    if state
+        .exploration
+        .as_ref()
+        .is_none_or(|p| p.presentation.is_some())
+        || state
+            .combat_story
+            .as_ref()
+            .is_some_and(|s| !s.waiting_child)
+    {
+        return Err(RuleError::Refused { feedback: vec![] });
+    }
+    let combat = state.combat.as_ref().unwrap();
+    let edge_point = combat.squad.positions[member];
+    let absolute = (
+        edge_point.0 + combat.map.shift.0 + 5,
+        edge_point.1 + combat.map.shift.1 + 5,
+    );
+    if !(1..=88).contains(&absolute.0) || !(1..=88).contains(&absolute.1) {
+        return super::retreat::leave_edge(state, content, member);
+    }
+    if word(&state.warriors[member].bytes, 0x3c)? < 1
+        || word(&state.warriors[member].bytes, 0x40)? < 2
+    {
+        put_word(&mut state.warriors[member].bytes, 0x16, 1);
+        return end_turn(state, content);
+    }
+    let neighbors = neighbors(combat, &state.warriors, member as i16)?;
+    let mut target = neighbors
+        .first()
+        .copied()
+        .unwrap_or(word(&state.warriors[member].bytes, 0x18)?);
+    if !alive(combat, &state.warriors, target)
+        || !hostile(combat, &state.warriors, member as i16, target)?
+    {
+        let eligible = (0..110_i16).any(|body| {
+            alive(combat, &state.warriors, body)
+                && hostile(combat, &state.warriors, member as i16, body).unwrap_or(false)
+        });
+        if !eligible {
+            return end_turn(state, content);
+        }
+        let mut selected = None;
+        for _ in 0..10_000 {
+            let candidate = state.random.range(0, 109);
+            if alive(combat, &state.warriors, candidate)
+                && hostile(combat, &state.warriors, member as i16, candidate)?
+            {
+                selected = Some(candidate);
+                break;
+            }
+        }
+        target = selected.ok_or("automatic target selection budget exceeded")?;
+    }
+    let to = position(combat, target);
+    let from = position(combat, member as i16);
+    let fleeing = word(&state.warriors[member].bytes, 0x5e)? != 0;
+    let mut direction = (
+        (to.0 - from.0).signum() as i8,
+        (to.1 - from.1).signum() as i8,
+    );
+    if fleeing {
+        direction = (-direction.0, -direction.1);
+    }
+    put_word(&mut state.warriors[member].bytes, 0x18, target);
+    put_word(&mut state.warriors[member].bytes, 0x90, 1);
+    if !fleeing && state.warriors[member].bytes[0x9dd] != 0 {
+        match player_shoot_action(state, content, target) {
+            Ok(mut events) => {
+                events.extend(finish_player_action(state, content, member as i16)?);
+                return Ok(events);
+            }
+            Err(RuleError::Refused { .. }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    for _ in 0..21 {
+        if direction != (0, 0) {
+            let before = state.combat.as_ref().unwrap().squad.positions[member];
+            let events = super::move_controlled(state, content, direction.0, direction.1)?;
+            if state.combat.as_ref().is_none_or(|c| {
+                c.active_body() != Some(member as i16) || c.squad.positions[member] != before
+            }) || events
+                .iter()
+                .any(|e| matches!(e, Event::AttackResolved { .. }))
+            {
+                return Ok(events);
+            }
+        }
+        direction = (
+            state.random.bound(3) as i8 - 2,
+            state.random.bound(3) as i8 - 2,
+        );
+    }
+    put_word(&mut state.warriors[member].bytes, 0x16, 1);
+    end_turn(state, content)
+}
+
 pub fn player_psi(
     state: &mut Session,
     content: &Content,
     spell: i16,
     power: i16,
     target: Option<(i16, i16)>,
+    rotation: u8,
 ) -> Result<Vec<Event>, RuleError> {
     let actor = state
         .combat
@@ -1777,14 +2009,16 @@ pub fn player_psi(
     if state.psi_memory.is_none() {
         state.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
     }
-    let mut events = super::player_psi::cast(
+    let mut events = super::player_psi::cast_with_buffs(
         state.combat.as_mut().unwrap(),
         &mut state.warriors,
         mission,
         &mut state.random,
         state.psi_memory.as_mut().unwrap(),
+        &mut state.party_buffs,
         state.psi_disabled,
         super::player_psi::CastRequest {
+            rotation,
             spell,
             power,
             target,
@@ -1824,7 +2058,10 @@ fn medical_turn(state: &Session) -> Result<usize, RuleError> {
         .ok_or_else(|| RuleError::Invalid("medical aid requires an active warrior".into()))
 }
 
-fn refresh_active_item_context(state: &mut Session, content: &Content) -> Result<(), RuleError> {
+pub(crate) fn refresh_active_item_context(
+    state: &mut Session,
+    content: &Content,
+) -> Result<(), RuleError> {
     let Some(body) = state.combat.as_ref().and_then(Combat::active_body) else {
         return Ok(());
     };
@@ -1936,7 +2173,7 @@ pub fn begin_medical_item(
     state.selected_warrior = warrior;
     state.loaded_item_field32 = Some(result.loaded_item_field32);
     state.attack_count = result.count;
-    state.ammunition_work.weapon = Some(crate::ammunition::definition(content, 700)?);
+    state.ammunition_work.weapon = Some(crate::ammunition::definition(content, selected.id())?);
     state.ammunition_work.ammo = Some(crate::ammunition::definition(content, 0)?);
     state.party_mask.fill(0);
     let mut health =
@@ -1951,7 +2188,7 @@ pub fn begin_medical_item(
     state.medical_continuation = Some(crate::MedicalContinuation {
         origin: crate::MedicalOrigin::OwnedNeedle,
         actor: warrior,
-        item: 700,
+        item: selected.id(),
         spell: 1401,
         power: result.count,
     });
@@ -1965,20 +2202,10 @@ pub fn begin_learned_heal(
     power: i16,
 ) -> Result<Vec<Event>, RuleError> {
     let actor = medical_turn(state)?;
-    if state
-        .health_context
-        .as_ref()
-        .is_some_and(|health| health.marks_affected)
-    {
-        return Err(RuleError::Unsupported {
-            action: "combat.learned_portrait_heal",
-            dependency: "affected-target marking during prepared Heal",
-        });
-    }
     if state.psi_menu_choices[actor]
         .as_ref()
         .is_some_and(|choice| {
-            choice.row > 6 || choice.column > 6 || !(1..=4).contains(&choice.power)
+            choice.row > 6 || choice.column > 6 || !(1..=7).contains(&choice.power)
         })
     {
         return Err(RuleError::Unsupported {
@@ -2076,6 +2303,20 @@ pub fn select_medical_target(
     state.medical_continuation = None;
     state.party_mask.fill(0);
     let mut events = resolution.events;
+    if let Some(health) = state.health_context.as_mut() {
+        health.unavailable = state.combat.as_ref().unwrap().unavailable;
+        if health.marks_affected {
+            for event in &events {
+                if let Event::SpellResolved { target, damage, .. } = event
+                    && *damage < 0
+                    && (0..state.warriors.len() as i16).contains(target)
+                    && word(&state.warriors[*target as usize].bytes, 0x50)? > -10
+                {
+                    health.affected[*target as usize] = -1;
+                }
+            }
+        }
+    }
     match resolution.follow_up {
         super::medical::FollowUp::FinishPlayerAction => {
             events.extend(finish_player_action(state, content, pending.actor as i16)?);
@@ -2106,7 +2347,11 @@ pub fn party_psi(
         ));
     }
     let mission = content
-        .map(state.exploration.as_ref().unwrap().map)
+        .map_at(
+            state.mission.as_deref(),
+            state.scenario_level,
+            state.exploration.as_ref().unwrap().map,
+        )
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
     if state.psi_memory.is_none() {
         state.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
@@ -2124,10 +2369,16 @@ pub fn party_psi(
             power,
         },
     )?;
+    if let Some(duration) = result.scenario_duration {
+        super::party_buffs::extend_scenario_tail(state, duration)?;
+    }
     state.warriors = result.warriors;
-    state.psi_memory = Some(result.memory);
+    let memory = result.memory;
     state.party_buffs = result.buffs;
-    state.attack_packet = Some(result.packet);
+    let packet = result.packet;
+    state.attack_packet = Some(packet.clone());
+    state.party_mask.fill(0);
+
     state.attack_identity = Some(result.identity);
     state.attack_count = result.count;
     state.psi_menu_choices[warrior] = Some(crate::PsiMenuChoice {
@@ -2135,7 +2386,35 @@ pub fn party_psi(
         column: result.identity[2] as u8,
         power,
     });
-    Ok(result.events)
+    let selection_limit = if packet[1] == 0 { power } else { 1 };
+    if matches!(packet[1], 0 | 1) && selection_limit < state.warriors.len() as i16 {
+        state.outdoor_psi = Some(crate::outdoor_psi::Selection {
+            actor: warrior,
+            spell,
+            power,
+            item: None,
+            remaining: if packet[1] == 0 {
+                power.min(state.warriors.len() as i16)
+            } else {
+                1
+            },
+        });
+        return Ok(vec![]);
+    }
+    state.party_mask[..state.warriors.len()].fill(1);
+    state.psi_memory = Some(memory);
+    let mut events = result.events;
+    if packet[1] != 7 {
+        events.extend(crate::story_spell::resolve_outdoors(
+            state,
+            &packet,
+            spell,
+            power,
+            warrior,
+            matches!(packet[1], 3 | 9) || (packet[1] == 0 && power > state.warriors.len() as i16),
+        )?);
+    }
+    Ok(events)
 }
 
 pub fn fit_ammunition(
@@ -2163,7 +2442,15 @@ pub fn fit_ammunition(
         .get(slot)
         .cloned()
         .ok_or_else(|| RuleError::Invalid("ammunition fitting slot missing".into()))?;
-    if matches!(item.id(), 1 | 2 | 38 | 165) {
+    if matches!(
+        word(&crate::ammunition::definition(content, item.id())?, 26)?,
+        2 | 15 | 20
+    ) {
+        if item.0[10] == 20 && state.phase == Phase::Combat {
+            return Err(RuleError::Refused {
+                feedback: vec![crate::feedback::NativeFeedback::Silent],
+            });
+        }
         let reserve_index = usize::try_from(ammunition.wrapping_sub(200))
             .map_err(|_| RuleError::Invalid("ammunition outside reserve table".into()))?;
         let quality = state
@@ -2252,6 +2539,21 @@ pub fn player_shoot(
     content: &Content,
     target: i16,
 ) -> Result<Vec<Event>, RuleError> {
+    match super::shooting::select(state, content, target) {
+        Err(RuleError::Refused { feedback }) => Ok(if feedback.is_empty() {
+            vec![Event::Feedback(crate::feedback::NativeFeedback::Silent)]
+        } else {
+            feedback.into_iter().map(Event::Feedback).collect()
+        }),
+        result => result,
+    }
+}
+
+pub fn player_shoot_immediate(
+    state: &mut Session,
+    content: &Content,
+    target: i16,
+) -> Result<Vec<Event>, RuleError> {
     let body = state
         .combat
         .as_ref()
@@ -2259,9 +2561,18 @@ pub fn player_shoot(
         .filter(|body| (0..6).contains(body))
         .ok_or_else(|| RuleError::Invalid("active warrior missing".into()))?;
     let refresh_health = word(&state.warriors[body as usize].bytes, 0xe4)? == 165;
-    let mut events = player_shoot_action(state, content, target)?;
-    events.insert(0, Event::Sound { resource_id: 145 });
-    events.extend(finish_player_action(state, content, body)?);
+    let events = match player_shoot_action(state, content, target) {
+        Ok(mut events) => {
+            events.insert(0, Event::Sound { resource_id: 145 });
+            events.extend(finish_player_action(state, content, body)?);
+            events
+        }
+        Err(RuleError::Refused { feedback }) if feedback.is_empty() => {
+            vec![Event::Feedback(crate::feedback::NativeFeedback::Silent)]
+        }
+        Err(RuleError::Refused { feedback }) => feedback.into_iter().map(Event::Feedback).collect(),
+        Err(error) => return Err(error),
+    };
     if refresh_health && state.combat.as_ref().and_then(Combat::active_body) != Some(body) {
         refresh_active_item_context(state, content)?;
     }
@@ -2273,51 +2584,64 @@ pub fn player_shoot_action(
     content: &Content,
     target: i16,
 ) -> Result<Vec<Event>, RuleError> {
-    let c = state
-        .combat
-        .as_mut()
-        .ok_or_else(|| RuleError::Invalid("combat missing".into()))?;
-    let body = c
-        .active_body()
-        .ok_or_else(|| RuleError::Invalid("active warrior missing".into()))?;
-    if !(0..6).contains(&body)
-        || target < 10
-        || !alive(c, &state.warriors, target)
-        || !hostile(c, &state.warriors, body, target)?
-    {
-        return Err(RuleError::Invalid("select a living hostile enemy".into()));
-    }
-    let mission = content
-        .map(
-            state
-                .exploration
-                .as_ref()
-                .map_or(0, |position| position.map),
-        )
-        .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
-    let attacks = &mission
+    player_shoot_targets_action(state, content, &[target], false)
+}
+
+pub(crate) fn player_shoot_targets_action(
+    state: &mut Session,
+    content: &Content,
+    targets: &[i16],
+    paid: bool,
+) -> Result<Vec<Event>, RuleError> {
+    player_shoot_action_at(state, content, targets, paid, None)
+}
+
+pub(crate) fn player_shoot_at_action(
+    state: &mut Session,
+    content: &Content,
+    center: (i16, i16),
+) -> Result<Vec<Event>, RuleError> {
+    let body = state
         .combat
         .as_ref()
-        .ok_or_else(|| RuleError::Invalid("combat content missing".into()))?
-        .attacks;
-    let warrior = &state.warriors[body as usize];
-    let weapon_id = word(&warrior.bytes, 0xe4)?;
-    let ammunition_id = warrior
-        .inventory()?
-        .iter()
-        .find(|item| item.id() == weapon_id && item.0[9] == 1)
-        .map(|item| word(&item.0, 4))
-        .transpose()?
-        .ok_or_else(|| RuleError::Invalid("equipped firearm absent from inventory".into()))?;
-    let weapon = content
-        .items
-        .get(weapon_id.unsigned_abs() as usize)
-        .ok_or_else(|| RuleError::Invalid("firearm definition missing".into()))?;
-    let ammunition = content
-        .items
-        .get(ammunition_id.unsigned_abs() as usize)
-        .ok_or_else(|| RuleError::Invalid("ammunition definition missing".into()))?;
-    let prepared = firearm::prepare(warrior, weapon, ammunition, attacks)?;
+        .and_then(Combat::active_body)
+        .ok_or("active warrior missing")?;
+    player_shoot_action_at(state, content, &[body], false, Some(center))
+}
+
+fn player_shoot_action_at(
+    state: &mut Session,
+    content: &Content,
+    targets: &[i16],
+    paid: bool,
+    center: Option<(i16, i16)>,
+) -> Result<Vec<Event>, RuleError> {
+    let mut prepared = super::shooting::prepare(state, content)?;
+    if targets.is_empty()
+        || targets.len()
+            > if prepared.packet[1] == 0 {
+                prepared.shots.max(1) as usize
+            } else {
+                1
+            }
+    {
+        return Err(RuleError::Invalid("invalid firearm target count".into()));
+    }
+    if let Some(location) = center {
+        super::shooting::admit_location(state, content, location, &prepared)?;
+    } else {
+        for &target in targets {
+            super::shooting::admit(state, content, target, &prepared, paid)?;
+        }
+    }
+    let c = state.combat.as_mut().unwrap();
+    c.inactive_rounds = 0;
+    let body = c.active_body().unwrap();
+    let w = &mut state.warriors[body as usize].bytes;
+    let weapon_id = word(w, 0xe4)?;
+    let weapon = &content.items[weapon_id.unsigned_abs() as usize];
+    let ammunition =
+        &content.items[word(w, 0x132 + 22 * prepared.slot + 4)?.unsigned_abs() as usize];
     c.weapon_work.prepare(weapon, ammunition)?;
     state.ammunition_work.prepare_pair(weapon, ammunition)?;
     state.ammunition_work.item = Some(crate::ammunition::definition(content, weapon_id)?);
@@ -2325,84 +2649,124 @@ pub fn player_shoot_action(
     state.attack_count = prepared.shots;
     c.attack_packet = Some(prepared.packet.clone());
     c.attack_identity = Some(spell_identity(word(weapon, 44)?));
-    if prepared.shots != 1 {
-        return Err(RuleError::Unsupported {
-            action: "combat.shoot",
-            dependency: "multiple-shot targeting",
-        });
+    if !paid {
+        let rounds = prepared.rounds.wrapping_mul(targets.len() as i16);
+        let slot = 0x134 + 22 * prepared.slot;
+        if word(w, slot)? < rounds {
+            return Err(refusal(crate::feedback::CombatRefusal::NotEnoughAmmo));
+        }
+        let loaded = word(w, slot)?.wrapping_sub(rounds);
+        put_word(w, slot, loaded);
+        let weight = word(w, 0x9d6)?.wrapping_sub(rounds.wrapping_mul(prepared.weight));
+        put_word(w, 0x9d6, weight);
     }
-    let start = position(c, body);
-    let end = position(c, target);
-    let dx = f32::from(start.0 - end.0);
-    let dy = f32::from(start.1 - end.1);
-    let distance = (dx * dx + dy * dy).sqrt().trunc() as i16;
-    let range = super::player_psi::range(&prepared.packet, prepared.shots)?;
-    if distance > range || !lifecycle::can_see(c, mission, start, end, 0)? {
-        return Err(RuleError::Invalid(
-            "enemy is outside firearm range or line of sight".into(),
-        ));
-    }
-    let w = &mut state.warriors[body as usize].bytes;
-    let slot = 0x132 + 22 * prepared.slot;
-    if word(w, 0x40)? < 2 {
-        return Err(RuleError::Invalid(
-            "firing requires two action points".into(),
-        ));
-    }
-    if word(w, slot + 2)? < prepared.rounds {
-        return Err(RuleError::Invalid(
-            "firearm empty; reload or select fists".into(),
-        ));
-    }
-    let loaded = word(w, slot + 2)?.wrapping_sub(prepared.rounds);
-    let weight = word(w, 0x9d6)?.wrapping_sub(prepared.rounds.wrapping_mul(prepared.weight));
     let actions = word(w, 0x40)?.wrapping_sub(2);
     let movement = word(w, 0x3c)?.wrapping_sub(3).max(0);
-    put_word(w, slot + 2, loaded);
-    put_word(w, 0x9d6, weight);
     put_word(w, 0x40, actions);
     put_word(w, 0x3c, movement);
-    let result = firearm::resolve(
-        &mut state.warriors[body as usize],
-        &mut c.enemies.records[(target - 10) as usize],
-        &prepared,
-        &mut state.random,
-        c.difficulty,
-    )?;
-    if result.killed {
-        lifecycle::kill_body(c, &mut state.warriors, target)?;
-        if weapon_id == 165
-            && let Some(health) = state.health_context.as_mut()
-        {
-            health.last_body = target;
-        }
+    if prepared.packet[1] == 0 {
+        prepared.shots = 1;
     }
-    let mut events = vec![Event::Sound {
-        resource_id: word(&prepared.packet, 36)?,
-    }];
-    events.extend(
-        result
-            .sounds
-            .into_iter()
-            .map(|resource_id| Event::Sound { resource_id }),
-    );
-    if result.killed && weapon_id == 165 {
-        let sound = word(&c.enemies.records[(target - 10) as usize].bytes, 0x6a)?;
-        if sound != 0 {
-            events.push(Event::Sound { resource_id: sound });
+    let mut events = vec![];
+    let mission = content
+        .map(state.exploration.as_ref().map_or(0, |p| p.map))
+        .unwrap();
+    for &selected in targets {
+        if !alive(c, &state.warriors, selected) {
+            continue;
         }
-    }
-    if result.damage != 0 && !result.killed && prepared.packet[19] == 9 {
+        let mut mask = [0_i16; 110];
+        if prepared.packet[1] < 2 {
+            mask[selected as usize] = 1;
+        } else {
+            let center = center.unwrap_or_else(|| position(c, selected));
+            let target = super::spells::SpellTarget {
+                first: center.0 + c.map.shift.0 + 5,
+                second: center.1 + c.map.shift.1 + 5,
+                kind: 3,
+            };
+            let resolved = super::spells::target_mask(
+                c,
+                &state.warriors,
+                &mission.areas,
+                &target,
+                &super::spells::SpellContext {
+                    packet: &prepared.packet,
+                    id: word(weapon, 44)?,
+                    count: prepared.shots,
+                    caster: body,
+                    initiative: c.cursor as i16,
+                    collision: false,
+                },
+                &c.spell_fields,
+                &mut state.random,
+            )?;
+            mask = resolved.mask;
+            c.spell_fields = resolved.fields;
+        }
         events.push(Event::Sound {
-            resource_id: word(&prepared.packet, 38)?,
+            resource_id: word(&prepared.packet, 36)?,
         });
+        state.random.range(
+            i16::from(prepared.packet[13] as i8),
+            i16::from(prepared.packet[14] as i8),
+        );
+        for (target, flag) in mask.iter().enumerate() {
+            if *flag <= 0 {
+                continue;
+            }
+            let target = target as i16;
+            let result = if target < 10 {
+                let attacker = state.warriors[body as usize].clone();
+                firearm::resolve_friendly_after_duration(
+                    &attacker,
+                    &mut state.warriors[target as usize],
+                    &prepared,
+                    &mut state.random,
+                    c.difficulty,
+                )?
+            } else {
+                firearm::resolve_after_duration(
+                    &mut state.warriors[body as usize],
+                    &mut c.enemies.records[(target - 10) as usize],
+                    &prepared,
+                    &mut state.random,
+                    c.difficulty,
+                )?
+            };
+            if result.killed {
+                lifecycle::kill_body(c, &mut state.warriors, target)?;
+                if weapon_id == 165
+                    && let Some(health) = state.health_context.as_mut()
+                {
+                    health.last_body = target;
+                }
+            }
+            events.extend(
+                result
+                    .sounds
+                    .into_iter()
+                    .map(|resource_id| Event::Sound { resource_id }),
+            );
+            if result.killed && weapon_id == 165 && target >= 10 {
+                let sound = word(&c.enemies.records[(target - 10) as usize].bytes, 0x6a)?;
+                if sound != 0 {
+                    events.push(Event::Sound { resource_id: sound });
+                }
+            }
+            if result.damage != 0 && !result.killed && prepared.packet[19] == 9 {
+                events.push(Event::Sound {
+                    resource_id: word(&prepared.packet, 38)?,
+                });
+            }
+            events.push(Event::AttackResolved {
+                attacker: body,
+                target,
+                damage: result.damage,
+                defeated: result.killed,
+            });
+        }
     }
-    events.push(Event::AttackResolved {
-        attacker: body,
-        target,
-        damage: result.damage,
-        defeated: result.killed,
-    });
     Ok(events)
 }
 pub fn initialize_active_turn(
@@ -2418,12 +2782,10 @@ pub fn initialize_active_turn(
         .combat
         .as_ref()
         .ok_or_else(|| RuleError::Invalid("combat tables missing".into()))?;
-    if body >= 10
-        && matches!(
-            word(&c.enemies.records[(body - 10) as usize].bytes, 0x5e)?,
-            276 | 277 | 345
-        )
-    {
+    if body >= 10 {
+        c.selected_enemy = (body - 10) as usize;
+    }
+    if body >= 10 && word(&c.enemies.records[(body - 10) as usize].bytes, 0x5e)? != 0 {
         let turn = super::final_turn_stories::initialize(
             c,
             w,
@@ -2451,27 +2813,57 @@ pub fn initialize_active_turn(
         return Ok((events, turn.skipped_turn));
     }
     initialize_turn(body, w, &mut c.enemies.records, &tables.race_moves, random)?;
-    Ok((vec![], false))
+    let skipped = body >= 10 && c.enemies.records[(body - 10) as usize].bytes[0xb3] != 0;
+    Ok((vec![], skipped))
 }
 
 pub fn end_turn(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+    select_turn(state, content, true)
+}
+
+fn select_turn(
+    state: &mut Session,
+    content: &Content,
+    advance: bool,
+) -> Result<Vec<Event>, RuleError> {
+    select_turn_bounded(state, content, advance, 2)
+}
+
+pub(crate) fn resume_selection(
+    state: &mut Session,
+    content: &Content,
+) -> Result<Vec<Event>, RuleError> {
+    let combat = state.combat.as_mut().ok_or("combat selection missing")?;
+    if !combat.selection_pending {
+        return Err(RuleError::Invalid("combat selection is not pending".into()));
+    }
+    combat.selection_pending = false;
+    select_turn_bounded(state, content, false, 2)
+}
+
+fn select_turn_bounded(
+    state: &mut Session,
+    content: &Content,
+    mut advance: bool,
+    remaining_wraps: u8,
+) -> Result<Vec<Event>, RuleError> {
     let mut events = vec![];
-    state.party_mask.fill(0);
-    state.bandage_ready = Some(1);
+    if advance {
+        state.party_mask.fill(0);
+        state.bandage_ready = Some(1);
+    }
     let c = state
         .combat
         .as_mut()
         .ok_or_else(|| RuleError::Invalid("combat missing".into()))?;
-    if let Some(packet) = c.attack_packet.as_mut() {
+    if advance && let Some(packet) = c.attack_packet.as_mut() {
         packet[19] = 0;
     }
     if !state.warriors.iter().any(|w| w.bytes[0x9df] != 0) {
-        return Err(RuleError::Unsupported {
-            action: "combat.exit",
-            dependency: "defeat rewards and exit cleanup",
-        });
+        return Ok(crate::mission::defeat(state, content));
     }
-    if let Some(body) = c.active_body()
+    if advance
+        && let Some(body) = c.active_body()
         && body < 10
     {
         let w = &mut state.warriors[body as usize].bytes;
@@ -2480,72 +2872,29 @@ pub fn end_turn(state: &mut Session, content: &Content) -> Result<Vec<Event>, Ru
         }
     }
     for _ in 0..220 {
-        c.cursor += 1;
-        c.spell_fields = super::spells::tick_fields(&c.spell_fields, c.cursor as i16)?;
-        c.field_used = super::spells::reset_used(&c.field_used)?;
+        if advance {
+            c.cursor += 1;
+            c.spell_fields = super::spells::tick_fields(&c.spell_fields, c.cursor as i16)?;
+            c.field_used = super::spells::reset_used(&c.field_used)?;
+            if c.death_queue.count > 0
+                || c.enemies.records.iter().all(|record| {
+                    record.stamina().unwrap_or(0) <= 0 || word(&record.bytes, 14).unwrap_or(1) == 0
+                })
+            {
+                let actor = c.active_body().unwrap_or(0);
+                events.extend(finish_action(state, content, actor, true)?);
+                return Ok(events);
+            }
+        }
+        advance = true;
         if c.cursor == 110 {
-            c.cursor = 0;
+            if remaining_wraps == 0 {
+                c.selection_pending = true;
+                return Ok(events);
+            }
             c.round = c.round.wrapping_add(1);
-            let mission = content
-                .map(state.exploration.as_ref().unwrap().map)
-                .ok_or_else(|| RuleError::Invalid("combat map missing".into()))?;
-            let tables = mission.combat.as_ref().unwrap();
-            let mut scripts = c.round_scripts.clone();
-            let story = super::round_stories::advance(
-                c,
-                &mut scripts,
-                mission,
-                &tables.monsters,
-                &tables.encounters,
-                0,
-                &mut state.random,
-            )?;
-            c.round_scripts = scripts;
-            for effect in story.effects {
-                use super::round_stories::RoundEffect;
-                events.push(match effect {
-                    RoundEffect::Sound(resource_id) => Event::Sound { resource_id },
-                    RoundEffect::Text(id) => Event::Message {
-                        id,
-                        text: mission.dialogue(id)?,
-                    },
-                    RoundEffect::Spawn { body, monster } => Event::CombatantAdded {
-                        body,
-                        definition: monster,
-                    },
-                });
-            }
-            super::party_buffs::reduce(&mut state.party_buffs)?;
-            let outcome = reduce_round_with_fields(
-                c,
-                &mut state.warriors,
-                &mut state.random,
-                Some(mission),
-                &mut state.attack_count,
-                &mut state.party_mask,
-                RoundContext {
-                    audio: true,
-                    selected_warrior: state.selected_warrior,
-                },
-            )?;
-            if let Some(body) = outcome.last_defeated_body
-                && let Some(health) = state.health_context.as_mut()
-            {
-                health.last_body = body;
-            }
-            events.extend(outcome.events);
-            if state
-                .warriors
-                .iter()
-                .any(|warrior| warrior.bytes[0x9de] != 0)
-            {
-                events.push(Event::Sound { resource_id: 10122 });
-            }
-            events.extend([
-                Event::Sound { resource_id: -139 },
-                Event::Sound { resource_id: -139 },
-                Event::Sound { resource_id: -139 },
-            ]);
+            events.extend(advance_round(state, content, remaining_wraps - 1)?);
+            return Ok(events);
         }
         let Some(body) = c.active_body() else {
             continue;
@@ -2586,6 +2935,231 @@ pub fn end_turn(state: &mut Session, content: &Content) -> Result<Vec<Event>, Ru
     }
     Err(RuleError::Invalid("no active combatant".into()))
 }
+fn advance_round(
+    state: &mut Session,
+    content: &Content,
+    remaining_wraps: u8,
+) -> Result<Vec<Event>, RuleError> {
+    let mission = state
+        .map(
+            content,
+            state.exploration.as_ref().ok_or("round map missing")?.map,
+        )
+        .ok_or("round content missing")?;
+    let tables = mission.combat.as_ref().ok_or("round tables missing")?;
+    let c = state.combat.as_mut().ok_or("round combat missing")?;
+    let mut scripts = c.round_scripts.clone();
+    let outcome = super::round_stories::advance(
+        c,
+        &mut scripts,
+        mission,
+        &tables.monsters,
+        &tables.encounters,
+        super::round_stories::RoundCaller {
+            active_enemy: c.script_enemy,
+            last_defeated: state.health_context.as_ref().map(|health| health.last_body),
+        },
+        &mut state.random,
+    )?;
+    let paused = scripts.pending.is_some();
+    c.round_scripts = scripts;
+    let mut events = vec![];
+    for effect in outcome.effects {
+        use super::round_stories::RoundEffect;
+        match effect {
+            RoundEffect::Sound(resource_id) => events.push(Event::Sound { resource_id }),
+            RoundEffect::Text(id) => {
+                state.exploration.as_mut().unwrap().presentation = Some(Presentation::Dialogue {
+                    id,
+                    text: crate::exploration::dialogue(mission, &state.warriors, id)?,
+                });
+                events.push(Event::StoryPresented);
+            }
+            RoundEffect::Spawn { body, monster } => events.push(Event::CombatantAdded {
+                body,
+                definition: monster,
+            }),
+            RoundEffect::Removed(body) => events.push(Event::CombatantRemoved { body }),
+            RoundEffect::Dispatch { script, cursor } => {
+                let position = state.exploration.as_mut().ok_or("round map missing")?;
+                state.round_dispatch = Some(super::round_stories::RoundDispatch {
+                    suspended_script: position.script.take(),
+                });
+                position.script = Some(ScriptState {
+                    record: mission.script(script)?.to_vec(),
+                    cursor,
+                    map_slot: 0,
+                    item_return: false,
+                    scheduled: true,
+                    menu: None,
+                    persist: false,
+                    origin: None,
+                });
+                events.extend(crate::exploration::run_script(state, content)?);
+                return Ok(events);
+            }
+        }
+    }
+    if paused {
+        return Ok(events);
+    }
+    events.extend(reduce_and_resume_round(state, content, remaining_wraps)?);
+    Ok(events)
+}
+
+pub(crate) fn continue_round(
+    state: &mut Session,
+    content: &Content,
+) -> Result<Vec<Event>, RuleError> {
+    let program = state
+        .combat
+        .as_mut()
+        .and_then(|c| c.round_scripts.pending.as_mut())
+        .ok_or("round continuation missing")?;
+    let id = program.text.take().ok_or("round dialogue missing")?;
+    if !matches!(state.exploration.as_ref().and_then(|p| p.presentation.as_ref()), Some(Presentation::Dialogue { id: current, .. }) if *current == id)
+    {
+        return Err(RuleError::Invalid(
+            "round continuation has no matching dialogue".into(),
+        ));
+    }
+    state.exploration.as_mut().unwrap().presentation = None;
+    advance_round(state, content, 2)
+}
+
+pub(crate) fn finish_round_dispatch(
+    state: &mut Session,
+    content: &Content,
+) -> Result<Vec<Event>, RuleError> {
+    let frame = state
+        .round_dispatch
+        .take()
+        .ok_or("round dispatch missing")?;
+    state
+        .exploration
+        .as_mut()
+        .ok_or("round map missing")?
+        .script = frame.suspended_script;
+    if let Some(arena) = state.combat.as_mut() {
+        let program = arena
+            .round_scripts
+            .pending
+            .as_mut()
+            .ok_or("round program missing")?;
+        program.delegated = false;
+        program.cursor = 8;
+        return advance_round(state, content, 2);
+    }
+    state.scripted_cleanup = None;
+    state.battle_after_message = 0;
+    state.battle_treasure = 0;
+    state.battle_group_script = None;
+    if let Some(start) = state.battle_npc.take() {
+        let script = state
+            .exploration
+            .as_mut()
+            .unwrap()
+            .script
+            .as_mut()
+            .ok_or("cleanup caller script missing")?;
+        script.cursor = start
+            .restore(&mut script.record, false)?
+            .ok_or("cleanup caller cursor missing")? as u8;
+        crate::story_npc_battle::finish(
+            crate::story_npc_battle::NpcBattleReturn::Reward,
+            &mut state.warriors,
+            [0; 2],
+        )?;
+    }
+    let mut events = vec![Event::BattleEnded { victory: false }];
+    if state
+        .combat_story
+        .as_ref()
+        .is_some_and(|story| story.waiting_child)
+    {
+        state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
+        events.push(Event::StoryPresented);
+    } else if state
+        .exploration
+        .as_ref()
+        .is_some_and(|p| p.script.is_some())
+    {
+        events.extend(crate::exploration::run_script(state, content)?);
+    }
+    Ok(events)
+}
+
+fn reduce_and_resume_round(
+    state: &mut Session,
+    content: &Content,
+    remaining_wraps: u8,
+) -> Result<Vec<Event>, RuleError> {
+    let mission = state
+        .map(
+            content,
+            state.exploration.as_ref().ok_or("round map missing")?.map,
+        )
+        .ok_or("round content missing")?;
+    let c = state.combat.as_mut().ok_or("round combat missing")?;
+    if c.inactive_rounds == 9 {
+        return super::retreat::finish(state, content);
+    }
+    c.inactive_rounds += 1;
+    c.cursor = 0;
+    let mut events = vec![];
+    super::party_buffs::reduce(&mut state.party_buffs)?;
+    let outcome = reduce_round_with_fields(
+        c,
+        &mut state.warriors,
+        &mut state.random,
+        Some(mission),
+        &mut state.attack_count,
+        &mut state.party_mask,
+        RoundContext {
+            audio: true,
+            selected_warrior: state.selected_warrior,
+            energy_recovery_disabled: state.energy_recovery_disabled,
+        },
+    )?;
+    if let Some(body) = outcome.last_defeated_body
+        && let Some(health) = state.health_context.as_mut()
+    {
+        health.last_body = body;
+    }
+    events.extend(outcome.events);
+    if state
+        .warriors
+        .iter()
+        .any(|warrior| warrior.bytes[0x9de] != 0)
+    {
+        events.push(Event::Sound { resource_id: 10122 });
+    }
+    events.extend([
+        Event::Sound { resource_id: -139 },
+        Event::Sound { resource_id: -139 },
+    ]);
+    if !state.command_preferences.suppress_round_message_sound {
+        events.push(Event::Sound { resource_id: -139 });
+    }
+
+    if c.death_queue.count > 0
+        || c.enemies
+            .records
+            .iter()
+            .all(|m| m.stamina().unwrap_or(0) <= 0 || word(&m.bytes, 14).unwrap_or(1) == 0)
+    {
+        events.extend(finish_action(
+            state,
+            content,
+            state.selected_warrior as i16,
+            true,
+        )?);
+    } else {
+        events.extend(select_turn_bounded(state, content, false, remaining_wraps)?);
+    }
+    Ok(events)
+}
+
 pub fn reduce_round(
     c: &mut Combat,
     w: &mut [Warrior],
@@ -2601,12 +3175,14 @@ pub fn reduce_round(
         RoundContext {
             audio: false,
             selected_warrior: 0,
+            energy_recovery_disabled: 0,
         },
     )
     .map(|outcome| outcome.events)
 }
 
 struct RoundContext {
+    energy_recovery_disabled: u8,
     audio: bool,
     selected_warrior: usize,
 }
@@ -2624,15 +3200,6 @@ fn reduce_round_with_fields(
     let mut last_defeated_body = None;
     for member in 0..w.len() {
         let b = &mut w[member].bytes;
-        if [0x8a, 0x8c, 0xa2, 0xa0]
-            .iter()
-            .any(|o| word(b, *o).unwrap_or(1) != 0)
-        {
-            return Err(RuleError::Unsupported {
-                action: "combat.round",
-                dependency: "ongoing regeneration, damage or bleeding",
-            });
-        }
         let health = word(b, 0x50)?;
         if word(b, 0x66)? != 0 && health > 0 && health < word(b, 0x52)? && word(b, 0x90)? == 0 {
             let healed = health
@@ -2650,6 +3217,26 @@ fn reduce_round_with_fields(
                 last_defeated_body = Some(member as i16);
             }
         }
+        for (offset, amount, address) in [(0x8a, None, 0x401948), (0x8c, Some(2), 0x40193a)] {
+            let before = word(&w[member].bytes, 0x50)?;
+            let condition = word(&w[member].bytes, offset)?;
+            if condition != 0 && before > 0 {
+                let amount = amount.unwrap_or(condition.wrapping_abs());
+                let health = before.wrapping_sub(amount);
+                put_word(&mut w[member].bytes, 0x50, health);
+                if health < 1 {
+                    lifecycle::kill_body(c, w, member as i16)?;
+                    last_defeated_body = Some(member as i16);
+                    events.push(Event::Feedback(crate::feedback::NativeFeedback::Flash {
+                        address,
+                        x: 100,
+                        y: 30,
+                        wait: 100,
+                        sound: 10122,
+                    }));
+                }
+            }
+        }
         if let Some(tick) = super::natural_conditions::poison_tick(&w[member].bytes)? {
             put_word(&mut w[member].bytes, 0x50, tick.health);
             if tick.killed {
@@ -2658,6 +3245,11 @@ fn reduce_round_with_fields(
             }
         }
         let b = &mut w[member].bytes;
+        crate::story_reduce::energy(b, context.energy_recovery_disabled)?;
+        if word(b, 0x98)? != 0 && word(b, 0x10)? != 0 {
+            put_word(b, 0x10, 0);
+            c.unavailable = c.unavailable.wrapping_sub(1);
+        }
         for offset in (0x5e..0xae).step_by(2) {
             let value = word(b, offset)?;
             if value > 0 {
@@ -2806,12 +3398,6 @@ fn reduce_enemy_round_impl(
     let mut last_defeated_body = None;
     for index in 0..c.enemies.records.len() {
         let m = &mut c.enemies.records[index];
-        if [0xcc, 0xd4, 0xd3].iter().any(|o| m.bytes[*o] != 0) {
-            return Err(RuleError::Unsupported {
-                action: "combat.round",
-                dependency: "ongoing enemy health or psi effect",
-            });
-        }
         for o in 0xb2..0xda {
             if (m.bytes[o] as i8) > 0 {
                 m.bytes[o] -= 1;
@@ -2830,14 +3416,6 @@ fn reduce_enemy_round_impl(
             put_word(&mut c.enemies.records[index].bytes, 0x110, tick.health);
             events.push(Event::Sound { resource_id: 107 });
             if tick.killed {
-                let monster = &c.enemies.records[index].bytes;
-                if word(monster, 0x60)? != 0 || (word(monster, 0x0e)? != 0 && monster[0xb0] != 0xff)
-                {
-                    return Err(RuleError::Unsupported {
-                        action: "combat.enemy_health_round",
-                        dependency: "health-drain death script or qualifying death counter",
-                    });
-                }
                 let sound = enemy_death_sound(&c.enemies.records[index])?;
                 lifecycle::kill_body(c, w, index as i16 + 10)?;
                 last_defeated_body = Some(index as i16 + 10);
@@ -2850,20 +3428,13 @@ fn reduce_enemy_round_impl(
             c.enemies.records[index].bytes[0x105] = 1;
             events.push(Event::Sound { resource_id: 104 });
             if tick.killed {
-                let monster = &c.enemies.records[index].bytes;
-                if word(monster, 0x60)? != 0 || (word(monster, 0x0e)? != 0 && monster[0xb0] != 0xff)
-                {
-                    return Err(RuleError::Unsupported {
-                        action: "combat.enemy_health_round",
-                        dependency: "poison death script or qualifying death counter",
-                    });
-                }
                 let sound = enemy_death_sound(&c.enemies.records[index])?;
                 lifecycle::kill_body(c, w, index as i16 + 10)?;
                 last_defeated_body = Some(index as i16 + 10);
                 events.push(Event::Sound { resource_id: sound });
             }
         }
+        super::natural_conditions::reduce_enemy_psi(&mut c.enemies.records[index].bytes)?;
         c.field_used = super::spells::reset_used(&c.field_used)?;
         if word(&c.enemies.records[index].bytes, 0x110)? > 0 {
             if let Some(mission) = mission {
@@ -3010,7 +3581,7 @@ fn collide_fields_impl(
             initiative: c.cursor as i16,
             collision: true,
         };
-        let mask = super::spells::target_mask(
+        let mask = super::spells::target_mask_rotated(
             c,
             w,
             &mission.areas,
@@ -3018,6 +3589,7 @@ fn collide_fields_impl(
             &context,
             &c.spell_fields,
             random,
+            collision.rotation,
         )?;
         party_mask.copy_from_slice(&mask.mask[..6]);
         let previous_hp = w
@@ -3187,19 +3759,37 @@ pub fn victory_loot(
     Ok((share, loot))
 }
 fn finish_victory(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
-    let combat = state
-        .combat
-        .as_ref()
-        .ok_or_else(|| RuleError::Invalid("combat missing".into()))?;
-    if combat.enemies.records.iter().any(|record| {
-        word(&record.bytes, 0x110).unwrap_or(0) > 0
-            && word(&record.bytes, 0xe).unwrap_or(1) == 0
-            && word(&record.bytes, 0x5a).unwrap_or(0) != 0
-    }) {
-        state.exploration.as_mut().unwrap().presentation = Some(Presentation::Survivors);
-        return Ok(vec![Event::StoryPresented]);
+    if let Some(events) = begin_survivors(state)? {
+        return Ok(events);
     }
     confirm_survivors(state, content)
+}
+
+pub(crate) fn begin_survivors(state: &mut Session) -> Result<Option<Vec<Event>>, RuleError> {
+    if state.suppress_allies != 0 {
+        return Ok(None);
+    }
+    let records = &mut state
+        .combat
+        .as_mut()
+        .ok_or("survivor roster missing")?
+        .enemies
+        .records;
+    state.survivors = super::allies::prepare_survivors(records)?;
+    if state.survivors.is_none() {
+        return Ok(None);
+    }
+    state
+        .exploration
+        .as_mut()
+        .ok_or("survivor map missing")?
+        .presentation = Some(Presentation::Survivors);
+    Ok(Some(vec![
+        Event::Sound {
+            resource_id: 29999_i16.wrapping_add(state.random.bound(4)),
+        },
+        Event::StoryPresented,
+    ]))
 }
 
 pub fn confirm_survivors(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
@@ -3207,12 +3797,28 @@ pub fn confirm_survivors(state: &mut Session, content: &Content) -> Result<Vec<E
         .combat
         .as_mut()
         .ok_or_else(|| RuleError::Invalid("combat missing".into()))?;
-    let synchronization = super::allies::synchronize(
-        &state.allies,
-        state.ally_count,
-        &mut combat.enemies.records,
-        &mut state.random,
-    )?;
+    let synchronization = if let Some(selection) = state.survivors.take() {
+        super::allies::commit_survivors(
+            &state.allies,
+            state.ally_count,
+            &mut combat.enemies.records,
+            Some(&selection),
+        )?
+    } else if state.suppress_allies != 0 {
+        super::allies::AllySynchronization {
+            menu: state.allies.clone(),
+            count: state.ally_count,
+            modal: false,
+            sounds: vec![],
+        }
+    } else {
+        super::allies::synchronize(
+            &state.allies,
+            state.ally_count,
+            &mut combat.enemies.records,
+            &mut state.random,
+        )?
+    };
     state.allies = synchronization.menu;
     state.ally_count = synchronization.count;
     let mut events: Vec<_> = synchronization
@@ -3245,6 +3851,7 @@ pub fn confirm_survivors(state: &mut Session, content: &Content) -> Result<Vec<E
         state.loaded_item_field32 = Some(state.ammunition_work.load_item(content, id)?);
     }
     state.warriors = rewards.warriors;
+    state.inventory_record = None;
     combat.enemies.records = rewards.enemies;
     state.party_currency = rewards.currency;
     let needs_promotion = state.warriors.iter().any(|warrior| {
@@ -3278,6 +3885,8 @@ pub fn confirm_survivors(state: &mut Session, content: &Content) -> Result<Vec<E
         health.effect = packet[18] as i8;
     }
     state.health_context = Some(health);
+    state.selected_enemy = combat.selected_enemy;
+    state.script_enemy = combat.script_enemy;
     state.combat = None;
     if !state
         .combat_story
@@ -3294,8 +3903,34 @@ pub fn confirm_survivors(state: &mut Session, content: &Content) -> Result<Vec<E
     Ok(events)
 }
 
-fn finish_battle_wrapper(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+pub(crate) fn refit_after_combat(
+    state: &mut Session,
+    content: &Content,
+) -> Result<Vec<Event>, RuleError> {
     let mut events = vec![];
+    if state.command_preferences.auto_refit {
+        for member in 0..state.warriors.len() {
+            let result = crate::ammunition::refit(
+                &state.warriors[member],
+                &state.ammunition,
+                content,
+                crate::ammunition::RefitFlags {
+                    in_combat: false,
+                    force: false,
+                    silent: true,
+                    warnings: false,
+                },
+                &state.ammunition_work,
+                &mut state.random,
+            )?;
+            events.extend(crate::ammunition::commit_result(state, member, result)?);
+        }
+    }
+    Ok(events)
+}
+
+fn finish_battle_wrapper(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+    let mut events = refit_after_combat(state, content)?;
     if state.battle_npc.take().is_some() {
         crate::story_npc_battle::finish(
             crate::story_npc_battle::NpcBattleReturn::Reward,
@@ -3368,6 +4003,8 @@ pub struct DeathStory {
     pub cursor: usize,
     pub actor: i16,
     #[serde(default)]
+    pub resume_turn: bool,
+    #[serde(default)]
     pub entry: super::death_scripts::DeathEntry,
     #[serde(default)]
     pub waiting_child: bool,
@@ -3379,13 +4016,75 @@ pub struct DeathStory {
     pub outer_group: Option<i16>,
     #[serde(default)]
     pub outer_npc: Option<crate::story_npc_battle::NpcBattleStart>,
+    #[serde(default)]
+    pub shared_dispatch: bool,
+    #[serde(default)]
+    pub suspended_script: Option<ScriptState>,
+    #[serde(default)]
+    pub parent: Option<Box<DeathStory>>,
 }
 
-fn finish_player_action(
+impl DeathStory {
+    pub(crate) fn validate(&self, state: &Session, content: &Content) -> Result<(), RuleError> {
+        let map = state
+            .map(content, state.exploration.as_ref().map_or(0, |p| p.map))
+            .ok_or("combat story map unavailable")?;
+        let mut current = Some(self);
+        let mut depth = 0;
+        while let Some(story) = current {
+            depth += 1;
+            if depth > 32
+                || story.cursor > 8
+                || !(0..110).contains(&story.actor)
+                || story.body >= 100
+                || map.script(story.script).is_err()
+                || (depth > 1 && !story.waiting_child)
+                || (state.phase != Phase::Combat && !story.waiting_child)
+            {
+                return Err(RuleError::Invalid(
+                    "invalid combat story continuation".into(),
+                ));
+            }
+            if let Some(script) = &story.suspended_script
+                && (!story.shared_dispatch
+                    || script.record.len() != 42
+                    || script.cursor > 8
+                    || script.map_slot >= 100
+                    || script.menu.as_ref().is_some_and(|menu| {
+                        menu.original.len() != 42
+                            || menu.id < 0
+                            || if menu.typed {
+                                (menu.id as usize + 1) * crate::typed_encounter::RECORD_BYTES
+                                    > map.typed_encounters.len()
+                            } else {
+                                (menu.id as usize + 1) * crate::story::MENU_RECORD_BYTES
+                                    > map.menus.len()
+                            }
+                    }))
+            {
+                return Err(RuleError::Invalid("invalid suspended combat script".into()));
+            }
+            current = story.parent.as_deref();
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn finish_player_action(
     state: &mut Session,
     content: &Content,
     actor: i16,
 ) -> Result<Vec<Event>, RuleError> {
+    finish_action(state, content, actor, false)
+}
+
+fn finish_action(
+    state: &mut Session,
+    content: &Content,
+    actor: i16,
+    resume_turn: bool,
+) -> Result<Vec<Event>, RuleError> {
+    retain_last_defeated(state);
     let c = state
         .combat
         .as_mut()
@@ -3394,23 +4093,32 @@ fn finish_player_action(
         c.death_queue.begin();
     }
     if let Some((_, entry)) = c.death_queue.current() {
-        if state.combat_story.is_some() {
+        if state
+            .combat_story
+            .as_ref()
+            .is_some_and(|story| !story.waiting_child)
+        {
             return Err(RuleError::Unsupported {
                 action: "combat.death_story",
                 dependency: "recursive child battle death scripts",
             });
         }
+        let parent = state.combat_story.take().map(Box::new);
         state.combat_story = Some(DeathStory {
             body: 0,
             script: entry.script,
             cursor: 0,
             actor,
+            resume_turn,
             entry,
             waiting_child: false,
             outer_after_message: state.battle_after_message,
             outer_treasure: state.battle_treasure,
             outer_group: state.battle_group_script,
             outer_npc: state.battle_npc.clone(),
+            shared_dispatch: false,
+            suspended_script: None,
+            parent,
         });
         return continue_death(state, content);
     }
@@ -3422,21 +4130,48 @@ fn finish_player_action(
     {
         return finish_victory(state, content);
     }
+    if resume_turn {
+        return select_turn(state, content, false);
+    }
     if actor >= 10 || word(&state.warriors[actor as usize].bytes, 0x40)? < 2 {
         return end_turn(state, content);
     }
     Ok(vec![])
 }
 
-fn finish_death_story(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+pub(crate) fn retain_last_defeated(state: &mut Session) {
+    let Some(body) = state
+        .combat
+        .as_mut()
+        .and_then(|combat| combat.pending_last_defeated.take())
+    else {
+        return;
+    };
+    let mut context = crate::story_health::context(
+        &state.warriors,
+        state.selected_warrior,
+        state.health_context.as_ref(),
+    );
+    context.last_body = body;
+    state.health_context = Some(context);
+}
+
+pub(crate) fn finish_death_story(
+    state: &mut Session,
+    content: &Content,
+) -> Result<Vec<Event>, RuleError> {
     let story = state
         .combat_story
         .take()
         .ok_or_else(|| RuleError::Invalid("death continuation missing".into()))?;
+    if story.shared_dispatch {
+        state.exploration.as_mut().unwrap().script = story.suspended_script.clone();
+    }
     if let Some(combat) = state.combat.as_mut() {
         combat.death_queue.acknowledge()?;
         super::death_scripts::clear_body_references(combat, &mut state.warriors, 0)?;
-        finish_player_action(state, content, story.actor)
+        state.combat_story = story.parent.map(|parent| *parent);
+        finish_action(state, content, story.actor, story.resume_turn)
     } else {
         // Child combat replaces the global roster. The outer reward sees count zero.
         for item in &mut state.booty_items {
@@ -3452,6 +4187,7 @@ fn finish_death_story(state: &mut Session, content: &Content) -> Result<Vec<Even
 }
 
 pub fn continue_death(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+    retain_last_defeated(state);
     let mut events = vec![];
     if state
         .combat_story
@@ -3471,6 +4207,13 @@ pub fn continue_death(state: &mut Session, content: &Content) -> Result<Vec<Even
         state.combat_story.as_mut().unwrap().waiting_child = false;
     }
     state.exploration.as_mut().unwrap().presentation = None;
+    if state
+        .combat_story
+        .as_ref()
+        .is_some_and(|story| story.shared_dispatch)
+    {
+        return crate::exploration::run_script(state, content);
+    }
     let map = content
         .map(
             state
@@ -3491,6 +4234,15 @@ pub fn continue_death(state: &mut Session, content: &Content) -> Result<Vec<Even
         story.cursor += 1;
         match opcode {
             0 => {}
+            119 | 122 | 123 | 124 | 125 => {
+                let (effects, stopped) =
+                    crate::story_combat::apply(state, content, opcode, parameter)?;
+                events.extend(effects);
+                if stopped {
+                    events.extend(finish_death_story(state, content)?);
+                    return Ok(events);
+                }
+            }
             1 => {
                 state.exploration.as_mut().unwrap().presentation = Some(Presentation::Dialogue {
                     id: parameter,
@@ -3510,68 +4262,23 @@ pub fn continue_death(state: &mut Session, content: &Content) -> Result<Vec<Even
                 state.combat_story = Some(continuation);
                 return Ok(events);
             }
-            125 => {
-                let extra = centurions_content::span(
-                    &map.combat.as_ref().unwrap().encounters,
-                    parameter.unsigned_abs() as usize * 10,
-                    10,
-                )?;
-                let class = word(extra, 0)?;
-                let count = word(extra, 2)?;
-                let radius = match word(extra, 4)? {
-                    0 => 1000,
-                    v => v,
-                };
-                let combat = state.combat.as_mut().unwrap();
-                let origin = (
-                    story.entry.x - i32::from(combat.map.shift.0) - 5,
-                    story.entry.y - i32::from(combat.map.shift.1) - 5,
-                );
-                for _ in 0..count {
-                    let mut nearest = None;
-                    let mut distance = radius;
-                    for (index, m) in combat.enemies.records.iter().enumerate() {
-                        if m.stamina()? <= 0 || i16::from(m.bytes[0x103] as i8) != class {
-                            continue;
-                        }
-                        let p = combat.enemies.positions[index];
-                        let dx = (origin.0 - i32::from(p.0)) as f32;
-                        let dy = (origin.1 - i32::from(p.1)) as f32;
-                        let current = (dx * dx + dy * dy).sqrt().trunc() as i16;
-                        if current < distance {
-                            distance = current;
-                            nearest = Some(index);
-                        }
-                    }
-                    let Some(index) = nearest else {
-                        break;
-                    };
-                    lifecycle::destroy_enemy(combat, index)?;
-                }
-            }
-            119 | 123 => {
-                let combat = state.combat.as_mut().unwrap();
-                let mut unavailable = combat.unavailable;
-                let result = super::mission_deaths::apply(
-                    combat,
-                    &mut state.warriors,
-                    map,
-                    &map.combat.as_ref().unwrap().encounters,
-                    super::mission_deaths::DeathContext {
-                        script: story.script,
-                        actor: 0,
-                        deferred_faction: Some(story.entry.faction),
-                    },
-                    &mut unavailable,
-                )?;
-                combat.unavailable = unavailable;
-                let _ = result;
-            }
             _ => {
-                return Err(RuleError::Unsupported {
-                    action: "combat.death_story",
-                    dependency: "other death story instructions",
+                let record = map.script(story.script)?.to_vec();
+                let cursor = story.cursor - 1;
+                story.shared_dispatch = true;
+                story.suspended_script = state.exploration.as_mut().unwrap().script.take();
+                state.exploration.as_mut().unwrap().script = Some(ScriptState {
+                    record,
+                    cursor: cursor as u8,
+                    map_slot: 0,
+                    item_return: false,
+                    scheduled: true,
+                    menu: None,
+                    persist: false,
+                    origin: None,
                 });
+                events.extend(crate::exploration::run_script(state, content)?);
+                return Ok(events);
             }
         }
     }

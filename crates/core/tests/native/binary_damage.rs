@@ -5,11 +5,17 @@ use centurions_core::combat::damage::*;
 #[test]
 fn damage_matches_complete_original_routine() {
     let fixture: serde_json::Value = crate::support::fixture("damage.json");
-    for (index, case) in fixture.array("cases").iter().enumerate() {
+    let percentages = crate::support::fixture("percentage-damage.json");
+    for (index, case) in fixture
+        .array("cases")
+        .iter()
+        .chain(percentages.array("cases"))
+        .enumerate()
+    {
         let mut target = case.bytes("input");
         let flags = case.n::<u64>("flags");
         let mut random = RandomState::new(case.n::<u32>("initial_seed"));
-        let result = resolve_damage(
+        let result = resolve_damage_with_amount(
             &mut target,
             case.n::<bool>("monster"),
             &DamagePacket {
@@ -22,6 +28,7 @@ fn damage_matches_complete_original_routine() {
                 saves: flags & 4 != 0,
                 armor_filter: flags & 8 != 0,
             },
+            case["previous"].as_i64().unwrap_or(0) as i16,
             &mut random,
         )
         .unwrap();

@@ -4,13 +4,12 @@ use centurions_core::story::{
     ConditionalJump, add_mission_score, flag_condition_jump, set_mission_flag,
 };
 
-fn fixture() -> serde_json::Value {
-    crate::support::fixture("story-flags.json")
-}
-
 #[test]
 fn mission_flag_mutations_match_complete_original_flag_table() {
-    for case in fixture()["set_cases"].as_array().unwrap() {
+    for case in crate::support::fixture("story-flags.json")["set_cases"]
+        .as_array()
+        .unwrap()
+    {
         let flags = case.bytes("before");
         let parameter = case.n::<i16>("parameter");
         assert_eq!(
@@ -23,7 +22,10 @@ fn mission_flag_mutations_match_complete_original_flag_table() {
 
 #[test]
 fn mission_flag_condition_matches_original_branch_decision() {
-    for case in fixture()["condition_cases"].as_array().unwrap() {
+    for case in crate::support::fixture("story-flags.json")["condition_cases"]
+        .as_array()
+        .unwrap()
+    {
         let mut flags = vec![0; 128];
         let index = case.n::<i16>("index");
         flags[index as usize] = case.n::<u8>("flag");
@@ -41,7 +43,10 @@ fn mission_flag_condition_matches_original_branch_decision() {
 
 #[test]
 fn mission_score_addition_matches_original_word_arithmetic() {
-    for case in fixture()["score_cases"].as_array().unwrap() {
+    for case in crate::support::fixture("story-flags.json")["score_cases"]
+        .as_array()
+        .unwrap()
+    {
         crate::support::expect(
             add_mission_score(case.n::<i16>("before"), case.n::<i16>("parameter")),
             &case["after"],

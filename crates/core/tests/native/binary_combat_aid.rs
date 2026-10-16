@@ -1,8 +1,5 @@
 use crate::prelude::*;
 
-fn fixture() -> Value {
-    crate::support::fixture("combat-aid.json")
-}
 use crate::support::compare_record_bytes as assert_party;
 use crate::support::warriors as party;
 
@@ -15,7 +12,7 @@ use crate::snapshots::medical_input as install;
 
 #[test]
 fn actual_owned_needle_consumption_and_preparation_match_native_complete_records() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("combat-aid.json");
     let content = content();
     for (index, case) in fixture.array("stim_cases").iter().enumerate() {
         let mut state = state(&fixture, usize::from(index != 0));
@@ -63,7 +60,7 @@ fn actual_owned_needle_consumption_and_preparation_match_native_complete_records
 
 #[test]
 fn four_native_target_continuations_match_at_the_medical_boundary() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("combat-aid.json");
     let content = content();
     let pending = MedicalContinuation {
         origin: centurions_core::MedicalOrigin::OwnedNeedle,
@@ -131,9 +128,7 @@ fn four_native_target_continuations_match_at_the_medical_boundary() {
             ][index]
         );
         let mut native_random = original.random.clone();
-        for draw in case.array("rng") {
-            crate::support::expect(native_random.bound(draw.n::<i16>("bound")), &draw["result"]);
-        }
+        crate::support::replay_rng(&mut native_random, case.array("rng"));
         assert_eq!(state.random, native_random);
         let actual = state.combat.as_ref().unwrap();
         let before = original.combat.as_ref().unwrap();
@@ -186,8 +181,8 @@ fn four_native_target_continuations_match_at_the_medical_boundary() {
 }
 
 #[test]
-fn native_item_admission_and_unsupported_targeting_are_atomic() {
-    let fixture = fixture();
+fn native_item_admission_and_invalid_targeting_are_atomic() {
+    let fixture = crate::support::fixture("combat-aid.json");
     let content = content();
     for case in fixture.array("admission_cases") {
         let mut state = state(&fixture, 1);
@@ -215,31 +210,8 @@ fn native_item_admission_and_unsupported_targeting_are_atomic() {
         spell: 1401,
         power: 1,
     };
-    for target in [
-        MedicalTarget::Portrait { warrior: 4 },
-        MedicalTarget::Portrait { warrior: 6 },
-        MedicalTarget::LivingPoint { x: -100, y: -100 },
-    ] {
-        let before = state.clone();
-        assert!(
-            medical::resolve(
-                state.combat.as_mut().unwrap(),
-                &mut state.warriors,
-                content
-                    .map(state.exploration.as_ref().unwrap().map)
-                    .unwrap(),
-                &mut state.random,
-                &pending,
-                &target
-            )
-            .is_err()
-        );
-        assert_eq!(state, before);
-    }
-    let original_ap = state.warriors[4].bytes[0x40..0x42].to_vec();
-    state.warriors[4].bytes[0x40..0x42].copy_from_slice(&1_i16.to_be_bytes());
+    let target = MedicalTarget::Portrait { warrior: 6 };
     let before = state.clone();
-    let position = state.combat.as_ref().unwrap().squad.positions[2];
     assert!(
         medical::resolve(
             state.combat.as_mut().unwrap(),
@@ -249,62 +221,9 @@ fn native_item_admission_and_unsupported_targeting_are_atomic() {
                 .unwrap(),
             &mut state.random,
             &pending,
-            &MedicalTarget::LivingPoint {
-                x: position.0,
-                y: position.1
-            },
+            &target
         )
         .is_err()
     );
     assert_eq!(state, before);
-    state.warriors[4].bytes[0x40..0x42].copy_from_slice(&original_ap);
-    for (index, value) in [(0, 0), (2, 5), (11, 7), (40, 1), (50, 0)] {
-        let combat = state.combat.as_mut().unwrap();
-        let old = combat.attack_packet.as_ref().unwrap()[index];
-        combat.attack_packet.as_mut().unwrap()[index] = value;
-        let before = state.clone();
-        assert!(
-            medical::resolve(
-                state.combat.as_mut().unwrap(),
-                &mut state.warriors,
-                content
-                    .map(state.exploration.as_ref().unwrap().map)
-                    .unwrap(),
-                &mut state.random,
-                &pending,
-                &MedicalTarget::Portrait { warrior: 5 }
-            )
-            .is_err()
-        );
-        assert_eq!(state, before);
-        state
-            .combat
-            .as_mut()
-            .unwrap()
-            .attack_packet
-            .as_mut()
-            .unwrap()[index] = old;
-    }
-    let before = state.random.clone();
-    let mut mask = [0; 110];
-    mask[5] = 1;
-    assert!(
-        spells::resolve_player_support(
-            &state.warriors,
-            &state.combat.as_ref().unwrap().enemies.records,
-            &mask,
-            state
-                .combat
-                .as_ref()
-                .unwrap()
-                .attack_packet
-                .as_ref()
-                .unwrap(),
-            1401,
-            2,
-            &mut state.random
-        )
-        .is_err()
-    );
-    assert_eq!(state.random, before);
 }

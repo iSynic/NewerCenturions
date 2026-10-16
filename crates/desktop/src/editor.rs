@@ -8,6 +8,7 @@ use centurions_core::{Command, Event, Session, apply};
 use macroquad::prelude::*;
 
 pub struct WarriorEditor {
+    pub free: bool,
     pub draft: Session,
     member: usize,
     selector: u16,
@@ -24,6 +25,7 @@ impl WarriorEditor {
             .ok_or("Editor warrior is outside the squad.")?
             .clone();
         Ok(Self {
+            free: true,
             draft: state.clone(),
             member,
             selector: 0,
@@ -33,13 +35,20 @@ impl WarriorEditor {
             scans: None,
         })
     }
-    pub fn handle(&mut self, item: usize, content: &Content) -> Result<Vec<Event>, String> {
+    pub fn handle(
+        &mut self,
+        item: usize,
+        content: &Content,
+    ) -> Result<Vec<Event>, centurions_core::RuleError> {
+        if item == 81 && !self.free {
+            return Err("Level editing requires the active warrior editor.".into());
+        }
         if self.level_information {
             self.level_information = false;
             return Ok(vec![]);
         }
         if self.scans.is_some() {
-            return self.scan_item(item, content);
+            return self.scan_item(item, content).map_err(Into::into);
         }
         match item {
             39 => {
@@ -70,8 +79,7 @@ impl WarriorEditor {
                     },
                     &mut self.draft,
                     content,
-                )
-                .map_err(|e| e.to_string())?;
+                )?;
                 self.level_information = events.iter().any(|e| {
                     matches!(
                         e,
@@ -110,14 +118,20 @@ impl WarriorEditor {
             45 => {
                 let previous = self.draft.warriors[self.member].clone();
                 let events = apply(
-                    Command::EditWarriorUpgrade {
-                        warrior: self.member,
-                        selector: self.selector,
+                    if self.free {
+                        Command::EditWarriorUpgrade {
+                            warrior: self.member,
+                            selector: self.selector,
+                        }
+                    } else {
+                        Command::UpgradeWarrior {
+                            warrior: self.member,
+                            selector: self.selector,
+                        }
                     },
                     &mut self.draft,
                     content,
-                )
-                .map_err(|e| e.to_string())?;
+                )?;
                 self.previous = previous;
                 return Ok(events);
             }
@@ -335,7 +349,7 @@ impl WarriorEditor {
         for item in (48..=80).chain([1, 4, 39, 45, 81, 82, 83, 84, 85]) {
             controls.push(Control {
                 rect: Self::rect(assets, item),
-                enabled: true,
+                enabled: item != 81 || self.free,
                 action: Action::Application(ApplicationAction::EditorItem(item)),
             });
         }
@@ -381,6 +395,32 @@ pub struct ScanEditor {
     warning: bool,
 }
 impl ScanEditor {
+    pub fn draw_promotion(
+        progress: &centurions_core::story_promotion::Progress,
+        content: &Content,
+        assets: &Assets,
+        controls: &mut Vec<Control>,
+    ) {
+        let view = Self {
+            selection: progress.selection.clone(),
+            controls: vec![],
+            question: progress.question,
+            description: progress.description,
+            warning: progress.warning,
+        };
+        view.draw(content, assets, controls);
+        for control in controls {
+            control.action = match control.action {
+                Action::Application(ApplicationAction::EditorItem(item)) => {
+                    Action::Command(Command::PromotionControl { item: item as u16 })
+                }
+                Action::Application(ApplicationAction::ScanAnswer(yes)) => {
+                    Action::Command(Command::PromotionAnswer { yes })
+                }
+                ref other => other.clone(),
+            };
+        }
+    }
     fn rect(assets: &Assets, item: usize) -> Rect {
         let [top, left, bottom, right] = assets.scan_dialog[item - 1].rect;
         Rect::new(

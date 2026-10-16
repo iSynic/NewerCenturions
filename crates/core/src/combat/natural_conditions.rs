@@ -111,6 +111,21 @@ pub fn enemy_poison_tick(
     }))
 }
 
+/// getup 0x126244 preserves its signed drain and the original regeneration alias.
+pub fn reduce_enemy_psi(monster: &mut [u8]) -> Result<(), RuleError> {
+    span(monster, 0, 288)?;
+    let amount = i16::from(monster[0xd4] as i8);
+    let mut psi = word(monster, 0x10e)?;
+    if amount != 0 {
+        psi = psi.wrapping_sub(amount).max(0);
+    }
+    if monster[0xd3] != 0 && monster[0xa8] != 0 {
+        psi = psi.wrapping_add(amount);
+    }
+    monster[0x10e..0x110].copy_from_slice(&psi.to_be_bytes());
+    Ok(())
+}
+
 fn condition_tick(warrior: &[u8], offset: usize) -> Result<Option<DiseaseTick>, RuleError> {
     let warrior = span(warrior, 0, 3138)?;
     let duration = word(warrior, offset)?;

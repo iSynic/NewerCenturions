@@ -30,7 +30,7 @@ pub(super) fn compare_outdoor_disease_reduction_matches_original_complete_warrio
             affected: std::array::from_fn(|member| word(&affected, member * 2).unwrap()),
         };
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
-        let outcome = reduce_outdoors(&warriors, &context, &mut random).unwrap();
+        let outcome = reduce_outdoors(&warriors, &context, &mut random, 0).unwrap();
         let actual: Vec<_> = crate::support::record_bytes(&outcome.warriors);
         let mut expected = before.clone();
         changes(&mut expected, &case["after_changes"]);

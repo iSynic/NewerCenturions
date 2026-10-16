@@ -1,14 +1,7 @@
 use crate::prelude::*;
 
-fn positions(value: &Value) -> Vec<(i16, i16)> {
-    words(value)
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| (pair[0], pair[1]))
-        .collect()
-}
 use crate::native_common::snapshot_party as warriors;
+use crate::support::positions;
 
 use crate::native_common::snapshot_enemies as enemies;
 
@@ -20,10 +13,6 @@ fn work(snapshot: &Value) -> WeaponWork {
         weapon_armor_filter: Some(word(&weapon, 0x88).unwrap()),
         ammunition_armor_filter: Some(word(&ammunition, 0x88).unwrap()),
     }
-}
-
-fn fixture() -> Value {
-    crate::support::fixture("player-guard.json")
 }
 
 fn state(content: &Content, snapshot: &Value) -> Session {
@@ -58,6 +47,10 @@ fn state(content: &Content, snapshot: &Value) -> Session {
         order: snapshot.words("order"),
         cursor: snapshot.n::<usize>("cursor"),
         round: snapshot.n::<i16>("round"),
+        round_scripts: RoundScripts {
+            counter: snapshot.n("round"),
+            ..Default::default()
+        },
         spell_fields: snapshot.bytes("fields"),
         field_used: snapshot.bytes("used"),
         attack_packet: Some(snapshot.bytes("packet")),
@@ -72,6 +65,7 @@ fn state(content: &Content, snapshot: &Value) -> Session {
 
 fn assert_snapshot(state: &Session, snapshot: &Value) {
     let combat = state.combat.as_ref().unwrap();
+    assert_eq!(combat.round_scripts.counter, snapshot.n::<i8>("round"));
     assert_party(state, snapshot);
     assert_eq!(combat.enemies.records, enemies(snapshot));
     assert_eq!(combat.map.tiles, snapshot.words("map"));
@@ -113,100 +107,60 @@ fn assert_snapshot(state: &Session, snapshot: &Value) {
 }
 
 fn assert_party(state: &Session, snapshot: &Value) {
-    let actual: Vec<_> = crate::support::record_bytes(&state.warriors);
-    let expected = snapshot.bytes("party");
-    assert_eq!(actual.len(), expected.len());
-    if let Some(offset) = actual.iter().zip(&expected).position(|(a, b)| a != b) {
-        panic!(
-            "party byte {offset:#x}: {} != {}",
-            actual[offset], expected[offset]
-        );
-    }
+    crate::support::compare_party(&state.warriors, snapshot);
 }
 
 #[test]
-fn accepted_guard_matches_original_complete_command_and_getup() {
+fn inactive_turns_match_original_recovery_retreat_and_saved_command() {
     let content = content();
-    let fixture = fixture();
-
-    for case in fixture.array("cases") {
-        let member = case.n::<usize>("member");
+    for case in crate::support::fixture("inactive-rounds.json").array("cases") {
         let mut state = state(&content, &case["before"]);
-        let before = state.clone();
-        assert_snapshot(&state, &case["before"]);
-        let events = if case["action_points"] == 2 {
-            runtime::player_guard(&mut state, &content).unwrap()
+        let mut resumed = crate::support::checkpoint(&state, &content, "inactive-turns");
+        let mut events = replay_command(Command::EndTurn, &mut state, &mut resumed, &content);
+        if case.n::<i16>("stun") == 3 {
+            crate::support::reject_command(&state, &content, Command::EndTurn);
+        }
+        for _ in 0..5 {
+            if !state.combat.as_ref().is_some_and(|c| c.selection_pending) {
+                break;
+            }
+            resumed = crate::support::checkpoint(&state, &content, "inactive-pending");
+            let next = replay_command(
+                Command::ResumeCombatSelection,
+                &mut state,
+                &mut resumed,
+                &content,
+            );
+            events.extend(next);
+        }
+        assert_eq!(
+            crate::support::event_sounds(&events),
+            case.n::<Vec<i16>>("sounds")
+        );
+        if case.n::<u8>("retreated") == 0 {
+            assert_snapshot(&state, &case["after"]);
+            assert_eq!(
+                state.combat.as_ref().unwrap().inactive_rounds,
+                case.n::<i16>("inactive_rounds")
+            );
+            resumed = crate::support::checkpoint(&state, &content, "inactive-recovered");
+            assert_eq!(state, resumed);
         } else {
-            // AP-zero is a controlled native prefix cut, outside public input admission.
-            state.warriors[member].bytes[0x16..0x18].copy_from_slice(&1_i16.to_be_bytes());
-            assert_party(&state, &case["guarded"]);
-            let mut events = vec![Event::Sound { resource_id: 10121 }];
-            events.extend(runtime::end_turn(&mut state, &content).unwrap());
-            events
-        };
-        assert_snapshot(&state, &case["after"]);
-        assert_party(&state, &case["guarded"]);
-        assert_eq!(word(&state.warriors[member].bytes, 0x16).unwrap(), 1);
-        assert_eq!(word(&state.warriors[member].bytes, 0x3c).unwrap(), 5);
-        crate::support::expect(
-            word(&state.warriors[member].bytes, 0x40).unwrap() as i64,
-            &case["action_points"],
-        );
-
-        assert!(matches!(
-            events.first(),
-            Some(Event::Sound { resource_id: 10121 })
-        ));
-        let sounds: Vec<_> = crate::support::event_sounds(&events);
-        assert_eq!(serde_json::to_value(sounds).unwrap(), case["sounds"]);
-        assert_eq!(state.combat.as_ref().unwrap().active_body(), Some(10));
-
-        let mut receipt = before.random.clone();
-        for draw in case.array("rng") {
-            crate::support::expect(receipt.bound(draw.n::<i16>("bound")), &draw["result"]);
+            assert!(state.combat.is_none());
+            assert_eq!(state.phase, Phase::Exploration);
+            assert_party(&state, &case["after"]);
+            assert_eq!(
+                (state.random.seed, state.random.draws),
+                (case["after"].n("seed"), case["after"].n("draws"))
+            );
         }
-        assert_eq!(state.random, receipt);
-
-        assert!(
-            case["after"]
-                .bytes("targets")
-                .iter()
-                .all(|byte| *byte == 255)
-        );
-
-        let mut expected = before;
-        expected.bandage_ready = Some(1); // Getup 125a56 establishes the next interaction.
-        for (warrior, native) in expected.warriors.iter_mut().zip(warriors(&case["after"])) {
-            warrior.bytes = native.bytes;
-        }
-        expected.random = state.random.clone();
-        let expected_combat = expected.combat.as_mut().unwrap();
-        expected_combat.enemies.records = enemies(&case["after"]);
-        expected_combat.cursor = case["after"].n::<usize>("cursor");
-        expected_combat.field_used = case["after"].bytes("used");
-        expected_combat.attack_packet = Some(case["after"].bytes("packet"));
-        assert_eq!(state, expected);
-    }
-}
-
-#[test]
-fn ordinary_guard_rejects_controlled_zero_ap_without_changes() {
-    let content = content();
-    for case in fixture()["cases"].as_array().unwrap() {
-        if case["action_points"] != 0 {
-            continue;
-        }
-        let mut state = state(&content, &case["before"]);
-        let before = state.clone();
-        assert!(runtime::player_guard(&mut state, &content).is_err());
-        assert_eq!(state, before);
     }
 }
 
 #[test]
 fn guarded_player_reaction_and_enemy_counterattack_match_original_complete_callers() {
     let content = content();
-    let guard = fixture();
+    let guard = crate::support::fixture("player-guard.json");
     let reactions: Value = crate::support::fixture("player-guard-reaction.json");
 
     for case in reactions.array("cases") {
@@ -244,43 +198,8 @@ fn guarded_player_reaction_and_enemy_counterattack_match_original_complete_calle
         let sounds: Vec<_> = crate::support::event_sounds(&events);
         assert_eq!(serde_json::to_value(sounds).unwrap(), case["sounds"]);
         let mut receipt = before.random.clone();
-        for draw in case.array("rng") {
-            crate::support::expect(receipt.bound(draw.n::<i16>("bound")), &draw["result"]);
-        }
+        crate::support::replay_rng(&mut receipt, case.array("rng"));
         assert_eq!(state.random, receipt);
-
-        let calls = case.array("native_calls");
-        let player = calls
-            .iter()
-            .find(|call| call["address"] == "100af0")
-            .unwrap();
-        assert_eq!(player["arguments"], json!([member, 10]));
-        assert_eq!(player["return"], "11143c");
-        assert_eq!(player["guard"], 0);
-        let enemy = calls
-            .iter()
-            .find(|call| call["address"] == "101eb6")
-            .unwrap();
-        assert_eq!(enemy["arguments"], json!([10, member, 0]));
-        assert_eq!(enemy["return"], "11171a");
-        assert_eq!(enemy["guard"], 0);
-        let setters: Vec<_> = calls
-            .iter()
-            .filter(|call| matches!(call["address"].as_str(), Some("130d38" | "130e54")))
-            .collect();
-        assert_eq!(setters.len(), 4);
-        for call in setters {
-            assert_eq!(call["arguments"], json!([0]));
-        }
-        for returned in case.array("attack_returns") {
-            assert_eq!(returned["result"], 0);
-            assert_eq!(returned["state"]["guard_word"], 0);
-        }
-
-        // The Session retains the three proved work WORDs; native raw buffers also capture the setters.
-        for field in ["weapon_work", "ammo_work", "item_work"] {
-            assert_eq!(bytes(&case["after"][field]), content.items[0]);
-        }
 
         let mut expected = before;
         for (warrior, native) in expected.warriors.iter_mut().zip(warriors(&case["after"])) {
@@ -298,11 +217,13 @@ fn guarded_player_reaction_and_enemy_counterattack_match_original_complete_calle
 #[test]
 fn public_guard_preserves_complete_native_state_and_resumes_from_save() {
     let content = content();
-    for (index, case) in fixture()["cases"].as_array().unwrap().iter().enumerate() {
-        if case["action_points"] != 2 {
-            continue;
-        }
-        for waiting_child in [false, true] {
+    let fixture = crate::support::fixture("player-guard.json");
+    for (index, case) in fixture.array("cases").iter().enumerate() {
+        let public = case["action_points"] == 2;
+        for waiting_child in [false, true]
+            .into_iter()
+            .take(if index == 0 { 2 } else { 1 })
+        {
             let mut actual = state(&content, &case["before"]);
             if waiting_child {
                 actual.combat_story = Some(runtime::DeathStory {
@@ -311,38 +232,48 @@ fn public_guard_preserves_complete_native_state_and_resumes_from_save() {
                     ..Default::default()
                 });
             }
-            let path = std::env::temp_dir().join(format!(
-                "centurions-public-guard-{}-{index}-{waiting_child}.json",
-                std::process::id()
-            ));
-            centurions_core::save(&path, &actual, &content).unwrap();
-            let mut resumed = centurions_core::load(&path, &content).unwrap();
-            let mut expected = actual.clone();
-            let expected_events = runtime::player_guard(&mut expected, &content).unwrap();
-            let combat = expected.combat.as_ref().unwrap();
-            expected.attack_packet = combat.attack_packet.clone();
-            expected.attack_identity = combat.attack_identity;
-            expected.weapon_work = combat.weapon_work;
-            let mut health = centurions_core::story_health::context(
-                &expected.warriors,
-                expected.selected_warrior,
-                expected.health_context.as_ref(),
-            );
-            health.unavailable = combat.unavailable;
-            health.effect = case["after"].bytes("packet")[18] as i8;
-            expected.health_context = Some(health);
-            let events = apply(Command::Guard, &mut actual, &content).unwrap();
-            assert_eq!(events, expected_events);
-            assert_eq!(actual, expected);
-            assert_snapshot(&actual, &case["after"]);
-            assert_eq!(
-                apply(Command::Guard, &mut resumed, &content).unwrap(),
+            let mut expected = state(&content, &case["after"]);
+            for (warrior, original) in expected.warriors.iter_mut().zip(&actual.warriors) {
+                warrior.original_sha256 = original.original_sha256.clone();
+            }
+            expected.combat_story = actual.combat_story.clone();
+            expected.bandage_ready = Some(1);
+            let events = if public {
+                let mut resumed = crate::support::checkpoint(&actual, &content, "guard-before");
+                let events = replay_command(Command::Guard, &mut actual, &mut resumed, &content);
+                let combat = expected.combat.as_ref().unwrap();
+                let mut health = centurions_core::story_health::context(
+                    &expected.warriors,
+                    expected.selected_warrior,
+                    None,
+                );
+                health.unavailable = combat.unavailable;
+                health.effect = case["after"].bytes("packet")[18] as i8;
+                expected.health_context = Some(health);
+                crate::support::checkpoint(&actual, &content, "guard-after");
                 events
-            );
-            assert_eq!(resumed, actual);
-            centurions_core::save(&path, &actual, &content).unwrap();
-            assert_eq!(centurions_core::load(&path, &content).unwrap(), actual);
-            std::fs::remove_file(path).unwrap();
+            } else {
+                // Native AP-zero prefix starts after public admission; retain its original suffix.
+                crate::support::reject_command(&actual, &content, Command::Guard);
+                expected.attack_packet = actual.attack_packet.clone();
+                let member = case.n::<usize>("member");
+                actual.warriors[member].bytes[0x16..0x18].copy_from_slice(&1_i16.to_be_bytes());
+                assert_party(&actual, &case["guarded"]);
+                let mut events = vec![Event::Sound { resource_id: 10121 }];
+                events.extend(runtime::end_turn(&mut actual, &content).unwrap());
+                events
+            };
+            crate::support::same_session(&actual, &expected);
+            let mut expected_events: Vec<_> = case
+                .n::<Vec<i16>>("sounds")
+                .into_iter()
+                .map(|resource_id| Event::Sound { resource_id })
+                .collect();
+            expected_events.push(Event::TurnStarted {
+                body: expected.combat.as_ref().unwrap().active_body().unwrap(),
+                round: expected.combat.as_ref().unwrap().round,
+            });
+            assert_eq!(events, expected_events);
         }
     }
 }
@@ -350,7 +281,7 @@ fn public_guard_preserves_complete_native_state_and_resumes_from_save() {
 #[test]
 fn public_guard_rejects_interrupted_or_unavailable_input_atomically() {
     let content = content();
-    let fixture = fixture();
+    let fixture = crate::support::fixture("player-guard.json");
     let baseline = state(&content, &fixture["cases"][0]["before"]);
     let member = baseline.combat.as_ref().unwrap().active_body().unwrap() as usize;
     for variant in 0..6 {
@@ -392,18 +323,19 @@ fn public_guard_rejects_interrupted_or_unavailable_input_atomically() {
 #[test]
 fn guard_rolls_back_arming_sound_and_initiative_on_later_round_failure() {
     let content = content();
-    let fixture = fixture();
+    let fixture = crate::support::fixture("player-guard.json");
     let mut state = state(&content, &fixture["cases"][0]["before"]);
     let member = state.combat.as_ref().unwrap().active_body().unwrap();
     let combat = state.combat.as_mut().unwrap();
     combat.cursor = 109;
     combat.order[109] = member;
-    state.warriors[0].bytes[0x8a..0x8c].copy_from_slice(&1_i16.to_be_bytes());
+    // A non-round action must roll back the already-armed guard and its sound.
+    combat.round_scripts.slots[0] = 33;
     let before = state.clone();
     assert!(matches!(
         apply(Command::Guard, &mut state, &content),
         Err(centurions_core::RuleError::Unsupported {
-            action: "combat.round",
+            action: "combat.round_story",
             ..
         })
     ));

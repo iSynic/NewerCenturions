@@ -4,13 +4,8 @@ use crate::native_common::original_file as data;
 use centurions_core::combat::ally_turns;
 use centurions_core::combat::attack;
 
-fn fixture() -> serde_json::Value {
-    crate::support::fixture("attack-packets.json")
-}
-
 fn combat(records: &[u8], member: i16) -> Combat {
     Combat {
-        difficulty: 0,
         battle: 117,
         map: TacticalMap {
             tiles: vec![1155; 8100],
@@ -32,7 +27,7 @@ fn combat(records: &[u8], member: i16) -> Combat {
 
 #[test]
 fn attack_packets_match_native_complete_writers_and_retention() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("attack-packets.json");
     let attacks = data("Data Files/Data S");
     let items = data("Data Files/Data ID");
     let cases = fixture.array("cases");

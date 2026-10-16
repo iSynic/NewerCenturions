@@ -662,13 +662,8 @@ fn scientist_turn_inner(
             return Ok(events);
         }
         m[0x104] = u8::from((m[0x109] as i8) >= 1);
-        if m[0xb2] != 0 {
-            return Err(RuleError::Unsupported {
-                action: "combat.scientist",
-                dependency: "fleeing ally",
-            });
-        }
-        if random.bound(100) <= word(m, 0x48)? {
+        let fleeing = m[0xb2] != 0;
+        if !fleeing && random.bound(100) <= word(m, 0x48)? {
             if fire(
                 c,
                 w,
@@ -686,13 +681,15 @@ fn scientist_turn_inner(
                 continue;
             }
             attempt += 1;
-        } else if random.bound(100) <= word(m, 0x42)? {
+        } else if !fleeing && random.bound(100) <= word(m, 0x42)? {
             return Err(RuleError::Unsupported {
                 action: "combat.scientist",
                 dependency: "ally spell",
             });
         }
-        events.extend(if display_writers {
+        events.extend(if fleeing {
+            vec![]
+        } else if display_writers {
             runtime::check_neighbors_with_work(c, w, random, body, items, attacks, buffs, buffers)?
         } else {
             runtime::check_neighbors_with_buffs(c, w, random, body, items, attacks, buffs)?
@@ -709,7 +706,18 @@ fn scientist_turn_inner(
                 break;
             }
             runtime::select_enemy_target(c, w, mission, random, body)?;
-            let moved = enemy::move_enemy(c, mission, e, random)?;
+            let moved = runtime::move_actor_with_reactions(
+                c,
+                w,
+                mission,
+                random,
+                body,
+                items,
+                buffs,
+                buffers,
+                display_writers,
+                &mut events,
+            )?;
             events.extend(
                 moved
                     .sounds

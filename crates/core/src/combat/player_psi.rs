@@ -1,8 +1,29 @@
 use super::*;
 use centurions_content::mission::OpeningMission;
 
+pub const COMBAT_SPELLS: &[i16] = &[
+    1101, 1201, 1202, 1203, 1204, 1205, 1206, 1207, 1301, 1302, 1303, 1304, 1305, 1306, 1307, 1401,
+    1402, 1404, 1405, 1407, 1503, 1504, 1505, 1507, 1601, 1602, 1604, 1701, 1702, 1703, 1704, 1706,
+    1707, 2101, 2102, 2104, 2105, 2106, 2107, 2202, 2203, 2204, 2205, 2206, 2207, 2301, 2302, 2303,
+    2304, 2306, 2307, 2402, 2403, 2404, 2406, 2407, 2501, 2502, 2503, 2504, 2507, 2601, 2602, 2603,
+    2605, 2606, 2702, 2703, 2704, 2705, 2706, 3102, 3106, 3107, 3201, 3202, 3203, 3204, 3205, 3206,
+    3301, 3302, 3303, 3304, 3305, 3306, 3402, 3403, 3404, 3405, 3406, 3407, 3501, 3502, 3504, 3505,
+    3507, 3601, 3602, 3603, 3605, 3701, 3702, 3703, 3704, 3706, 3707,
+];
+
+pub const OUTDOOR_PARTY_SPELLS: &[i16] = &[
+    1105, 1301, 1302, 1303, 1304, 1305, 1306, 1307, 1505, 1706, 3401,
+];
+pub const OUTDOOR_TARGET_SPELLS: &[i16] = &[
+    1101, 1201, 1202, 1203, 1204, 1205, 1206, 1207, 1401, 1405, 1503, 1602, 1604, 1703, 1704, 1705,
+    3201, 3202, 3203, 3204, 3301, 3303, 3304, 3305, 3505, 3603, 3605, 3703, 3704, 3705, 3707,
+];
+
+pub const PARTY_SPELLS: &[i16] = &[1102, 1103, 1407, 1501, 1507, 1605, 3101, 3103, 3406, 3606];
+
 #[derive(Clone, Copy, Debug)]
 pub struct CastRequest {
+    pub rotation: u8,
     pub spell: i16,
     pub power: i16,
     pub target: Option<(i16, i16)>,
@@ -22,6 +43,7 @@ pub struct PartyCastResult {
     pub packet: Vec<u8>,
     pub identity: [i16; 3],
     pub count: i16,
+    pub scenario_duration: Option<i16>,
     pub events: Vec<Event>,
 }
 
@@ -40,7 +62,11 @@ pub fn cast_party(
     let packet = validate_party(warriors, mission, disabled, request)?;
     let actor = &warriors[request.warrior];
     let charge = cost(&packet, request.power)?;
-    let identity = [0, 0, 2];
+    let identity = [
+        request.spell / 1000 - 1,
+        request.spell % 1000 / 100 - 1,
+        request.spell % 100 - 1,
+    ];
     let mut result = PartyCastResult {
         warriors: warriors.to_vec(),
         memory: memory.to_vec(),
@@ -48,6 +74,7 @@ pub fn cast_party(
         packet: packet.clone(),
         identity,
         count: request.power,
+        scenario_duration: None,
         events: vec![Event::Sound {
             resource_id: word(&packet, 36)?.wrapping_neg(),
         }],
@@ -61,14 +88,24 @@ pub fn cast_party(
             value,
         );
     }
+    if packet[1] != 7 {
+        return Ok(result);
+    }
     let mut next_random = random.clone();
     let mut duration = next_random.range(i16::from(packet[13] as i8), i16::from(packet[14] as i8));
-    for _ in 0..request.power {
-        duration = duration.wrapping_add(
-            next_random.range(i16::from(packet[15] as i8), i16::from(packet[16] as i8)),
-        );
+    if packet[15] != 0 {
+        for _ in 0..request.power {
+            duration = duration.wrapping_add(
+                next_random.range(i16::from(packet[15] as i8), i16::from(packet[16] as i8)),
+            );
+        }
     }
-    super::party_buffs::extend_inertial(&mut result.buffs, duration)?;
+    let effect = word(&packet, 40)?;
+    if effect == 110 {
+        result.scenario_duration = Some(duration);
+    } else {
+        super::party_buffs::extend(&mut result.buffs, effect, duration)?;
+    }
     *random = next_random;
     Ok(result)
 }
@@ -79,7 +116,11 @@ pub fn validate_party(
     disabled: u8,
     request: PartyCastRequest,
 ) -> Result<Vec<u8>, RuleError> {
-    if request.spell != 1103 || !matches!(request.power, 1 | 2) {
+    if (!PARTY_SPELLS.contains(&request.spell)
+        && !OUTDOOR_PARTY_SPELLS.contains(&request.spell)
+        && !OUTDOOR_TARGET_SPELLS.contains(&request.spell))
+        || !(1..=7).contains(&request.power)
+    {
         return Err(RuleError::Unsupported {
             action: "psi.party",
             dependency: "other outdoor learned spell or power",
@@ -109,6 +150,17 @@ pub fn validate_party(
         ));
     }
     let packet = packet(mission, request.spell)?;
+    if !mode_allowed(&packet, false)? {
+        return Err(RuleError::Refused {
+            feedback: vec![crate::feedback::NativeFeedback::Warning { index: 22 }],
+        });
+    }
+    if !((packet[1] == 7 && matches!(word(&packet, 40)?, 0..=9 | 110))
+        || (matches!(packet[1], 0 | 1 | 3 | 4 | 9)
+            && (matches!(word(&packet, 40)?, 1..=40 | 57 | 64))))
+    {
+        return Err(RuleError::Invalid("psi unavailable outdoors".into()));
+    }
     let charge = cost(&packet, request.power)?;
     if actor.psi_points()? < charge {
         return Err(RuleError::Invalid("insufficient psi".into()));
@@ -193,12 +245,14 @@ pub fn validate(
     disabled: u8,
     request: CastRequest,
 ) -> Result<(), RuleError> {
-    if !matches!(request.spell, 1101 | 1305 | 2101 | 2204 | 2302) || !matches!(request.power, 1 | 2)
-    {
+    if !COMBAT_SPELLS.contains(&request.spell) || !(1..=7).contains(&request.power) {
         return Err(RuleError::Unsupported {
             action: "combat.player_psi",
             dependency: "other learned spell or power",
         });
+    }
+    if request.rotation > 3 {
+        return Err(RuleError::Invalid("psi rotation".into()));
     }
     let actor = combat
         .active_body()
@@ -214,12 +268,25 @@ pub fn validate(
     }
     let packet = packet(mission, request.spell)?;
     if !mode_allowed(&packet, true)? {
-        return Err(RuleError::Invalid("psi unavailable in combat".into()));
+        return Err(RuleError::Refused {
+            feedback: vec![crate::feedback::NativeFeedback::Warning { index: 23 }],
+        });
     }
     if warriors[actor as usize].psi_points()? < cost(&packet, request.power)? {
         return Err(RuleError::Invalid("insufficient psi".into()));
     }
-    if request.spell == 2302 {
+    if packet[1] == 7 {
+        if range(&packet, request.power)? != 0
+            || !(0..10).contains(&word(&packet, 40)?)
+            || request.target.is_some()
+        {
+            return Err(RuleError::Invalid(
+                "party spell uses automatic caster targeting".into(),
+            ));
+        }
+        return Ok(());
+    }
+    if matches!(packet[1], 9 | 10 | 12) {
         if request.target.is_some() {
             return Err(RuleError::Invalid(
                 "global psi spell does not take a point target".into(),
@@ -236,22 +303,41 @@ pub fn validate(
         .get(actor as usize)
         .ok_or_else(|| RuleError::Invalid("psi caster position missing".into()))?;
     if !in_range(from, target, range(&packet, request.power)?) {
-        return Err(RuleError::Invalid("psi target outside range".into()));
+        return Err(RuleError::Refused {
+            feedback: vec![crate::feedback::NativeFeedback::Combat {
+                kind: crate::feedback::CombatRefusal::OutOfRange,
+            }],
+        });
     }
     let center = (
         i32::from(target.0) + i32::from(combat.map.shift.0) + 5,
         i32::from(target.1) + i32::from(combat.map.shift.1) + 5,
     );
-    if request.spell == 1101 {
-        support_body(combat, warriors, target)?;
-        return Ok(());
-    }
-    if matches!(request.spell, 1305 | 2101)
+    if i16::from(packet[2] as i8) + i16::from(packet[3] as i8) > 0
         && !lifecycle::can_see(combat, mission, from, target, 0)?
     {
-        return Err(RuleError::Invalid("psi target outside sight".into()));
+        return Err(RuleError::Refused {
+            feedback: vec![crate::feedback::NativeFeedback::Combat {
+                kind: crate::feedback::CombatRefusal::Blocked,
+            }],
+        });
     }
-    let shape = usize::from(packet[31]);
+    if packet[1] < 2 {
+        selected_body(combat, warriors, target)?;
+        return Ok(());
+    }
+    let shape = match packet[1] {
+        3 => {
+            usize::from(packet[31])
+                + if packet[7] != 0 {
+                    usize::from(request.rotation)
+                } else {
+                    0
+                }
+        }
+        4 => request.power as usize,
+        _ => 1,
+    };
     if shape == 0 {
         return Err(RuleError::Invalid("psi area missing".into()));
     }
@@ -271,13 +357,8 @@ pub fn validate(
                 let body = combat.map.tiles
                     [(center.0 - 3 + x as i32) as usize * 90 + (center.1 - 3 + y as i32) as usize]
                     .wrapping_abs();
-                if (0..110).contains(&body)
-                    && (body >= 6 || word(&warriors[body as usize].bytes, 0x9a)? != 0)
-                {
-                    return Err(RuleError::Unsupported {
-                        action: "combat.player_psi",
-                        dependency: "other support target or reflection",
-                    });
+                if (6..10).contains(&body) {
+                    return Err(RuleError::Invalid("empty support body".into()));
                 }
             }
         }
@@ -285,28 +366,24 @@ pub fn validate(
     Ok(())
 }
 
-fn support_body(
+pub(crate) fn selected_body(
     combat: &Combat,
     warriors: &[Warrior],
     target: (i16, i16),
 ) -> Result<i16, RuleError> {
     let cell = OpeningMission::index(
-        i32::from(target.0) + i32::from(combat.map.shift.0) + 5,
-        i32::from(target.1) + i32::from(combat.map.shift.1) + 5,
+        i32::from(target.0 + combat.map.shift.0 + 5),
+        i32::from(target.1 + combat.map.shift.1 + 5),
     )?;
     let body = combat.map.tiles[cell].wrapping_abs();
-    if !(0..6).contains(&body) || body as usize >= warriors.len() {
-        return Err(RuleError::Invalid(
-            "support psi requires an occupied warrior body".into(),
-        ));
+    if (0..warriors.len() as i16).contains(&body) && warriors[body as usize].bytes[0x9df] != 0
+        || (10..10 + combat.enemies.records.len() as i16).contains(&body)
+            && word(&combat.enemies.records[(body - 10) as usize].bytes, 0x110)? > 0
+    {
+        Ok(body)
+    } else {
+        Err(RuleError::Refused { feedback: vec![] })
     }
-    if word(&warriors[body as usize].bytes, 0x9a)? != 0 {
-        return Err(RuleError::Unsupported {
-            action: "combat.player_psi",
-            dependency: "support spell reflection",
-        });
-    }
-    Ok(body)
 }
 
 pub fn cast(
@@ -318,6 +395,35 @@ pub fn cast(
     disabled: u8,
     request: CastRequest,
 ) -> Result<Vec<Event>, RuleError> {
+    if packet(mission, request.spell)?[1] == 7 {
+        return Err(RuleError::Unsupported {
+            action: "combat.player_psi",
+            dependency: "party duration state required",
+        });
+    }
+    cast_with_buffs(
+        combat,
+        warriors,
+        mission,
+        random,
+        memory,
+        &mut vec![0; 20],
+        disabled,
+        request,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cast_with_buffs(
+    combat: &mut Combat,
+    warriors: &mut [Warrior],
+    mission: &OpeningMission,
+    random: &mut RandomState,
+    memory: &mut Vec<u8>,
+    buffs: &mut Vec<u8>,
+    disabled: u8,
+    request: CastRequest,
+) -> Result<Vec<Event>, RuleError> {
     validate(combat, warriors, mission, disabled, request)?;
     if memory.len() != 480 {
         return Err(RuleError::Invalid("psi memory size".into()));
@@ -326,31 +432,82 @@ pub fn cast(
     let mut next_warriors = warriors.to_vec();
     let mut next_random = random.clone();
     let mut next_memory = memory.clone();
+    let mut next_buffs = buffs.clone();
     let events = cast_inner(
         &mut next_combat,
         &mut next_warriors,
         mission,
         &mut next_random,
         &mut next_memory,
+        &mut next_buffs,
         request,
+        CastPayment::Charge,
     )?;
     *combat = next_combat;
     warriors.clone_from_slice(&next_warriors);
     *random = next_random;
     *memory = next_memory;
+    *buffs = next_buffs;
     Ok(events)
 }
 
+enum CastPayment {
+    Charge,
+    Prepared,
+    AdditionalTarget,
+}
+
+pub(crate) fn cast_selection(
+    state: &mut Session,
+    mission: &OpeningMission,
+    selection: &super::psi_selection::Selection,
+) -> Result<Vec<Event>, RuleError> {
+    let mut events = vec![];
+    let combat = state.combat.as_mut().ok_or("psi combat missing")?;
+    let memory = state.psi_memory.as_mut().ok_or("psi memory missing")?;
+    for (index, body) in selection.targets.iter().copied().enumerate() {
+        let target = if body < 10 {
+            combat.squad.positions[body as usize]
+        } else {
+            combat.enemies.positions[(body - 10) as usize]
+        };
+        events.extend(cast_inner(
+            combat,
+            &mut state.warriors,
+            mission,
+            &mut state.random,
+            memory,
+            &mut state.party_buffs,
+            CastRequest {
+                spell: selection.spell,
+                power: selection.power,
+                target: Some(target),
+                rotation: 0,
+            },
+            if index == 0 {
+                CastPayment::Prepared
+            } else {
+                CastPayment::AdditionalTarget
+            },
+        )?);
+    }
+    Ok(events)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn cast_inner(
     combat: &mut Combat,
     warriors: &mut [Warrior],
     mission: &OpeningMission,
     random: &mut RandomState,
     memory: &mut [u8],
+    buffs: &mut [u8],
     request: CastRequest,
+    payment: CastPayment,
 ) -> Result<Vec<Event>, RuleError> {
     let actor = combat.active_body().unwrap() as usize;
     let packet = packet(mission, request.spell)?;
+    combat.inactive_rounds = 0;
     let descriptor = [
         request.spell / 1000 - 1,
         request.spell % 1000 / 100 - 1,
@@ -359,38 +516,58 @@ fn cast_inner(
     combat.attack_packet = Some(packet.clone());
     combat.attack_identity = Some(descriptor);
     let w = &mut warriors[actor].bytes;
-    let remaining = word(w, 0x58)?.wrapping_sub(cost(&packet, request.power)?);
-    put_word(w, 0x58, remaining);
-    let casts = i32::from_be_bytes(w[0xa66..0xa6a].try_into().unwrap()).wrapping_add(1);
-    w[0xa66..0xa6a].copy_from_slice(&casts.to_be_bytes());
-    for (offset, value) in [
-        (0xac8, word(w, 0xac8)?.wrapping_add(1)),
-        (0x3c, word(w, 0x3c)?.wrapping_sub(3).max(0)),
-        (0x40, word(w, 0x40)?.wrapping_sub(2)),
-    ] {
-        put_word(w, offset, value);
+    if matches!(payment, CastPayment::Charge) {
+        let remaining = word(w, 0x58)?.wrapping_sub(cost(&packet, request.power)?);
+        put_word(w, 0x58, remaining);
+        let casts = i32::from_be_bytes(w[0xa66..0xa6a].try_into().unwrap()).wrapping_add(1);
+        w[0xa66..0xa6a].copy_from_slice(&casts.to_be_bytes());
+        let count = word(w, 0xac8)?.wrapping_add(1);
+        put_word(w, 0xac8, count);
+    }
+    if !matches!(payment, CastPayment::AdditionalTarget) {
+        let movement = word(w, 0x3c)?.wrapping_sub(3).max(0);
+        let points = word(w, 0x40)?.wrapping_sub(2);
+        put_word(w, 0x3c, movement);
+        put_word(w, 0x40, points);
     }
     let mut events = vec![];
-    let mask = if request.spell == 2302 {
+    if matches!(packet[1], 9 | 10) {
+        events.push(Event::Feedback(crate::feedback::NativeFeedback::Flash {
+            address: if packet[1] == 9 { 0x401840 } else { 0x401820 },
+            x: 325,
+            y: 322,
+            wait: 60,
+            sound: 0,
+        }));
+    }
+    let mask = if matches!(packet[1], 9 | 10 | 12) {
         let mut mask = [0; 110];
         for (body, warrior) in warriors.iter().enumerate() {
-            if warrior.bytes[0x9df] != 0 && word(&warrior.bytes, 0x10)? != 0 {
+            if warrior.bytes[0x9df] != 0
+                && (packet[1] == 12 || (word(&warrior.bytes, 0x10)? == 0) == (packet[1] == 9))
+            {
                 mask[body] = 1;
             }
         }
         for (index, enemy) in combat.enemies.records.iter().enumerate() {
-            if word(&enemy.bytes, 0x110)? > 0 && word(&enemy.bytes, 0xe)? != 0 {
+            if word(&enemy.bytes, 0x110)? > 0
+                && (packet[1] == 12 || (word(&enemy.bytes, 0xe)? == 0) == (packet[1] == 9))
+            {
                 mask[index + 10] = 1;
             }
         }
         mask
     } else {
-        let target = request.target.unwrap();
-        let target = if request.spell == 1101 {
+        let target = request.target.unwrap_or(combat.squad.positions[actor]);
+        let target = if packet[1] < 2 {
             spells::SpellTarget {
-                first: support_body(combat, warriors, target)?,
+                first: selected_body(combat, warriors, target)?,
                 second: 0,
-                kind: 1,
+                kind: if selected_body(combat, warriors, target)? < 10 {
+                    1
+                } else {
+                    2
+                },
             }
         } else {
             spells::SpellTarget {
@@ -402,7 +579,7 @@ fn cast_inner(
         events.push(Event::Sound {
             resource_id: word(&packet, 36)?,
         });
-        let mask = spells::target_mask(
+        let mask = spells::target_mask_rotated(
             combat,
             warriors,
             &mission.areas,
@@ -417,6 +594,7 @@ fn cast_inner(
             },
             &combat.spell_fields,
             random,
+            request.rotation,
         )?;
         combat.spell_fields = mask.fields;
         mask.mask
@@ -424,20 +602,39 @@ fn cast_inner(
     for (index, value) in descriptor.into_iter().chain([request.power]).enumerate() {
         put_word(memory, actor * 80 + 72 + index * 2, value);
     }
-    if matches!(request.spell, 1101 | 1305) {
-        if request.spell == 1101 && combat.weapon_work.armor_filter()? {
-            return Err(RuleError::Unsupported {
-                action: "combat.player_psi",
-                dependency: "retained armor-filter healing",
-            });
+    if packet[1] == 7 {
+        let mut duration = random.range(i16::from(packet[13] as i8), i16::from(packet[14] as i8));
+        if packet[15] != 0 {
+            for _ in 0..request.power {
+                duration = duration.wrapping_add(
+                    random.range(i16::from(packet[15] as i8), i16::from(packet[16] as i8)),
+                );
+            }
         }
-        let result = spells::resolve_player_support(
+        super::party_buffs::extend(buffs, word(&packet, 40)?, duration)?;
+        return Ok(events);
+    }
+    if packet[9] <= 3
+        && matches!(packet[19], 7 | 8 | 10)
+        && matches!(word(&packet, 40)?, 1..=40 | 57)
+        && (word(&packet, 40)? == 57
+            || (packet[12] == 0
+                && word(&packet, 34)? == 0
+                && packet[23..30].iter().all(|v| *v == 0)))
+    {
+        let result = spells::resolve_support_for_caster(
             warriors,
             &combat.enemies.records,
             &mask,
-            &packet,
             request.spell,
-            request.power,
+            &spells::DirectSpell {
+                packet: &packet,
+                level: descriptor[1],
+                count: request.power,
+                armor_filter: combat.weapon_work.armor_filter()?,
+                weapon_sound: combat.weapon_work.sound()?,
+            },
+            Some(actor as i16),
             random,
         )?;
         warriors.clone_from_slice(&result.warriors);
@@ -456,6 +653,12 @@ fn cast_inner(
                 .map(|resource_id| Event::Sound { resource_id }),
         );
         for (target, outcome) in result.targets {
+            if target >= 10 && outcome.damage != 0 {
+                let w = &mut warriors[actor].bytes;
+                let total = i32::from_be_bytes(w[0xa46..0xa4a].try_into().unwrap())
+                    .wrapping_add(i32::from(outcome.damage));
+                w[0xa46..0xa4a].copy_from_slice(&total.to_be_bytes());
+            }
             events.extend(
                 outcome
                     .sounds
@@ -472,7 +675,11 @@ fn cast_inner(
         }
         return Ok(events);
     }
-    let result = spells::resolve_bodies(
+    let previous_hp = warriors
+        .iter()
+        .map(Warrior::stamina)
+        .collect::<Result<Vec<_>, _>>()?;
+    let result = spells::resolve_bodies_with_memory(
         warriors,
         &combat.enemies.records,
         &mask,
@@ -483,6 +690,7 @@ fn cast_inner(
             armor_filter: combat.weapon_work.armor_filter()?,
             weapon_sound: combat.weapon_work.sound()?,
         },
+        spells::RestrictionMemoryView::ordinary_startup(&mission.item_cache, None),
         random,
     )?;
     warriors.clone_from_slice(&result.warriors);
@@ -496,8 +704,8 @@ fn cast_inner(
             .into_iter()
             .map(|resource_id| Event::Sound { resource_id }),
     );
-    for (target, outcome) in result.targets {
-        if target >= 10 && outcome.damage != 0 {
+    for (target, outcome) in &result.targets {
+        if *target >= 10 && outcome.damage != 0 {
             let w = &mut warriors[actor].bytes;
             let total = i32::from_be_bytes(w[0xa46..0xa4a].try_into().unwrap())
                 .wrapping_add(i32::from(outcome.damage));
@@ -507,22 +715,15 @@ fn cast_inner(
                 w[0xa5a..0xa5e].copy_from_slice(&kills.to_be_bytes());
             }
         }
-        events.extend(
-            outcome
-                .sounds
-                .into_iter()
-                .map(|resource_id| Event::Sound { resource_id }),
-        );
-        if outcome.killed {
-            lifecycle::kill_body(combat, warriors, target as i16)?;
-        }
-        events.push(Event::SpellResolved {
-            caster: Some(actor as i16),
-            spell: request.spell,
-            target: target as i16,
-            damage: outcome.damage,
-            defeated: outcome.killed,
-        });
     }
+    runtime::append_spell_outcomes(
+        combat,
+        warriors,
+        result.targets,
+        result.race_excluded,
+        (Some(actor as i16), request.spell, &packet, &previous_hp),
+        false,
+        &mut events,
+    )?;
     Ok(events)
 }

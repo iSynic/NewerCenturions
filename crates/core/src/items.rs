@@ -313,10 +313,10 @@ pub fn use_ammunition_pack(
     if item.0[9] != 0 {
         return Err(RuleError::Invalid("ammunition pack is equipped".into()));
     }
-    if item.id() != 200 || recipient.inventory()?.len() > 30 {
+    if !(200..400).contains(&item.id()) || item.0[10] != 26 {
         return Err(RuleError::Unsupported {
             action: "ammunition.use",
-            dependency: "incompatible ammunition or extended inventory",
+            dependency: "inventory record is not an ammunition supply",
         });
     }
     if word(&item.0, 2)? <= 0 {

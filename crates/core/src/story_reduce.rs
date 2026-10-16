@@ -5,6 +5,7 @@ pub fn reduce_outdoors(
     warriors: &[Warrior],
     context: &story_health::HealthContext,
     random: &mut RandomState,
+    energy_recovery_disabled: u8,
 ) -> Result<story_health::HealthOutcome, RuleError> {
     if warriors.is_empty() || warriors.len() > 6 {
         return Err(RuleError::Invalid(
@@ -13,15 +14,6 @@ pub fn reduce_outdoors(
     }
     for warrior in warriors {
         span(&warrior.bytes, 0, 3138)?;
-        if [0x8a, 0x8c, 0x98, 0xa0, 0xa2]
-            .iter()
-            .any(|offset| word(&warrior.bytes, *offset).unwrap_or(1) != 0)
-        {
-            return Err(RuleError::Unsupported {
-                action: "time.reduce",
-                dependency: "active damage, stun recovery or energy effects",
-            });
-        }
     }
     let mut outcome = story_health::HealthOutcome {
         warriors: warriors.to_vec(),
@@ -62,6 +54,30 @@ pub fn reduce_outdoors(
         outcome.context = disease.context;
         outcome.events.extend(disease.events);
         outcome.amounts.extend(disease.amounts);
+        for (offset, amount, address) in [(0x8a, None, 0x401948), (0x8c, Some(2), 0x40193a)] {
+            let bytes = &mut outcome.warriors[member].bytes;
+            let before = word(bytes, 0x50)?;
+            let condition = word(bytes, offset)?;
+            if condition != 0 && before > 0 {
+                let amount = amount.unwrap_or(condition.wrapping_abs());
+                bytes[0x50..0x52].copy_from_slice(&before.wrapping_sub(amount).to_be_bytes());
+                outcome.context.effect = 7;
+                if before.wrapping_sub(amount) < 1 {
+                    outcome.context.unavailable = outcome.context.unavailable.wrapping_add(1);
+                    outcome.context.last_body = member as i16;
+                    outcome.events.push(story_health::HealthEvent::Sound(
+                        next_random.bound(2).wrapping_add(506),
+                    ));
+                    outcome.events.push(story_health::HealthEvent::Flash {
+                        address,
+                        sound: 10122,
+                    });
+                    if outcome.context.unavailable >= outcome.warriors.len() as i8 {
+                        outcome.events.push(story_health::HealthEvent::PartyLost);
+                    }
+                }
+            }
+        }
         let poison = crate::combat::natural_conditions::poison_outdoors(
             &outcome.warriors,
             member,
@@ -73,6 +89,11 @@ pub fn reduce_outdoors(
         outcome.events.extend(poison.events);
         outcome.amounts.extend(poison.amounts);
         let bytes = &mut outcome.warriors[member].bytes;
+        energy(bytes, energy_recovery_disabled)?;
+        if word(bytes, 0x98)? != 0 && word(bytes, 0x10)? != 0 {
+            bytes[0x10..0x12].fill(0);
+            outcome.context.unavailable = outcome.context.unavailable.wrapping_sub(1);
+        }
         for offset in (0x5e..0xae).step_by(2) {
             let duration = word(bytes, offset)?;
             if duration > 0 {
@@ -82,4 +103,22 @@ pub fn reduce_outdoors(
     }
     *random = next_random;
     Ok(outcome)
+}
+
+pub(crate) fn energy(bytes: &mut [u8], recovery_disabled: u8) -> Result<(), RuleError> {
+    if word(bytes, 0x50)? > 0 {
+        let drain = word(bytes, 0xa2)?.wrapping_abs();
+        if drain != 0 {
+            let points = word(bytes, 0x58)?.wrapping_sub(drain).max(0);
+            bytes[0x58..0x5a].copy_from_slice(&points.to_be_bytes());
+        }
+        let regeneration = word(bytes, 0xa0)?.wrapping_abs();
+        if recovery_disabled == 0 && regeneration != 0 && word(bytes, 0x5a)? != 0 {
+            let points = word(bytes, 0x58)?
+                .wrapping_add(regeneration)
+                .min(word(bytes, 0x5a)?);
+            bytes[0x58..0x5a].copy_from_slice(&points.to_be_bytes());
+        }
+    }
+    Ok(())
 }

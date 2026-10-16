@@ -2,10 +2,6 @@ use crate::prelude::*;
 
 use centurions_core::walking_header::lookup;
 
-fn fixture() -> Value {
-    crate::support::fixture("regional-move-continuation.json")
-}
-
 fn long(bytes: &[u8], offset: usize) -> i32 {
     i32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }
@@ -25,25 +21,7 @@ fn current_position(snapshot: &Value) -> (i32, i32, i32) {
 
 #[test]
 fn original_caller_captures_current_coordinates_and_skips_header_on_exit() {
-    let fixture = fixture();
-
-    let before_move = &fixture["foundations"][0]["session"];
-    let after_victory = &fixture["foundations"][1]["session"];
-    assert_eq!(before_move["exploration"]["x"], 6);
-    assert_eq!(before_move["exploration"]["y"], 4);
-    assert_eq!(
-        before_move["random"],
-        json!({"seed": 1906898442_u32, "draws": 17571})
-    );
-    assert_eq!(after_victory["exploration"]["x"], 7);
-    assert_eq!(after_victory["exploration"]["y"], 3);
-    assert_eq!(
-        after_victory["random"],
-        json!({"seed": 380869113_u32, "draws": 24319})
-    );
-    assert!(after_victory["combat"].is_null());
-    assert!(after_victory["exploration"]["script"].is_null());
-    assert!(after_victory["exploration"]["presentation"].is_null());
+    let fixture = crate::support::fixture("regional-move-continuation.json");
 
     for case in fixture.array("cases") {
         let (_, x, y) = current_position(&case["before"]);
@@ -58,7 +36,10 @@ fn original_caller_captures_current_coordinates_and_skips_header_on_exit() {
 
 #[test]
 fn walking_header_lookup_matches_continuous_original_prefix_and_full_buffers() {
-    for case in fixture()["cases"].as_array().unwrap() {
+    for case in crate::support::fixture("regional-move-continuation.json")["cases"]
+        .as_array()
+        .unwrap()
+    {
         if !case.n::<bool>("complete_newland_prefix") {
             continue;
         }

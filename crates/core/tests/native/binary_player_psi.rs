@@ -1,24 +1,13 @@
 use crate::prelude::*;
 use crate::support::warriors as party;
 
-fn positions(hex: &str) -> Vec<(i16, i16)> {
-    words(hex)
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|p| (p[0], p[1]))
-        .collect()
-}
-fn fixture() -> Value {
-    crate::support::fixture("player-psi.json")
-}
 use crate::support::assert_bytes;
+use crate::support::positions;
 
 fn controlled(case: &Value) -> Combat {
     let mut order = vec![-1; 110];
     order[1] = 1;
     Combat {
-        difficulty: 0,
         battle: 85,
         map: TacticalMap {
             tiles: words(case.text("map_before")),
@@ -68,6 +57,7 @@ fn verify(
         &mut memory,
         0,
         CastRequest {
+            rotation: 0,
             spell: id,
             power,
             target,
@@ -128,7 +118,7 @@ fn verify(
 
 #[test]
 fn learned_player_psi_matches_96_complete_native_casts() {
-    let data = fixture();
+    let data = crate::support::fixture("player-psi.json");
     let content = content();
     let mission = content.map(0).unwrap();
     let cases = data.array("cases");
@@ -144,8 +134,21 @@ fn learned_player_psi_matches_96_complete_native_casts() {
 }
 #[test]
 fn learned_player_psi_matches_two_native_campaign_inputs() {
-    let data = fixture();
+    let data = crate::support::fixture("player-psi.json");
     let content = content();
+    let startup =
+        std::fs::read(crate::support::root().join("analysis/ghidra/startup/a5-initial.bin"))
+            .unwrap();
+    assert_eq!(
+        digest(&startup),
+        crate::support::fixture("startup.json")["initialized_sha256"]
+    );
+    let retained = centurions_core::combat::weapon_work::WeaponWork {
+        sound: Some(word(&startup, 0x453776 - 0x3fe210).unwrap()),
+        weapon_armor_filter: Some(word(&startup, 0x4537f0 - 0x3fe210).unwrap()),
+        ammunition_armor_filter: Some(word(&startup, 0x45375a - 0x3fe210).unwrap()),
+    };
+    assert_eq!(Session::new(&content).weapon_work, retained);
     let foundation = &data["route_foundation"];
     let combat: Combat = serde_json::from_value(foundation["combat"].clone()).unwrap();
     let mission = content
@@ -163,7 +166,7 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
 }
 #[test]
 fn player_psi_admission_matches_16_native_gates_without_mutation() {
-    let data = fixture();
+    let data = crate::support::fixture("player-psi.json");
     let cases = data.array("gate_cases");
 
     for case in cases {
@@ -183,7 +186,7 @@ fn player_psi_admission_matches_16_native_gates_without_mutation() {
 }
 #[test]
 fn player_psi_affordability_and_range_match_32_native_boundaries() {
-    let data = fixture();
+    let data = crate::support::fixture("player-psi.json");
     let content = content();
     let packet = spells::load_packet(
         &content.map(0).unwrap().combat.as_ref().unwrap().attacks,

@@ -7,6 +7,14 @@ use std::path::{Path, PathBuf};
 pub trait BinaryInput {
     fn binary(&self) -> Cow<'_, [u8]>;
 }
+fn hex_digit(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        b'A'..=b'F' => byte - b'A' + 10,
+        _ => panic!("invalid native fixture hex byte"),
+    }
+}
 impl BinaryInput for str {
     fn binary(&self) -> Cow<'_, [u8]> {
         assert_eq!(self.len() % 2, 0, "native hex record length");
@@ -15,7 +23,7 @@ impl BinaryInput for str {
                 .as_chunks::<2>()
                 .0
                 .iter()
-                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+                .map(|pair| hex_digit(pair[0]) * 16 + hex_digit(pair[1]))
                 .collect(),
         )
     }
@@ -95,6 +103,19 @@ pub fn mission_session(content: &Content) -> Session {
     state
 }
 
+pub fn script_state(record: Vec<u8>, cursor: u8) -> centurions_core::ScriptState {
+    centurions_core::ScriptState {
+        record,
+        cursor,
+        map_slot: 0,
+        item_return: false,
+        scheduled: true,
+        menu: None,
+        persist: false,
+        origin: None,
+    }
+}
+
 pub fn data(name: &str) -> Vec<u8> {
     std::fs::read(
         root()
@@ -102,9 +123,6 @@ pub fn data(name: &str) -> Vec<u8> {
             .join(name),
     )
     .unwrap()
-}
-pub fn attacks() -> Vec<u8> {
-    data("Data S")
 }
 pub fn items() -> Vec<Vec<u8>> {
     data("Data ID")
@@ -115,7 +133,13 @@ pub fn items() -> Vec<Vec<u8>> {
         .collect()
 }
 pub fn assert_bytes(actual: &[u8], expected: &[u8], context: &str) {
-    assert_eq!(actual, expected, "{context}");
+    assert_eq!(actual.len(), expected.len(), "{context}: length");
+    let differing = actual.iter().zip(expected).position(|(a, b)| a != b);
+    assert_eq!(
+        differing.map(|i| (i, actual[i], expected[i])),
+        None,
+        "{context}: first differing byte"
+    );
 }
 
 pub trait NativeScalar: PartialEq + std::fmt::Debug {
@@ -161,10 +185,6 @@ pub fn expect<T: NativeScalar>(actual: T, expected: &Value) {
 pub fn expect_array<T: NativeScalar>(actual: &T, expected: &Value) {
     assert_eq!(actual, &T::from_native(expected));
 }
-#[track_caller]
-pub fn expect_hex(actual: &[u8], expected: &Value) {
-    assert_eq!(actual, bytes(expected));
-}
 pub trait NativeRecord {
     fn record_bytes(&self) -> &[u8];
 }
@@ -178,15 +198,6 @@ impl NativeRecord for centurions_content::combat::MonsterRecord {
         &self.bytes
     }
 }
-#[track_caller]
-pub fn expect_records<T: NativeRecord>(actual: &[T], expected: &Value) {
-    let combined: Vec<u8> = actual
-        .iter()
-        .flat_map(|record| record.record_bytes().iter().copied())
-        .collect();
-    expect_hex(&combined, expected);
-}
-
 pub trait NativeCase {
     fn n<T: NativeScalar>(&self, key: &str) -> T;
     fn text(&self, key: &str) -> &str;
@@ -233,6 +244,10 @@ pub fn battle() -> centurions_core::combat::Combat {
         order: vec![-1; 110],
         cursor: 1,
         round: 0,
+        inactive_rounds: 0,
+        selection_pending: false,
+        script_enemy: 0,
+        selected_enemy: 0,
         round_scripts: Default::default(),
         death_queue: Default::default(),
         spell_fields: vec![0; 1200],
@@ -241,6 +256,8 @@ pub fn battle() -> centurions_core::combat::Combat {
         attack_identity: Some([0; 3]),
         weapon_work: centurions_core::combat::weapon_work::WeaponWork::zero(),
         unavailable: 0,
+        pending_last_defeated: None,
+        firearm_selection: None,
     }
 }
 
@@ -357,12 +374,16 @@ pub fn long_bytes(values: &[i32]) -> Vec<u8> {
 
 #[track_caller]
 pub fn same_session(actual: &centurions_core::Session, expected: &centurions_core::Session) {
+    if actual == expected {
+        return;
+    }
     let actual = serde_json::to_value(actual).unwrap();
     let expected = serde_json::to_value(expected).unwrap();
     if let Some(difference) = crate::native_common::first_difference(&actual, &expected, "session")
     {
         panic!("{difference}");
     }
+    panic!("session differs outside serialized fields");
 }
 
 pub fn buffer(fixture: &Value, value: &Value) -> Vec<u8> {
@@ -401,6 +422,37 @@ pub fn checkpoint(
     restored
 }
 
+#[track_caller]
+pub fn replay_command(
+    command: Command,
+    state: &mut Session,
+    resumed: &mut Session,
+    content: &Content,
+) -> Vec<centurions_core::Event> {
+    let events = apply(command.clone(), state, content).unwrap();
+    assert_eq!(apply(command, resumed, content).unwrap(), events);
+    same_session(state, resumed);
+    events
+}
+
+pub fn replay_rng(random: &mut centurions_core::RandomState, receipts: &[Value]) {
+    for receipt in receipts {
+        expect(random.bound(receipt.n::<i16>("bound")), &receipt["result"]);
+    }
+}
+
+pub fn advance_rng<'a>(
+    random: &mut centurions_core::RandomState,
+    receipts: &mut impl Iterator<Item = &'a Value>,
+    draws: u64,
+) {
+    while random.draws < draws {
+        let receipt = receipts.next().unwrap();
+        expect(random.bound(receipt.n::<i16>("bound")), &receipt["result"]);
+    }
+    assert_eq!(random.draws, draws);
+}
+
 pub fn reject_command(
     state: &centurions_core::Session,
     content: &centurions_content::Content,
@@ -411,13 +463,57 @@ pub fn reject_command(
     same_session(&candidate, state);
 }
 
-pub fn compare_party(actual: &[centurions_content::Warrior], snapshot: &Value) {
-    expect_records(actual, &snapshot["party"]);
+pub fn refuse_command(
+    state: &Session,
+    content: &Content,
+    command: Command,
+    feedback: Vec<centurions_core::feedback::NativeFeedback>,
+) {
+    let mut candidate = state.clone();
+    let events = apply(command, &mut candidate, content).unwrap();
+    assert_eq!(
+        events,
+        feedback
+            .into_iter()
+            .map(centurions_core::Event::Feedback)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(candidate.warriors, state.warriors);
+    assert_eq!(candidate.random, state.random);
+    let (after, before) = (
+        candidate.combat.as_ref().unwrap(),
+        state.combat.as_ref().unwrap(),
+    );
+    assert_eq!(
+        (
+            &after.map,
+            &after.squad,
+            &after.enemies,
+            after.cursor,
+            &after.order
+        ),
+        (
+            &before.map,
+            &before.squad,
+            &before.enemies,
+            before.cursor,
+            &before.order
+        )
+    );
 }
 
-pub fn compare_record_bytes(
+pub fn compare_party(actual: &[centurions_content::Warrior], snapshot: &Value) {
+    compare_party_named(actual, snapshot, "party");
+}
+
+pub fn compare_party_named(
     actual: &[centurions_content::Warrior],
-    expected: &[centurions_content::Warrior],
+    snapshot: &Value,
+    context: &str,
 ) {
+    assert_bytes(&record_bytes(actual), &bytes(&snapshot["party"]), context);
+}
+
+pub fn compare_record_bytes<T: NativeRecord>(actual: &[T], expected: &[T]) {
     assert_eq!(record_bytes(actual), record_bytes(expected));
 }

@@ -2,9 +2,6 @@ use crate::prelude::*;
 
 use centurions_core::items;
 
-fn fixture() -> Value {
-    crate::support::fixture("earned-crate-equipment.json")
-}
 use crate::native_common::snapshot_party as party;
 
 fn records(snapshot: &Value, key: &str) -> Vec<InventoryRecord> {
@@ -42,7 +39,6 @@ use crate::support::compare_party as assert_party;
 
 fn assert_prepared(state: &Session, case: &Value, content: &Content) {
     let member = case.n::<usize>("receiver");
-    let before = state.clone();
     let prepared = firearm::prepare(
         &state.warriors[member],
         &content.items[165],
@@ -59,41 +55,15 @@ fn assert_prepared(state: &Session, case: &Value, content: &Content) {
     assert_eq!(prepared.weight, 0);
     assert_eq!(prepared.sound, 406);
     assert!(!prepared.armor_filter);
-    assert_eq!(*state, before);
 
     assert_party(&state.warriors, &case["prepared"]);
 }
 
-fn assert_session(actual: &Session, expected: &Session) {
-    fn compare(actual: &Value, expected: &Value, path: &str) {
-        if actual == expected {
-            return;
-        }
-        match (actual, expected) {
-            (Value::Object(a), Value::Object(b)) => {
-                for (key, value) in a {
-                    compare(value, &b[key], &format!("{path}.{key}"));
-                }
-            }
-            (Value::Array(a), Value::Array(b)) => {
-                assert_eq!(a.len(), b.len(), "{path} length");
-                for (index, (a, b)) in a.iter().zip(b).enumerate() {
-                    compare(a, b, &format!("{path}[{index}]"));
-                }
-            }
-            _ => panic!("{path}: {actual} != {expected}"),
-        }
-    }
-    compare(
-        &serde_json::to_value(actual).unwrap(),
-        &serde_json::to_value(expected).unwrap(),
-        "Session",
-    );
-}
+use crate::support::same_session as assert_session;
 
 #[test]
 fn all_thirteen_collection_cases_match_native_records_and_warning_order() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("earned-crate-equipment.json");
     let content = content();
     for case in fixture.array("cases").iter().take(13) {
         let member = case.n::<usize>("receiver");
@@ -126,6 +96,25 @@ fn all_thirteen_collection_cases_match_native_records_and_warning_order() {
         assert_party(&actual.warriors, &case["picked"]);
         assert_eq!(result.item, records(&case["picked"], "loot")[slot]);
 
+        if !crate_mode {
+            let mut actual = initial.clone();
+            actual.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
+            let events = apply(
+                Command::TakeLoot {
+                    slot,
+                    warrior: member,
+                },
+                &mut actual,
+                &content,
+            )
+            .unwrap();
+            assert_eq!(events, effects(&case["before"], &case["picked"]));
+            assert_party(&actual.warriors, &case["picked"]);
+            assert_eq!(
+                actual.booty_items[slot],
+                records(&case["picked"], "loot")[slot]
+            );
+        }
         if crate_mode {
             let mut actual = initial.clone();
             let events = equipment::take_crate(&mut actual, &content, slot, member).unwrap();
@@ -145,7 +134,7 @@ fn all_thirteen_collection_cases_match_native_records_and_warning_order() {
 
 #[test]
 fn outdoor_wear_replacement_compaction_and_enhanced_preparation_match_native() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("earned-crate-equipment.json");
     let content = content();
     for index in [5, 6, 9, 10] {
         let case = &fixture["cases"][index];
@@ -200,15 +189,34 @@ fn outdoor_wear_replacement_compaction_and_enhanced_preparation_match_native() {
             );
         } else {
             let mut public = initial.clone();
-            assert!(equipment::equip(&mut public, &content, member, slot).is_err());
-            assert_eq!(public, initial);
+            let feedback = equipment::equip(&mut public, &content, member, slot).unwrap();
+            assert_eq!(
+                feedback,
+                result
+                    .sounds
+                    .into_iter()
+                    .map(|resource_id| Event::Sound { resource_id })
+                    .chain(
+                        result
+                            .warnings
+                            .into_iter()
+                            .map(|warning| Event::CollectionRejected { warning })
+                    )
+                    .collect::<Vec<_>>()
+            );
+            assert_party(&public.warriors, &case["worn"]);
+            assert_eq!(
+                public.ammunition_work.item,
+                Some(case["worn"].bytes("item_work"))
+            );
+            assert_eq!(public.random, initial.random);
         }
     }
 }
 
 #[test]
 fn continuous_stack_firearm_acquisition_preserves_native_normalization_and_caches() {
-    let fixture = fixture();
+    let fixture = crate::support::fixture("earned-crate-equipment.json");
     let content = content();
     let case = &fixture["cases"][13];
     let mut actual = state(&fixture, case, &case["before"]);

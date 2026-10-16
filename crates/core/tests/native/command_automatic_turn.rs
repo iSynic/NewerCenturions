@@ -101,9 +101,7 @@ fn native_automatic_turns_preserve_complete_state_events_and_save_resume() {
                 }
             };
             let mut resumed = crate::support::checkpoint(&state, &content, "automatic-before");
-            let events = apply(command.clone(), &mut state, &content).unwrap();
-            assert_eq!(apply(command, &mut resumed, &content).unwrap(), events);
-            crate::support::same_session(&state, &resumed);
+            let events = replay_command(command, &mut state, &mut resumed, &content);
             let mut expected = original;
             project(&mut expected, after, owned);
             expected.ammunition_work.item = Some(after.bytes("item_work"));

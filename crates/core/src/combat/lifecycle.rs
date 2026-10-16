@@ -5,6 +5,7 @@ pub fn kill_body(
     warriors: &mut [Warrior],
     body: i16,
 ) -> Result<(), RuleError> {
+    combat.pending_last_defeated = Some(body);
     let (position, under) = if (0..6).contains(&body) {
         let w = &mut warriors[body as usize].bytes;
         if word(w, 0x10)? == 0 && word(w, 0x90)? < 1 {

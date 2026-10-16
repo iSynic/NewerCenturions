@@ -187,6 +187,11 @@ pub(crate) fn read_file(path: &Path) -> Result<Vec<u8>, ContentError> {
     Ok(fs::read(path)?)
 }
 
+pub fn data_file(path: &Path) -> Result<Vec<u8>, ContentError> {
+    let raw = read_file(path)?;
+    Ok(fork_payload(&raw, 1)?.to_vec())
+}
+
 pub(crate) fn read_data(root: &Path, relative: &str) -> Result<Vec<u8>, ContentError> {
     let relative = if root.join("Data Files").is_dir() {
         relative
