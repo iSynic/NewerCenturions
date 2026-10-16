@@ -134,7 +134,10 @@ pub fn restore(
     Ok(result)
 }
 
-fn placement_passable(body: &PlacedBody, mission: &OpeningMission) -> Result<bool, RuleError> {
+pub(crate) fn placement_passable(
+    body: &PlacedBody,
+    mission: &OpeningMission,
+) -> Result<bool, RuleError> {
     let size = size(&body.monster)?;
     for (offset, occupied, anchor) in [
         (0x11e, true, true),

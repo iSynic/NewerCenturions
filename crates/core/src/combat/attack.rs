@@ -3,9 +3,33 @@ use damage::{DamageFlags, DamagePacket, resolve_damage};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct AttackResult {
+    pub feedback: Option<AttackFeedback>,
     pub damage: i16,
     pub killed: bool,
     pub sounds: Vec<i16>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct AttackFeedback {
+    pub code: i16,
+    pub amount: i16,
+    pub recipient: AttackRecipient,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum AttackRecipient {
+    Attacker,
+    Defender,
+}
+
+impl AttackFeedback {
+    pub(crate) fn defender(code: i16, amount: i16) -> Self {
+        Self {
+            code,
+            amount,
+            recipient: AttackRecipient::Defender,
+        }
+    }
 }
 
 fn increment_long(bytes: &mut [u8], offset: usize, value: i32) {
@@ -112,6 +136,7 @@ fn unarmed_attack_inner(
     if word(w, 0xacc)? >= word(w, 0xaca)? {
         return Ok((
             AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![45],
@@ -159,6 +184,7 @@ fn unarmed_attack_inner(
         increment_long(w, 0xa52, 1);
         return Ok((
             AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![],
@@ -176,6 +202,7 @@ fn unarmed_attack_inner(
     if rejected {
         return Ok((
             AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![],
@@ -212,6 +239,7 @@ fn unarmed_attack_inner(
         increment_long(w, 0xa52, 1);
         return Ok((
             AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![],
@@ -240,6 +268,7 @@ fn unarmed_attack_inner(
         };
         return Ok((
             AttackResult {
+                feedback: None,
                 damage,
                 killed: health < 1,
                 sounds: vec![sound],
@@ -266,6 +295,7 @@ fn unarmed_attack_inner(
     };
     Ok((
         AttackResult {
+            feedback: None,
             damage,
             killed,
             sounds: vec![sound],
@@ -326,11 +356,38 @@ pub fn natural_attack_with_buffs(
     buffs: &[u8],
     difficulty: i16,
 ) -> Result<(AttackResult, Vec<u8>), RuleError> {
+    let (result, packet, _) = natural_attack_with_target(
+        warrior,
+        enemy,
+        attack_index,
+        random,
+        Some(attacks),
+        retained,
+        buffs,
+        difficulty,
+    )?;
+    Ok((result, packet))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn natural_attack_with_target(
+    warrior: &mut Warrior,
+    enemy: &mut MonsterRecord,
+    attack_index: usize,
+    random: &mut RandomState,
+    attacks: Option<&[u8]>,
+    retained: &[u8],
+    buffs: &[u8],
+    difficulty: i16,
+) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
     super::party_buffs::validate(buffs)?;
     if retained.len() != 58 {
         return Err(RuleError::Invalid("retained attack packet size".into()));
     }
-    let base = attack_packet(attacks)?;
+    let base = attacks
+        .map(attack_packet)
+        .transpose()?
+        .unwrap_or_else(default_attack_packet);
     let (mut next_warrior, mut next_enemy, mut next_random) =
         (warrior.clone(), enemy.clone(), random.clone());
     let result = natural_attack_inner(
@@ -348,6 +405,55 @@ pub fn natural_attack_with_buffs(
     Ok(result)
 }
 
+pub(crate) fn resolve_reflected_attack(
+    target: &mut [u8],
+    packet: &[u8],
+    index: usize,
+    natural: bool,
+    random: &mut RandomState,
+) -> Result<AttackResult, RuleError> {
+    let source = target.to_vec();
+    target[0x105] = 1;
+    let resolved = resolve_damage(
+        target,
+        true,
+        &DamagePacket {
+            bytes: packet.to_vec(),
+            attack_count: 0,
+        },
+        DamageFlags {
+            armor: true,
+            saves: true,
+            ..Default::default()
+        },
+        random,
+    )?;
+    let condition = source[0x96 + index * 4];
+    let mut damage = resolved.total;
+    let mut feedback = None;
+    if damage != 0 && natural {
+        if let Some(effect) =
+            super::natural_conditions::monster_attack_effect(target, &source, index, random)?
+        {
+            feedback = effect.feedback;
+            damage = damage.wrapping_add(effect.extra_damage);
+            if condition == 10 && effect.applied {
+                put_word(target, 0x10c, -1);
+            }
+        } else {
+            damage = 0;
+        }
+    }
+    let health = word(target, 0x110)?.wrapping_sub(damage);
+    put_word(target, 0x110, health);
+    Ok(AttackResult {
+        feedback,
+        damage,
+        killed: health < 1,
+        sounds: vec![],
+    })
+}
+
 fn natural_attack_inner(
     warrior: &mut Warrior,
     enemy: &mut MonsterRecord,
@@ -356,7 +462,7 @@ fn natural_attack_inner(
     mut packet: Vec<u8>,
     buffs: &[u8],
     difficulty: i16,
-) -> Result<(AttackResult, Vec<u8>), RuleError> {
+) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
     let w = &mut warrior.bytes;
     let m = &mut enemy.bytes;
     if attack_index >= 6 {
@@ -371,9 +477,7 @@ fn natural_attack_inner(
     // attack2102038 clears any previously loaded ranged ID before natural damage.
     if !matches!(word(m, 0x28)?, 0 | 9)
         || (word(m, 0x28)? == 9 && !matches!(word(m, 0x4e)?, 0 | 9))
-        || !matches!(condition, 0 | 4 | 5 | 9 | 14)
-        || word(w, 0x9c)? != 0
-        || word(w, 0x60)? != 0
+        || !matches!(condition, 0 | 1 | 2 | 4 | 5 | 6 | 9 | 10 | 11 | 14 | 17)
     {
         return Err(RuleError::Unsupported {
             action: "combat.attack",
@@ -404,20 +508,25 @@ fn natural_attack_inner(
     if (m[0xac] != 0 || m[0xad] != 0) && word(w, 0x8a)? != 0 {
         hit = hit.wrapping_sub(10);
     }
-    if random.bound(100)
-        > hit.clamp(
+    let hit = random.bound(100)
+        <= hit.clamp(
             15_i16.wrapping_sub(difficulty.wrapping_mul(5)),
             90_i16.wrapping_sub(difficulty.wrapping_mul(5)),
-        )
-    {
-        increment_long(w, 0xa56, 1);
+        );
+    let reflected = word(w, 0x9c)? != 0 && random.bound(100) < 34 && word(m, 0xc)? == 0;
+    if !hit {
+        if !reflected {
+            increment_long(w, 0xa56, 1);
+        }
         return Ok((
             AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![],
             },
             packet,
+            reflected,
         ));
     }
     let bonus = word(m, 0x40)?.wrapping_add(i16::from(m[0xd2] as i8));
@@ -453,6 +562,10 @@ fn natural_attack_inner(
             impact
         },
     );
+    if reflected {
+        let result = resolve_reflected_attack(m, &packet, attack_index, true, random)?;
+        return Ok((result, packet, true));
+    }
     let resolved = resolve_damage(
         w,
         false,
@@ -471,60 +584,29 @@ fn natural_attack_inner(
         increment_long(w, 0xa56, 1);
         return Ok((
             AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![],
             },
             packet,
+            reflected,
         ));
     }
+    let natural = super::natural_conditions::warrior_attack_effect(
+        w,
+        m,
+        attack_index,
+        word(buffs, 14)? != 0,
+        random,
+    )?;
     let mut damage = resolved.total;
-    if condition != 0 {
-        let strength = random.range(word(m, 0)? / 2, word(m, 0)?).max(1);
-        if condition == 9
-            && let Some(duration) =
-                super::natural_conditions::disease_duration(w, strength, random)?
-        {
-            put_word(w, 0x96, duration);
-        }
-        if condition == 5
-            && let Some(duration) = super::natural_conditions::poison_duration(w, strength, random)?
-        {
-            put_word(w, 0x64, duration);
-        }
-        if condition == 4 {
-            let saved = random.bound(100) <= word(w, 0x122)?;
-            let previous = word(w, 0x62)?;
-            if !saved && previous >= 0 {
-                let duration = previous.wrapping_add(strength.wrapping_abs());
-                if duration < 30 {
-                    put_word(w, 0x62, duration);
-                }
-                for offset in [0x3c, 0x40] {
-                    let remaining = word(w, offset)? / 2;
-                    put_word(w, offset, remaining);
-                }
-            }
-        }
-    }
     let mut sounds = vec![];
     if let Some(adjusted) = super::party_buffs::attack2_damage(buffs, 0, damage)? {
         damage = adjusted;
         sounds.push(-694);
     }
-    if condition == 14 {
-        let mut extra = random.bound(i16::from(m[0x94 + attack_index * 4] as i8));
-        if word(w, 0x32)? == 3 {
-            extra = extra.wrapping_mul(2);
-        }
-        if random.bound(100) <= word(w, 0x11a)? {
-            extra /= 2;
-        }
-        if word(w, 0x76)? != 0 {
-            extra /= 2;
-        }
-        damage = damage.wrapping_add(extra);
-    }
+    damage = damage.wrapping_add(natural.extra_damage);
     increment_long(w, 0xa42, i32::from(damage));
     increment_long(w, 0xa4e, 1);
     let health = word(w, 0x50)?.wrapping_sub(damage);
@@ -535,10 +617,12 @@ fn natural_attack_inner(
     put_word(w, 0x14, 1);
     Ok((
         AttackResult {
+            feedback: natural.feedback,
             damage,
             killed: health < 1,
             sounds,
         },
         packet,
+        false,
     ))
 }

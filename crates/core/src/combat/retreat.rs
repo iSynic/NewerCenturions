@@ -8,6 +8,15 @@ pub(crate) fn leave_edge(
     content: &Content,
     member: usize,
 ) -> Result<Vec<Event>, RuleError> {
+    leave(state, content, member, true)
+}
+
+pub(crate) fn leave(
+    state: &mut Session,
+    content: &Content,
+    member: usize,
+    edge_message: bool,
+) -> Result<Vec<Event>, RuleError> {
     let c = state.combat.as_mut().ok_or("retreat combat missing")?;
     let point = c.squad.positions[member];
     let cell = OpeningMission::index(
@@ -22,18 +31,19 @@ pub(crate) fn leave_edge(
     w[0x9df] = 0;
     let penalty = i32::from_be_bytes(w[0xa72..0xa76].try_into().unwrap()).wrapping_add(200);
     w[0xa72..0xa76].copy_from_slice(&penalty.to_be_bytes());
-    let mut events = vec![
-        Event::Feedback(NativeFeedback::Flash {
+    let mut events = vec![];
+    if edge_message {
+        events.push(Event::Feedback(NativeFeedback::Flash {
             address: 0x403c3a,
             x: 100,
             y: 100,
             wait: 0,
             sound: 6000,
-        }),
-        Event::CombatantRemoved {
-            body: member as i16,
-        },
-    ];
+        }));
+    }
+    events.push(Event::CombatantRemoved {
+        body: member as i16,
+    });
     if state
         .warriors
         .iter()
@@ -82,6 +92,7 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
         }
         w[0x9df] = 1;
     }
+    state.retain_npcs();
     let combat = state.combat.take().ok_or("retreat combat missing")?;
     state.attack_packet = combat.attack_packet;
     state.attack_identity = combat.attack_identity;

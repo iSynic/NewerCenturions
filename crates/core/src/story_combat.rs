@@ -24,11 +24,7 @@ pub(crate) fn apply(
             combat.unavailable = 0;
             return Ok((vec![], true));
         }
-        let record = combat
-            .enemies
-            .records
-            .get_mut(combat.script_enemy)
-            .ok_or("retained story actor missing")?;
+        let record = combat.story_record_mut(combat.script_enemy)?;
         record.bytes[0x110..0x112].copy_from_slice(&1_i16.to_be_bytes());
         record.bytes[14..16].fill(0);
         record.bytes[0x82] = 1;
@@ -45,12 +41,8 @@ pub(crate) fn apply(
             )
         } else {
             let index = combat.script_enemy;
-            let record = combat
-                .enemies
-                .records
-                .get(index)
-                .ok_or("retained story actor missing")?;
-            (combat.enemies.positions[index], word(&record.bytes, 14)?)
+            let record = combat.story_record(index)?;
+            (combat.story_position(index)?, word(&record.bytes, 14)?)
         }
     } else {
         ((0, 0), 0)

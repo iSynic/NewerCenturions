@@ -56,6 +56,7 @@ impl Inventory {
             members: self.members,
             scroll: self.scroll,
             selected: self.selected,
+            shop_family: self.category,
         }
     }
     pub fn open(&mut self, selected: usize, count: usize) {
@@ -513,7 +514,7 @@ impl Inventory {
             self.detail(content, map, &item, side == 1 && Self::shop(state), assets);
         }
     }
-    fn detail(
+    pub(crate) fn detail(
         &self,
         content: &Content,
         map: &centurions_content::mission::OpeningMission,
@@ -521,9 +522,6 @@ impl Inventory {
         stock: bool,
         assets: &Assets,
     ) {
-        use centurions_core::{
-            recovered_detail_ui::DetailEffect, recovered_drawing::DrawingEffect,
-        };
         let mut key = item.0.to_vec();
         key.push(u8::from(stock));
         for id in [item.id(), word(&item.0, 4).unwrap_or(0)] {
@@ -553,73 +551,9 @@ impl Inventory {
         let Some((_, Ok(plan))) = cached.as_ref() else {
             return;
         };
-        let mut color = YELLOW;
-        let mut position = vec2(0., 0.);
-        let mut size = 12;
-        let rectangle = |r: &centurions_core::recovered_geometry::BodyRect| {
-            Rect::new(
-                r.left as f32,
-                r.top as f32 + 20.,
-                (r.right - r.left) as f32,
-                (r.bottom - r.top) as f32,
-            )
-        };
-        for effect in &plan.effects {
-            match effect {
-                DetailEffect::Drawing(DrawingEffect::ForeColor(value)) => {
-                    color = match value {
-                        205 => RED,
-                        273 => SKYBLUE,
-                        341 => GREEN,
-                        409 => BLUE,
-                        33 => BLACK,
-                        _ => YELLOW,
-                    }
-                }
-                DetailEffect::Drawing(DrawingEffect::TextSize(value)) => size = *value as u16,
-                DetailEffect::Drawing(DrawingEffect::MoveTo {
-                    horizontal,
-                    vertical,
-                }) => position = vec2(*horizontal as f32, *vertical as f32 + 20.),
-                DetailEffect::Drawing(DrawingEffect::DrawString(value)) => {
-                    let text = centurions_content::ui::pascal_text(value.raw()).unwrap_or_default();
-                    assets.text(&text, position.x, position.y, size, color);
-                    position.x += measure_text(&text, Some(&assets.font), size, 1.).width;
-                }
-                DetailEffect::Drawing(DrawingEffect::DrawPicture { handle, bounds }) => {
-                    assets.panel(*handle as i16, rectangle(bounds))
-                }
-                DetailEffect::Drawing(DrawingEffect::PlotColorIcon { handle, rect }) => {
-                    if let Some(image) = assets.icons.get(&(*handle as i16)) {
-                        let r = rectangle(rect);
-                        draw_texture_ex(
-                            image,
-                            r.x,
-                            r.y,
-                            WHITE,
-                            DrawTextureParams {
-                                dest_size: Some(vec2(r.w, r.h)),
-                                ..Default::default()
-                            },
-                        );
-                    }
-                }
-                DetailEffect::TextBox {
-                    bytes,
-                    rectangle: rect,
-                    ..
-                } => {
-                    let bytes = &bytes[..bytes
-                        .iter()
-                        .position(|byte| *byte == 0)
-                        .unwrap_or(bytes.len())];
-                    let text = centurions_content::ui::c_string(bytes);
-                    assets.wrapped_color(&text, rectangle(rect), size, size as f32 + 2., color);
-                }
-                _ => {}
-            }
-        }
+        draw_detail_plan(plan, assets);
     }
+
     fn row_stats(
         &self,
         content: &Content,
@@ -687,6 +621,79 @@ impl Inventory {
                 },
             );
             x += measure_text(text, Some(&assets.font), 10, 1.).width;
+        }
+    }
+}
+
+pub(crate) fn draw_detail_plan(
+    plan: &centurions_core::recovered_detail_ui::DetailPlan,
+    assets: &Assets,
+) {
+    use centurions_core::{recovered_detail_ui::DetailEffect, recovered_drawing::DrawingEffect};
+    let mut color = YELLOW;
+    let mut position = vec2(0., 0.);
+    let mut size = 12;
+    let rectangle = |r: &centurions_core::recovered_geometry::BodyRect| {
+        Rect::new(
+            r.left as f32,
+            r.top as f32 + 20.,
+            (r.right - r.left) as f32,
+            (r.bottom - r.top) as f32,
+        )
+    };
+    for effect in &plan.effects {
+        match effect {
+            DetailEffect::Drawing(DrawingEffect::ForeColor(value)) => {
+                color = match value {
+                    205 => RED,
+                    273 => SKYBLUE,
+                    341 => GREEN,
+                    409 => BLUE,
+                    33 => BLACK,
+                    _ => YELLOW,
+                }
+            }
+            DetailEffect::Drawing(DrawingEffect::TextSize(value)) => size = *value as u16,
+            DetailEffect::Drawing(DrawingEffect::MoveTo {
+                horizontal,
+                vertical,
+            }) => position = vec2(*horizontal as f32, *vertical as f32 + 20.),
+            DetailEffect::Drawing(DrawingEffect::DrawString(value)) => {
+                let text = centurions_content::ui::pascal_text(value.raw()).unwrap_or_default();
+                assets.text(&text, position.x, position.y, size, color);
+                position.x += measure_text(&text, Some(&assets.font), size, 1.).width;
+            }
+            DetailEffect::Drawing(DrawingEffect::DrawPicture { handle, bounds }) => {
+                assets.panel(*handle as i16, rectangle(bounds))
+            }
+            DetailEffect::Drawing(DrawingEffect::PlotColorIcon { handle, rect }) => {
+                if let Some(image) = assets.icons.get(&(*handle as i16)) {
+                    let r = rectangle(rect);
+                    draw_texture_ex(
+                        image,
+                        r.x,
+                        r.y,
+                        WHITE,
+                        DrawTextureParams {
+                            dest_size: Some(vec2(r.w, r.h)),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            DetailEffect::TextBox {
+                bytes,
+                rectangle: rect,
+                ..
+            } => {
+                let bytes = &bytes[..bytes
+                    .iter()
+                    .position(|byte| *byte == 0)
+                    .unwrap_or(bytes.len())];
+                let text = centurions_content::ui::c_string(bytes);
+                assets.wrapped_color(&text, rectangle(rect), size, size as f32 + 2., color);
+            }
+            _ => {}
         }
     }
 }

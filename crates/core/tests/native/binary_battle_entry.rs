@@ -12,44 +12,46 @@ pub(super) fn compare_underground_battle_entry_matches_original_complete_records
     let content = crate::support::content();
 
     for case in fixture.array("cases") {
-        let state = battle_state(&content, &fixture, case, 6, 0);
-        let combat = state.combat.as_ref().unwrap();
-        let context = format!("battle{} seed{}", case["battle"], case["seed_before"]);
-        let encode = |v: &[i16]| crate::support::word_bytes(v);
-        assert_bytes(
-            &encode(&combat.map.tiles),
-            &case.bytes("tiles"),
-            &format!("{context} map"),
-        );
-        assert_eq!(
-            combat.map.shift,
-            (
-                case["shift"][0].as_i64().unwrap() as i16,
-                case["shift"][1].as_i64().unwrap() as i16
-            ),
-            "{context} shift"
-        );
-        crate::support::native_expect! {
-        scalar combat.map.edge_word => &case["edge"], "binary_battle_entry";
-        bytes crate::support::record_bytes(&state.warriors) => &case["warriors"], &format!("{context} warriors");
-        bytes crate::support::record_bytes(&combat
-                        .enemies.records) => &case["enemies"], &format!("{context} enemies");
-        scalar combat.enemies.records.len() => &case["count"], "binary_battle_entry";
-        }
-        let positions = |p: &[(i16, i16)]| p.iter().flat_map(|(x, y)| [*x, *y]).collect::<Vec<_>>();
-        crate::support::native_expect! {
-        bytes encode(&positions(&combat.squad.positions)) => &case["squad"], &format!("{context} squad");
-        words &(combat.squad.under_tiles) => &case["under"], "binary_battle_entry";
-        bytes encode(&positions(&combat.enemies.positions)) => &case["positions"], &format!("{context} enemy positions");
-        words &(combat.order) => &case["order"], "binary_battle_entry";
-        scalar combat.cursor => &case["cursor"], "binary_battle_entry";
-        }
-        assert_eq!(
-            (state.random.seed, state.random.draws),
-            (case.n::<u32>("seed_after"), case.n::<u64>("draws")),
-            "{context} RNG"
-        );
+        let state = battle_state(&content, &fixture, case, 6, 0, 0);
+        assert_battle(&state, case);
     }
+}
+
+pub(super) fn assert_battle(state: &Session, case: &Value) {
+    let context = format!(
+        "battle{} seed{} variant{}",
+        case["battle"], case["seed_before"], case["variant"]
+    );
+    let combat = state.combat.as_ref().unwrap();
+    combat.validate(&state.warriors).unwrap();
+    let encode = |v: &[i16]| crate::support::word_bytes(v);
+    assert_bytes(
+        &encode(&combat.map.tiles),
+        &case.bytes("tiles"),
+        &format!("{context} map"),
+    );
+    let [x, y] = case.n::<[i16; 2]>("shift");
+    assert_eq!(combat.map.shift, (x, y));
+    crate::support::native_expect! {
+    scalar combat.map.edge_word => &case["edge"], "binary_battle_entry";
+    bytes crate::support::record_bytes(&state.warriors) => &case["warriors"], &format!("{context} warriors");
+    bytes crate::support::record_bytes(&combat
+                    .enemies.records) => &case["enemies"], &format!("{context} enemies");
+    scalar combat.enemies.records.len() => &case["count"], "binary_battle_entry";
+    }
+    let positions = |p: &[(i16, i16)]| p.iter().flat_map(|(x, y)| [*x, *y]).collect::<Vec<_>>();
+    crate::support::native_expect! {
+    bytes encode(&positions(&combat.squad.positions)) => &case["squad"], &format!("{context} squad");
+    words &(combat.squad.under_tiles) => &case["under"], "binary_battle_entry";
+    bytes encode(&positions(&combat.enemies.positions)) => &case["positions"], &format!("{context} enemy positions");
+    words &(combat.order) => &case["order"], "binary_battle_entry";
+    scalar combat.cursor => &case["cursor"], "binary_battle_entry";
+    }
+    assert_eq!(
+        (state.random.seed, state.random.draws),
+        (case.n::<u32>("seed_after"), case.n::<u64>("draws")),
+        "{context} RNG"
+    );
 }
 
 fn battle_state(
@@ -58,6 +60,7 @@ fn battle_state(
     case: &Value,
     count: usize,
     difficulty: i16,
+    marker: i16,
 ) -> Session {
     let mut state = Session::new(content);
     apply(
@@ -84,6 +87,7 @@ fn battle_state(
     .unwrap();
     state.warriors = crate::support::warriors(&fixture["warriors_before"]);
     state.warriors.truncate(count);
+    state.warriors[0].bytes[0x90..0x92].copy_from_slice(&marker.to_be_bytes());
     let map = content.map(case.n::<i32>("map")).unwrap();
     let position = state.exploration.as_mut().unwrap();
     position.map = case.n::<i32>("map");
@@ -101,13 +105,14 @@ fn battle_state(
 fn selected_squad_count_survives_mission_combat_entry_and_reload() {
     let content = crate::support::content();
     let fixture = crate::support::fixture("battle-entry.json");
-    for (count, difficulty) in [(1, -2), (3, 0), (6, 2)] {
+    for (count, difficulty, marker) in [(1, -2, 0), (3, 0, 1), (6, 2, -1)] {
         let mut state = battle_state(
             &content,
             &fixture,
             &fixture.array("cases")[0],
             count,
             difficulty,
+            marker,
         );
         assert_eq!(state.warriors.len(), count);
         state.validate(&content).unwrap();

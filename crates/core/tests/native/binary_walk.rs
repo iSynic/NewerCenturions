@@ -5,24 +5,14 @@ use centurions_core::combat::move_warrior;
 #[test]
 fn walking_matches_instruction_state_and_effects() {
     let fixture: serde_json::Value = crate::support::fixture("walk.json");
-    let properties = fixture.bytes("properties");
     let content = Content {
-        tutorials: vec![],
-        identity: "walking".into(),
-        warriors: vec![],
-        items: vec![],
-        resources: vec![],
-        original_services: None,
         scenario: Some(centurions_content::mission::ScenarioContent::single(
             OpeningMission {
-                tile_properties: properties[64..12064].to_vec(),
                 default_tile: 0,
-                shared: std::sync::Arc::new(centurions_content::mission::StoryTables {
-                    ..crate::support::stories()
-                }),
-                ..crate::support::mission()
+                ..crate::support::terrain_mission(&fixture)
             },
         )),
+        ..crate::support::fixture_content("walking")
     };
     for case in fixture.array("cases") {
         let dx = case.n::<i8>("dx");
@@ -33,20 +23,12 @@ fn walking_matches_instruction_state_and_effects() {
         tiles[25 * 90 + 25] = 0;
         tiles[(25 + i32::from(dx)) as usize * 90 + (25 + i32::from(dy)) as usize] =
             case.n::<i16>("tile");
-        state.combat = Some(Combat {
-            battle: 2,
-            map: TacticalMap {
-                tiles,
-                shift: (0, 0),
-                edge_word: 0,
-            },
-            squad: SquadPlacement {
-                positions: vec![(20, 20); 6],
-                under_tiles: vec![1155; 6],
-            },
-            order: vec![-1, 0],
-            ..crate::support::battle()
-        });
+        let mut combat = crate::support::battle();
+        combat.battle = 2;
+        combat.map.tiles = tiles;
+        combat.squad.positions = vec![(20, 20); 6];
+        combat.order = vec![-1, 0];
+        state.combat = Some(combat);
         let events = move_warrior(&mut state, &content, dx, dy).unwrap();
         assert_eq!(state.warriors[0].bytes, case.bytes("after"));
         let combat = state.combat.unwrap();
@@ -59,20 +41,11 @@ fn walking_matches_instruction_state_and_effects() {
             (case.n::<i16>("x"), case.n::<i16>("y"))
         );
         crate::support::expect(combat.squad.under_tiles[0], &case["under"]);
-        let sounds: Vec<_> = events
-            .iter()
-            .filter_map(|e| {
-                if let Event::Sound { resource_id } = e {
-                    Some(i64::from(*resource_id))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let sounds = crate::support::event_sounds(&events);
         let mut expected_sounds = case
             .array("sounds")
             .iter()
-            .map(|v| v.as_i64().unwrap())
+            .map(|v| v.as_i64().unwrap() as i16)
             .collect::<Vec<_>>();
         // This probe stops at the failure label before the caller's final sound.
         // The complete caller is covered by binary_warrior_opportunity.

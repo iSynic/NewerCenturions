@@ -16,6 +16,10 @@ pub mod reference_views;
 pub mod roster;
 pub mod shop;
 
+#[cfg(all(test, feature = "original-fixtures"))]
+#[path = "../tests/unit/support.rs"]
+mod test_support;
+
 pub mod rules {
     /// CODE 1 pin, 0x13f65e. Sequential comparisons also define reversed bounds.
     pub fn pin(mut value: i16, minimum: i16, maximum: i16) -> i16 {
@@ -125,6 +129,8 @@ pub struct Session {
     pub loot_limit: Option<i16>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typed_encounters: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_controls: Option<field_controls::State>,
     pub exploration: Option<Exploration>,
     pub random: RandomState,
     pub crate_items: Vec<InventoryRecord>,
@@ -157,6 +163,8 @@ pub struct Session {
     pub time_continuation: Option<TimeContinuation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub psi_selection: Option<combat::psi_selection::Selection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_quantity: Option<combat::targeting::FirearmQuantity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outdoor_psi: Option<outdoor_psi::Selection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -204,6 +212,10 @@ pub struct Session {
     pub ammunition_work: ammunition::WorkBuffers,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inventory_record: Option<InventoryRecord>,
+    #[serde(default)]
+    pub npc_backing: combat::retained::NpcBacking,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_death_queue: Option<combat::death_scripts::DeathQueue>,
     #[serde(default)]
     pub loot_quality: Option<Vec<u8>>,
     #[serde(default)]
@@ -486,6 +498,7 @@ pub struct MenuContinuation {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Presentation {
+    ScriptPause,
     Messages {
         pages: Vec<(i16, String)>,
         next: Option<Box<Presentation>>,
@@ -534,10 +547,15 @@ pub struct CommandPreferences {
     pub auto_refit: bool,
     #[serde(default)]
     pub suppress_round_message_sound: bool,
+    #[serde(default)]
+    pub animation_delay: i16,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
+    FieldControl {
+        action: field_controls::Action,
+    },
     ClinicControl {
         item: u16,
     },
@@ -697,13 +715,35 @@ pub enum Command {
         members: [usize; 2],
         scroll: [usize; 2],
         selected: Option<(usize, usize)>,
+        #[serde(default)]
+        shop_family: usize,
     },
     UnequipItem {
         warrior: usize,
         slot: usize,
     },
+    BeginAutomaticTurn,
+    DelayTurn,
+    UndoCombatMove,
+    ToggleCombatAuto {
+        warrior: usize,
+    },
+    RequestCombatEscape,
+    EscapeCombat,
+    SelectCombatWeapon {
+        slot: usize,
+    },
+    ViewCombatBody {
+        body: i16,
+    },
     EndTurn,
     Guard,
+    BeginCapture,
+    SelectCaptureTarget {
+        x: i16,
+        y: i16,
+    },
+    CancelCapture,
     SelectSurvivor {
         row: usize,
     },
@@ -733,11 +773,33 @@ pub enum Command {
         spell: i16,
         power: i16,
     },
+    CastPsiOnWarrior {
+        warrior: usize,
+        spell: i16,
+        power: i16,
+    },
     SelectPsiTarget {
         x: i16,
         y: i16,
     },
     FirePsiSelection,
+    ClearPsiTargets,
+    BeginPsiTargeting {
+        spell: i16,
+        power: i16,
+    },
+    FirePreparedPsi {
+        x: i16,
+        y: i16,
+        rotation: u8,
+    },
+    FirePreparedPsiOnWarrior {
+        warrior: usize,
+    },
+    BeginFireTargets,
+    AdjustTargetQuantity {
+        increase: bool,
+    },
     CancelPsiSelection,
     SelectOutdoorPsiTarget {
         warrior: usize,
@@ -841,6 +903,7 @@ pub enum Event {
     Sound {
         resource_id: i16,
     },
+    CombatEscapeOffered,
     Delay {
         ticks: u32,
     },
@@ -989,6 +1052,7 @@ impl Session {
             native_import: None,
             shops: Default::default(),
             shop_access: None,
+            field_controls: None,
             confiscated: None,
             suppress_allies: 0,
             loot_limit: None,
@@ -1009,7 +1073,9 @@ impl Session {
             script_enemy: 0,
             loaded_item_field32: None,
             ammunition_work: ammunition::WorkBuffers::default(),
-            inventory_record: None,
+            inventory_record: Some(InventoryRecord([0; 22])),
+            npc_backing: combat::retained::NpcBacking::startup(),
+            retained_death_queue: None,
             loot_quality: None,
             attack_count: 0,
             attack_packet: Some(vec![0; 58]),
@@ -1034,6 +1100,7 @@ impl Session {
             movement_continuation: None,
             time_continuation: None,
             psi_selection: None,
+            target_quantity: None,
             outdoor_psi: None,
             encounter_actions: None,
             promotion: None,
@@ -1054,6 +1121,10 @@ impl Session {
     }
 
     pub fn validate(&self, content: &Content) -> Result<(), RuleError> {
+        self.npc_backing.validate()?;
+        if let Some(queue) = &self.retained_death_queue {
+            queue.validate()?;
+        }
         shop::validate(self, content)?;
         if let Some(saved) = &self.confiscated {
             saved.validate()?;
@@ -1196,28 +1267,11 @@ impl Session {
             pending.validate(self, content)?;
         }
         clinic::validate(self)?;
+        field_controls::validate(self)?;
         story_cleanup::validate(self)?;
         story_actor::validate(self, content)?;
-        if self.round_dispatch.as_ref().is_some_and(|frame| {
-            frame
-                .suspended_script
-                .as_ref()
-                .is_some_and(|script| !script.valid(content))
-                || self
-                    .exploration
-                    .as_ref()
-                    .is_none_or(|position| position.script.is_none())
-                || (self.combat.is_none()
-                    && self.scripted_cleanup != Some(story_cleanup::Stage::Complete))
-                || self.combat.as_ref().is_some_and(|arena| {
-                    arena
-                        .round_scripts
-                        .pending
-                        .as_ref()
-                        .is_none_or(|program| !program.delegated)
-                })
-        }) {
-            return Err(RuleError::Invalid("invalid round dispatch frame".into()));
+        if let Some(frame) = &self.round_dispatch {
+            frame.validate(self, content)?;
         }
         if let Some(selection) = &self.survivors {
             selection.validate(
@@ -1277,8 +1331,15 @@ impl Session {
                 return Err(RuleError::Invalid("round wrap has no continuation".into()));
             }
         }
+        combat::capture::validate_selection(self)?;
         outdoor_psi::validate(self, content)?;
         typed_encounter::validate_actions(self, content)?;
+        if let Some(quantity) = &self.target_quantity {
+            quantity.validate(
+                self.combat.as_ref().ok_or("targeting combat missing")?,
+                &self.warriors,
+            )?;
+        }
         if let Some(pending) = &self.psi_selection {
             pending.validate(self)?;
         }
@@ -1338,6 +1399,8 @@ impl Session {
                                 | Presentation::Survivors
                                 | Presentation::Loot
                                 | Presentation::Avoidance { .. }
+                                | Presentation::Shop
+                                | Presentation::Clinic { .. }
                         )
                     ))
                 || position.event_headers.len() != 4200
@@ -1410,6 +1473,10 @@ pub fn apply(
         if matches!(*command, Command::WithPreferences { .. }) {
             return Err("nested command preferences".into());
         }
+        if !(0..=50).contains(&preferences.animation_delay) || preferences.animation_delay % 5 != 0
+        {
+            return Err("invalid original animation speed".into());
+        }
         let mut candidate = state.clone();
         let previous = candidate.command_preferences.clone();
         candidate.command_preferences = preferences;
@@ -1427,6 +1494,28 @@ pub fn apply(
         };
         command = resolved;
     }
+    if let Command::Move { dx, dy } = command
+        && let Some(combat) = state.combat.as_ref().filter(|c| c.capture_actor.is_some())
+    {
+        let origin = combat.squad.positions[combat.capture_actor.unwrap() as usize];
+        command = Command::SelectCaptureTarget {
+            x: origin.0.wrapping_add(i16::from(dx)),
+            y: origin.1.wrapping_add(i16::from(dy)),
+        };
+    }
+    let targeting_only = matches!(
+        command,
+        Command::BeginCapture
+            | Command::CancelCapture
+            | Command::BeginAutomaticTurn
+            | Command::ToggleCombatAuto { .. }
+            | Command::RequestCombatEscape
+            | Command::ViewCombatBody { .. }
+            | Command::BeginFireTargets
+            | Command::BeginPsiTargeting { .. }
+            | Command::AdjustTargetQuantity { .. }
+            | Command::ClearPsiTargets
+    );
     let mut candidate = state.clone();
     let editing = matches!(
         command,
@@ -1467,32 +1556,31 @@ pub fn apply(
             | Command::RunEnemyTurn
             | Command::RunControlledTurn
     );
-    let unmodeled_inventory_write = matches!(
-        command,
-        Command::TakeLoot { .. }
-            | Command::StoreLoot { .. }
-            | Command::TakeCrate { .. }
-            | Command::BuyItem { .. }
-            | Command::SellItem { .. }
-            | Command::RefitParty
-            | Command::Reload { .. }
-            | Command::FitAmmunition { .. }
-            | Command::UseAmmunitionPack { .. }
-    );
+    if let Some(combat) = candidate.combat.as_mut() {
+        combat.direct_deaths = melee_input;
+    }
     let mut events = match apply_inner(command, &mut candidate, content) {
         Ok(events) => events,
         Err(error @ RuleError::RefusedAfterEffects { .. }) => {
+            if let Some(combat) = candidate.combat.as_mut() {
+                combat.direct_deaths = false;
+            }
             candidate.validate(content)?;
             *state = candidate;
             return Err(error);
         }
         Err(error) => return Err(error),
     };
-    if unmodeled_inventory_write {
-        candidate.inventory_record = None;
+    if targeting_only {
+        candidate.validate(content)?;
+        *state = candidate;
+        return Ok(events);
     }
     for event in &events {
         match event {
+            Event::Feedback(feedback::NativeFeedback::CombatResult { .. }) => {
+                candidate.bandage_ready = Some(0)
+            }
             Event::AttackResolved { damage, .. } if melee_input || *damage > 0 => {
                 candidate.bandage_ready = Some(0);
             }
@@ -1512,6 +1600,7 @@ pub fn apply(
             .any(|event| matches!(event, Event::Message { .. }))
     {
         events.extend(exploration::resume_movement(&mut candidate, content)?);
+        events.extend(field_controls::resume(&mut candidate, content)?);
     }
     if physical_work_input && let Some(item) = candidate.ammunition_work.item.as_ref() {
         candidate.loaded_item_field32 = Some(centurions_content::word(item, 32)?);
@@ -1549,6 +1638,9 @@ pub fn apply(
     {
         let next = position.presentation.take().map(Box::new);
         position.presentation = Some(Presentation::Messages { pages, next });
+    }
+    if let Some(combat) = candidate.combat.as_mut() {
+        combat.direct_deaths = false;
     }
     candidate.validate(content)?;
     *state = candidate;
@@ -1593,7 +1685,6 @@ fn apply_inner(
     if matches!(
         command,
         Command::SetWarriorAppearance { .. }
-            | Command::ViewWarrior { .. }
             | Command::UpgradeWarrior { .. }
             | Command::EditWarriorUpgrade { .. }
             | Command::EditCarriedItem { .. }
@@ -1604,7 +1695,10 @@ fn apply_inner(
         return Err(RuleError::Refused { feedback: vec![] });
     }
     if state.medical_continuation.is_some()
-        && !matches!(command, Command::SelectMedicalTarget { .. })
+        && !matches!(
+            command,
+            Command::SelectMedicalTarget { .. } | Command::AdjustTargetQuantity { .. }
+        )
     {
         return Err(RuleError::Invalid(
             "finish choosing the medical target before acting".into(),
@@ -1633,11 +1727,26 @@ fn apply_inner(
     {
         return Err(RuleError::Refused { feedback: vec![] });
     }
+    if state
+        .combat
+        .as_ref()
+        .is_some_and(|c| c.capture_actor.is_some())
+        && !matches!(
+            command,
+            Command::SelectCaptureTarget { .. } | Command::CancelCapture
+        )
+    {
+        return Err(RuleError::Refused { feedback: vec![] });
+    }
     if state.psi_selection.is_some()
         && !matches!(
             command,
             Command::SelectPsiTarget { .. }
                 | Command::FirePsiSelection
+                | Command::FirePreparedPsi { .. }
+                | Command::FirePreparedPsiOnWarrior { .. }
+                | Command::ClearPsiTargets
+                | Command::AdjustTargetQuantity { .. }
                 | Command::CancelPsiSelection
         )
     {
@@ -1649,10 +1758,25 @@ fn apply_inner(
         .is_some_and(|c| c.firearm_selection.is_some())
         && !matches!(
             command,
-            Command::ShootEnemy { .. } | Command::FireSelectedTargets | Command::CancelFireTargets
+            Command::ShootEnemy { .. }
+                | Command::FireSelectedTargets
+                | Command::CancelFireTargets
+                | Command::BeginFireTargets
+                | Command::AdjustTargetQuantity { .. }
         )
     {
         return Err(RuleError::Refused { feedback: vec![] });
+    }
+    if !matches!(
+        command,
+        Command::BeginFireTargets
+            | Command::AdjustTargetQuantity { .. }
+            | Command::ShootEnemy { .. }
+            | Command::ShootAt { .. }
+            | Command::FireSelectedTargets
+            | Command::CancelFireTargets
+    ) {
+        state.target_quantity = None;
     }
     if combat::runtime::controlled_warrior(state).is_some()
         && matches!(
@@ -1663,7 +1787,17 @@ fn apply_inner(
                 | Command::ShootEnemy { .. }
                 | Command::ShootAt { .. }
                 | Command::Guard
+                | Command::DelayTurn
+                | Command::UndoCombatMove
+                | Command::RequestCombatEscape
+                | Command::EscapeCombat
+                | Command::SelectCombatWeapon { .. }
                 | Command::CastPsi { .. }
+                | Command::BeginPsiTargeting { .. }
+                | Command::BeginFireTargets
+                | Command::FirePreparedPsi { .. }
+                | Command::FirePreparedPsiOnWarrior { .. }
+                | Command::CastPsiOnWarrior { .. }
         )
     {
         return Err(RuleError::Refused { feedback: vec![] });
@@ -1696,6 +1830,7 @@ fn apply_inner(
                 | Command::UseItem { .. }
                 | Command::InspectInventory { .. }
                 | Command::CancelMenu
+                | Command::DropItem { .. }
                 | Command::TakeLoot { .. }
                 | Command::StoreLoot { .. }
                 | Command::KeepCurrentSpells
@@ -1709,6 +1844,7 @@ fn apply_inner(
         ));
     }
     match command {
+        Command::FieldControl { action } => field_controls::start(state, content, action),
         Command::ClinicControl { item } => clinic::control(state, content, item),
         Command::OpenShop => shop::open(state),
         Command::CloseShop => shop::close(state, content),
@@ -1878,7 +2014,11 @@ fn apply_inner(
             Ok(events)
         }
         Command::DropItem { warrior, slot } => {
-            if state.phase != Phase::Exploration {
+            let collecting = state
+                .exploration
+                .as_ref()
+                .is_some_and(|p| p.presentation == Some(Presentation::Loot));
+            if state.phase != Phase::Exploration && !(state.phase == Phase::Combat && collecting) {
                 return Err(RuleError::Refused { feedback: vec![] });
             }
             let mission = state
@@ -2058,7 +2198,9 @@ fn apply_inner(
             ])
         }
         Command::ViewWarrior { warrior } => {
-            if state.phase != Phase::Exploration {
+            if !(warrior_management_available(state)
+                || state.phase == Phase::Combat && combat::controls::actor(state).is_ok())
+            {
                 return Err(RuleError::Refused { feedback: vec![] });
             }
             state.warriors.get(warrior).ok_or_else(|| {
@@ -2223,6 +2365,13 @@ fn apply_inner(
                 Some(Presentation::Messages { .. })
             ) {
                 exploration::continue_messages(state, content)
+            } else if state.combat.is_none()
+                && state
+                    .round_dispatch
+                    .as_ref()
+                    .is_some_and(|frame| frame.owns_script(state))
+            {
+                exploration::continue_story(state, content)
             } else if state
                 .combat_story
                 .as_ref()
@@ -2263,8 +2412,25 @@ fn apply_inner(
             members,
             scroll,
             selected,
-        } => equipment::inspect(state, members, scroll, selected),
+            shop_family,
+        } => equipment::inspect(state, content, members, scroll, selected, shop_family),
         Command::UnequipItem { warrior, slot } => equipment::unequip(state, content, warrior, slot),
+        Command::BeginAutomaticTurn => combat::controls::automatic(state),
+        Command::DelayTurn => combat::controls::delay(state, content),
+        Command::UndoCombatMove => combat::controls::undo(state, content),
+        Command::ToggleCombatAuto { warrior } => combat::controls::toggle_auto(state, warrior),
+        Command::RequestCombatEscape => {
+            combat::controls::escape_check(state)?;
+            Ok(vec![
+                Event::Sound { resource_id: 20005 },
+                Event::CombatEscapeOffered,
+            ])
+        }
+        Command::EscapeCombat => combat::controls::escape(state, content),
+        Command::SelectCombatWeapon { slot } => {
+            combat::controls::select_weapon(state, content, slot)
+        }
+        Command::ViewCombatBody { body } => reference_views::combat_body(state, content, body),
         Command::Guard => combat::runtime::player_guard(state, content),
         Command::SelectSurvivor { row } => {
             let combat = state.combat.as_ref().ok_or("survivor roster missing")?;
@@ -2286,6 +2452,9 @@ fn apply_inner(
         Command::RunEnemyTurn => combat::runtime::enemy_turn(state, content),
         Command::ResumeCombatSelection => combat::runtime::resume_selection(state, content),
         Command::RunControlledTurn => combat::runtime::controlled_turn(state, content),
+        Command::BeginCapture => combat::capture::begin(state),
+        Command::SelectCaptureTarget { x, y } => combat::capture::select(state, content, x, y),
+        Command::CancelCapture => combat::capture::cancel(state),
         Command::AttackEnemy { body } => combat::runtime::player_attack(state, content, body),
         Command::AttackFriend { body } => {
             combat::runtime::player_attack_friend(state, content, body)
@@ -2305,6 +2474,11 @@ fn apply_inner(
             spell,
             power,
         } => combat::runtime::party_psi(state, content, warrior, spell, power),
+        Command::CastPsiOnWarrior {
+            warrior,
+            spell,
+            power,
+        } => combat::runtime::player_psi_warrior(state, content, warrior, spell, power),
         Command::Reload { warrior }
             if state
                 .exploration
@@ -2334,6 +2508,20 @@ fn apply_inner(
         }
         Command::SelectPsiTarget { x, y } => combat::psi_selection::select(state, content, (x, y)),
         Command::FirePsiSelection => combat::psi_selection::fire(state, content),
+        Command::BeginPsiTargeting { spell, power } => {
+            combat::psi_selection::begin_targeting(state, content, spell, power)
+        }
+        Command::FirePreparedPsi { x, y, rotation } => {
+            combat::psi_selection::fire_at(state, content, (x, y), rotation)
+        }
+        Command::FirePreparedPsiOnWarrior { warrior } => {
+            combat::psi_selection::fire_warrior(state, content, warrior)
+        }
+        Command::BeginFireTargets => combat::targeting::begin_firearm(state, content),
+        Command::AdjustTargetQuantity { increase } => {
+            combat::targeting::adjust(state, content, increase)
+        }
+        Command::ClearPsiTargets => combat::psi_selection::clear(state),
         Command::CancelPsiSelection => combat::psi_selection::cancel(state, content),
         Command::SelectOutdoorPsiTarget { warrior } => outdoor_psi::select(state, content, warrior),
         Command::FinishOutdoorPsi => outdoor_psi::finish(state, content),
@@ -2346,12 +2534,7 @@ fn apply_inner(
         }
         Command::Encounter => exploration::manual_encounter(state, content),
         Command::SetFirearmMode { warrior, enabled } => {
-            let w = state
-                .warriors
-                .get_mut(warrior)
-                .ok_or_else(|| RuleError::Invalid("warrior outside squad".into()))?;
-            w.bytes[0x9dd] = u8::from(enabled);
-            Ok(vec![])
+            combat::controls::firearm_mode(state, content, warrior, enabled)
         }
         Command::AddToCrate { item } => insert(item, &mut state.crate_items, true),
         Command::AddToBooty { item } => insert(item, &mut state.booty_items, false),
@@ -2491,6 +2674,7 @@ pub mod recovered_verification;
 pub mod recovered_world_display;
 pub use exploration::{needs_spell_confirmation, typed_record};
 pub mod clinic;
+pub mod field_controls;
 mod item_modifiers;
 pub mod items;
 pub mod mission;
@@ -2561,7 +2745,7 @@ fn menu_length(actual: usize, authored: usize) -> bool {
 pub fn save(path: &Path, state: &Session, content: &Content) -> Result<(), RuleError> {
     state.validate(content)?;
     let bytes = serde_json::to_vec_pretty(&Save {
-        schema_version: 6,
+        schema_version: 12,
         session: state.clone(),
     })?;
     atomic_write(path, &bytes)
@@ -2632,11 +2816,88 @@ pub fn load(path: &Path, content: &Content) -> Result<Session, RuleError> {
                 .clone();
             position.region_state = content.map(0).unwrap().regions.clone();
         }
-    } else if !matches!(saved.schema_version, 2..=6) {
+    } else if !matches!(saved.schema_version, 2..=12) {
         return Err(RuleError::Invalid(format!(
             "unsupported save version {}",
             saved.schema_version
         )));
+    }
+    if saved.schema_version < 12
+        && saved
+            .session
+            .combat
+            .as_ref()
+            .is_some_and(|c| c.turn_origin.is_some() || c.automatic.iter().any(|v| *v))
+    {
+        return Err("combat controls require save version 12".into());
+    }
+    if saved.schema_version < 11
+        && saved
+            .session
+            .combat
+            .as_ref()
+            .is_some_and(|c| c.capture_actor.is_some())
+    {
+        return Err("mechanical targeting requires save version 11".into());
+    }
+    if saved.schema_version < 10 && saved.session.field_controls.is_some() {
+        return Err("outdoor controls require save version 10".into());
+    }
+    if saved.schema_version < 9 {
+        let mut page = saved
+            .session
+            .exploration
+            .as_ref()
+            .and_then(|p| p.presentation.as_ref());
+        while let Some(current) = page {
+            match current {
+                Presentation::ScriptPause => {
+                    return Err("script pause requires save version 9".into());
+                }
+                Presentation::Messages { next, .. } => page = next.as_deref(),
+                _ => break,
+            }
+        }
+        if saved.session.retained_death_queue.is_some() {
+            return Err("retained death queue requires save version 9".into());
+        }
+        let mut story = saved.session.combat_story.as_ref();
+        while let Some(current) = story {
+            if current.queue_cursor.is_some() {
+                return Err("queued caller cursor requires save version 9".into());
+            }
+            story = current.parent.as_deref();
+        }
+    }
+    if saved.schema_version < 8
+        && saved.session.round_dispatch.as_ref().is_some_and(|frame| {
+            frame.child_battle
+                || frame.parent.is_some()
+                || frame.outer_battle.is_some()
+                || frame.death_depth.is_some()
+        })
+    {
+        return Err(RuleError::Invalid(
+            "round child context requires save version 8".into(),
+        ));
+    }
+    if saved.schema_version < 7 {
+        saved.session.npc_backing = Default::default();
+        let mut story = saved.session.combat_story.as_mut();
+        while let Some(current) = story {
+            if current.child_returned {
+                return Err(RuleError::Invalid(
+                    "returned child context requires save version 7".into(),
+                ));
+            }
+            current.direct = false;
+            story = current.parent.as_deref_mut();
+        }
+        if let Some(combat) = saved.session.combat.as_mut() {
+            combat.retained_npcs = Default::default();
+            combat.direct_deaths = false;
+            combat.direct_death = None;
+        }
     }
     if saved.schema_version < 6
         && (saved.session.time_continuation.is_some()

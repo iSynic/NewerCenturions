@@ -84,6 +84,104 @@ pub fn detail(
     )
 }
 
+/// Read-only projection of updateodds161068. Scratch writes never enter the session.
+pub fn attack_estimate(
+    state: &crate::Session,
+    content: &Content,
+    body: i16,
+    native: &NativeText,
+    strings: &BTreeMap<i16, Vec<u8>>,
+) -> Result<DetailPlan, RuleError> {
+    const FRAME: u32 = 0x700200;
+    let combat = state.combat.as_ref().ok_or("estimate combat missing")?;
+    let actor = combat
+        .active_body()
+        .filter(|body| (0..state.warriors.len() as i16).contains(body))
+        .ok_or("estimate warrior missing")?;
+    let mut memory = RenderingMemory::default();
+    for (address, length) in [
+        (0x41f714, 2),
+        (0x439598, 4),
+        (0x4434b6, 4),
+        (0x45363c, 450),
+        (0x479ed8, 256),
+        (0x700000, 1024),
+    ] {
+        memory.insert_region(address, &vec![0; length]);
+    }
+    memory.insert_region(0x402f3c, native.bytes(0x402f3c, 2)?);
+    memory.insert_region(0x442576, &combat.difficulty.to_be_bytes());
+    memory.insert_region(0x4435d2, &actor.to_be_bytes());
+    memory.insert_region(
+        FRAME + 8,
+        &(if body >= 10 { body - 10 } else { -1 }).to_be_bytes(),
+    );
+    let warrior = &state.warriors[actor as usize];
+    memory.insert_region(0x448aa0 + actor as u32 * 3138, &warrior.bytes);
+    let equipment = if warrior.bytes[0x9dd] == 0 {
+        0x12e
+    } else {
+        0x12c
+    };
+    let equipped = word(&warrior.bytes, equipment)?;
+    if equipped != 0
+        && !warrior
+            .inventory()?
+            .iter()
+            .any(|item| item.id() == equipped && item.0[9] != 0)
+    {
+        return Err("estimate requires the original equipped-instance multiplier".into());
+    }
+    if warrior.bytes[0x9dd] != 0 && equipped == 0 {
+        return Err("estimate requires the original retained firearm damage context".into());
+    }
+    if body >= 10 {
+        let enemy = combat
+            .enemies
+            .records
+            .get((body - 10) as usize)
+            .ok_or("estimate target missing")?;
+        memory.insert_region(0x439d3c + (body - 10) as u32 * 288, &enemy.bytes);
+    }
+    for id in [
+        word(&warrior.bytes, 0xe4)?,
+        word(&warrior.bytes, 0xca)?,
+        word(&warrior.bytes, 0x12c)?,
+        word(&warrior.bytes, 0x12e)?,
+        word(&warrior.bytes, 0x126)?,
+    ] {
+        let index = id.unsigned_abs() as usize;
+        if index / 200 >= ITEM_TABLE_ADDRESSES.len() {
+            return Err("estimate item family unavailable".into());
+        }
+        let definition = crate::ammunition::definition(content, id)?;
+        memory.insert_region(
+            ITEM_TABLE_ADDRESSES[index / 200] + (index % 200 * 150) as u32,
+            &definition,
+        );
+    }
+    for (address, bytes) in [
+        (0x45363c, &state.ammunition_work.item),
+        (0x4536d2, &state.ammunition_work.ammo),
+        (0x453768, &state.ammunition_work.weapon),
+    ] {
+        if let Some(bytes) = bytes {
+            memory.insert_region(address, bytes);
+        }
+    }
+    crate::recovered_detail_ui::update_odds(
+        &memory,
+        FRAME,
+        crate::recovered_attack::DamageFrame {
+            unmatched_multiplier_single_bits: 1_f32.to_bits(),
+        },
+        &mut Services {
+            strings,
+            description: &[],
+        },
+    )
+}
+
 struct Services<'a> {
     strings: &'a BTreeMap<i16, Vec<u8>>,
     description: &'a [u8],
@@ -133,6 +231,23 @@ impl DetailServices for Services<'_> {
             }
             DetailRequest::GetForeColor { destination }
             | DetailRequest::GetBackColor { destination } => write(*destination, vec![0; 6]),
+            DetailRequest::InsetRect {
+                pointer,
+                horizontal,
+                vertical,
+            } => {
+                let rect = memory.rect(*pointer)?;
+                let bytes = [
+                    rect.top.wrapping_add(*vertical),
+                    rect.left.wrapping_add(*horizontal),
+                    rect.bottom.wrapping_sub(*vertical),
+                    rect.right.wrapping_sub(*horizontal),
+                ]
+                .into_iter()
+                .flat_map(i16::to_be_bytes)
+                .collect();
+                write(*pointer, bytes)
+            }
             DetailRequest::Sane {
                 opcode,
                 source,
@@ -261,6 +376,7 @@ pub(crate) fn arithmetic(
     let current = extended(memory, destination)?;
     encode_extended(match operation {
         0 => current + value,
+        2 => current - value,
         4 => current * value,
         6 => current / value,
         _ => return unavailable(),

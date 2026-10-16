@@ -75,12 +75,7 @@ fn composed_shot_matches_live_original_records_rng_and_next_turn() {
     crate::support::native_expect! {
     words &(c.order) => &expected["order"], "live_firearm";
     words &(c.map.tiles) => &expected["map"], "live_firearm";
-    bytes c.enemies
-                .records
-                .iter()
-                .flat_map(|m| &m.bytes)
-                .copied()
-                .collect::<Vec<_>>() => &expected["enemies"], "live_firearm";
+    bytes crate::support::record_bytes(&c.enemies.records) => &expected["enemies"], "live_firearm";
     words &(c.squad.under_tiles) => &expected["under_tiles"], "live_firearm";
     }
     let after_origin = origin(expected);

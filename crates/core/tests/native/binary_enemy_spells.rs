@@ -35,10 +35,8 @@ fn enemy_spell_damage_matches_original_complete_party_and_random_consumption() {
 
 #[test]
 fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption() {
-    use centurions_content::{combat::MonsterRecord, mission::OpeningMission};
-    use centurions_core::combat::{
-        Combat, EnemySetup, SquadPlacement, TacticalMap, spells::select_targets,
-    };
+    use centurions_content::combat::MonsterRecord;
+    use centurions_core::combat::spells::select_targets;
     let mut additional: serde_json::Value = crate::support::fixture("additional-spells.json");
     additional["cases"] = additional["selection_cases"].take();
     let fixtures: [serde_json::Value; 6] = [
@@ -50,44 +48,28 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
         crate::support::fixture("zero-area-selection.json"),
     ];
     for fixture in fixtures {
-        let properties = fixture.bytes("properties");
         let areas = fixture.bytes("areas");
-        let mission = OpeningMission {
-            tile_properties: properties[64..12064].to_vec(),
-            shared: std::sync::Arc::new(Default::default()),
-            ..crate::support::mission()
-        };
+        let mission = crate::support::terrain_mission(&fixture);
         for (index, case) in fixture.array("cases").iter().enumerate() {
             let warriors = crate::support::warriors(&case.bytes("party"));
             let distance = case.n::<i16>("distance");
             let tiles = crate::support::words(&case.bytes("map"));
-            let combat = Combat {
-                battle: 28,
-                map: TacticalMap {
-                    tiles,
-                    shift: (0, 0),
-                    edge_word: 0,
-                },
-                squad: SquadPlacement {
-                    positions: (0..6)
-                        .map(|i| {
-                            (
-                                20 + distance + i * if case["weapon_id"].is_null() { 1 } else { 4 },
-                                20,
-                            )
-                        })
-                        .collect(),
-                    under_tiles: vec![1155; 6],
-                },
-                enemies: EnemySetup {
-                    records: vec![MonsterRecord {
-                        bytes: case.bytes("caster_before"),
-                    }],
-                    positions: vec![(20, 20)],
-                },
-                order: vec![-1, 10],
-                ..crate::support::battle()
-            };
+            let mut combat = crate::support::battle();
+            combat.battle = 28;
+            combat.map.tiles = tiles;
+            combat.squad.positions = (0..6)
+                .map(|i| {
+                    (
+                        20 + distance + i * if case["weapon_id"].is_null() { 1 } else { 4 },
+                        20,
+                    )
+                })
+                .collect();
+            combat.enemies.records = vec![MonsterRecord {
+                bytes: case.bytes("caster_before"),
+            }];
+            combat.enemies.positions = vec![(20, 20)];
+            combat.order = vec![-1, 10];
             let mut random = RandomState::new(case.n::<u32>("seed_before"));
             let packet = case.bytes("packet");
             let rotated = packet[7] != 0;
@@ -165,10 +147,7 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
 
 #[test]
 fn spell_target_masks_reflection_and_fields_match_original_complete_buffers() {
-    use centurions_core::combat::{
-        Combat, EnemySetup, SquadPlacement, TacticalMap,
-        spells::{SpellContext, SpellTarget, target_mask},
-    };
+    use centurions_core::combat::spells::{SpellContext, SpellTarget, target_mask};
     let fixture: serde_json::Value = crate::support::fixture("spell-targets.json");
     let areas = fixture.bytes("areas");
     let tiles: Vec<i16> = crate::support::words(&fixture.bytes("map"));
@@ -182,24 +161,13 @@ fn spell_target_masks_reflection_and_fields_match_original_complete_buffers() {
             }
         }
         let monsters = crate::support::monsters(&case["records"]);
-        let combat = Combat {
-            battle: 28,
-            map: TacticalMap {
-                tiles: tiles.clone(),
-                shift: (0, 0),
-                edge_word: 0,
-            },
-            squad: SquadPlacement {
-                positions: (0..6).map(|i| (20 + i, 20)).collect(),
-                under_tiles: vec![1155; 6],
-            },
-            enemies: EnemySetup {
-                records: monsters,
-                positions: vec![(20, 22), (22, 22)],
-            },
-            order: vec![-1, 10],
-            ..crate::support::battle()
-        };
+        let mut combat = crate::support::battle();
+        combat.battle = 28;
+        combat.map.tiles = tiles.clone();
+        combat.squad.positions = (0..6).map(|i| (20 + i, 20)).collect();
+        combat.enemies.records = monsters;
+        combat.enemies.positions = vec![(20, 22), (22, 22)];
+        combat.order = vec![-1, 10];
         let mut fields = vec![0; 1200];
         if variant == 2 {
             for slot in fields.as_chunks_mut::<20>().0 {

@@ -14,23 +14,17 @@ pub fn place_allies(
         return Err(RuleError::Invalid("invalid ally placement input".into()));
     }
     let mut staged = map.clone();
-    let origin = (map.shift.0.wrapping_add(5), map.shift.1.wrapping_add(5));
     let mut result = EnemySetup {
         records: vec![],
         positions: vec![],
     };
     for index in 0..count {
         let mut bytes = menu[index * 288..(index + 1) * 288].to_vec();
-        if word(&bytes, 0x10)? != 0 {
-            return Err(RuleError::Unsupported {
-                action: "combat.allies",
-                dependency: "large ally placement",
-            });
-        }
         put_word(&mut bytes, 0x10c, -1);
         bytes[0x82] = 0;
         bytes[0x104] = 0;
         let mut found = None;
+        let mut attempted = [false; 8100];
         'search: for ring in 1..=180_i16 {
             for dy in -ring..ring {
                 for dx in -ring..ring {
@@ -45,27 +39,34 @@ pub fn place_allies(
                     {
                         continue;
                     }
+                    // Rejected ally cells leave the map and RNG unchanged.
                     let cell = OpeningMission::index(
-                        i32::from(position.0.wrapping_add(origin.0)),
-                        i32::from(position.1.wrapping_add(origin.1)),
+                        i32::from(position.0) + i32::from(staged.shift.0) + 5,
+                        i32::from(position.1) + i32::from(staged.shift.1) + 5,
                     )?;
-                    let tile = staged.tiles[cell];
-                    if tile > 999 && mission.tile_word(tile - 1000, 4)? == 0 {
-                        found = Some((position, cell, tile));
+                    if std::mem::replace(&mut attempted[cell], true) {
+                        continue;
+                    }
+                    let candidate = footprint::place(
+                        &staged,
+                        &MonsterRecord {
+                            bytes: bytes.clone(),
+                        },
+                        position,
+                        index as i16 + 10,
+                    )?;
+                    if footprint::placement_passable(&candidate, mission)? {
+                        found = Some(candidate);
                         break 'search;
                     }
                 }
             }
         }
-        let (position, cell, tile) =
+        let placed =
             found.ok_or_else(|| RuleError::Invalid("no free ally placement cell".into()))?;
-        staged.tiles[cell] = index as i16 + 10;
-        put_word(&mut bytes, 0x11e, tile);
-        for offset in [0x118, 0x11a, 0x11c] {
-            put_word(&mut bytes, offset, 0);
-        }
-        result.records.push(MonsterRecord { bytes });
-        result.positions.push(position);
+        staged = placed.map;
+        result.records.push(placed.monster);
+        result.positions.push(placed.position);
     }
     *map = staged;
     Ok(result)

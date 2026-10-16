@@ -7,7 +7,7 @@ use centurions_content::{Content, InventoryRecord, native_text::NativeText, ui, 
 use std::collections::BTreeMap;
 mod detail;
 pub(crate) use detail::arithmetic as finite_arithmetic;
-pub use detail::detail;
+pub use detail::{attack_estimate, detail};
 
 pub fn row(
     content: &Content,

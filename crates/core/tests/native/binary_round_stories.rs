@@ -1,6 +1,5 @@
 use crate::prelude::*;
 
-use crate::support::field_bytes as bytes;
 use centurions_core::combat::round_stories;
 use centurions_core::combat::round_stories::RoundEffect;
 
@@ -32,32 +31,20 @@ fn input(
     fixture: &serde_json::Value,
     case: &serde_json::Value,
 ) -> (Combat, Vec<Warrior>, RandomState) {
-    let mut order = vec![-1; 110];
-    order[1] = 10;
+    let mut combat = crate::support::battle();
+    combat.battle = 146;
+    combat.map.tiles = case.words("map_before");
+    combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
+    combat.enemies.records = crate::support::monsters(&case["records_before"]);
+    combat.enemies.positions = crate::support::positions(&case["positions_before"]);
+    combat.order[1] = 10;
     if case.get("order_before").is_some() {
-        order = words(&bytes(case, "order_before"));
+        combat.order = case.words("order_before");
     }
+    combat.script_enemy = case["actor_before"].as_u64().unwrap_or(0) as usize;
     (
-        Combat {
-            battle: 146,
-            map: TacticalMap {
-                tiles: words(&bytes(case, "map_before")),
-                edge_word: 0,
-                shift: (0, 0),
-            },
-            squad: SquadPlacement {
-                positions: (0..6).map(|i| (40 + i, 40)).collect(),
-                under_tiles: vec![1155; 6],
-            },
-            enemies: EnemySetup {
-                records: crate::support::monsters(&bytes(case, "records_before")),
-                positions: crate::support::positions(&case["positions_before"]),
-            },
-            order,
-            script_enemy: case["actor_before"].as_u64().unwrap_or(0) as usize,
-            ..crate::support::battle()
-        },
-        crate::support::warriors(&bytes(fixture, "warriors_before")),
+        combat,
+        crate::support::warriors(&fixture["warriors_before"]),
         RandomState::new(case.n::<u32>("seed_before")),
     )
 }
@@ -72,8 +59,8 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
     ] {
         let fixture = crate::support::fixture(fixture_name);
         let mission = mission(&fixture);
-        let definitions = bytes(&fixture, "monsters");
-        let extras = bytes(&fixture, "extras");
+        let definitions = fixture.bytes("monsters");
+        let extras = fixture.bytes("extras");
         for (index, case) in fixture.array("cases").iter().enumerate() {
             let (mut combat, warriors, mut random) = input(&fixture, case);
             let initial_hostiles = case["hostile_count_before"].as_i64().unwrap_or_else(|| {
@@ -87,7 +74,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                     })
                     .count() as i64
             });
-            let slot_words = words(&bytes(case, "slots_before"));
+            let slot_words = words(&case.bytes("slots_before"));
             let mut state = RoundScripts {
                 counter: case.n::<i8>("round_before"),
                 slots: slot_words.try_into().unwrap(),
@@ -122,15 +109,15 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 }
             }
             let records: Vec<u8> = crate::support::record_bytes(&combat.enemies.records);
-            assert_eq!(records, bytes(case, "records_after"), "records case{index}");
+            assert_eq!(records, case.bytes("records_after"), "records case{index}");
             assert_eq!(
                 combat.map.tiles,
-                words(&bytes(case, "map_after")),
+                words(&case.bytes("map_after")),
                 "map case{index}"
             );
             assert_eq!(
                 combat.order,
-                words(&bytes(case, "order_after")),
+                words(&case.bytes("order_after")),
                 "order case{index}"
             );
             let positions: Vec<i16> = combat
@@ -141,15 +128,15 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 .collect();
             assert_eq!(
                 positions,
-                words(&bytes(case, "positions_after")),
+                words(&case.bytes("positions_after")),
                 "positions case{index}"
             );
             let party: Vec<u8> = crate::support::record_bytes(&warriors);
-            assert_eq!(party, bytes(case, "warriors_after"), "party case{index}");
+            assert_eq!(party, case.bytes("warriors_after"), "party case{index}");
             crate::support::expect(state.counter as i64, &case["round_after"]);
             assert_eq!(
                 state.slots.to_vec(),
-                words(&bytes(case, "slots_after")),
+                words(&case.bytes("slots_after")),
                 "slots case{index}"
             );
             crate::support::native_expect! {
@@ -191,7 +178,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 arena.cursor = 110;
                 arena.round_scripts = RoundScripts {
                     counter: state.counter,
-                    slots: words(&bytes(case, "slots_before")).try_into().unwrap(),
+                    slots: words(&case.bytes("slots_before")).try_into().unwrap(),
                     pending: Some(round_stories::RoundProgram {
                         slot: 0,
                         script: Some(11),
@@ -204,6 +191,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 session.combat = Some(arena);
                 session.round_dispatch = Some(round_stories::RoundDispatch {
                     suspended_script: None,
+                    ..Default::default()
                 });
                 let position = session.exploration.as_mut().unwrap();
                 position.restore_map(
@@ -262,7 +250,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 assert_eq!(observed, expected_effects, "shared round case{index}");
                 crate::support::assert_bytes(
                     &crate::support::record_bytes(&actual.enemies.records),
-                    &bytes(case, "records_after"),
+                    &case.bytes("records_after"),
                     &format!("shared round monsters case{index}"),
                 );
                 assert_eq!(actual.enemies.positions, combat.enemies.positions);
@@ -272,7 +260,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 assert_eq!(session.random, random);
                 crate::support::assert_bytes(
                     &crate::support::record_bytes(&session.warriors),
-                    &bytes(case, "warriors_after"),
+                    &case.bytes("warriors_after"),
                     &format!("shared round warriors case{index}"),
                 );
                 crate::support::checkpoint(&session, &content, "shared-round-after");
@@ -300,7 +288,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 arena.round = case.n("round_before");
                 arena.round_scripts = RoundScripts {
                     counter: case.n("round_before"),
-                    slots: words(&bytes(case, "slots_before")).try_into().unwrap(),
+                    slots: words(&case.bytes("slots_before")).try_into().unwrap(),
                     pending: None,
                 };
                 if carried {
@@ -317,7 +305,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 }
                 assert_eq!(
                     crate::support::record_bytes(&state.combat.as_ref().unwrap().enemies.records),
-                    bytes(case, "records_after")
+                    case.bytes("records_after")
                 );
                 assert_eq!(
                     (state.random.seed, state.random.draws),
@@ -414,6 +402,77 @@ fn original_round_surrender_enters_question_then_declines_or_cleans_without_rewa
                 position.presentation,
                 Some(Presentation::Dialogue { id: 93, .. })
             ));
+            // Authored alternative after surrender: destroy the containers, then return from BD6.
+            for _ in 0..40 {
+                if matches!(
+                    state.exploration.as_ref().unwrap().presentation,
+                    Some(Presentation::Menu { id: 0, .. })
+                ) {
+                    break;
+                }
+                replay_command(Command::Continue, &mut state, &mut resumed, &content);
+            }
+            replay_command(
+                Command::SelectMenuEntry { index: 3 },
+                &mut state,
+                &mut resumed,
+                &content,
+            );
+            for _ in 0..8 {
+                if state.combat.is_some() {
+                    break;
+                }
+                replay_command(Command::Continue, &mut state, &mut resumed, &content);
+            }
+            assert_eq!(state.combat.as_ref().unwrap().battle, 6);
+            state = crate::support::checkpoint(&state, &content, "round-child-battle");
+            let path = std::env::temp_dir().join(format!(
+                "centurions-round-schema-{}.json",
+                std::process::id()
+            ));
+            save(&path, &state, &content).unwrap();
+            let mut legacy: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            legacy["schema_version"] = 7.into();
+            std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+            assert!(load(&path, &content).is_err());
+            legacy["schema_version"] = 8.into();
+            std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+            assert!(load(&path, &content).is_err());
+            legacy["schema_version"] = 9.into();
+            legacy["session"]["round_dispatch"]["outer_battle"] = serde_json::json!({
+                "after_message": 0, "treasure": 32767, "group": null, "npc": null
+            });
+            std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+            assert!(load(&path, &content).is_err());
+            std::fs::remove_file(path).unwrap();
+            for candidate in [&mut state, &mut resumed] {
+                let arena = candidate.combat.as_mut().unwrap();
+                for body in 0..arena.enemies.records.len() {
+                    arena.enemies.records[body].bytes[0x110..0x112].fill(0);
+                    centurions_core::combat::lifecycle::kill_body(
+                        arena,
+                        &mut candidate.warriors,
+                        body as i16 + 10,
+                    )
+                    .unwrap();
+                }
+            }
+            replay_command(Command::EndTurn, &mut state, &mut resumed, &content);
+            for _ in 0..30 {
+                if state.round_dispatch.is_none() {
+                    break;
+                }
+                let command = if matches!(
+                    state.exploration.as_ref().unwrap().presentation,
+                    Some(Presentation::Menu { .. })
+                ) {
+                    Command::CancelMenu
+                } else {
+                    Command::Continue
+                };
+                replay_command(command, &mut state, &mut resumed, &content);
+            }
+            assert!(state.round_dispatch.is_none() && state.combat.is_none());
         }
     }
 }
@@ -444,6 +503,7 @@ fn surrender_question_cleanup_and_saved_script_return_match_native_early_exit() 
         state.combat = Some(arena);
         state.round_dispatch = Some(round_stories::RoundDispatch {
             suspended_script: None,
+            ..Default::default()
         });
         let position = state.exploration.as_mut().unwrap();
         position.restore_map(

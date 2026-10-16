@@ -36,10 +36,9 @@ impl Selection {
                     self.spell % 1000 / 100 - 1,
                     self.spell % 100 - 1,
                 ])
-            || combat
-                .attack_packet
-                .as_ref()
-                .is_none_or(|packet| packet.len() != 58 || packet[1] != 0)
+            || combat.attack_packet.as_ref().is_none_or(|packet| {
+                packet.len() != 58 || packet[1] > 6 || packet[1] != 0 && !self.targets.is_empty()
+            })
             || self.targets.iter().any(|body| {
                 *body < 0
                     || (*body >= state.warriors.len() as i16 && *body < 10)
@@ -83,9 +82,133 @@ pub(crate) fn begin(
     spell: i16,
     power: i16,
 ) -> Result<Vec<Event>, RuleError> {
+    let map = mission(state, content)?;
+    let packet = spells::load_packet(
+        &map.combat.as_ref().ok_or("Psi content missing")?.attacks,
+        spell,
+    )?;
+    if packet[1] != 0 {
+        return Err("Psi selection requires a multi-body spell".into());
+    }
+    begin_targeting(state, content, spell, power)
+}
+
+pub(crate) fn fire_at(
+    state: &mut Session,
+    content: &Content,
+    point: (i16, i16),
+    rotation: u8,
+) -> Result<Vec<Event>, RuleError> {
+    let pending = state.psi_selection.clone().ok_or("no pending Psi target")?;
+    pending.validate(state)?;
+    if state
+        .combat
+        .as_ref()
+        .unwrap()
+        .attack_packet
+        .as_ref()
+        .unwrap()[1]
+        == 0
+    {
+        return Err("multi-body scan requires selected targets".into());
+    }
+    if state.psi_memory.is_none() {
+        state.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
+    }
+    let mut events = player_psi::cast_prepared_at(
+        state,
+        mission(state, content)?,
+        &pending,
+        point,
+        rotation,
+        None,
+    )?;
+    state.psi_selection = None;
+    events.extend(runtime::finish_player_action(
+        state,
+        content,
+        pending.actor as i16,
+    )?);
+    Ok(events)
+}
+
+pub(crate) fn fire_warrior(
+    state: &mut Session,
+    content: &Content,
+    warrior: usize,
+) -> Result<Vec<Event>, RuleError> {
+    let pending = state
+        .psi_selection
+        .clone()
+        .ok_or("no pending portrait scan")?;
+    pending.validate(state)?;
+    let combat = state.combat.as_ref().unwrap();
+    let packet = combat.attack_packet.as_ref().unwrap();
+    let target = *combat
+        .squad
+        .positions
+        .get(warrior)
+        .ok_or("portrait scan warrior missing")?;
+    if packet[1] != 1 || !(pending.spell == 1101 || word(packet, 40)? == 64) {
+        return Err("scan has no portrait target handler".into());
+    }
+    if pending.spell == 1101 {
+        state.psi_selection = None;
+        state.selected_warrior = pending.actor;
+        let mut health = crate::story_health::context(
+            &state.warriors,
+            pending.actor,
+            state.health_context.as_ref(),
+        );
+        health.affected[pending.actor] = 1;
+        health.effect = packet[18] as i8;
+        state.health_context = Some(health);
+        state.medical_continuation = Some(crate::MedicalContinuation {
+            origin: crate::MedicalOrigin::LearnedHeal,
+            actor: pending.actor,
+            item: 0,
+            spell: pending.spell,
+            power: pending.power,
+        });
+        runtime::refresh_active_item_context(state, content)?;
+        return runtime::select_medical_target(
+            state,
+            content,
+            crate::MedicalTarget::Portrait { warrior },
+        );
+    }
+    if state.psi_memory.is_none() {
+        state.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
+    }
+    let mut events = player_psi::cast_prepared_at(
+        state,
+        mission(state, content)?,
+        &pending,
+        target,
+        0,
+        Some(warrior as i16),
+    )?;
+    state.psi_selection = None;
+    events.extend(runtime::finish_player_action(
+        state,
+        content,
+        pending.actor as i16,
+    )?);
+    Ok(events)
+}
+
+pub(crate) fn begin_targeting(
+    state: &mut Session,
+    content: &Content,
+    spell: i16,
+    power: i16,
+) -> Result<Vec<Event>, RuleError> {
     if state.psi_selection.is_some()
         || state.medical_continuation.is_some()
-        || state.combat_story.is_some()
+        || state
+            .combat_story
+            .as_ref()
+            .is_some_and(|story| !story.waiting_child)
         || state
             .exploration
             .as_ref()
@@ -118,10 +241,8 @@ pub(crate) fn begin(
         &map.combat.as_ref().ok_or("Psi content missing")?.attacks,
         spell,
     )?;
-    if packet[1] != 0 {
-        return Err(RuleError::Invalid(
-            "Psi selection requires a multi-body spell".into(),
-        ));
+    if packet[1] > 6 {
+        return Err("scan has no point-target continuation".into());
     }
     combat.weapon_work.armor_filter()?;
     let w = &mut state.warriors[actor].bytes;
@@ -133,6 +254,10 @@ pub(crate) fn begin(
     let combat = state.combat.as_mut().unwrap();
     combat.attack_packet = Some(packet);
     combat.attack_identity = Some(identity);
+    state.attack_packet = combat.attack_packet.clone();
+    state.attack_identity = combat.attack_identity;
+    state.weapon_work = combat.weapon_work;
+    state.target_quantity = None;
     state.attack_count = power;
     state.psi_menu_choices[actor] = Some(PsiMenuChoice {
         row: identity[1] as u8,
@@ -167,6 +292,9 @@ pub fn admit_target(
     }
     let combat = state.combat.as_ref().unwrap();
     let packet = combat.attack_packet.as_ref().unwrap();
+    if packet[1] != 0 {
+        return Err("point scan requires a point-target command".into());
+    }
     let mut admission = state.warriors.clone();
     let w = &mut admission[pending.actor].bytes;
     add(w, 0x58, player_psi::cost(packet, pending.power)?)?;
@@ -220,6 +348,17 @@ pub(crate) fn fire(state: &mut Session, content: &Content) -> Result<Vec<Event>,
         pending.actor as i16,
     )?);
     Ok(events)
+}
+
+/// cleartarget13822a clears selection without charging or refunding the scan.
+pub(crate) fn clear(state: &mut Session) -> Result<Vec<Event>, RuleError> {
+    let pending = state
+        .psi_selection
+        .as_ref()
+        .ok_or("no pending Psi selection")?;
+    pending.validate(state)?;
+    state.psi_selection.as_mut().unwrap().targets.clear();
+    Ok(vec![])
 }
 
 pub(crate) fn cancel(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {

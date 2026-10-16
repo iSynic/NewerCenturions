@@ -3,7 +3,7 @@ use crate::{
     assets::Assets,
     presentation::{Action, Control},
 };
-use centurions_content::{ui, word};
+use centurions_content::word;
 use macroquad::prelude::*;
 
 pub struct Creature {
@@ -27,7 +27,10 @@ impl Creature {
         let field = |number, text: String| {
             assets.wrapped_color(&text, assets.dialog_rect(158, number), 10, 12., YELLOW);
         };
-        field(7, ui::c_string(&r[218..]));
+        field(
+            7,
+            centurions_content::combat::monster_name(r).unwrap_or_default(),
+        );
         field(28, self.description.clone());
         for (number, offset) in [(24, 10), (38, 0), (26, 8), (23, 6), (25, 86)] {
             field(number, word(r, offset).unwrap_or(0).to_string());

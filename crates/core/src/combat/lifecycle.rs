@@ -36,7 +36,18 @@ pub fn kill_body(
     } else if body >= 10 {
         let cleanup = super::death_scripts::cleanup_enemy(combat, warriors, body)?;
         if let Some(entry) = cleanup.entry {
-            combat.death_queue.enqueue(entry)?;
+            // killbody12e8a4 selects direct newland only outside deferred processing.
+            if combat.direct_deaths && !combat.death_queue.processing {
+                if combat.direct_death.is_some() {
+                    return Err(RuleError::Unsupported {
+                        action: "combat.death_story",
+                        dependency: "multiple immediate deaths before the caller resumes",
+                    });
+                }
+                combat.direct_death = Some((body, entry));
+            } else {
+                combat.death_queue.enqueue(entry)?;
+            }
         }
         return Ok(());
     } else {

@@ -5,24 +5,14 @@ use centurions_core::combat::ally_turns;
 use centurions_core::combat::attack;
 
 fn combat(records: &[u8], member: i16) -> Combat {
-    Combat {
-        battle: 117,
-        map: TacticalMap {
-            tiles: vec![1155; 8100],
-            shift: (0, 0),
-            edge_word: 0,
-        },
-        squad: SquadPlacement {
-            positions: (0..6).map(|i| (40 + i, 40)).collect(),
-            under_tiles: vec![1155; 6],
-        },
-        enemies: EnemySetup {
-            records: crate::support::monsters(records),
-            positions: vec![(40 + member, 40); records.len() / 288],
-        },
-        attack_identity: Some([2, 4, 6]),
-        ..crate::support::battle()
-    }
+    let mut combat = crate::support::battle();
+    combat.battle = 117;
+    combat.map.tiles.fill(1155);
+    combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
+    combat.enemies.records = crate::support::monsters(records);
+    combat.enemies.positions = vec![(40 + member, 40); records.len() / 288];
+    combat.attack_identity = Some([2, 4, 6]);
+    combat
 }
 
 #[test]

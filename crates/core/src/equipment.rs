@@ -19,9 +19,11 @@ fn unsupported(dependency: &'static str) -> RuleError {
 /// Display copies all nine visible rows; updateshop20 then copies a selected owned row.
 pub(crate) fn inspect(
     state: &mut Session,
+    content: &Content,
     members: [usize; 2],
     scroll: [usize; 2],
     selected: Option<(usize, usize)>,
+    shop_family: usize,
 ) -> Result<Vec<Event>, RuleError> {
     if state.exploration.as_ref().is_some_and(|position| {
         position.presentation.as_ref().is_some_and(|presentation| {
@@ -39,8 +41,17 @@ pub(crate) fn inspect(
         .is_some_and(|position| position.presentation == Some(crate::Presentation::Shop));
     for side in 0..2 {
         if shop && side == 1 {
-            // Shop rows partially overwrite the previous temporary record.
-            state.inventory_record = None;
+            if shop_family >= 5 || scroll[side] >= 1000 {
+                return Err("shop inventory view outside native rows".into());
+            }
+            let rows: Vec<_> = crate::shop::stock(state)?
+                .into_iter()
+                .filter(|(_, id, _)| usize::from(id.unsigned_abs()) / 200 == shop_family)
+                .collect();
+            for row in scroll[side]..scroll[side] + 9 {
+                let id = rows.get(row).map_or(0, |(_, id, _)| *id);
+                crate::shop::display_record(state, content, id)?;
+            }
             continue;
         }
         let warrior = state
@@ -61,7 +72,17 @@ pub(crate) fn inspect(
         if side > 1 || slot >= if shop && side == 1 { 1000 } else { 100 } {
             return Err("inventory selection outside native rows".into());
         }
-        if !(shop && side == 1) {
+        if shop && side == 1 {
+            let id = crate::shop::stock(state)?
+                .into_iter()
+                .find(|(index, _, _)| *index == slot)
+                .ok_or("selected shop stock missing")?
+                .1;
+            if usize::from(id.unsigned_abs()) / 200 != shop_family {
+                return Err("selected shop stock outside displayed family".into());
+            }
+            crate::shop::display_record(state, content, id)?;
+        } else {
             state.inventory_record = Some(
                 state.warriors[members[side]]
                     .inventory()?
@@ -565,6 +586,12 @@ pub fn take_crate(
         .get(slot)
         .ok_or_else(|| RuleError::Invalid("crate slot missing".into()))?;
     let item_id = item.id();
+    let retained = item.clone();
+    let stacked = item_id == 700
+        && state.warriors[warrior]
+            .inventory()?
+            .iter()
+            .any(|owned| owned.id() == 700);
     let result = collect_item(
         &state.warriors[warrior],
         item,
@@ -573,6 +600,9 @@ pub fn take_crate(
     )?;
     state.warriors[warrior] = result.warrior;
     if result.collected {
+        if !stacked {
+            state.inventory_record = Some(retained);
+        }
         state.crate_items[slot] = result.item;
     }
     let mut occupied: Vec<_> = state

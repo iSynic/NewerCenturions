@@ -28,23 +28,13 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         enemy[0x110..0x112].copy_from_slice(&100_i16.to_be_bytes());
         enemy[0xb0] = 0;
         let target = (case.n::<i16>("target_x"), 20);
-        state.combat = Some(Combat {
-            map: TacticalMap {
-                tiles: case.words("map_before"),
-                shift: (0, 0),
-                edge_word: 0,
-            },
-            squad: SquadPlacement {
-                positions: vec![(20, 20); 6],
-                under_tiles: vec![1155; 6],
-            },
-            enemies: EnemySetup {
-                records: vec![MonsterRecord { bytes: enemy }],
-                positions: vec![target],
-            },
-            ..crate::support::battle()
-        });
-        state.combat.as_mut().unwrap().order[1..3].copy_from_slice(&[0, 10]);
+        let mut combat = crate::support::battle();
+        combat.map.tiles = case.words("map_before");
+        combat.squad.positions = vec![(20, 20); 6];
+        combat.enemies.records = vec![MonsterRecord { bytes: enemy }];
+        combat.enemies.positions = vec![target];
+        combat.order[1..3].copy_from_slice(&[0, 10]);
+        state.combat = Some(combat);
         let random = state.random.clone();
         assert!(click_command(&state, 20, 20).unwrap().is_none());
         assert!(matches!(
@@ -71,12 +61,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
             }));
         }
         expected.push(Event::Feedback(NativeFeedback::Combat { kind: refusal }));
-        assert_eq!(
-            serde_json::to_value(&events).unwrap(),
-            serde_json::to_value(expected).unwrap(),
-            "{}",
-            case.text("case")
-        );
+        assert_eq!(events, expected, "{}", case.text("case"));
         assert_eq!(state.warriors[0].bytes, case.bytes("after"));
         assert_eq!(
             state.combat.as_ref().unwrap().map.tiles,
@@ -240,14 +225,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
                 .wrapping_sub(rounds * word(&content.items[weapon as usize], 36).unwrap());
             expected[offset..offset + 2].copy_from_slice(&weight.to_be_bytes());
         }
-        assert_eq!(
-            state
-                .warriors
-                .iter()
-                .flat_map(|w| w.bytes.clone())
-                .collect::<Vec<_>>(),
-            expected
-        );
+        assert_eq!(crate::support::record_bytes(&state.warriors), expected);
         assert_eq!(
             (state.random.seed, state.random.draws),
             (case.n::<u32>("seed"), case.n::<u64>("draws"))
@@ -285,11 +263,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         assert_eq!(state, before);
         apply(Command::RunControlledTurn, &mut state, &content).unwrap();
         assert_eq!(
-            state
-                .warriors
-                .iter()
-                .flat_map(|w| w.bytes.clone())
-                .collect::<Vec<_>>(),
+            crate::support::record_bytes(&state.warriors),
             case.bytes("after")
         );
         assert_eq!(
@@ -309,11 +283,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         let mut state = crate::command_support_psi::combat_state(&content, case);
         let events = apply(Command::RunControlledTurn, &mut state, &content).unwrap();
         assert_eq!(
-            state
-                .warriors
-                .iter()
-                .flat_map(|w| w.bytes.clone())
-                .collect::<Vec<_>>(),
+            crate::support::record_bytes(&state.warriors),
             case["after"].bytes("party")
         );
         assert_eq!(
@@ -394,14 +364,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         let mut state = crate::support::mission_session(&content);
         state.phase = Phase::Combat;
         state.warriors = crate::support::warriors(&case.bytes("party_before"));
-        let positions = |key: &str| {
-            case.words(key)
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|xy| (xy[0], xy[1]))
-                .collect::<Vec<_>>()
-        };
+        let positions = |key: &str| crate::support::positions(&case[key]);
         let mut combat = crate::support::battle();
         combat.map.tiles = case.words("tiles_before");
         combat.squad.positions = positions("positions_before");
@@ -421,11 +384,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         )
         .unwrap();
         assert_eq!(
-            state
-                .warriors
-                .iter()
-                .flat_map(|warrior| warrior.bytes.iter().copied())
-                .collect::<Vec<_>>(),
+            crate::support::record_bytes(&state.warriors),
             case.bytes("party_after")
         );
         let combat = state.combat.as_ref().unwrap();

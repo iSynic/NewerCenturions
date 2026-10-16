@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 pub const BATTLE_BYTES: usize = 1372;
 pub const MONSTER_BYTES: usize = 288;
 
+/// Data MD keeps a Str29; bytes after its length are retained record padding.
+pub fn monster_name(record: &[u8]) -> Result<String, ContentError> {
+    crate::ui::pascal_text(span(record, 218, 30)?)
+}
+
 #[derive(Clone, Debug)]
 pub struct CombatContent {
     pub encounters: Vec<u8>,

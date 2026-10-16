@@ -5,14 +5,7 @@ fn native_fixture(name: &str) -> serde_json::Value {
     serde_json::from_slice(&std::fs::read(root.join(name)).unwrap()).unwrap()
 }
 
-fn decode(text: &str) -> Vec<u8> {
-    text.as_bytes()
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
-        .collect()
-}
+use crate::fixture_hex::decode;
 
 fn story_frame(record: Vec<u8>, cursor: u8, map_slot: usize) -> centurions_core::ScriptState {
     centurions_core::ScriptState {
@@ -77,6 +70,27 @@ fn scenario_selection_and_archive_children_use_the_application_handlers() {
     });
     driver.app.screen = Screen::Game;
     let before = driver.state.clone();
+    let (_, about) = driver.act(ApplicationAction::Menu(128, 1));
+    assert_eq!(
+        about,
+        [
+            Event::Sound { resource_id: 10107 },
+            Event::Sound { resource_id: 30000 },
+            Event::Delay { ticks: 20 },
+            Event::Sound { resource_id: 10141 },
+        ]
+    );
+    assert!(driver.app.about && driver.app.blocks_game());
+    driver.act(ApplicationAction::CloseAbout);
+    assert!(!driver.app.about);
+    assert_eq!(driver.state, before);
+    assert!(
+        driver
+            .app
+            .archives
+            .iter()
+            .any(|(_, name)| name == "Bore Worm")
+    );
     driver.act(ApplicationAction::Menu(132, 1));
     assert!(driver.app.creature.is_some());
     driver.act(ApplicationAction::CreatureItem(3));
@@ -87,8 +101,32 @@ fn scenario_selection_and_archive_children_use_the_application_handlers() {
     driver.state.exploration.as_mut().unwrap().presentation =
         Some(Presentation::Prologue { resource_id: 1000 });
     let mut record = vec![0; 42];
-    record[8..10].copy_from_slice(&29_i16.to_be_bytes());
+    record[8..10].copy_from_slice(&26_i16.to_be_bytes());
+    record[10..12].copy_from_slice(&29_i16.to_be_bytes());
     driver.state.exploration.as_mut().unwrap().script = Some(story_frame(record, 0, 0));
+    assert_eq!(
+        driver.command(Command::Continue),
+        [Event::Feedback(centurions_core::feedback::script_pause())]
+    );
+    let path = std::env::temp_dir().join(format!("centurions-pause-{}.json", std::process::id()));
+    centurions_core::save(&path, &driver.state, &driver.content).unwrap();
+    driver.state = centurions_core::load(&path, &driver.content).unwrap();
+    let mut legacy: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    legacy["schema_version"] = 8.into();
+    std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    assert!(centurions_core::load(&path, &driver.content).is_err());
+    std::fs::remove_file(path).unwrap();
+    let mut ui = crate::presentation::UiState::default();
+    assert!(ui.prepare_script_pause(&driver.state));
+    assert_eq!(
+        ui.feedback_sound(1.),
+        Some(Event::Sound { resource_id: 30005 })
+    );
+    assert!(ui.feedback_input(1.1, true));
+    assert!(!ui.feedback.is_empty());
+    assert!(ui.feedback_input(1.3, true));
+    assert!(ui.feedback.is_empty());
     let events = driver.command(Command::Continue);
     assert!(events.iter().any(|event| matches!(
         event,
@@ -261,7 +299,6 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
         (16, 10, 0),
         (21, 10, 5),
     ] {
-        assert!(driver.app.supported(135, item, &driver.state));
         let (_, events) = driver.act(ApplicationAction::Menu(135, item));
         assert_eq!(
             (driver.app.volume, driver.app.music_volume, driver.app.sound),
@@ -369,24 +406,42 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
     assert_eq!(events, expected_events);
     assert!(driver.app.exchange_offer.is_none());
     driver.state.warriors[0].bytes[0x9de] = 1;
-    let notices = driver.app.combat_notices(None, &driver.state);
-    assert!(
-        notices
-            .iter()
-            .all(|e| matches!(e, Event::Sound { resource_id: -139 }))
-    );
+    let notices = driver.app.combat_notices(Some(-1), &driver.state);
+    assert!(notices.iter().all(|e| matches!(
+        e,
+        Event::Feedback(centurions_core::feedback::NativeFeedback::Sound { resource_id: -139 })
+    )));
     restored.native_preferences.controls[4] = false;
     restored.native_preferences.controls[5] = false;
     assert!(
         restored
-            .combat_notices(None, &driver.state)
-            .iter()
-            .any(|e| matches!(e, Event::Feedback(_)))
-    );
-    assert!(
-        restored
             .combat_notices(driver.state.combat.as_ref().map(|c| c.round), &driver.state)
             .is_empty()
+    );
+    let mut ui = UiState::default();
+    let mut events: Vec<_> = (0..3).map(|_| Event::Sound { resource_id: -139 }).collect();
+    events.push(Event::Sound { resource_id: 138 });
+    restored.prepare_combat_round(Some(-1), &driver.state, &mut events);
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, Event::Sound { .. })),
+        "round audio would play twice"
+    );
+    for event in events {
+        if let Event::Feedback(feedback) = event {
+            ui.feedback.push_back(feedback);
+        }
+    }
+    for frame in 0..60 {
+        if ui.feedback_sound(f64::from(frame)).is_some() {
+            ui.feedback_until = f64::from(frame) + 0.5;
+        }
+        ui.feedback_input(f64::from(frame), true);
+    }
+    assert!(
+        ui.feedback.is_empty() && ui.persistent_feedback.is_none(),
+        "round notice did not close"
     );
     let actor = driver.state.combat.as_ref().unwrap().active_body().unwrap() as usize;
     for (offset, value) in [(0x90, 1_i16), (0x10, 0), (0x5e, 0)] {

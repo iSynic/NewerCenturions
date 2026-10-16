@@ -1,5 +1,5 @@
 use crate::{RuleError, combat};
-use centurions_content::{Content, Warrior, span, word};
+use centurions_content::{Content, InventoryRecord, Warrior, span, word};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScenarioItemUse {
@@ -43,6 +43,7 @@ pub fn use_scenario_item(
     content: &Content,
     race_movements: &[i8],
     context: ScriptItemContext,
+    retained: Option<&InventoryRecord>,
 ) -> Result<ScenarioItemUse, RuleError> {
     let warrior = warriors
         .get(member)
@@ -71,12 +72,6 @@ pub fn use_scenario_item(
     let quantity = word(bytes, offset + 2)?;
     let quantity = if quantity > 0 { quantity - 1 } else { quantity };
     let remove = quantity == 0 && word(definition, 0x26)? != 0;
-    if remove && (count > 30 || bytes[offset + 9] != 0) {
-        return Err(RuleError::Unsupported {
-            action: "item.use",
-            dependency: "equipped item removal or extended inventory",
-        });
-    }
     let return_code = word(definition, 0x32)?.wrapping_add(100).wrapping_neg();
     let mut result = ScenarioItemUse {
         warriors: warriors.to_vec(),
@@ -94,6 +89,25 @@ pub fn use_scenario_item(
     let carried = word(bytes, 0x9d6)?.wrapping_sub(word(definition, 0x24)?);
     bytes[0x9d6..0x9d8].copy_from_slice(&carried.to_be_bytes());
     if remove {
+        result.sounds.push(655);
+        if bytes[offset + 9] != 0 {
+            // dropitem121152 removes worn attributes before its fixed-slot shift.
+            let selected = warrior.inventory()?[slot].clone();
+            let removed = crate::editor_items::retained_equipment(
+                &result.warriors[member],
+                content,
+                slot,
+                false,
+                false,
+                retained.unwrap_or(&selected),
+            )?;
+            result.warriors[member] = removed.warrior;
+            result.warnings.extend(removed.warnings);
+            if removed.native_return as u16 == 0 {
+                return Ok(result);
+            }
+        }
+        let bytes = &mut result.warriors[member].bytes;
         let weight =
             word(definition, 0x10)?.wrapping_add(word(definition, 0x24)?.wrapping_mul(quantity));
         let carried = word(bytes, 0x9d6)?.wrapping_sub(weight);
@@ -109,7 +123,6 @@ pub fn use_scenario_item(
             .get(race as usize)
             .ok_or_else(|| RuleError::Invalid("selected item race movement unavailable".into()))?;
         combat::calculate_movement(&mut result.warriors[member], *movement)?;
-        result.sounds.push(655);
     }
     Ok(result)
 }

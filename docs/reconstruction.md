@@ -10,44 +10,72 @@ event loop is observed. Live desktop comparison is still required for visual
 parity. Creation, roster, mission-ending and preference handlers are connected;
 their existence does not establish complete interactive or original-game parity.
 
-## Current functionality checkpoint
+## Local implementation checkpoint
 
-The beta 4 source checkpoint preserves the compiler split, the shared command
-boundary and schema 6 saves with readers for versions 1-5. Six assisted command
-routes exercise all six Thunder stages, both terminal branches and mission-one
-reset, including independent replay and save/reload suffix checks. Assistance is
-explicit; these are functionality checks, not unaided campaign completion or
-proof of all obtainable features.
+The maintained runtime keeps the compiler split and shared command boundary.
+Schema 12 saves retain readers for versions 1–11. Persistent round/death caller
+ownership, retained death queues and script pauses are validated before replacing
+a session; older formats cannot silently admit those new contexts. Version 10 also
+retains outdoor camp/search state, clinic access and interrupted control actions.
+Old saves initialize these new contexts as inactive.
 
-The reconciled remaining work is grouped below. This is a disclosure of known
-limits, not a claim that unlisted bugs cannot exist.
+The current repairs connect authored credit chests, retained equipment and NPC
+work, conditioned battle entry, large allies, friendly rifle turns, ordinary
+click reload, natural combat effects, the previously omitted learned powers,
+encounter item returns and original text conversion. The About menu uses its
+original resources, sounds and delay. Creature labels respect their original
+Pascal lengths and the supplied bestiary order.
 
-| Area | Remaining behavior |
-| --- | --- |
-| Treasure | Authored credit chests currently produce an unsupported diagnostic. |
-| Learned Psi | 29 combat-enabled choices, outdoor Leap/Open Lock and 16 typed-encounter special-effect contexts lack complete entries. |
-| Items and equipment | Disposable script-item directories beyond 30 entries, remaining script returns and retained work after shop/refit/loot callers. |
-| Combat | Occupied-target reload restrictions, conditioned party battle entry, weapon/effect dispatch and some allied rifle turns. |
-| Actors and scripts | Large recruited allies, retained actor backing and nested death/summon caller restoration. |
-| Desktop | Original text-entry conversion and the About action; remaining visual/audio/input acceptance. |
-| Verification | Story alternatives, native eligibility and caller effects, persistent continuations, Hive Leader fault qualification and historical native case-to-runner ownership. |
+The exploration panel uses original PICT 176 and its original control rectangles.
+Inventory, trade, Psi, camp, automatic/active search, rest, healing and contextual
+crate/shop/clinic controls connect shared actions. Reopening shop/clinic dialogs
+uses their retained ownership checks rather than requiring an active script.
+Held control loops are bounded and stop retrying after refusals. These connections
+are source-backed compositions of independently compared rule primitives; full
+button-level native comparison and user-operated visual acceptance remain separate.
+Mechanical capture now has shared entry, target, cancellation and saved-state commands. Bounded original transactions compare records, costs, RNG and feedback; whole-click and live presentation parity remain separate.
 
-Current maintained test code is 25,466 lines against 102,041 production code
-lines (24.9566%, with a 25% ceiling). Expanded instruction bodies, generated
-catalogs and fixture data are excluded from the denominator. Raw physical
-totals are 26,617 test lines and 104,952 maintained production lines. Independent
-native fixture data stays private and is not included in public source or
-runtime packages.
+Six assisted command routes exercise all six Thunder stages, the authored
+conclusion and mission-one reset. Each recording is independently replayed and
+compared with saved suffixes. Assistance is explicit; these checks test
+functionality without requiring unaided campaign completion.
 
-Local release measurements for the unchanged runtime checkpoint were 220.516
-seconds cold, 68.601 seconds after a representative runtime edit and 0.932 seconds
-with no changes. These timings do not predict a hosted runner's duration.
+This does not certify every alternative or obtainable feature. Remaining work
+is tracked in one reconciled completion inventory: complete original caller
+comparisons, broader combat/Psi/actor qualification, remaining branch coverage,
+Hive Leader fault qualification, and live presentation and interaction
+acceptance. All 35 historical case identities now have executed current ownership or an
+exact independent superseding receipt. Ten original ray-dispatch and six movement-spell controls now compare actual
+commands and saved replay at explicit native service boundaries. Four historical
+occupied-refill controls also run through Move with documented NPC health
+assistance. The source-domain script-entry audit classifies all 26 previously
+unqualified identities without using campaign route absence as proof.
+The two nested-caller cases compare the
+complete captured three-window sequence, retained records, queue/header bytes,
+RNG and ordered feedback. Their controlled service boundaries remain explicit.
 
-Complete original Mac save import, additional real scenario content, other
-platforms and full original-game fidelity remain separate work. Native dialogs,
-fullscreen recovery, held movement/targeting, inventory/shop interactions,
-music/audio, visual comparison and sustained desktop CPU/memory acceptance need
-user-operated observation. No automated desktop control establishes those gates.
+Current enforced accounting is 26,128 test code lines / 104,677 maintained
+production code lines (24.960593%, ceiling 25%). Physical totals are 27,323 test
+and 107,695 production lines. Test helpers and verification scripts are counted;
+expanded bodies, generated catalogs, fixtures, vendor code and recovery tools
+are excluded from maintained production code. All frozen native references
+remain intact. New bounded native cases compare natural effects and all 256
+original MacRoman case-fold outputs. A complete original opcode-8 header copy
+now agrees with the actual movement/save path. Original script replacement
+retains the full footer; Click Mouse pauses persist and resume through the
+desktop feedback handler. These are distinct from live observations.
+
+Fresh cold, representative maintained-runtime edit and no-change release
+measurements, compiler version, hardware and memory peaks are recorded in the
+local checkpoint provenance. The gates remain ten minutes cold and two minutes
+incremental. These do not predict hosted runner times. Compiler priority and
+memory guards remain in place.
+
+Native file dialogs, fullscreen restoration, held movement and targeting,
+inventory/trade/shops, music/audio, original visuals/help and actual desktop
+resource use require user-operated acceptance. Complete populated Mac save
+import, other genuine scenarios, ports and publishing remain separate work.
+No automated desktop control or public release is part of this pass.
 
 ## Recovery workflow
 
@@ -340,3 +368,14 @@ original inputs require it. Assistance does not establish acquisition, navigatio
 combat calculations or native fidelity. Independent original-binary cases remain
 the authority for their measured behavior. No assistance enters the desktop
 runtime. Live presentation, audio and responsiveness require user observation.
+
+The combat panel uses original pictures and native hit regions. Auto (including
+per-warrior checkboxes), Delay, Escape, Undo, the weapon-name chooser and selected-
+body portrait remain missing normal-combat entry points. The first four report
+technical diagnostics without modifying the session; the latter two still lack
+control bindings. Weapon-mode W and general inventory/Archives access are distinct
+actions. Camera controls are
+source-derived; inspected-body information and original range presentation still
+require completion/comparison. The finite control audit is tracked alongside the
+private completion checklist. Version 11 retains mechanical targeting; versions
+1-10 initialize that context as inactive and cannot admit it when downgraded.

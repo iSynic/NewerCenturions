@@ -1,9 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(all(test, feature = "original-fixtures"))]
+#[path = "../../core/tests/hex.rs"]
+mod fixture_hex;
+
 mod appearance;
 mod application;
 mod assets;
 mod audio;
+mod collection;
+mod combat_controls;
 mod creation;
 mod creature;
 mod editor;
@@ -21,6 +27,10 @@ mod original_content;
 mod preferences;
 mod presentation;
 mod save_files;
+mod scan_picker;
+mod status_popup;
+mod story_dialogs;
+mod targeting;
 mod window;
 
 use assets::Assets;
@@ -408,8 +418,18 @@ async fn main() {
             if let Err(error) = application.prepare_information(state, assets) {
                 ui.failure(error);
             }
+            if status_popup::active(&ui)
+                && ui.technical_error.is_none()
+                && application.help.page.is_none()
+            {
+                status_popup::scroll(state, assets, &mut ui);
+            }
             let controls = application.draw(content, state, assets, &ui);
             ui.movement.repeat_seconds = (application.speed as f64 * 5. - 5.) / 60.;
+            let script_pause = {
+                ui.prepare_capture_prompt(state);
+                ui.prepare_script_pause(state)
+            };
             if ui.technical_error.is_none()
                 && application.help.page.is_none()
                 && let Some(event) = ui.feedback_sound(get_time())
@@ -450,7 +470,15 @@ async fn main() {
             {
                 ui.error(error);
             }
-            let mut action = if capture.is_none()
+            let mut action = if script_pause && feedback_blocked && ui.feedback.is_empty() {
+                Some(Action::Command(Command::Continue))
+            } else if status_popup::active(&ui)
+                && !feedback_blocked
+                && !display_shortcut
+                && application.help.page.is_none()
+            {
+                status_popup::input()
+            } else if capture.is_none()
                 && !display_shortcut
                 && !feedback_blocked
                 && !state.combat.as_ref().is_some_and(|c| c.selection_pending)
@@ -461,6 +489,27 @@ async fn main() {
             };
             let mut blocked =
                 display_shortcut || feedback_blocked || was_blocked || application.blocks_game();
+            blocked |= status_popup::active(&ui);
+            if !blocked
+                && capture.is_none()
+                && ui.inspection.is_none()
+                && state.exploration.as_ref().is_some_and(|p| {
+                    matches!(
+                        p.presentation,
+                        Some(
+                            centurions_core::Presentation::Dialogue { .. }
+                                | centurions_core::Presentation::Messages { .. }
+                        )
+                    )
+                })
+            {
+                // Scenario text owns input; negative IDs resume without a click.
+                action = input::story_action(
+                    state,
+                    is_mouse_button_pressed(MouseButton::Left) || !get_keys_pressed().is_empty(),
+                );
+                blocked = true;
+            }
             let mut automatic_turn = false;
             if action.is_none() && !blocked && ui.effects.is_empty() && get_time() >= ui.delay_until
             {
@@ -507,6 +556,11 @@ async fn main() {
             if action.is_none()
                 && !blocked
                 && ui.inspection.is_none()
+                && !targeting::active(state, &ui)
+                && state
+                    .exploration
+                    .as_ref()
+                    .is_some_and(|position| position.presentation.is_none())
                 && ui.effects.is_empty()
                 && get_time() >= ui.delay_until
                 && !enemy_error
@@ -538,11 +592,6 @@ async fn main() {
                 }
                 automatic_turn = action.is_some();
             }
-            if let Some(Action::Drop(warrior, slot)) = action {
-                action = (!application.native_preferences.enabled(12)
-                    || application::command_modifier())
-                .then_some(Action::Command(Command::DropItem { warrior, slot }));
-            }
             action = match ui.resolve_inventory(action, state, content, get_time()) {
                 Ok(next) => next,
                 Err(error) => {
@@ -550,10 +599,15 @@ async fn main() {
                     None
                 }
             };
+            if let Some(Action::Drop(warrior, slot)) = action {
+                action = (!application.native_preferences.enabled(12)
+                    || application::command_modifier())
+                .then_some(Action::Command(Command::DropItem { warrior, slot }));
+            }
             if let Some(action) = action {
                 let label = match &action {
                     Action::Application(_) => unreachable!(),
-                    Action::Inventory(_) => unreachable!(),
+                    Action::Inventory(_) | Action::Collection(_) => unreachable!(),
                     Action::Command(command) => format!("{command:?}"),
                     Action::Save => "Save".into(),
                     Action::FastSave => "Fast save".into(),
@@ -564,13 +618,18 @@ async fn main() {
                         format!("Information child {member}")
                     }
                     Action::Close => "Close inspection".into(),
+                    Action::CombatView(view) => format!("Combat view {view:?}"),
+                    Action::PanCombat(x, y) => format!("Combat view {x},{y}"),
                     Action::Page(n) => format!("Inspection page {n}"),
                     Action::ChoosePsi(spell) => format!("Choose psi {spell}"),
                     Action::PsiPower(power) => format!("Psi power {power}"),
-                    Action::PsiMapTarget => "Choose psi map location".into(),
                     Action::RotatePsi => "Rotate psi target".into(),
-                    Action::FireMapTarget => "Choose firearm map location".into(),
+                    Action::TargetQuantity(increase) => {
+                        format!("Target quantity increase {increase}")
+                    }
                     Action::MedicalCancel => "Confirm medical cancellation".into(),
+                    Action::TextEntry(open) => format!("Text entry {open}"),
+                    Action::PreviewPsi(spell) => format!("Preview Psi {spell}"),
                     Action::KeepMedicalTarget => "Keep choosing medical target".into(),
                     Action::Drop(_, _) => unreachable!(),
                 };
@@ -578,13 +637,25 @@ async fn main() {
                     Action::Application(_) => unreachable!(),
                     Action::Drop(_, _) => unreachable!(),
                     Action::Command(command) => {
+                        let text_entry =
+                            matches!(command, Command::SubmitText { .. } | Command::CancelMenu);
+                        let collection = matches!(
+                            command,
+                            Command::TakeLoot { .. }
+                                | Command::StoreLoot { .. }
+                                | Command::TakeCrate { .. }
+                        );
+                        let weapon = matches!(command, Command::SelectCombatWeapon { .. });
                         let enemy = matches!(command, Command::RunEnemyTurn);
                         let psi = matches!(
                             command,
                             Command::CastPsi { .. }
+                                | Command::CastPsiOnWarrior { .. }
                                 | Command::CastEncounterPsi { .. }
                                 | Command::CastPartyPsi { .. }
                                 | Command::BeginPsiSelection { .. }
+                                | Command::FirePreparedPsi { .. }
+                                | Command::FirePreparedPsiOnWarrior { .. }
                                 | Command::FirePsiSelection
                                 | Command::CancelPsiSelection
                                 | Command::SelectOutdoorPsiTarget { .. }
@@ -608,8 +679,21 @@ async fn main() {
                         let movement =
                             matches!(command, Command::Move { .. } | Command::CombatClick { .. });
                         let previous_round = state.combat.as_ref().map(|c| c.round);
+                        let field_control = if let Command::FieldControl { action } = &command {
+                            Some(*action)
+                        } else {
+                            None
+                        };
                         match apply(application.command(command), state, content) {
                             Ok(mut events) => {
+                                if text_entry {
+                                    ui.typed_entry = false;
+                                    ui.typed_text.clear();
+                                }
+                                if collection {
+                                    ui.collection_slot = None;
+                                    ui.collection_drag = false;
+                                }
                                 if shot
                                     && events
                                         .iter()
@@ -617,7 +701,11 @@ async fn main() {
                                 {
                                     ui.firearm_map_target = false;
                                 }
-                                events.extend(application.combat_notices(previous_round, state));
+                                application.prepare_combat_round(
+                                    previous_round,
+                                    state,
+                                    &mut events,
+                                );
                                 if movement
                                     && !events.iter().any(|event| {
                                         matches!(
@@ -651,6 +739,9 @@ async fn main() {
                                 {
                                     ui.inspection = None;
                                 }
+                                if weapon {
+                                    ui.inspection = None;
+                                }
                                 ui.events(&events);
                                 application.observe(&events);
                                 if events
@@ -665,11 +756,26 @@ async fn main() {
                                     ui.psi_choice = None;
                                 }
                                 if let Ok(audio) = &audio {
-                                    audio.play(&events);
+                                    if field_control.is_some() && ui.field_repeating {
+                                        // buttonchoice plays the loop's entry sound once per held gesture.
+                                        audio.play(events.iter().filter(|event| {
+                                            !matches!(
+                                                event,
+                                                Event::Sound {
+                                                    resource_id: 6001 | 10105
+                                                }
+                                            )
+                                        }));
+                                    } else {
+                                        audio.play(&events);
+                                    }
                                 }
                                 enemy_error = false;
                             }
                             Err(e) => {
+                                if let Some(action) = field_control {
+                                    ui.field_repeat = Some((action, f64::INFINITY));
+                                }
                                 ui.failure(e);
                                 enemy_error = enemy || automatic_turn;
                             }
@@ -701,6 +807,7 @@ async fn main() {
                                 application.screen = application::Screen::Game;
                                 ui.selected = 0;
                                 ui.feedback.clear();
+                                ui.persistent_feedback = None;
                                 if let Ok(audio) = &audio {
                                     audio.clear_pending();
                                 }
@@ -725,15 +832,48 @@ async fn main() {
                         application.quit_after_save = false;
                         application.end_after_save = false;
                     }
+                    Action::CombatView(view) => ui.combat_view.change(state, view),
+                    Action::PanCombat(x, y) => ui.combat_view.pan(state, (x, y)),
                     Action::Select(i) => {
                         ui.selected = i;
                         ui.page = 0;
+                        if ui.inspection == Some(presentation::Inspection::Psi) {
+                            ui.psi_choice = None;
+                        }
                     }
                     Action::InformationInspection(member, inspection) => {
                         ui.selected = member;
                         ui.return_information = Some(member);
+                        if inspection == presentation::Inspection::FireTargets {
+                            if let Err(error) = apply(Command::BeginFireTargets, state, content) {
+                                ui.failure(error);
+                                continue;
+                            }
+                            ui.estimate_target = None;
+                        }
                         ui.inspection = Some(inspection);
                         ui.page = 0;
+                        if inspection == presentation::Inspection::Psi {
+                            let actor = state
+                                .combat
+                                .as_ref()
+                                .and_then(|arena| arena.active_body())
+                                .filter(|body| (0..state.warriors.len() as i16).contains(body))
+                                .map_or(ui.selected, |body| body as usize);
+                            if let Some(choice) = &state.psi_menu_choices[actor] {
+                                ui.page = usize::from(choice.row).min(6);
+                                let school =
+                                    centurions_content::word(&state.warriors[actor].bytes, 0x36)
+                                        .unwrap_or(0);
+                                let spell = school * 1000
+                                    + (ui.page as i16 + 1) * 100
+                                    + i16::from(choice.column)
+                                    + 1;
+                                if state.warriors[actor].knows_spell(spell).unwrap_or(false) {
+                                    ui.psi_choice = Some((spell, ui.psi_power.clamp(1, 7)));
+                                }
+                            }
+                        }
                         if inspection == presentation::Inspection::Items {
                             ui.inventory.open(member, state.warriors.len());
                             if let Err(error) =
@@ -744,6 +884,15 @@ async fn main() {
                         }
                     }
                     Action::Open(inspection) => {
+                        if matches!(
+                            inspection,
+                            presentation::Inspection::Conditions
+                                | presentation::Inspection::Modifiers
+                        ) && application.sound
+                            && let Ok(audio) = &audio
+                        {
+                            audio.play(&[Event::Sound { resource_id: 609 }]);
+                        }
                         if let Some(centurions_core::Presentation::Clinic { member, .. }) = state
                             .exploration
                             .as_ref()
@@ -770,6 +919,7 @@ async fn main() {
                             }
                         }
                         if inspection == presentation::Inspection::Psi {
+                            ui.psi_choice = None;
                             let actor = state
                                 .combat
                                 .as_ref()
@@ -780,8 +930,36 @@ async fn main() {
                                 ui.psi_power = choice.power.clamp(1, 7);
                             }
                         }
+                        if inspection == presentation::Inspection::FireTargets {
+                            if let Err(error) = apply(Command::BeginFireTargets, state, content) {
+                                ui.failure(error);
+                                continue;
+                            }
+                            ui.estimate_target = None;
+                        }
                         ui.inspection = Some(inspection);
                         ui.page = 0;
+                        if inspection == presentation::Inspection::Psi {
+                            let actor = state
+                                .combat
+                                .as_ref()
+                                .and_then(|arena| arena.active_body())
+                                .filter(|body| (0..state.warriors.len() as i16).contains(body))
+                                .map_or(ui.selected, |body| body as usize);
+                            if let Some(choice) = &state.psi_menu_choices[actor] {
+                                ui.page = usize::from(choice.row).min(6);
+                                let school =
+                                    centurions_content::word(&state.warriors[actor].bytes, 0x36)
+                                        .unwrap_or(0);
+                                let spell = school * 1000
+                                    + (ui.page as i16 + 1) * 100
+                                    + i16::from(choice.column)
+                                    + 1;
+                                if state.warriors[actor].knows_spell(spell).unwrap_or(false) {
+                                    ui.psi_choice = Some((spell, ui.psi_power.clamp(1, 7)));
+                                }
+                            }
+                        }
                         if inspection == presentation::Inspection::Items {
                             ui.inventory.open(ui.selected, state.warriors.len());
                             if let Err(error) =
@@ -792,11 +970,21 @@ async fn main() {
                         }
                     }
                     Action::Close => {
+                        if (status_popup::active(&ui)
+                            || ui.inspection == Some(presentation::Inspection::Specials))
+                            && application.sound
+                            && let Ok(audio) = &audio
+                        {
+                            audio.play(&[Event::Sound {
+                                resource_id: if status_popup::active(&ui) { 607 } else { 141 },
+                            }]);
+                        }
                         ui.firearm_map_target = false;
                         if state
                             .combat
                             .as_ref()
                             .is_some_and(|c| c.firearm_selection.is_some())
+                            || state.target_quantity.is_some()
                         {
                             match apply(Command::CancelFireTargets, state, content) {
                                 Ok(events) => application.observe(&events),
@@ -810,14 +998,56 @@ async fn main() {
                             application.restore_information(member);
                         }
                     }
-                    Action::Page(change) => ui.page = (ui.page as i32 + change).max(0) as usize,
-                    Action::Inventory(_) => unreachable!(),
-                    Action::PsiPower(power) => ui.psi_power = power.clamp(1, 7),
+                    Action::Page(change) => {
+                        ui.page = (ui.page as i32 + change).max(0) as usize;
+                        if ui.inspection == Some(presentation::Inspection::Psi) {
+                            ui.page = ui.page.min(6);
+                            ui.psi_choice = None;
+                        }
+                    }
+                    Action::Inventory(_) | Action::Collection(_) => unreachable!(),
+                    Action::TargetQuantity(increase) => {
+                        match targeting::adjust(state, content, &mut ui, increase) {
+                            Ok(events) => {
+                                if let Some(pending) = &state.psi_selection {
+                                    ui.psi_power = pending.power;
+                                    if ui.psi_choice.is_some() {
+                                        ui.psi_choice = Some((pending.spell, pending.power));
+                                        ui.psi_pending = ui.psi_choice;
+                                    }
+                                }
+                                ui.events(&events);
+                                application.observe(&events);
+                                if let Ok(audio) = &audio {
+                                    audio.play(&events);
+                                }
+                            }
+                            Err(error) => ui.failure(error),
+                        }
+                    }
+                    Action::PsiPower(power) => {
+                        ui.psi_power = power.clamp(1, 7);
+                        if let Some(choice) = &mut ui.psi_choice {
+                            choice.1 = ui.psi_power;
+                        }
+                    }
                     Action::ChoosePsi(spell) => {
                         let power = ui.psi_power.clamp(1, 7);
+                        match apply(Command::BeginPsiTargeting { spell, power }, state, content) {
+                            Ok(events) => {
+                                ui.events(&events);
+                                application.observe(&events);
+                            }
+                            Err(error) => {
+                                ui.failure(error);
+                                continue;
+                            }
+                        }
                         ui.psi_rotation = 0;
                         ui.psi_preview = None;
+                        ui.estimate_target = None;
                         ui.psi_choice = Some((spell, power));
+                        ui.psi_pending = Some((spell, power));
                         ui.inspection = Some(presentation::Inspection::PsiTargets);
                         ui.page = 0;
                     }
@@ -828,13 +1058,16 @@ async fn main() {
                                 resource_id: 130,
                             });
                     }
-                    Action::PsiMapTarget => {
-                        ui.psi_pending = ui.psi_choice;
-                        ui.inspection = None;
+                    Action::TextEntry(open) => {
+                        ui.typed_entry = open;
+                        ui.typed_text.clear();
                     }
-                    Action::FireMapTarget => {
-                        ui.firearm_map_target = true;
-                        ui.inspection = None;
+                    Action::PreviewPsi(spell) => {
+                        ui.psi_choice = Some((spell, ui.psi_power.clamp(1, 7)));
+                        ui.feedback
+                            .push_back(centurions_core::feedback::NativeFeedback::Sound {
+                                resource_id: 141,
+                            });
                     }
                     Action::MedicalCancel => ui.medical_cancel = true,
                     Action::KeepMedicalTarget => ui.medical_cancel = false,

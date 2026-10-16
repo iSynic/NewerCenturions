@@ -72,6 +72,8 @@ impl Creation {
         view.stage = if race { Stage::Race } else { Stage::Mos };
         view.request.race = word(&warrior.bytes, 0x32)?;
         view.request.mos = word(&warrior.bytes, 0x34)?;
+        view.request.portrait = word(&warrior.bytes, 0x54)?;
+        view.request.icon = word(&warrior.bytes, 0x56)?;
         Ok(view)
     }
     pub fn dialog(&self) -> i16 {
@@ -304,6 +306,20 @@ impl Creation {
         match self.stage {
             Stage::Race | Stage::Mos => {
                 enabled.extend([56, 58, 74]);
+                // race/caste draw the selected warrior in DITL item74.
+                if let Some(image) = assets.portraits.get(&self.request.portrait) {
+                    let rect = assets.dialog_rect(id, 74);
+                    draw_texture_ex(
+                        image,
+                        rect.x,
+                        rect.y,
+                        WHITE,
+                        DrawTextureParams {
+                            dest_size: Some(rect.size()),
+                            ..Default::default()
+                        },
+                    );
+                }
                 let chosen = if self.stage == Stage::Race {
                     self.request.race
                 } else {

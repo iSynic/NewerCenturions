@@ -5,61 +5,10 @@ use crate::support::positions;
 
 use crate::native_common::snapshot_enemies as enemies;
 
-fn work(snapshot: &Value) -> WeaponWork {
-    let weapon = snapshot.bytes("weapon_work");
-    let ammunition = snapshot.bytes("ammo_work");
-    WeaponWork {
-        sound: Some(word(&weapon, 0x0e).unwrap()),
-        weapon_armor_filter: Some(word(&weapon, 0x88).unwrap()),
-        ammunition_armor_filter: Some(word(&ammunition, 0x88).unwrap()),
-    }
-}
-
+use crate::native_common::psi_work as work;
 fn state(content: &Content, snapshot: &Value) -> Session {
-    let mut state = crate::support::mission_session(content);
-    state.warriors = warriors(snapshot);
-    state.psi_memory = Some(snapshot.bytes("memory"));
-    state.party_buffs = snapshot.bytes("party_buffs");
-    state.loaded_item_field32 = Some(snapshot.n::<i16>("item_context"));
-    state.attack_count = snapshot.n::<i16>("count");
-    state.weapon_work = work(snapshot);
-    state.attack_packet = Some(snapshot.bytes("packet"));
-    state.attack_identity = Some(snapshot.words("identity").try_into().unwrap());
-    state.random = RandomState {
-        seed: snapshot.n::<u32>("seed"),
-        draws: snapshot.n::<u64>("draws"),
-    };
-    state.combat = Some(Combat {
-        battle: 85,
-        map: TacticalMap {
-            tiles: snapshot.words("map"),
-            shift: (0, 0),
-            edge_word: 0,
-        },
-        squad: SquadPlacement {
-            positions: positions(&snapshot["party_positions"]),
-            under_tiles: vec![1155; 6],
-        },
-        enemies: EnemySetup {
-            records: enemies(snapshot),
-            positions: positions(&snapshot["monster_positions"]),
-        },
-        order: snapshot.words("order"),
-        cursor: snapshot.n::<usize>("cursor"),
-        round: snapshot.n::<i16>("round"),
-        round_scripts: RoundScripts {
-            counter: snapshot.n("round"),
-            ..Default::default()
-        },
-        spell_fields: snapshot.bytes("fields"),
-        field_used: snapshot.bytes("used"),
-        attack_packet: Some(snapshot.bytes("packet")),
-        attack_identity: Some(snapshot.words("identity").try_into().unwrap()),
-        weapon_work: state.weapon_work,
-        unavailable: snapshot.n::<i8>("unavailable"),
-        ..crate::support::battle()
-    });
-    state.phase = Phase::Combat;
+    let mut state = crate::native_common::psi_snapshot(content, snapshot);
+    state.combat.as_mut().unwrap().round_scripts.counter = snapshot.n("round");
     state
 }
 

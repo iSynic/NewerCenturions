@@ -57,7 +57,6 @@ pub use centurions_core::save;
 pub use centurions_core::story_health::HealthContext;
 pub use centurions_core::story_health::HealthEvent;
 pub use centurions_core::story_reduce::reduce_outdoors;
-pub use serde::Deserialize;
 pub use serde_json::Value;
 pub use serde_json::json;
 pub use std::sync::Arc;

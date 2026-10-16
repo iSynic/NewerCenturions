@@ -1,6 +1,5 @@
 use crate::prelude::*;
 
-use crate::support::field_bytes as bytes;
 use centurions_core::story_inventory;
 use centurions_core::story_promotion;
 use centurions_core::story_promotion::LibraryRandom;
@@ -16,7 +15,7 @@ fn native_close_promotes_each_living_member_once_and_preserves_valid_spells() {
 
     let content = crate::support::content();
     let map = content.map(0).unwrap();
-    let baseline = bytes(&fixture, "warriors");
+    let baseline = fixture.bytes("warriors");
     let interactive = crate::support::fixture("interactive-promotion.json");
     let cases = fixture.array("cases");
 
@@ -114,20 +113,8 @@ fn native_close_promotes_each_living_member_once_and_preserves_valid_spells() {
                 "command promotion case{index}"
             );
             assert_eq!(state.random, random);
-            if let Some(sounds) = case["sounds"].as_array() {
-                assert_eq!(
-                    events
-                        .iter()
-                        .filter_map(|event| match event {
-                            Event::Sound { resource_id } => Some(*resource_id),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>(),
-                    sounds
-                        .iter()
-                        .map(|s| s.as_i64().unwrap() as i16)
-                        .collect::<Vec<_>>()
-                );
+            if case["sounds"].is_array() {
+                crate::support::expect(crate::support::event_sounds(&events), &case["sounds"]);
             }
             assert_eq!(
                 (state.library_random_seed, state.library_random_draws),
@@ -147,7 +134,7 @@ fn original_reward_chain_crosses_level_thresholds_at_close() {
 
     let content = crate::support::content();
     let map = content.map(0).unwrap();
-    let baseline = bytes(&fixture, "warriors");
+    let baseline = fixture.bytes("warriors");
     for case in fixture
         .array("cases")
         .iter()
@@ -161,7 +148,7 @@ fn original_reward_chain_crosses_level_thresholds_at_close() {
         };
         for stage in case.array("stages") {
             let n = stage.n::<u64>("stage");
-            let table = bytes(stage, "table");
+            let table = stage.bytes("table");
             let loot = if n == 1 {
                 let prepared =
                     story_treasure::prepare(&warriors, &table, &content, &mut random, 0).unwrap();
@@ -186,14 +173,14 @@ fn original_reward_chain_crosses_level_thresholds_at_close() {
             .warriors;
             assert_eq!(
                 flatten(&warriors),
-                bytes(stage, "warriors"),
+                stage.bytes("warriors"),
                 "chain stage{n}"
             );
             let mut crate_bytes = vec![0; 22000];
             for (i, item) in loot.iter().enumerate() {
                 crate_bytes[i * 22..i * 22 + 22].copy_from_slice(&item.0);
             }
-            assert_eq!(crate_bytes, bytes(stage, "crate"), "chain stage{n}");
+            assert_eq!(crate_bytes, stage.bytes("crate"), "chain stage{n}");
             crate::support::native_expect! {
             scalar library.seed => &stage["library_seed"], "binary_level_promotion";
             scalar library.draws => &stage["library_draws"], "binary_level_promotion";

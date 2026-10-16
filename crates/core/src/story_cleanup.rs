@@ -108,6 +108,7 @@ pub(crate) fn confirm(state: &mut Session, content: &Content) -> Result<Vec<Even
             record[0x4e..0x50].copy_from_slice(&weapon);
         }
     }
+    state.retain_npcs();
     let arena = state.combat.take().unwrap();
     state.attack_packet = arena.attack_packet;
     state.attack_identity = arena.attack_identity;

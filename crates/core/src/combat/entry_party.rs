@@ -24,22 +24,21 @@ pub fn initiative(
     }
     let mut living = Vec::new();
     let mut speeds = Vec::new();
+    let mut marked = 0_i8;
     for (index, warrior) in warriors.iter().enumerate() {
         span(&warrior.bytes, 0, 3138)?;
-        if word(&warrior.bytes, 0x90)? != 0 {
-            return Err(RuleError::Unsupported {
-                action: "combat.initiative",
-                dependency: "confused warrior initiative",
-            });
-        }
         speeds.push(word(&warrior.bytes, 0x9e8)?);
         if warrior.stamina()? > 0 {
             living.push(index as i16);
+            marked += i8::from(word(&warrior.bytes, 0x90)? != 0);
         }
     }
-    let bound = warriors.len() as i16 - i16::from(unavailable) + enemy_speeds.len() as i16;
+    let bound = warriors.len() as i16 - i16::from(unavailable)
+        + enemy_speeds.len() as i16
+        + i16::from(marked);
     let inserted = (warriors.len() as i8 - 1)
         .wrapping_sub(unavailable)
+        .wrapping_add(marked)
         .wrapping_add(1) as u8 as usize;
     if !(1..110).contains(&bound) || (surprise == 0 && inserted > living.len()) {
         return Err(RuleError::Unsupported {

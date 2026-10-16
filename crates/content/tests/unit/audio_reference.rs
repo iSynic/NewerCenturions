@@ -53,12 +53,10 @@ fn original_ima4_music_matches_independent_ffmpeg_pcm_and_rejects_corruption() {
 }
 
 #[cfg(feature = "original-fixtures")]
-fn hex_bytes(text: &str) -> Vec<u8> {
-    (0..text.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(&text[index..index + 2], 16).unwrap())
-        .collect()
-}
+#[path = "../../../core/tests/hex.rs"]
+mod hex;
+#[cfg(feature = "original-fixtures")]
+use hex::decode as hex_bytes;
 
 #[cfg(feature = "original-fixtures")]
 #[test]

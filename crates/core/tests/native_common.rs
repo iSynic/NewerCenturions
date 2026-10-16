@@ -1,5 +1,35 @@
 use crate::prelude::*;
 
+pub fn earned_receipt(name: &str, index: usize) -> Value {
+    crate::support::fixture(&format!("{name}-receipt-{}.json", [12, 1][index]))
+}
+
+/// Historical command recordings omitted showresults151a88 for the Shield packet.
+/// Restore that source-owned event without changing the frozen recording bytes.
+pub fn shield_result_events(events: Vec<Event>) -> Vec<Event> {
+    let mut result = vec![];
+    for event in events {
+        if let Event::SpellResolved {
+            spell: 1305,
+            target,
+            damage: 0,
+            ..
+        } = &event
+        {
+            result.push(Event::Feedback(
+                centurions_core::feedback::NativeFeedback::CombatResult {
+                    body: *target,
+                    code: 13,
+                    amount: 0,
+                    audible: false,
+                },
+            ));
+        }
+        result.push(event);
+    }
+    result
+}
+
 pub fn assert_body_records(
     warriors: &[Warrior],
     enemies: &[MonsterRecord],
@@ -330,7 +360,10 @@ pub fn first_difference(actual: &Value, expected: &Value, path: &str) -> Option<
         return None;
     }
     match (actual, expected) {
-        (Value::Object(a), Value::Object(b)) if a.len() == b.len() => {
+        (Value::Object(a), Value::Object(b)) => {
+            if a.len() != b.len() {
+                return Some(format!("{path}: keys {:?} != {:?}", a.keys(), b.keys()));
+            }
             for (key, value) in a {
                 if let Some(other) = b.get(key) {
                     if let Some(error) = first_difference(value, other, &format!("{path}.{key}")) {
@@ -355,6 +388,14 @@ pub fn first_difference(actual: &Value, expected: &Value, path: &str) -> Option<
     }
     Some(format!("{path}: fields differ"))
 }
+pub fn earned_inventory_work(index: usize) -> Option<centurions_content::InventoryRecord> {
+    Some(centurions_content::InventoryRecord(
+        crate::support::fixture("earned-crate-equipment.json")["cases"][5 + index]["picked"]
+            .bytes("selected_record")
+            .try_into()
+            .unwrap(),
+    ))
+}
 pub fn refresh_item_work(state: &mut Session, content: &Content) {
     // Compose the omitted combatupdate2 writer after the native Getup/prefix:
     // NPC WORD4e or party ca/e4 (BYTE9dd) selects the complete loaditem record.
@@ -377,4 +418,79 @@ pub fn refresh_item_work(state: &mut Session, content: &Content) {
     record[26..28].copy_from_slice(&class.to_be_bytes());
     state.loaded_item_field32 = Some(word(&record, 32).unwrap());
     state.ammunition_work.item = Some(record);
+}
+
+// Shared controlled geometry for independent movement and complete actor-decision receipts.
+pub fn enemy_movement_case(case: &Value) -> Combat {
+    let dx = case.n::<i16>("dx");
+    let dy = case.n::<i16>("dy");
+    let layout = case.n::<i64>("layout");
+    let mut tiles = vec![1155; 8100];
+    if layout == 1 || layout == 3 {
+        tiles[((25 + dx) * 90 + 25 + dy) as usize] = if layout == 3 { 1000 } else { 1061 };
+    }
+    if layout == 2 {
+        for x in 24..=26 {
+            for y in 24..=26 {
+                tiles[x * 90 + y] = 1061;
+            }
+        }
+    }
+    tiles[25 * 90 + 25] = 10;
+    tiles[((25 + dx * 4) * 90 + 25 + dy * 4) as usize] = 0;
+    Combat {
+        battle: 2,
+        map: TacticalMap {
+            tiles,
+            shift: (0, 0),
+            edge_word: 0,
+        },
+        squad: SquadPlacement {
+            positions: vec![(20 + dx * 4, 20 + dy * 4); 6],
+            under_tiles: vec![1155; 6],
+        },
+        enemies: EnemySetup {
+            records: vec![MonsterRecord {
+                bytes: case.bytes("input"),
+            }],
+            positions: vec![(20, 20)],
+        },
+        order: vec![-1, 10],
+        ..crate::support::battle()
+    }
+}
+
+/// Shared controlled Psi caller state; captures retain their separate round ownership.
+pub fn psi_work(snapshot: &Value) -> WeaponWork {
+    crate::snapshots::weapon_work(&|key| snapshot.bytes(key))
+}
+pub fn psi_snapshot(content: &Content, snapshot: &Value) -> Session {
+    let mut state = crate::support::mission_session(content);
+    state.warriors = snapshot_party(snapshot);
+    state.psi_memory = Some(snapshot.bytes("memory"));
+    state.party_buffs = snapshot.bytes("party_buffs");
+    state.loaded_item_field32 = Some(snapshot.n("item_context"));
+    state.attack_count = snapshot.n("count");
+    state.weapon_work = psi_work(snapshot);
+    state.attack_packet = Some(snapshot.bytes("packet"));
+    state.attack_identity = Some(snapshot.words("identity").try_into().unwrap());
+    state.random = random_state(snapshot);
+    let mut combat = crate::support::battle();
+    combat.battle = 85;
+    combat.map.tiles = snapshot.words("map");
+    combat.squad.positions = crate::support::positions(&snapshot["party_positions"]);
+    combat.enemies.records = snapshot_enemies(snapshot);
+    combat.enemies.positions = crate::support::positions(&snapshot["monster_positions"]);
+    combat.order = snapshot.words("order");
+    combat.cursor = snapshot.n("cursor");
+    combat.round = snapshot.n("round");
+    combat.spell_fields = snapshot.bytes("fields");
+    combat.field_used = snapshot.bytes("used");
+    combat.attack_packet = state.attack_packet.clone();
+    combat.attack_identity = state.attack_identity;
+    combat.weapon_work = state.weapon_work;
+    combat.unavailable = snapshot.n("unavailable");
+    state.combat = Some(combat);
+    state.phase = Phase::Combat;
+    state
 }

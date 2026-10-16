@@ -101,11 +101,27 @@ pub fn natural_attack_enemy_with_actor(
     attacks: &[u8],
     retained: &[u8],
 ) -> Result<(AttackResult, Vec<u8>), RuleError> {
+    let (result, packet, _) =
+        natural_attack_enemy_with_target(c, warriors, random, bodies, Some(attacks), retained)?;
+    Ok((result, packet))
+}
+
+pub(crate) fn natural_attack_enemy_with_target(
+    c: &mut Combat,
+    warriors: &mut [Warrior],
+    random: &mut RandomState,
+    bodies: (i16, i16, usize, i16),
+    attacks: Option<&[u8]>,
+    retained: &[u8],
+) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
     let (attacker, target, index, actor) = bodies;
     if retained.len() != 58 {
         return Err(RuleError::Invalid("retained attack packet size".into()));
     }
-    let base = attack::attack_packet(attacks)?;
+    let base = attacks
+        .map(attack::attack_packet)
+        .transpose()?
+        .unwrap_or_else(attack::default_attack_packet);
     let (mut next_combat, mut next_warriors, mut next_random) =
         (c.clone(), warriors.to_vec(), random.clone());
     let result = natural_attack_enemy_inner(
@@ -134,7 +150,7 @@ fn natural_attack_enemy_inner(
     index: usize,
     actor: i16,
     mut packet: Vec<u8>,
-) -> Result<(AttackResult, Vec<u8>), RuleError> {
+) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
     if attacker < 10 || target < 10 || attacker == target || index >= 6 {
         return Err(RuleError::Invalid("invalid monster attack".into()));
     }
@@ -160,13 +176,8 @@ fn natural_attack_enemy_inner(
         0x93 + index * 4
     };
     let condition = source[0x96 + index * 4];
-    let current = word(&source, 0x4e)?;
-    let guardian_reaction = current == 187 && word(&source, 0x26)? == 0;
-    if (!matches!(current, 0 | 1 | 28 | 29 | 680 | 681) && !guardian_reaction)
-        || word(&source, 0x28)? != 0
-        || !matches!(condition, 0 | 2 | 4 | 6 | 9 | 14)
-        || victim[0xd1] != 0
-        || word(victim, 0xc)? != 0
+    if word(&source, 0x28)? != 0
+        || !matches!(condition, 0 | 1 | 2 | 4 | 5 | 6 | 9 | 10 | 11 | 14 | 17)
     {
         return Err(RuleError::Unsupported {
             action: "combat.monster_attack",
@@ -176,11 +187,7 @@ fn natural_attack_enemy_inner(
     if word(&source, 0x4e)? != 0 {
         let actor = usize::try_from(actor - 10)
             .map_err(|_| RuleError::Invalid("invalid retained enemy actor".into()))?;
-        let record = c
-            .enemies
-            .records
-            .get_mut(actor)
-            .ok_or_else(|| RuleError::Invalid("retained enemy actor missing".into()))?;
+        let record = c.story_record_mut(actor)?;
         put_word(&mut record.bytes, 0x4e, 0);
     }
     let p = position(c, attacker);
@@ -217,19 +224,35 @@ fn natural_attack_enemy_inner(
     if (source[0xac] != 0 || source[0xad] != 0) && victim[0xc8] != 0 {
         hit = hit.wrapping_sub(10);
     }
-    if random.bound(100)
-        > hit.clamp(
+    let hit = random.bound(100)
+        <= hit.clamp(
             15_i16.wrapping_sub(c.difficulty.wrapping_mul(5)),
             90_i16.wrapping_sub(c.difficulty.wrapping_mul(5)),
-        )
-    {
+        );
+    let immunity = word(victim, 0xc)?;
+    if hit && !matches!(immunity, -2..=0 | -1024) {
         return Ok((
             AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![],
             },
             packet,
+            false,
+        ));
+    }
+    let reflected = victim[0xd1] != 0 && random.bound(100) < 34 && word(&source, 0xc)? == 0;
+    if !hit {
+        return Ok((
+            AttackResult {
+                feedback: None,
+                damage: 0,
+                killed: false,
+                sounds: vec![],
+            },
+            packet,
+            reflected,
         ));
     }
     let bonus = word(&source, 0x40)?.wrapping_add(i16::from(source[0xd2] as i8));
@@ -245,6 +268,19 @@ fn natural_attack_enemy_inner(
     );
     let impact = i16::from(source[selected + 2] as i8);
     put_word(&mut packet, 38, if impact == 0 { 100 } else { impact });
+    if reflected {
+        let result = attack::resolve_reflected_attack(
+            &mut c.enemies.records[a].bytes,
+            &packet,
+            index,
+            true,
+            random,
+        )?;
+        if result.killed {
+            lifecycle::kill_body(c, warriors, attacker)?;
+        }
+        return Ok((result, packet, true));
+    }
     let resolved = resolve_damage(
         &mut c.enemies.records[t].bytes,
         true,
@@ -261,47 +297,34 @@ fn natural_attack_enemy_inner(
     )?;
     let mut sounds = Vec::new();
     let mut extra_damage = 0_i16;
-    if resolved.total != 0 && condition != 0 {
-        let strength = random
-            .range(word(&source, 0)? / 2, word(&source, 0)?)
-            .max(1);
-        if condition == 14 {
-            extra_damage = random.bound(i16::from(source[0x94 + index * 4] as i8));
-            let victim = &c.enemies.records[t].bytes;
-            let threshold = i16::from(victim[0x8f] as i8);
-            if random.bound(100) <= threshold || threshold > 99 {
-                extra_damage /= 2;
-            }
-            if victim[0xbe] != 0 {
-                extra_damage /= 2;
-            }
-            if extra_damage != 0 {
-                sounds.push(344);
-            }
-        } else {
-            let (save, offset) = match condition {
-                2 => (7, 0xb3),
-                4 => (8, 0xb4),
-                6 => (0, 0xcf),
-                9 => (7, 0xce),
-                _ => unreachable!(),
-            };
-            let m = &mut c.enemies.records[t].bytes;
-            let threshold = i16::from(m[0x8b + save] as i8);
-            let saved = random.bound(100) <= threshold || threshold > 99;
-            if !saved && (m[offset] as i8) >= 0 {
-                m[offset] = (m[offset] as i8).wrapping_add(strength.wrapping_abs() as i8) as u8;
-                if condition == 2 {
-                    m[0x109] = 0;
-                    m[0x106] = 0;
-                }
-                if condition == 4 {
-                    m[0x109] = ((m[0x109] as i8) / 2) as u8;
-                    m[0x106] = ((m[0x106] as i8) / 2) as u8;
-                }
-                if condition == 9 {
-                    sounds.push(104);
-                }
+    let mut feedback = None;
+    if resolved.total != 0 {
+        let Some(effect) = super::natural_conditions::monster_attack_effect(
+            &mut c.enemies.records[t].bytes,
+            &source,
+            index,
+            random,
+        )?
+        else {
+            return Ok((
+                AttackResult {
+                    feedback: None,
+                    damage: 0,
+                    killed: false,
+                    sounds: vec![],
+                },
+                packet,
+                false,
+            ));
+        };
+        extra_damage = effect.extra_damage;
+        feedback = effect.feedback;
+        if effect.applied {
+            match condition {
+                9 => sounds.push(104),
+                14 => sounds.push(344),
+                10 => put_word(&mut c.enemies.records[a].bytes, 0x10c, -1),
+                _ => {}
             }
         }
     }
@@ -317,11 +340,13 @@ fn natural_attack_enemy_inner(
     }
     Ok((
         AttackResult {
+            feedback,
             damage: resolved.total.wrapping_add(extra_damage),
             killed: health < 1,
             sounds,
         },
         packet,
+        false,
     ))
 }
 
@@ -419,18 +444,20 @@ fn fire(
     let (item_context, body) = actor;
     let a = (body - 10) as usize;
     let source = c.enemies.records[a].bytes.clone();
-    if word(&source, 0x26)? != 1 || word(&source, 0x4c)? != 201 {
+    let weapon_id = word(&source, 0x26)?;
+    if weapon_id != 1 {
         return Err(RuleError::Unsupported {
             action: "combat.scientist_firearm",
-            dependency: "other scientist weapon or ammunition",
+            dependency: "ally rifle caller requires firearm one",
         });
     }
     let weapon = items
-        .get(1)
-        .ok_or_else(|| RuleError::Invalid("scientist weapon missing".into()))?;
+        .get(weapon_id as usize)
+        .ok_or_else(|| RuleError::Invalid("ally weapon missing".into()))?;
+    let ammo_id = enemy_weapons::ammo_id(&c.enemies.records[a], item_context)?;
     let ammo = items
-        .get(if item_context == 0 { 0 } else { 201 })
-        .ok_or_else(|| RuleError::Invalid("scientist ammunition missing".into()))?;
+        .get(ammo_id.unsigned_abs() as usize)
+        .ok_or_else(|| RuleError::Invalid("ally ammunition missing".into()))?;
     let attacks = &mission
         .combat
         .as_ref()
@@ -480,12 +507,6 @@ fn fire(
     let Some(target) = selected else {
         return Ok(false);
     };
-    if target < 10 {
-        return Err(RuleError::Unsupported {
-            action: "combat.scientist_firearm",
-            dependency: "scientist targeting warrior",
-        });
-    }
     let m = &mut c.enemies.records[a].bytes;
     m[0x109] = (m[0x109] as i8).wrapping_sub(2) as u8;
     m[0x106] = (m[0x106] as i8).wrapping_sub(3) as u8;
@@ -497,6 +518,52 @@ fn fire(
         resource_id: word(&p, 36)?,
     });
     random.range(i16::from(p[13] as i8), i16::from(p[14] as i8));
+    if target < 6 {
+        let prepared = firearm::PreparedFirearm {
+            sound: word(&p, 38)?,
+            packet: p,
+            slot: 0,
+            shots: 1,
+            rounds: word(weapon, 22)?,
+            weight: 0,
+            armor_filter: c.weapon_work.armor_filter()?,
+        };
+        let result = firearm::resolve_enemy_after_duration(
+            &mut w[target],
+            &mut c.enemies.records[a],
+            &prepared,
+            random,
+            c.difficulty,
+        )?;
+        if result.killed {
+            lifecycle::kill_body(c, w, target as i16)?;
+        }
+        events.extend(
+            result
+                .sounds
+                .into_iter()
+                .map(|resource_id| Event::Sound { resource_id }),
+        );
+        if result.damage != 0 {
+            if !result.killed {
+                events.push(Event::Sound {
+                    resource_id: result_audio(
+                        &c.enemies.records[a],
+                        0,
+                        result.damage,
+                        prepared.sound,
+                    )?,
+                });
+            }
+            events.push(Event::AttackResolved {
+                attacker: body,
+                target: target as i16,
+                damage: result.damage,
+                defeated: result.killed,
+            });
+        }
+        return Ok(true);
+    }
     let t = target - 10;
     let victim = &c.enemies.records[t].bytes;
     let mut hit = 33_i16;
@@ -643,10 +710,11 @@ fn scientist_turn_inner(
         return Err(RuleError::Invalid("active scientist is warrior".into()));
     }
     let e = (body - 10) as usize;
-    if c.enemies.records[e].bytes[0x103] != 65 {
+    if word(&c.enemies.records[e].bytes, 0xe)? != 0 || word(&c.enemies.records[e].bytes, 0x26)? != 1
+    {
         return Err(RuleError::Unsupported {
             action: "combat.scientist",
-            dependency: "other ally definition",
+            dependency: "ally rifle caller requires friendly firearm one",
         });
     }
     let attacks = &mission

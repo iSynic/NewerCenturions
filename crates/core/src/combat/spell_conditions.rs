@@ -93,6 +93,57 @@ pub(crate) fn follow_up(target: &mut [u8], monster: bool, effect: i16) -> Result
     Ok(())
 }
 
+/// spelllist 0x15c76a changes allegiance after the party reflection draw.
+/// The returned delta belongs to byte442739, not the hostile-body cache4435c4.
+pub(crate) fn change_allegiance(
+    warriors: &mut [Warrior],
+    enemies: &mut [MonsterRecord],
+    target: usize,
+    caster: usize,
+) -> Result<i8, RuleError> {
+    let side = if caster < 10 {
+        word(
+            &warriors.get(caster).ok_or("charm caster missing")?.bytes,
+            0x10,
+        )?
+    } else {
+        word(
+            &enemies
+                .get(caster - 10)
+                .ok_or("charm caster missing")?
+                .bytes,
+            0xe,
+        )?
+    };
+    let monster = target >= 10;
+    let bytes = if monster {
+        &mut enemies
+            .get_mut(target - 10)
+            .ok_or("charm target missing")?
+            .bytes
+    } else {
+        &mut warriors
+            .get_mut(target)
+            .ok_or("charm target missing")?
+            .bytes
+    };
+    let offset = if monster { 0xe } else { 0x10 };
+    let previous = word(bytes, offset)?;
+    if side != 0 || previous != 0 {
+        if monster {
+            bytes[0x10c..0x10e].copy_from_slice(&(-1_i16).to_be_bytes());
+        } else if side != 0 && previous != side {
+            bytes[0x18..0x1a].copy_from_slice(&(-1_i16).to_be_bytes());
+        }
+        bytes[offset..offset + 2].copy_from_slice(&side.to_be_bytes());
+    }
+    Ok(if monster {
+        0
+    } else {
+        i8::from(previous == 0 && side != 0) - i8::from(previous != 0 && side == 0)
+    })
+}
+
 pub struct ConditionOutcome {
     pub warriors: Vec<Warrior>,
     pub enemies: Vec<MonsterRecord>,

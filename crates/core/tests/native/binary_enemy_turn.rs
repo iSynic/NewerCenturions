@@ -19,14 +19,7 @@ fn verify(ranged: bool) {
         include_str!("../../../../evidence/fixtures/enemy-turn.json")
     })
     .unwrap();
-    let properties = fixture.bytes("properties");
-    let mission = OpeningMission {
-        tile_properties: properties[64..12064].to_vec(),
-        shared: std::sync::Arc::new(centurions_content::mission::StoryTables {
-            ..crate::support::stories()
-        }),
-        ..crate::support::mission()
-    };
+    let mission = crate::support::terrain_mission(&fixture);
 
     let content = crate::support::content();
     let mut mission = mission;
@@ -35,40 +28,7 @@ fn verify(ranged: bool) {
     for (index, case) in fixture.array("cases").iter().enumerate() {
         let dx = case.n::<i16>("dx");
         let dy = case.n::<i16>("dy");
-        let layout = case.n::<i64>("layout");
-        let mut tiles = vec![1155; 8100];
-        if layout == 1 || layout == 3 {
-            tiles[((25 + dx) * 90 + 25 + dy) as usize] = if layout == 3 { 1000 } else { 1061 };
-        }
-        if layout == 2 {
-            for x in 24..=26 {
-                for y in 24..=26 {
-                    tiles[x * 90 + y] = 1061;
-                }
-            }
-        }
-        tiles[25 * 90 + 25] = 10;
-        tiles[((25 + dx * 4) * 90 + 25 + dy * 4) as usize] = 0;
-        let mut combat = Combat {
-            battle: 2,
-            map: TacticalMap {
-                tiles,
-                shift: (0, 0),
-                edge_word: 0,
-            },
-            squad: SquadPlacement {
-                positions: vec![(20 + dx * 4, 20 + dy * 4); 6],
-                under_tiles: vec![1155; 6],
-            },
-            enemies: EnemySetup {
-                records: vec![MonsterRecord {
-                    bytes: case.bytes("input"),
-                }],
-                positions: vec![(20, 20)],
-            },
-            order: vec![-1, 10],
-            ..crate::support::battle()
-        };
+        let mut combat = crate::native_common::enemy_movement_case(case);
         let mut random = RandomState::new(case.n::<u32>("initial_seed"));
         let bytes = case.bytes("warriors");
         let mut warriors: Vec<centurions_content::Warrior> = crate::support::warriors(&bytes);

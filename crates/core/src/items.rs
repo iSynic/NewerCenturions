@@ -1,5 +1,19 @@
 use super::*;
 
+/// booty1061fc..10630c retains the last higher-class record copied during sorting.
+pub(crate) fn sort_loot(items: &mut [InventoryRecord]) -> Option<InventoryRecord> {
+    let mut temporary = None;
+    for _ in 0..items.len() {
+        for slot in 0..items.len().saturating_sub(1) {
+            if (items[slot].0[10] as i8) < items[slot + 1].0[10] as i8 {
+                temporary = Some(items[slot + 1].clone());
+                items.swap(slot, slot + 1);
+            }
+        }
+    }
+    temporary
+}
+
 pub fn compact(warrior: &mut Warrior) -> Result<(), RuleError> {
     let count = warrior.inventory()?.len();
     let bytes = &mut warrior.bytes;

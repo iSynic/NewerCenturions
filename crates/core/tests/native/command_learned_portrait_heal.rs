@@ -10,6 +10,7 @@ pub(super) fn project(state: &mut Session, snapshot: &Value) {
     state.bandage_ready = Some(snapshot.n("aid_gate"));
     state.weapon_work = crate::snapshots::weapon_work(&read);
     let arena = state.combat.as_mut().unwrap();
+    let before = (arena.cursor, arena.round);
     crate::snapshots::records(arena, &|key| snapshot.bytes(key));
     crate::snapshots::geometry(arena, &|key| snapshot.bytes(key), (0, 0));
     if let Some(rounds) = snapshot.get("inactive_rounds") {
@@ -17,6 +18,7 @@ pub(super) fn project(state: &mut Session, snapshot: &Value) {
     }
     arena.cursor = snapshot.n::<usize>("cursor");
     arena.round = snapshot.n::<i16>("round");
+    crate::snapshots::turn_origin(arena, before);
     arena.round_scripts.counter = snapshot
         .get("round_counter")
         .map_or(arena.round as i8, |value| value.as_i64().unwrap() as i8);

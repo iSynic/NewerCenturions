@@ -13,6 +13,7 @@ pub struct Rewards {
     pub currency: i32,
     pub unavailable: i8,
     pub last_item_id: Option<i16>,
+    pub inventory_record: Option<InventoryRecord>,
 }
 
 /// Original ordinary booty preparation; allocation and level promotion occur at Close.
@@ -123,7 +124,7 @@ pub fn prepare(
         )?);
         last_item_id = Some(id);
     }
-    loot.sort_by_key(|item| std::cmp::Reverse(item.0[10] as i8));
+    let inventory_record = items::sort_loot(&mut loot);
     let rounded_share = f64::from(share as f32);
     for warrior in &mut warriors {
         if warrior.stamina()? <= 0 || word(&warrior.bytes, 0x90)? < 0 || warrior.bytes[0x9df] == 0 {
@@ -149,6 +150,7 @@ pub fn prepare(
         currency: currency.wrapping_add(cash),
         unavailable,
         last_item_id,
+        inventory_record,
     })
 }
 

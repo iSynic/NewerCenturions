@@ -135,7 +135,7 @@ pub(crate) fn resolve_outdoors(
     include_allies: bool,
 ) -> Result<Vec<Event>, RuleError> {
     let effect = word(packet, 40)?.wrapping_abs();
-    if !matches!(effect, 0..=40 | 57 | 64) && !(packet[1] == 7 && effect == 110) {
+    if !matches!(effect, 0..=40 | 57 | 64 | 70) && !(packet[1] == 7 && effect == 110) {
         return Err(RuleError::Unsupported {
             action: "psi.outdoor",
             dependency: "other outdoor spell effect",
@@ -224,7 +224,7 @@ pub(crate) fn resolve_outdoors(
         if (1..=40).contains(&effect) {
             combat::spell_conditions::add_duration(w, false, effect, duration)?;
         }
-        if matches!(effect, 1..=40 | 64) {
+        if matches!(effect, 1..=40 | 64 | 70) {
             follow_up = Some(if word(w, 0x9a)? != 0 && state.random.bound(100) < 34 {
                 caster
             } else {

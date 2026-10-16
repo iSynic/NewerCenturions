@@ -199,6 +199,34 @@ def preserved(root, manifest):
     return failures
 
 
+def qualify_entries(result, receipt_path):
+    """Apply a reviewed source-domain closure only to its exact inputs and graph."""
+    import hashlib
+    import json
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8-sig"))
+    project = Path(__file__).resolve().parent.parent
+    for name, digest in receipt["source_hashes"].items():
+        if hashlib.sha256((project / name).read_bytes()).hexdigest() != digest:
+            raise ValueError(f"Stale script entry qualification: {name}")
+    graph = json.dumps({key: result[key] for key in ("nodes", "edges")},
+                       sort_keys=True, separators=(",", ":")).encode()
+    if hashlib.sha256(graph).hexdigest() != receipt["graph_sha256"]:
+        raise ValueError("Script entry qualification does not match the current graph")
+    classifications = {entry["node"]: entry for entry in receipt["not_selected"]}
+    if set(classifications) != set(result["unqualified_nodes"]):
+        raise ValueError("Script entry qualification does not cover the unselected records")
+    result["unselected_nodes"] = result["unqualified_nodes"]
+    result["unqualified_nodes"] = []
+    result["entry_classifications"] = classifications
+    result["entry_qualification"] = dict(receipt=receipt_path.as_posix(),
+                                        scope=receipt["classification_scope"],
+                                        remaining=receipt["remaining"])
+    result["qualification"] = ("Reviewed source-domain dispatch closure; conditional activation, "
+                               "native effects and live acceptance remain separate. No campaign route "
+                               "absence is used as unreachability proof.")
+    return result
+
+
 def main():
     import argparse
     import json

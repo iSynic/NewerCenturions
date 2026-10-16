@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import hashlib
+import argparse
 import json
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import tomllib
 import zipfile
 
@@ -14,13 +14,19 @@ import zipfile
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     version = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-    output = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else root / "dist" / f"The New Centurions Windows {version} source-only"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", nargs="?", type=Path, default=root / "dist" / f"The New Centurions Windows {version} source-only")
+    parser.add_argument("--build-directory", type=Path, default=root / "target/release")
+    parser.add_argument("--provenance", type=Path)
+    args = parser.parse_args()
+    output = args.output.resolve()
+    build = args.build_directory.resolve()
     archive = output.parent / (output.name + ".zip")
     if output.exists() or archive.exists():
         raise SystemExit("Package directory and archive must both be fresh")
     files = {
-        "target/release/centurions-desktop.exe": "The New Centurions.exe",
-        "target/release/centurions-tools.exe": "centurions-tools.exe",
+        build / "centurions-desktop.exe": "The New Centurions.exe",
+        build / "centurions-tools.exe": "centurions-tools.exe",
         "LICENSE": "LICENSE",
         "THIRD_PARTY.md": "THIRD_PARTY.md",
         "docs/public-readme.md": "README.md",
@@ -31,6 +37,8 @@ def main() -> None:
         "vendor/mace3/LICENSE": "licenses/mace3.txt",
         "vendor/mace3/LOCAL_CHANGES.md": "licenses/mace3-local-changes.md",
     }
+    if args.provenance:
+        files[args.provenance.resolve()] = "build-provenance.json"
     for source in files:
         if not (root / source).is_file():
             raise SystemExit(f"Missing package input: {source}")

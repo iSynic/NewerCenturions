@@ -1,6 +1,5 @@
 use crate::prelude::*;
 
-use crate::support::field_bytes as bytes;
 use centurions_core::{story_move_away, typed_encounter};
 
 #[test]
@@ -12,8 +11,8 @@ fn original_move_away_matches_signed_position_and_flags() {
     for case in cases {
         let caller = case.n::<bool>("caller");
         let answer = case.n::<bool>("answer");
-        assert_eq!(bytes(case, "working_before"), bytes(case, "working_after"));
-        assert_eq!(bytes(case, "working_before"), bytes(case, "header_after"));
+        assert_eq!(case.bytes("working_before"), case.bytes("working_after"));
+        assert_eq!(case.bytes("working_before"), case.bytes("header_after"));
         if caller {
             let extra = [0, 1, 0, 0, 0, 0, 0, 239, 0, 238];
             assert_eq!(
@@ -30,7 +29,8 @@ fn original_move_away_matches_signed_position_and_flags() {
         if caller && answer {
             continue;
         }
-        let flags: [i8; 6] = bytes(case, "flags_before")
+        let flags: [i8; 6] = case
+            .bytes("flags_before")
             .into_iter()
             .map(|v| v as i8)
             .collect::<Vec<_>>()
@@ -52,11 +52,11 @@ fn original_move_away_matches_signed_position_and_flags() {
         }
         assert_eq!(
             result.flags.map(|v| v as u8).to_vec(),
-            bytes(case, "flags_after")
+            case.bytes("flags_after")
         );
         assert_eq!(
             result.saved_delta.map(|v| v as u8).to_vec(),
-            bytes(case, "saved_delta")
+            case.bytes("saved_delta")
         );
         assert_eq!(result.update_controls, case["controls"] == 1);
     }

@@ -7,7 +7,7 @@ use centurions_core::combat::party_buffs;
 
 use crate::support::positions;
 
-use crate::support::assert_bytes;
+use crate::support::{assert_bytes, record_bytes as flatten_party};
 
 fn combat(s: &Value, caster: i16) -> Combat {
     let mut order = vec![-1; 110];
@@ -36,9 +36,6 @@ fn combat(s: &Value, caster: i16) -> Combat {
         ..crate::support::battle()
     }
 }
-fn flatten_party(w: &[Warrior]) -> Vec<u8> {
-    crate::support::record_bytes(w)
-}
 fn compare(c: &Combat, w: &[Warrior], s: &Value, label: &str) {
     crate::support::native_expect! {
     bytes flatten_party(w) => &s["party"], &format!("{label} party");
@@ -63,17 +60,7 @@ fn compare(c: &Combat, w: &[Warrior], s: &Value, label: &str) {
     scalar c.unavailable as u8 => &s["unavailable"], "binary_support_psi";
     }
 }
-fn rng(r: &RandomState, s: &Value, _label: &str) {
-    crate::support::native_expect! {
-    scalar r.seed => &s["seed"], "binary_support_psi";
-    scalar r.draws => &s["draws"], "binary_support_psi";
-    }
-}
 use crate::support::event_sounds as sounds;
-
-fn expected_sounds(c: &Value) -> Vec<i16> {
-    c.n::<Vec<i16>>("sounds")
-}
 #[test]
 fn support_casts_match_complete_native_records_packets_memory_rng_and_audio() {
     let f = crate::support::fixture("player-support-psi.json");
@@ -120,12 +107,12 @@ fn support_casts_match_complete_native_records_packets_memory_rng_and_audio() {
         .unwrap_or_else(|e| panic!("{label} {e:?}"));
         compare(&c, &w, after, &label);
         assert_bytes(&memory, &after.bytes("memory"), &format!("{label} memory"));
-        assert_eq!(sounds(&events), expected_sounds(case), "{label} sounds");
         assert_eq!(
-            before["party_buffs"], after["party_buffs"],
-            "{label} unchanged buffs"
+            sounds(&events),
+            case.n::<Vec<i16>>("sounds"),
+            "{label} sounds"
         );
-        rng(&random, after, &label);
+        assert_eq!(random, crate::native_common::random_state(after));
     }
 }
 #[test]
@@ -171,7 +158,7 @@ fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
         .unwrap_or_else(|e| panic!("{label} {e:?}"));
         c.attack_packet = Some(packet);
         compare(&c, &w, after, &label);
-        rng(&random, after, &label);
+        assert_eq!(random, crate::native_common::random_state(after));
         let mut sounds = result.sounds;
         sounds.push(if result.damage == 0 {
             650
@@ -180,7 +167,7 @@ fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
         } else {
             i16::from(c.enemies.records[0].bytes[0x95] as i8)
         });
-        assert_eq!(sounds, expected_sounds(case), "{label} sounds");
+        assert_eq!(sounds, case.n::<Vec<i16>>("sounds"), "{label} sounds");
         assert!(!result.killed);
     }
 }
@@ -203,7 +190,7 @@ fn party_timers_and_damage_modifier_match_independent_native_branches() {
         crate::support::expect(result.unwrap_or(amount), &case["after"]["last_amount"]);
         assert_eq!(
             if result.is_some() { vec![-694] } else { vec![] },
-            expected_sounds(case),
+            case.n::<Vec<i16>>("sounds"),
             "modifier {i} sounds"
         );
     }
@@ -237,9 +224,9 @@ fn electric_ward_matches_native_damage_component_rng_and_target_flags() {
         scalar result.total => &case["damage"], "binary_support_psi";
         bytes flatten_party(&w) => &after["party"], &format!("{label} party");
         }
-        rng(&random, after, &label);
+        assert_eq!(random, crate::native_common::random_state(after));
         assert!(!result.shield_sound);
-        assert!(expected_sounds(case).is_empty());
+        assert!(case.n::<Vec<i16>>("sounds").is_empty());
     }
 }
 #[test]

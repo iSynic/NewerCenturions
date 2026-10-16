@@ -5,32 +5,16 @@ use centurions_core::combat::death_scripts::DeathStoryFrame;
 use centurions_core::combat::death_scripts::EncounterBattleFrame;
 use centurions_core::combat::death_scripts::cleanup_enemy;
 
-use crate::support::field_bytes as bytes;
 fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>) {
-    let mut order = vec![-1; 110];
-    order[1] = 10;
-    (
-        Combat {
-            map: TacticalMap {
-                tiles: words(&bytes(case, "map_before")),
-                shift: (0, 0),
-                edge_word: 0,
-            },
-            squad: SquadPlacement {
-                positions: (0..6).map(|i| (40 + i, 40)).collect(),
-                under_tiles: vec![1155; 6],
-            },
-            enemies: EnemySetup {
-                records: vec![MonsterRecord {
-                    bytes: bytes(case, "record_before"),
-                }],
-                positions: vec![(20, 20)],
-            },
-            order,
-            ..crate::support::battle()
-        },
-        crate::support::warriors(&case["warriors_before"]),
-    )
+    let mut combat = crate::support::battle();
+    combat.map.tiles = case.words("map_before");
+    combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
+    combat.enemies.records = vec![MonsterRecord {
+        bytes: case.bytes("record_before"),
+    }];
+    combat.enemies.positions = vec![(20, 20)];
+    combat.order[1] = 10;
+    (combat, crate::support::warriors(&case["warriors_before"]))
 }
 
 #[test]
@@ -41,14 +25,14 @@ fn native_large_death_cleanup_matches_record_map_order_and_queue() {
         let result = cleanup_enemy(&mut combat, &mut warriors, 10).unwrap();
         assert_eq!(
             combat.enemies.records[0].bytes,
-            bytes(case, "record_cleanup")
+            case.bytes("record_cleanup")
         );
-        assert_eq!(combat.map.tiles, words(&bytes(case, "map_cleanup")));
-        assert_eq!(combat.order, words(&bytes(case, "order_after")));
+        assert_eq!(combat.map.tiles, words(&case.bytes("map_cleanup")));
+        assert_eq!(combat.order, words(&case.bytes("order_after")));
         assert_eq!(i64::from(result.increment_kills), case["kills_cleanup"]);
         if case.n::<i64>("queued") != 0 {
             let entry = result.entry.unwrap();
-            assert_eq!(entry.bytes(), bytes(case, "queue_cleanup")[..14]);
+            assert_eq!(entry.bytes(), case.bytes("queue_cleanup")[..14]);
         }
     }
 }
@@ -64,14 +48,11 @@ fn story(
 ) {
     let (native_body, script) = input;
     let death_frame = DeathStoryFrame::capture(header, native_body).unwrap();
-    let authored = bytes(
-        fixture,
-        if script == 51 {
-            "script51"
-        } else {
-            "script229"
-        },
-    );
+    let authored = fixture.bytes(if script == 51 {
+        "script51"
+    } else {
+        "script229"
+    });
     header[8..42].copy_from_slice(&authored[8..42]);
     if script == 229 {
         flags[31] = 1;
@@ -98,7 +79,7 @@ fn native_queue_child_reset_and_parent_restore_match_composite_cases() {
         let (mut combat, mut warriors) = input(case);
         let result = cleanup_enemy(&mut combat, &mut warriors, 10).unwrap();
         let entry = result.entry.unwrap();
-        let mut header = bytes(case, "parent_body");
+        let mut header = case.bytes("parent_body");
         let mut flags = vec![0; 128];
         let mut queue = DeathQueue {
             pointer: 0x12345678,
@@ -117,7 +98,7 @@ fn native_queue_child_reset_and_parent_restore_match_composite_cases() {
         } else {
             queue.enqueue(entry).unwrap();
         }
-        assert_eq!(header, bytes(case, "body_cleanup"));
+        assert_eq!(header, case.bytes("body_cleanup"));
         if case["queued"] != 0 {
             if case["second_entry"] == true {
                 queue
@@ -148,8 +129,8 @@ fn native_queue_child_reset_and_parent_restore_match_composite_cases() {
             }
             queue.finish();
         }
-        assert_eq!(header, bytes(case, "body_after"));
-        assert_eq!(flags, bytes(case, "flags_after"));
+        assert_eq!(header, case.bytes("body_after"));
+        assert_eq!(flags, case.bytes("flags_after"));
         crate::support::native_expect! {
         scalar queue.count => &case["queue_count_after"], "binary_death_scripts";
         scalar i64::from(queue.pointer) => &case["queue_pointer_after"], "binary_death_scripts";
@@ -160,15 +141,11 @@ fn native_queue_child_reset_and_parent_restore_match_composite_cases() {
                 .iter()
                 .flat_map(|e| e.bytes())
                 .collect::<Vec<_>>(),
-            bytes(case, "queue_after")
+            case.bytes("queue_after")
         );
         assert_eq!(
-            warriors
-                .iter()
-                .flat_map(|w| &w.bytes)
-                .copied()
-                .collect::<Vec<_>>(),
-            bytes(case, "warriors_after")
+            crate::support::record_bytes(&warriors),
+            case.bytes("warriors_after")
         );
     }
 }

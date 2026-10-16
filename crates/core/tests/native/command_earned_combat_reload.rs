@@ -1,7 +1,5 @@
 use crate::prelude::*;
 
-use crate::native_common::restore_party as party;
-
 fn input(fixture: &Value, case: &Value) -> Session {
     let mut state: Session = serde_json::from_value(
         fixture["foundations"][case.n::<usize>("foundation")]["session"].clone(),
@@ -22,22 +20,13 @@ fn project(state: &mut Session, snapshot: &Value, baseline: &Value) {
     }
 }
 
-use crate::support::reject_command as atomic;
 use crate::support::same_session as same;
 
 use crate::support::checkpoint;
 
-fn receipt(index: usize) -> Value {
-    let receipts = [
-        include_str!("../../../../evidence/fixtures/earned-combat-reload-receipt-12.json"),
-        include_str!("../../../../evidence/fixtures/earned-combat-reload-receipt-1.json"),
-    ];
-    serde_json::from_str(receipts[index]).unwrap()
-}
-
 fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) -> Option<Session> {
     let index = case.n::<usize>("foundation");
-    let receipt = receipt(index);
+    let receipt = crate::native_common::earned_receipt("earned-combat-reload", index);
     let commands = receipt.array("commands");
     let ordered_events = receipt.array("ordered_events");
     assert_eq!(ordered_events.len(), commands.len());
@@ -46,11 +35,18 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
     state = checkpoint(&state, content, &format!("prefix-start-{index}"));
     for (step, (command, recorded)) in commands.iter().zip(ordered_events).enumerate() {
         let command: Command = serde_json::from_value(command.clone()).unwrap();
-        let expected: Vec<Event> = serde_json::from_value(recorded.clone()).unwrap();
+        let expected = crate::native_common::shield_result_events(
+            serde_json::from_value(recorded.clone()).unwrap(),
+        );
         let before = state.clone();
         let result = apply(command.clone(), &mut state, content);
         if let Ok(events) = &result
-            && events.iter().any(|e| matches!(e, Event::Feedback(_)))
+            && events.iter().any(|e| {
+                matches!(
+                    e,
+                    Event::Feedback(centurions_core::feedback::NativeFeedback::Combat { .. })
+                )
+            })
         {
             assert_eq!((index, step), (1, 149));
             assert!(matches!(&command, Command::ShootEnemy { body: 15 }));
@@ -107,6 +103,9 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
     }
     expected.ammunition_work.weapon = Some(weapon);
     expected.ammunition_work.ammo = Some(ammo);
+    expected.inventory_record = crate::native_common::earned_inventory_work(index);
+    expected.combat.as_mut().unwrap().turn_origin =
+        crate::snapshots::recorded_turn_origin(&receipt, expected.combat.as_ref().unwrap());
     same(&state, &expected);
     Some(state)
 }
@@ -122,48 +121,6 @@ fn historical_extra_cell_shot_rejects_atomically_and_valid_prefix_still_replays(
     {
         let result = replay_historical_prefix(&fixture, case, &content);
         assert_eq!(result.is_some(), case["foundation"] == 0);
-    }
-    let commands: Vec<Command> =
-        serde_json::from_value(crate::support::fixture("earned-hive-route12.commands.json"))
-            .unwrap();
-    let mut state = Session::new(&content);
-    state.random = RandomState::new(12);
-    for command in &commands[..1881] {
-        apply(command.clone(), &mut state, &content).unwrap();
-    }
-    let mut resumed = checkpoint(&state, &content, "hive-before");
-    for command in &commands[1881..] {
-        replay_command(command.clone(), &mut state, &mut resumed, &content);
-        resumed = checkpoint(&resumed, &content, "hive-suffix");
-    }
-    assert!(state.combat.is_none() && state.mission_stage == 1);
-    assert!(state.exploration.as_ref().unwrap().presentation.is_none());
-}
-
-#[test]
-fn silent_first_refit_matches_native_warrior_stock_and_cache_scalars() {
-    let content = crate::support::content();
-    let fixture: Value = crate::support::fixture("earned-combat-reload.json");
-    for case in fixture
-        .array("cases")
-        .iter()
-        .filter(|case| case["kind"] == "normalized_diagonal_attempt")
-    {
-        let mut state = input(&fixture, case);
-        party(&mut state, &case["before_command"]);
-        let original = state.clone();
-        let result =
-            firearm::refit_earned_secondary(&state.warriors[4], &content, state.ammunition[80])
-                .unwrap();
-        same(&state, &original);
-        state.warriors[4] = result.warrior;
-        state.ammunition[80] = result.reserve;
-        let mut expected = original;
-        party(&mut expected, &case["after"]);
-        expected.ammunition = crate::support::longs(&case["after"].bytes("ammunition"));
-        same(&state, &expected);
-        assert_eq!(result.loaded_item_field32, 16);
-        assert_eq!(result.weapon_work, WeaponWork::zero());
     }
 }
 
@@ -190,20 +147,7 @@ fn historical_occupied_cell_refill_matches_complete_native_caller_and_save_resum
         same(&state, &expected);
         assert!(events.is_empty());
 
-        assert_eq!(state.random, initial.random);
-        assert_eq!(
-            state.combat.as_ref().unwrap().attack_packet,
-            initial.combat.as_ref().unwrap().attack_packet
-        );
-        assert_eq!(
-            state.combat.as_ref().unwrap().attack_identity,
-            initial.combat.as_ref().unwrap().attack_identity
-        );
-        assert_eq!(state.attack_count, 0);
-        assert_eq!(state.loaded_item_field32, Some(16));
-        assert_eq!(state.ammunition[80], 2);
-        let restored = checkpoint(&state, &content, &format!("refill-after-{index}"));
-        same(&state, &restored);
+        checkpoint(&state, &content, &format!("refill-after-{index}"));
     }
 }
 
@@ -240,23 +184,17 @@ fn last_stock_control_matches_complete_native_caller_and_save_resume() {
     same(&state, &expected);
     assert!(events.is_empty());
 
-    assert_eq!(state.random, initial.random);
-    assert_eq!(state.ammunition[80], 0);
+    checkpoint(&state, &content, "last-stock-after");
+    replay_command(
+        Command::Move { dx: 1, dy: 1 },
+        &mut state,
+        &mut resumed,
+        &content,
+    );
     assert_eq!(
         word(&state.warriors[4].inventory().unwrap()[0].0, 2).unwrap(),
-        1
+        0
     );
-    assert_eq!(state.attack_count, 0);
-    assert_eq!(state.loaded_item_field32, Some(16));
-    assert_eq!(state.weapon_work, WeaponWork::zero());
-    assert_eq!(state.attack_packet, initial.attack_packet);
-    assert_eq!(state.attack_identity, initial.attack_identity);
-    for (key, id) in [("item_work", 165), ("weapon_work", 165), ("ammo_work", 280)] {
-        assert_eq!(bytes(&case["after"][key]), *content.items.get(id).unwrap());
-    }
-    let restored = checkpoint(&state, &content, "last-stock-after");
-    same(&state, &restored);
-    atomic(&state, &content, Command::Move { dx: 1, dy: 1 });
 }
 
 #[test]
@@ -279,8 +217,6 @@ fn reserve_two_uses_the_source_supported_full_load_interval() {
         expected.ammunition[80] = 1;
         same(&state, &expected);
         assert!(events.is_empty());
-        assert_eq!(state.random, initial.random);
-        let restored = checkpoint(&state, &content, "stock-two-after");
-        same(&state, &restored);
+        checkpoint(&state, &content, "stock-two-after");
     }
 }

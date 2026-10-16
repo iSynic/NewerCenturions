@@ -7,24 +7,16 @@ fn natural_slow_attack_matches_original_complete_records_and_random_consumption(
 
 #[test]
 fn slow_duration_reduction_matches_original_signed_counter_records() {
-    use centurions_core::combat::{Combat, SquadPlacement, TacticalMap, runtime::reduce_round};
+    use centurions_core::combat::runtime::reduce_round;
     let fixture: serde_json::Value = crate::support::fixture("slow-reduction.json");
     let mut warriors = crate::support::warriors(&fixture.bytes("before"));
-    let mut combat = Combat {
-        battle: 8,
-        map: TacticalMap {
-            tiles: vec![],
-            edge_word: 0,
-            shift: (0, 0),
-        },
-        squad: SquadPlacement {
-            positions: vec![],
-            under_tiles: vec![],
-        },
-        order: vec![],
-        cursor: 0,
-        ..crate::support::battle()
-    };
+    let mut combat = crate::support::battle();
+    combat.battle = 8;
+    combat.map.tiles.clear();
+    combat.squad.positions.clear();
+    combat.squad.under_tiles.clear();
+    combat.order.clear();
+    combat.cursor = 0;
     let mut random = RandomState::new(12);
     let events = reduce_round(&mut combat, &mut warriors, &mut random).unwrap();
     assert!(events.is_empty());

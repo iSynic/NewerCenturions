@@ -1,17 +1,8 @@
 use super::*;
+use crate::test_support::{bytes, fixture};
 #[test]
 fn sparse_initial_order_matches_original_getup_execution() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../evidence/fixtures/sparse-turn.json"
-    ))
-    .unwrap();
-    fn bytes(value: &serde_json::Value) -> Vec<u8> {
-        let hex = value.as_str().unwrap();
-        (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
-            .collect()
-    }
+    let fixture = fixture("sparse-turn.json");
     for case in fixture["cases"].as_array().unwrap() {
         let body = case["body"].as_i64().unwrap() as i16;
         let first = case["first_slot"].as_u64().unwrap() as usize;

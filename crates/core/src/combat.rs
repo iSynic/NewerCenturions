@@ -3,6 +3,8 @@ use centurions_content::combat::{BattleRecord, MonsterRecord};
 pub mod allies;
 pub mod ally_turns;
 pub mod attack;
+pub mod capture;
+pub mod controls;
 pub mod damage;
 pub mod death_scripts;
 pub mod enemy;
@@ -20,6 +22,7 @@ pub mod natural_conditions;
 pub mod party_buffs;
 pub mod player_psi;
 pub mod psi_selection;
+pub mod retained;
 pub mod retreat;
 pub mod rewards;
 pub mod round_stories;
@@ -27,6 +30,7 @@ pub mod runtime;
 pub mod shooting;
 pub mod spell_conditions;
 pub mod spells;
+pub mod targeting;
 mod warrior_attack;
 pub mod weapon_work;
 
@@ -38,6 +42,12 @@ pub struct Combat {
     pub map: TacticalMap,
     pub squad: SquadPlacement,
     pub enemies: EnemySetup,
+    #[serde(default)]
+    pub retained_npcs: retained::NpcBacking,
+    #[serde(default)]
+    pub direct_deaths: bool,
+    #[serde(default)]
+    pub direct_death: Option<(i16, death_scripts::DeathEntry)>,
     pub order: Vec<i16>,
     pub cursor: usize,
     pub round: i16,
@@ -73,6 +83,15 @@ pub struct Combat {
     pub pending_last_defeated: Option<i16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub firearm_selection: Option<shooting::Selection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_actor: Option<i16>,
+    #[serde(default, skip_serializing_if = "automatic_off")]
+    pub automatic: [bool; 6],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_origin: Option<(i16, i16)>,
+}
+fn automatic_off(flags: &[bool; 6]) -> bool {
+    flags.iter().all(|flag| !flag)
 }
 fn empty_spell_fields() -> Vec<u8> {
     vec![0; 1200]
@@ -82,6 +101,17 @@ fn empty_field_used() -> Vec<u8> {
 }
 impl Combat {
     pub fn validate(&self, warriors: &[Warrior]) -> Result<(), RuleError> {
+        self.retained_npcs.validate()?;
+        if self.capture_actor.is_some_and(|actor| {
+            Some(actor) != self.active_body()
+                || !(0..warriors.len() as i16).contains(&actor)
+                || self.firearm_selection.is_some()
+        }) {
+            return Err(RuleError::Invalid(
+                "invalid mechanical targeting state".into(),
+            ));
+        }
+        self.death_queue.validate()?;
         if let Some(selection) = &self.firearm_selection {
             selection.validate(self, warriors)?;
         }
@@ -101,13 +131,24 @@ impl Combat {
                     || (body < 10 && body as usize >= warriors.len())
                     || (body >= 10 && body as usize - 10 >= self.enemies.records.len())
             })
+            || self.direct_death.as_ref().is_some_and(|(body, entry)| {
+                *body < 10
+                    || usize::from(body.unsigned_abs()) - 10 >= self.enemies.records.len()
+                    || entry.script <= 0
+            })
+            || self.automatic[warriors.len()..].iter().any(|flag| *flag)
+            || self.turn_origin.is_some_and(|(x, y)| {
+                !(0..90).contains(&(i32::from(x) + i32::from(self.map.shift.0) + 5))
+                    || !(0..90).contains(&(i32::from(y) + i32::from(self.map.shift.1) + 5))
+            })
+            || self.turn_origin.is_some()
+                && self
+                    .active_body()
+                    .is_none_or(|body| !(0..warriors.len() as i16).contains(&body))
             || self.round < 0
             || !(0..=9).contains(&self.inactive_rounds)
             || (self.selection_pending
                 && (self.cursor != 110 || self.round_scripts.pending.is_some()))
-            || self.death_queue.entries.len() != 100
-            || self.death_queue.count > 100
-            || self.death_queue.cursor > 100
             || self.spell_fields.len() != 1200
             || self.field_used.len() != 128
             || self
@@ -260,7 +301,7 @@ fn move_warrior_inner(
         {
             return runtime::player_attack(state, content, tile);
         }
-        return reload_at_occupied_cell(state, content, mission, body, tile, destination, dx);
+        return reload_at_occupied_cell(state, content, mission, body, tile, dx);
     }
     if tile < 1000 {
         return Err(RuleError::Unsupported {
@@ -382,6 +423,9 @@ pub fn click_command(state: &Session, x: i16, y: i16) -> Result<Option<Command>,
         i32::from(x) + i32::from(combat.map.shift.0) + 5,
         i32::from(y) + i32::from(combat.map.shift.1) + 5,
     )?;
+    if combat.capture_actor.is_some() {
+        return Ok(Some(Command::SelectCaptureTarget { x, y }));
+    }
     let body = combat.map.tiles[index].wrapping_abs();
     if state.warriors[actor].bytes[0x9dd] != 0
         && (body != actor as i16)
@@ -402,7 +446,6 @@ fn reload_at_occupied_cell(
     mission: &centurions_content::mission::OpeningMission,
     actor: usize,
     target: i16,
-    destination: (i16, i16),
     dx: i8,
 ) -> Result<Vec<Event>, RuleError> {
     let unsupported = || RuleError::Unsupported {
@@ -411,43 +454,36 @@ fn reload_at_occupied_cell(
     };
     let combat = state.combat.as_mut().ok_or_else(unsupported)?;
     let member = &state.warriors[actor];
-    if actor != 4
-        || word(&member.bytes, 0x34)? != 4
-        || member.stamina()? <= 0
-        || member.bytes[0x9df] != 1
-        || word(&member.bytes, 0x10)? != 0
-        || word(&member.bytes, 0x90)? != 0
-        || word(&member.bytes, 0x98)? != 0
-        || word(&member.bytes, 0x40)? < 2
-        || !(10..110).contains(&target)
-    {
+    if member.stamina()? <= 0 || member.bytes[0x9df] != 1 || word(&member.bytes, 0x40)? < 2 {
         return Err(unsupported());
     }
-    let enemy = combat
-        .enemies
-        .records
-        .get((target - 10) as usize)
-        .ok_or_else(unsupported)?;
-    let absolute = (
-        i32::from(destination.0) + i32::from(combat.map.shift.0) + 5,
-        i32::from(destination.1) + i32::from(combat.map.shift.1) + 5,
-    );
-    if !(3..=86).contains(&absolute.0)
-        || !(3..=86).contains(&absolute.1)
-        || combat.enemies.positions[(target - 10) as usize] != destination
-        || enemy.bytes[0xb0] != 0
-        || word(&enemy.bytes, 0xe)? == word(&member.bytes, 0x10)?
-        || runtime::neighbors(combat, &state.warriors, actor as i16)?
-            .iter()
-            .any(|body| *body < 10)
+    let (faction, living) = if let Some(target) = usize::try_from(target)
+        .ok()
+        .and_then(|target| state.warriors.get(target))
     {
+        (
+            word(&target.bytes, 0x10)?,
+            target.stamina()? > 0 && target.bytes[0x9df] != 0,
+        )
+    } else if let Some(enemy) = usize::try_from(target - 10)
+        .ok()
+        .and_then(|target| combat.enemies.records.get(target))
+    {
+        (
+            word(&enemy.bytes, 0xe)?,
+            enemy.bytes[0xb0] != 255 && enemy.stamina()? > 0,
+        )
+    } else {
+        return Err(unsupported());
+    };
+    if !living || faction == word(&member.bytes, 0x10)? {
         return Err(unsupported());
     }
     let attacks = mission
         .combat
         .as_ref()
         .map_or(&[][..], |tables| &tables.attacks);
-    let effects = runtime::check_neighbors_with_work(
+    let mut effects = runtime::check_neighbors_with_work(
         combat,
         &mut state.warriors,
         &mut state.random,
@@ -457,6 +493,10 @@ fn reload_at_occupied_cell(
         &state.party_buffs,
         &mut state.ammunition_work,
     )?;
+    if state.warriors[actor].bytes[0x9df] == 0 {
+        effects.extend(runtime::end_turn(state, content)?);
+        return Ok(effects);
+    }
     if dx < 0 {
         state.warriors[actor].bytes[0x9e0] = 1;
     } else if dx > 0 {
@@ -465,18 +505,19 @@ fn reload_at_occupied_cell(
     let weapon_id = word(&state.warriors[actor].bytes, 0xe4)?;
     let equipped = state.warriors[actor]
         .inventory()?
-        .first()
+        .iter()
+        .find(|item| item.id() == weapon_id && item.0[9] == 1)
         .cloned()
         .ok_or_else(unsupported)?;
-    if !matches!(weapon_id, 1 | 2 | 38 | 165)
-        || state.warriors[actor].bytes[0x9dd] != 1
-        || equipped.id() != weapon_id
-        || equipped.0[9] != 1
-        || word(&equipped.0, 2)? != 0
-    {
+    if state.warriors[actor].bytes[0x9dd] == 0 {
         return Err(unsupported());
     }
     let weapon = crate::ammunition::definition(content, weapon_id)?;
+    if word(&equipped.0, 2)? >= word(&weapon, 22)? {
+        let mut effects = effects;
+        effects.extend(runtime::player_shoot(state, content, target)?);
+        return Ok(effects);
+    }
     combat.weapon_work.load_weapon(&weapon)?;
     state.ammunition_work.weapon = Some(weapon);
     state.attack_count = 0;
@@ -494,7 +535,6 @@ fn reload_at_occupied_cell(
         &mut state.random,
     )?;
     let completed = refit.native_return != 0;
-    let mut effects = effects;
     effects.extend(crate::ammunition::commit_result(state, actor, refit)?);
     if !completed {
         put_word(&mut state.warriors[actor].bytes, 0x90, 0);
@@ -522,36 +562,7 @@ pub fn initialize_turn(
 ) -> Result<(), RuleError> {
     if (0..6).contains(&body) {
         let warrior = &mut warriors[body as usize];
-        if [0x60, 0x98]
-            .iter()
-            .any(|offset| word(&warrior.bytes, *offset).unwrap_or(1) != 0)
-            || word(&warrior.bytes, 0x10)? != 0
-            || word(&warrior.bytes, 0x90)? != 0
-        {
-            return Err(RuleError::Unsupported {
-                action: "combat.turn",
-                dependency: "inactive or confused warrior",
-            });
-        }
-        items::compact(warrior)?;
-        let bytes = &mut warrior.bytes;
-        let carry = word(bytes, 0x40)?.clamp(0, 1);
-        let mut points = carry
-            .wrapping_add(word(bytes, 0x12)?)
-            .wrapping_add(word(bytes, 0x1e)?);
-        if word(bytes, 0x8c)? != 0 {
-            points = points.wrapping_add(4);
-        }
-        put_word(bytes, 0x40, points);
-        let race = word(bytes, 0x32)? - 1;
-        let race_move = *race_moves
-            .get(race as usize)
-            .ok_or_else(|| RuleError::Invalid("race movement missing".into()))?;
-        calculate_movement(warrior, race_move)?;
-        let maximum = word(&warrior.bytes, 0x3e)?;
-        put_word(&mut warrior.bytes, 0x3c, maximum);
-        put_word(&mut warrior.bytes, 0xacc, 0);
-        put_word(&mut warrior.bytes, 0xac8, 0);
+        initialize_warrior_record(warrior, race_moves, random)?;
     } else if body >= 10 {
         let monster = enemies
             .get_mut((body - 10) as usize)
@@ -575,6 +586,61 @@ pub fn initialize_turn(
         return Err(RuleError::Invalid("invalid active body".into()));
     }
     Ok(())
+}
+
+/// getup12667e..127090: turn markers, confusion, signed faction and AP/movement.
+pub(crate) fn initialize_warrior_record(
+    warrior: &mut Warrior,
+    race_moves: &[i8],
+    random: &mut RandomState,
+) -> Result<(bool, i8), RuleError> {
+    centurions_content::span(&warrior.bytes, 0, 3138)?;
+    let bytes = &mut warrior.bytes;
+    if (word(bytes, 0x5e)? != 0 || word(bytes, 0x10)? != 0) && word(bytes, 0x90)? == 0 {
+        put_word(bytes, 0x90, 1);
+    }
+    let faction = word(bytes, 0x10)?;
+    if word(bytes, 0x90)? >= 0 && word(bytes, 0x98)? != 0 {
+        let roll = random.bound(100);
+        if roll < 30 {
+            if random.bound(2) == 1 && faction == 0 {
+                put_word(bytes, 0x10, faction.wrapping_add(1));
+                if word(bytes, 0x90)? == 0 {
+                    put_word(bytes, 0x90, 1);
+                }
+            } else if random.bound(2) == 2 && faction != 0 {
+                put_word(bytes, 0x10, 0);
+            }
+        } else if roll > 70 {
+            let fleeing = word(bytes, 0x5e)?.wrapping_add(30);
+            put_word(bytes, 0x5e, fleeing);
+        } else {
+            let sleeping = word(bytes, 0x60)?.wrapping_add(1);
+            put_word(bytes, 0x60, sleeping);
+            return Ok((true, 0));
+        }
+    }
+    let unavailable_delta = i8::from(word(bytes, 0x10)? != 0) - i8::from(faction != 0);
+    items::compact(warrior)?;
+    let bytes = &mut warrior.bytes;
+    let carry = word(bytes, 0x40)?.clamp(0, 1);
+    let mut points = carry
+        .wrapping_add(word(bytes, 0x12)?)
+        .wrapping_add(word(bytes, 0x1e)?);
+    if word(bytes, 0x8c)? != 0 {
+        points = points.wrapping_add(4);
+    }
+    put_word(bytes, 0x40, points);
+    let race = word(bytes, 0x32)? - 1;
+    let race_move = *race_moves
+        .get(race as usize)
+        .ok_or_else(|| RuleError::Invalid("race movement missing".into()))?;
+    calculate_movement(warrior, race_move)?;
+    let maximum = word(&warrior.bytes, 0x3e)?;
+    put_word(&mut warrior.bytes, 0x3c, maximum);
+    put_word(&mut warrior.bytes, 0xacc, 0);
+    put_word(&mut warrior.bytes, 0xac8, 0);
+    Ok((false, unavailable_delta))
 }
 
 /// getup126a18..126dd6: signed counters, confusion draws and haste attack copies.
@@ -818,6 +884,7 @@ fn begin_battle_with_group(
     advantage: i16,
     group: bool,
 ) -> Result<Vec<Event>, RuleError> {
+    state.retain_npcs();
     let mission = content
         .map(
             state
@@ -831,16 +898,6 @@ fn begin_battle_with_group(
         .as_ref()
         .ok_or_else(|| RuleError::Invalid("combat tables missing".into()))?;
     let battle = BattleRecord::read(&tables.battles, id)?;
-    if state
-        .warriors
-        .iter()
-        .any(|w| word(&w.bytes, 0x90).unwrap_or(1) != 0)
-    {
-        return Err(RuleError::Unsupported {
-            action: "combat.enter",
-            dependency: "squad confusion or selection status",
-        });
-    }
     let exploration = state
         .exploration
         .as_ref()
@@ -862,6 +919,7 @@ fn begin_battle_with_group(
         &mut state.random,
     )?;
     let direction = state.random.bound(360);
+    state.npc_backing.rebase_origin(map.shift);
     let distance = state.random.bound(i16::from(battle.distance));
     let base = direction_offset(direction, distance);
     let mut squad = place_squad(
@@ -947,7 +1005,7 @@ fn begin_battle_with_group(
         .combat
         .as_ref()
         .map(|combat| combat.death_queue.clone())
-        .unwrap_or_default();
+        .unwrap_or_else(|| state.retained_death_queue.clone().unwrap_or_default());
     death_queue.reset_for_battle();
     state.handled_deaths.clear();
     state.combat_story = None;
@@ -971,6 +1029,9 @@ fn begin_battle_with_group(
         map,
         squad,
         enemies,
+        retained_npcs: state.npc_backing.clone(),
+        direct_deaths: false,
+        direct_death: None,
         order,
         cursor,
         round: 0,
@@ -991,6 +1052,9 @@ fn begin_battle_with_group(
         unavailable,
         pending_last_defeated: None,
         firearm_selection: None,
+        capture_actor: None,
+        automatic: [false; 6],
+        turn_origin: None,
     });
     if let Some(packet) = state.combat.as_mut().unwrap().attack_packet.as_mut() {
         packet[19] = 0;

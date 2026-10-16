@@ -1,31 +1,28 @@
+use crate::fixture_hex as hex;
 use centurions_content::Content;
 use centurions_core::{Command, Session, apply};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
+pub fn fixture_content(identity: &str) -> Content {
+    Content {
+        tutorials: vec![],
+        identity: identity.into(),
+        warriors: vec![],
+        items: vec![],
+        resources: vec![],
+        original_services: None,
+        scenario: None,
+    }
+}
+
 pub trait BinaryInput {
     fn binary(&self) -> Cow<'_, [u8]>;
 }
-fn hex_digit(byte: u8) -> u8 {
-    match byte {
-        b'0'..=b'9' => byte - b'0',
-        b'a'..=b'f' => byte - b'a' + 10,
-        b'A'..=b'F' => byte - b'A' + 10,
-        _ => panic!("invalid native fixture hex byte"),
-    }
-}
 impl BinaryInput for str {
     fn binary(&self) -> Cow<'_, [u8]> {
-        assert_eq!(self.len() % 2, 0, "native hex record length");
-        Cow::Owned(
-            self.as_bytes()
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|pair| hex_digit(pair[0]) * 16 + hex_digit(pair[1]))
-                .collect(),
-        )
+        Cow::Owned(hex::decode(self))
     }
 }
 impl BinaryInput for String {
@@ -257,7 +254,13 @@ pub fn battle() -> centurions_core::combat::Combat {
         weapon_work: centurions_core::combat::weapon_work::WeaponWork::zero(),
         unavailable: 0,
         pending_last_defeated: None,
+        retained_npcs: Default::default(),
+        direct_deaths: false,
+        direct_death: None,
         firearm_selection: None,
+        capture_actor: None,
+        automatic: [false; 6],
+        turn_origin: None,
     }
 }
 
@@ -325,6 +328,12 @@ pub fn native_value<T: NativeScalar>(_: &T, value: &Value) -> T {
 
 pub fn stories() -> centurions_content::mission::StoryTables {
     centurions_content::mission::StoryTables::default()
+}
+pub fn terrain_mission(fixture: &Value) -> centurions_content::mission::OpeningMission {
+    centurions_content::mission::OpeningMission {
+        tile_properties: fixture.bytes("properties")[64..12064].to_vec(),
+        ..mission()
+    }
 }
 pub fn mission() -> centurions_content::mission::OpeningMission {
     centurions_content::mission::OpeningMission {
@@ -401,9 +410,6 @@ pub fn buffer(fixture: &Value, value: &Value) -> Vec<u8> {
         );
     }
     decoded
-}
-pub fn field_bytes(value: &Value, key: &str) -> Vec<u8> {
-    value.bytes(key)
 }
 
 pub fn checkpoint(

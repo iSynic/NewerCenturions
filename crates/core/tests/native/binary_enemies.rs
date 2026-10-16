@@ -4,77 +4,50 @@ use centurions_content::combat::BattleRecord;
 
 use centurions_core::combat::place_enemies_at_difficulty;
 
-#[derive(Deserialize)]
-struct Fixture {
-    battle: String,
-    definitions: String,
-    map: String,
-    cases: Vec<Case>,
-}
-#[derive(Deserialize)]
-struct Case {
-    #[serde(default)]
-    difficulty: i16,
-    base: i16,
-    seed: u32,
-    after_seed: u32,
-    draws: u64,
-    count: usize,
-    records: String,
-    tiles: String,
-    positions: String,
-}
 #[test]
 fn enemy_setup_matches_whole_records_positions_map_and_randomness() {
-    for json in [
-        include_str!("../../../../evidence/fixtures/enemies.json"),
-        include_str!("../../../../evidence/fixtures/enemies-opening.json"),
-        include_str!("../../../../evidence/fixtures/difficulty-enemies.json"),
+    for name in [
+        "enemies.json",
+        "enemies-opening.json",
+        "difficulty-enemies.json",
     ] {
-        let fixture: Fixture = serde_json::from_str(json).unwrap();
+        let fixture = crate::support::fixture(name);
         let map_fixture: serde_json::Value = crate::support::fixture("combat-map.json");
-        let properties = map_fixture.bytes("properties");
         let mission = OpeningMission {
-            tile_properties: properties[64..12064].to_vec(),
             default_tile: 0,
-            shared: std::sync::Arc::new(centurions_content::mission::StoryTables {
-                ..crate::support::stories()
-            }),
-            ..crate::support::mission()
+            ..crate::support::terrain_mission(&map_fixture)
         };
-        let battle = BattleRecord::read(&decode(&fixture.battle), 0).unwrap();
-        for case in fixture.cases {
+        let battle = BattleRecord::read(&fixture.bytes("battle"), 0).unwrap();
+        for case in fixture.array("cases") {
             let mut map = TacticalMap {
-                tiles: words(&fixture.map),
+                tiles: fixture.words("map"),
                 shift: (-39, -15),
                 edge_word: 0,
             };
-            let mut random = RandomState::new(case.seed);
+            let mut random = RandomState::new(case.n("seed"));
+            let base = case.n::<i16>("base");
             let result = place_enemies_at_difficulty(
                 &mut map,
                 &mission,
                 &battle,
-                &decode(&fixture.definitions),
-                (case.base, case.base),
+                &fixture.bytes("definitions"),
+                (base, base),
                 &mut random,
-                case.difficulty,
+                case.get("difficulty")
+                    .map_or(0, |value| value.as_i64().unwrap() as i16),
             )
             .unwrap();
-            assert_eq!(result.records.len(), case.count);
+            crate::support::native_expect! {
+            scalar result.records.len() => &case["count"], "enemy setup count";
+            bytes crate::support::record_bytes(&result.records) => &case["records"], "enemy setup records";
+            words map.tiles => &case["tiles"], "enemy setup map";
+            scalar random.seed => &case["after_seed"], "enemy setup seed";
+            scalar random.draws => &case["draws"], "enemy setup draws";
+            }
             assert_eq!(
-                crate::support::record_bytes(&result.records),
-                decode(&case.records)
+                result.positions,
+                crate::support::positions(&case.bytes("positions"))
             );
-            assert_eq!(
-                result
-                    .positions
-                    .iter()
-                    .flat_map(|(x, y)| [*x, *y])
-                    .collect::<Vec<_>>(),
-                words(&case.positions)
-            );
-            assert_eq!(map.tiles, words(&case.tiles));
-            assert_eq!((random.seed, random.draws), (case.after_seed, case.draws));
         }
     }
 }

@@ -120,6 +120,8 @@ mod binary_map_seven_fallback;
 mod binary_map_seven_fire_caller;
 #[path = "native/binary_map_seven_weapons.rs"]
 mod binary_map_seven_weapons;
+#[path = "native/binary_mechanical_capture.rs"]
+mod binary_mechanical_capture;
 #[path = "native/binary_mission_deaths.rs"]
 mod binary_mission_deaths;
 #[path = "native/binary_monster_disease.rs"]
@@ -130,6 +132,8 @@ mod binary_monster_elemental;
 mod binary_monster_melee;
 #[path = "native/binary_move_away.rs"]
 mod binary_move_away;
+#[path = "native/binary_music.rs"]
+mod binary_music;
 #[path = "native/binary_native_save.rs"]
 mod binary_native_save;
 #[path = "native/binary_natural.rs"]
@@ -286,6 +290,8 @@ mod command_support_psi;
 mod enemy_callers;
 #[path = "native/enemy_target_bounds.rs"]
 mod enemy_target_bounds;
+#[path = "hex.rs"]
+mod fixture_hex;
 #[path = "native/live_ammunition.rs"]
 mod live_ammunition;
 #[path = "native/live_calendar.rs"]

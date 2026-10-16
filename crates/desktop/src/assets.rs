@@ -6,7 +6,7 @@ const APPLICATION_PICTURES: &[i16] = &[
     1, 2, 4, 7, 19, 128, 130, 131, 132, 142, 149, 151, 154, 158, 159, 160, 162, 165, 168, 173, 179,
     180, 181, 182, 183, 187, 195, 203, 204, 214, 215, 216, 221, 222, 233, 234, 235, 15, 16, 133,
     134, 136, 137, 138, 144, 147, 148, 150, 152, 153, 156, 167, 170, 175, 190, 191, 202, 193, 194,
-    212, 213, 226, 227,
+    145, 201, 161, 176, 184, 198, 207, 230, 232, 212, 213, 226, 227,
 ];
 
 pub struct Assets {
@@ -46,6 +46,7 @@ pub struct Assets {
     pub dialogs: HashMap<i16, Vec<ui::DialogItem>>,
     pub dialog_sizes: HashMap<i16, Vec2>,
     pub preference_descriptions: Vec<String>,
+    pub executable_version: String,
 }
 impl Assets {
     pub fn target_pattern(&self, shape: i16, point: Vec2, clip: Rect) {
@@ -110,10 +111,23 @@ impl Assets {
         let mut reference_strings = HashMap::new();
         let mut preference_descriptions = Vec::new();
         let mut dialog_pictures = std::collections::HashSet::new();
+        let version = content
+            .resources
+            .iter()
+            .find(|resource| {
+                resource.original.ends_with("/New Centurions")
+                    && resource.r#type == "vers"
+                    && resource.id == 1
+            })
+            .ok_or_else(|| ContentError::Invalid("executable version resource missing".into()))?;
+        let version_bytes = read_resource(extracted, version)?;
+        let executable_version = ui::pascal_text(version_bytes.get(6..).ok_or_else(|| {
+            ContentError::Invalid("truncated executable version resource".into())
+        })?)?;
         for resource in &content.resources {
             if resource.original.ends_with("/Cargo Pod")
                 && resource.r#type == "STR#"
-                && matches!(resource.id, 128 | 137 | 138 | 1201)
+                && matches!(resource.id, 128 | 134 | 137 | 138 | 1201)
             {
                 reference_strings.insert(
                     resource.id,
@@ -124,12 +138,30 @@ impl Assets {
                 && resource.r#type == "DITL"
                 && matches!(
                     resource.id,
-                    128 | 131 | 132 | 133 | 136 | 148 | 153 | 158 | 159 | 161 | 167 | 177 | 190
+                    128 | 131
+                        | 132
+                        | 133
+                        | 136
+                        | 137
+                        | 144
+                        | 147
+                        | 148
+                        | 153
+                        | 157
+                        | 158
+                        | 159
+                        | 160
+                        | 161
+                        | 166
+                        | 167
+                        | 169
+                        | 177
+                        | 190
                 )
             {
                 let items = ui::dialog_items(&read_resource(extracted, resource)?)?;
                 for item in &items {
-                    if item.kind == 64 && item.data.len() == 2 {
+                    if item.kind & 0x7f == 64 && item.data.len() == 2 {
                         let id = i16::from_be_bytes(item.data[..2].try_into().unwrap());
                         if id > 0 {
                             dialog_pictures.insert(id);
@@ -142,7 +174,25 @@ impl Assets {
                 && resource.r#type == "DLOG"
                 && matches!(
                     resource.id,
-                    128 | 131 | 132 | 133 | 136 | 148 | 153 | 158 | 159 | 161 | 167 | 177 | 190
+                    128 | 131
+                        | 132
+                        | 133
+                        | 136
+                        | 137
+                        | 144
+                        | 147
+                        | 148
+                        | 153
+                        | 157
+                        | 158
+                        | 159
+                        | 160
+                        | 161
+                        | 166
+                        | 167
+                        | 169
+                        | 177
+                        | 190
                 )
             {
                 let bytes = read_resource(extracted, resource)?;
@@ -173,17 +223,29 @@ impl Assets {
             }
             if cargo
                 && resource.r#type == "CNTL"
-                && ((300..=309).contains(&resource.id) || matches!(resource.id, 168 | 169))
+                && ((300..=309).contains(&resource.id)
+                    || (190..=195).contains(&resource.id)
+                    || matches!(resource.id, 142 | 154 | 155 | 166 | 167 | 168 | 169))
             {
                 let bytes = read_resource(extracted, resource)?;
                 let top = f32::from(centurions_content::word(&bytes, 0)?);
                 let left = f32::from(centurions_content::word(&bytes, 2)?);
                 let bottom = f32::from(centurions_content::word(&bytes, 4)?);
                 let right = f32::from(centurions_content::word(&bytes, 6)?);
-                // ToolBoxInit131978 and mainscreeninit: large mode offsets160/140 minus32, plus our menu20.
+                // mainscreeninit moves bottom-left combat controls vertically, Auto boxes horizontally.
+                let dx = if matches!(resource.id, 166 | 167) {
+                    0.
+                } else {
+                    160.
+                };
+                let dy = if (190..=195).contains(&resource.id) {
+                    20.
+                } else {
+                    128.
+                };
                 main_controls.insert(
                     resource.id,
-                    Rect::new(left + 160., top + 128., right - left, bottom - top),
+                    Rect::new(left + dx, top + dy, right - left, bottom - top),
                 );
             }
             if cargo && resource.r#type == "ppat" && resource.id == 131 {
@@ -313,7 +375,8 @@ impl Assets {
         }
         if questions.len() < 19
             || (300..=309)
-                .chain([168, 169])
+                .chain(190..=195)
+                .chain([142, 154, 155, 166, 167, 168, 169])
                 .any(|id| !main_controls.contains_key(&id))
             || squad_text.len() < 70
             || upgrade_dialog.len() < 102
@@ -413,6 +476,7 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
             dialogs,
             dialog_sizes,
             preference_descriptions,
+            executable_version,
         };
         let characters = Font::ascii_character_list();
         for size in [12, 14, 24] {
@@ -513,7 +577,9 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
         )
     }
     pub fn dialog_rect(&self, id: i16, item: usize) -> Rect {
-        let origin = self.dialog_origin(id);
+        self.dialog_rect_at(id, item, self.dialog_origin(id))
+    }
+    pub fn dialog_rect_at(&self, id: i16, item: usize, origin: Vec2) -> Rect {
         let [top, left, bottom, right] = self.dialogs[&id][item - 1].rect;
         Rect::new(
             origin.x + left as f32,
@@ -523,12 +589,14 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
         )
     }
     pub fn draw_dialog(&self, id: i16) {
-        let origin = self.dialog_origin(id);
+        self.draw_dialog_at(id, self.dialog_origin(id));
+    }
+    pub fn draw_dialog_at(&self, id: i16, origin: Vec2) {
         let size = self.dialog_sizes[&id];
         draw_rectangle(origin.x, origin.y, size.x, size.y, BLACK);
         let port = Rect::new(origin.x, origin.y, size.x, size.y);
         for (i, item) in self.dialogs[&id].iter().enumerate() {
-            let rect = self.dialog_rect(id, i + 1);
+            let rect = self.dialog_rect_at(id, i + 1, origin);
             let Some(clip) = rect.intersect(port) else {
                 continue;
             };
@@ -557,7 +625,7 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
         for (i, item) in self.dialogs[&id].iter().enumerate() {
             if item.kind & 0x7f == 8
                 && !item.text().contains('^')
-                && let Some(clip) = self.dialog_rect(id, i + 1).intersect(port)
+                && let Some(clip) = self.dialog_rect_at(id, i + 1, origin).intersect(port)
             {
                 self.wrapped_color(&item.text(), clip, 12, 14., YELLOW);
             }

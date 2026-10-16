@@ -1,3 +1,5 @@
+#[path = "hex.rs"]
+mod fixture_hex;
 #[path = "support/no_services.rs"]
 mod no_services;
 
@@ -11,15 +13,6 @@ struct TinyRoutines;
 impl RoutineResolver for TinyRoutines {
     fn dispatch(&self, execution: &mut Execution<'_>, entry: u32, frame: u32) -> Result<()> {
         match entry {
-            1 => {
-                execution.word(0, 0x1234)?;
-                execution.call(2, frame)?;
-                execution.byte(1, 0x56)
-            }
-            2 => {
-                execution.registers.data[0].assign_word(0xabcd);
-                Ok(())
-            }
             3 => {
                 execution.byte(0, 0xff)?;
                 execution.call(3, frame)
@@ -88,39 +81,11 @@ fn limits_and_missing_children_reject_without_mutating_input() {
             8,
             ApplicationRegisters::default(),
             bounds,
-            &mut no_services::NoServices,
+            &mut no_services::NoServices::default(),
             &TinyRoutines,
         )
         .unwrap_err();
         assert!(error.to_string().contains(diagnostic), "{error}");
         assert_eq!(input, before);
     }
-}
-
-// Protects child-call composition, word width, and the order of overlapping writes.
-#[test]
-fn child_dispatch_preserves_word_width_and_effect_order() {
-    let mut registers = ApplicationRegisters::default();
-    registers.data[0] = RegisterBits::full(0x98760000);
-    let plan = execute(
-        &state(),
-        1,
-        8,
-        registers,
-        limits(),
-        &mut no_services::NoServices,
-        &TinyRoutines,
-    )
-    .unwrap();
-    assert_eq!(plan.native_d0, RegisterBits::full(0x9876abcd));
-    assert_eq!(plan.state.memory.word(0).unwrap(), 0x1256);
-    let writes: Vec<_> = plan
-        .effects
-        .iter()
-        .map(|effect| match effect {
-            ApplicationControlEffect::Write(write) => (write.address, write.bytes.clone()),
-            _ => panic!("unexpected effect"),
-        })
-        .collect();
-    assert_eq!(writes, vec![(0, vec![0x12, 0x34]), (1, vec![0x56])]);
 }

@@ -37,7 +37,9 @@ pub fn context(
     let mut context = previous.cloned().unwrap_or(HealthContext {
         unavailable: warriors
             .iter()
-            .filter(|warrior| warrior.stamina().unwrap_or(0) < 1)
+            .filter(|warrior| {
+                warrior.stamina().unwrap_or(0) < 1 || word(&warrior.bytes, 0x90).unwrap_or(0) != 0
+            })
             .count() as i8,
         selected_warrior,
         effect: 0,

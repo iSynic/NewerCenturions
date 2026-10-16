@@ -1,7 +1,6 @@
 use crate::prelude::*;
 
 use crate::support::assert_bytes;
-use crate::support::field_bytes as raw;
 
 fn state(f: &Value, c: &Value) -> Session {
     let mut s: Session = serde_json::from_value(f["foundation"].clone()).unwrap();
@@ -43,34 +42,34 @@ fn blocked_first_spell_chance_matches_six_complete_native_enemy_turns() {
         let context = format!("variant{}", case["variant"]);
         assert_bytes(
             &crate::support::record_bytes(&s.warriors),
-            &raw(case, "party_after"),
+            &case.bytes("party_after"),
             &format!("{context} party"),
         );
         assert_bytes(
             &crate::support::record_bytes(&combat.enemies.records),
-            &raw(case, "records_after"),
+            &case.bytes("records_after"),
             &format!("{context} enemies"),
         );
         assert_eq!(
             combat.map.tiles,
-            words(&raw(case, "map_after")),
+            words(&case.bytes("map_after")),
             "{context} map"
         );
         assert_eq!(
             combat.order,
-            words(&raw(case, "order_after")),
+            words(&case.bytes("order_after")),
             "{context} order"
         );
         assert_eq!(
             combat.enemies.positions,
-            crate::support::positions(&raw(case, "positions_after")),
+            crate::support::positions(&case.bytes("positions_after")),
             "{context} positions"
         );
-        assert_eq!(combat.spell_fields, raw(case, "fields_after"));
-        assert_eq!(combat.field_used, raw(case, "used_after"));
+        assert_eq!(combat.spell_fields, case.bytes("fields_after"));
+        assert_eq!(combat.field_used, case.bytes("used_after"));
         assert_eq!(
             combat.attack_packet.as_ref().unwrap(),
-            &raw(case, "packet_after"),
+            &case.bytes("packet_after"),
             "{context} packet"
         );
         assert_eq!(work.item_context, Some(case.n::<i16>("context_after")));

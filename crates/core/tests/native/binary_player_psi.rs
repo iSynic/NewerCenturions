@@ -7,27 +7,17 @@ use crate::support::positions;
 fn controlled(case: &Value) -> Combat {
     let mut order = vec![-1; 110];
     order[1] = 1;
-    Combat {
-        battle: 85,
-        map: TacticalMap {
-            tiles: words(case.text("map_before")),
-            shift: (0, 0),
-            edge_word: 0,
-        },
-        squad: SquadPlacement {
-            positions: positions(case.text("warrior_positions")),
-            under_tiles: vec![1155; 6],
-        },
-        enemies: EnemySetup {
-            records: crate::support::monsters(&case["records_before"]),
-            positions: positions(case.text("monster_positions")),
-        },
-        order,
-        spell_fields: case.bytes("fields_before"),
-        attack_packet: None,
-        attack_identity: None,
-        ..crate::support::battle()
-    }
+    let mut combat = crate::support::battle();
+    combat.battle = 85;
+    combat.map.tiles = case.words("map_before");
+    combat.squad.positions = positions(case.text("warrior_positions"));
+    combat.enemies.records = crate::support::monsters(&case["records_before"]);
+    combat.enemies.positions = positions(case.text("monster_positions"));
+    combat.order = order;
+    combat.spell_fields = case.bytes("fields_before");
+    combat.attack_packet = None;
+    combat.attack_identity = None;
+    combat
 }
 fn verify(
     case: &Value,
@@ -162,6 +152,196 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
         combat.spell_fields.fill(0);
         combat.field_used.fill(0);
         verify(case, combat, mission, &format!("campaign psi case {i}"));
+    }
+    // Resolution extensions are source-derived; ray dispatch also compares original instructions.
+    let rays = crate::support::fixture("ray-dispatch.json");
+    let movements = crate::support::fixture("movement-psi.json");
+    let drains = crate::support::fixture("drain-caller.json");
+    let charms = crate::support::fixture("charm-result.json");
+    for (spell, gate, blocked, ray_case) in [
+        1106, 1403, 1406, 1502, 1506, 1603, 1606, 1607, 1705, 2103, 2201, 2305, 2401, 2405, 2505,
+        2506, 2604, 2607, 2701, 2707, 3104, 3105, 3207, 3307, 3503, 3506, 3604, 3607, 3705,
+    ]
+    .into_iter()
+    .filter(|spell| !matches!(spell, 2103 | 2506 | 2607 | 2707 | 3104))
+    .map(|spell| (spell, 1, false, None))
+    .chain([(1106, 0, false, None), (1106, 1, true, None)])
+    .chain(
+        rays.array("cases")
+            .iter()
+            .map(|case| (case.n::<i16>("spell"), 1, false, Some(case))),
+    ) {
+        let mut state: Session = serde_json::from_value(foundation.clone()).unwrap();
+        state.psi_memory = Some(vec![0; 480]);
+        state.bandage_ready = Some(gate);
+        let actor = 1;
+        let power = if ray_case.is_some() { 3 } else { 1 };
+        let w = &mut state.warriors[actor].bytes;
+        w[0x36..0x38].copy_from_slice(&(spell / 1000_i16).to_be_bytes());
+        w[0x9f0..0xa21].fill(1);
+        for (offset, value) in [
+            (0x58, 30000_i16),
+            (0x50, 30000),
+            (0x40, 5),
+            (0x3c, 5),
+            (0xac6, 100),
+            (0xac8, 0),
+            (0x14, 0),
+        ] {
+            w[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
+        }
+        let combat = state.combat.as_mut().unwrap();
+        combat.order[combat.cursor] = actor as i16;
+        combat.weapon_work = WeaponWork::zero();
+        let charm = matches!(spell, 1406 | 1506 | 3506);
+        let drain = matches!(spell, 1502 | 1603 | 3503);
+        let movement = matches!(spell, 1106 | 1403 | 2305 | 2604 | 3105);
+        let revival = matches!(spell, 1705 | 3705);
+        if movement {
+            state.random = RandomState::new(12);
+        }
+        if let Some(case) = ray_case {
+            combat.map.tiles = case.words("map");
+            combat.map.shift = (0, 0);
+            for index in 0..3 {
+                let position = (
+                    39 + case.n::<i16>("dx") * (index + 1),
+                    50 + case.n::<i16>("dy") * (index + 1),
+                );
+                if index < 2 {
+                    combat.enemies.positions[index as usize] = position;
+                    combat.enemies.records[index as usize].bytes[0x110..0x112]
+                        .copy_from_slice(&30000_i16.to_be_bytes());
+                } else {
+                    combat.squad.positions[0] = position;
+                    state.warriors[0].bytes[0x50..0x52].copy_from_slice(&30000_i16.to_be_bytes());
+                }
+            }
+        }
+        let target = if let Some(case) = ray_case {
+            (39 + 4 * case.n::<i16>("dx"), 50 + 4 * case.n::<i16>("dy"))
+        } else if charm || drain {
+            let m = &mut combat.enemies.records[1].bytes;
+            m[0xa..0xc].fill(0);
+            m[0xc2..0xc9].fill(0);
+            m[0x90] = 0;
+            m[0x8c..0x8e].fill(0);
+            m[0x10e..0x110].copy_from_slice(&1000_i16.to_be_bytes());
+            combat.enemies.positions[1]
+        } else if revival {
+            state.warriors[0].bytes[0x50..0x52].copy_from_slice(&(-10_i16).to_be_bytes());
+            centurions_core::combat::lifecycle::kill_body(combat, &mut state.warriors, 0).unwrap();
+            combat.squad.positions[0]
+        } else if movement {
+            if blocked {
+                combat.squad.positions[0]
+            } else {
+                (38, 50)
+            }
+        } else {
+            combat.squad.positions[actor]
+        };
+        let before = state.warriors[actor].psi_points().unwrap();
+        let mut resumed = crate::support::checkpoint(&state, &content, "learned-family-before");
+        let command = if matches!(spell, 1406 | 2405 | 2701 | 3506) {
+            replay_command(
+                Command::BeginPsiSelection { spell, power },
+                &mut state,
+                &mut resumed,
+                &content,
+            );
+            replay_command(
+                Command::SelectPsiTarget {
+                    x: target.0,
+                    y: target.1,
+                },
+                &mut state,
+                &mut resumed,
+                &content,
+            );
+            resumed = crate::support::checkpoint(&state, &content, "learned-family-selection");
+            Command::FirePsiSelection
+        } else if revival {
+            Command::CastPsiOnWarrior {
+                warrior: 0,
+                spell,
+                power,
+            }
+        } else {
+            Command::CastPsi {
+                rotation: 0,
+                spell,
+                power,
+                target: Some(target),
+            }
+        };
+        let command = Command::WithPreferences {
+            command: Box::new(command),
+            preferences: centurions_core::CommandPreferences {
+                animation_delay: ray_case.map_or(0, |case| case.n("delay")),
+                ..Default::default()
+            },
+        };
+        let events = replay_command(command, &mut state, &mut resumed, &content);
+        if gate == 0 {
+            assert!(events.contains(&Event::Feedback(
+                centurions_core::feedback::NativeFeedback::Warning { index: 87 }
+            )));
+        } else {
+            assert!(events.iter().any(|event| matches!(event, Event::SpellResolved { spell: actual, .. } if *actual == spell)), "spell {spell}");
+        }
+        assert!(state.warriors[actor].psi_points().unwrap() < before);
+        if movement && !blocked {
+            let case = movements
+                .array("cases")
+                .iter()
+                .find(|case| case.n::<i16>("spell") == spell && case.n::<i16>("gate") == gate)
+                .unwrap();
+            let combat = state.combat.as_ref().unwrap();
+            crate::support::native_expect! {
+                bytes crate::support::record_bytes(&state.warriors) => &case["warriors_after"], "movement party";
+                words combat.map.tiles => &case["map_after"], "movement terrain";
+                bytes state.psi_memory.as_ref().unwrap() => &case["memory_after"], "movement memory";
+                scalar state.bandage_ready.unwrap() => &case["gate_after"], "movement gate";
+                scalar state.random.draws => &case["draws"], "movement draws";
+            }
+            assert_eq!(combat.squad.positions, positions(&case["positions_after"]));
+            crate::support::expect_array(
+                &crate::support::event_sounds(&events)[1..].to_vec(),
+                &case["sounds"],
+            );
+        } else if movement {
+            assert_eq!(state.warriors[actor].stamina().unwrap(), -10);
+            assert!(state.combat.as_ref().unwrap().active_body().is_some());
+        }
+        if charm || drain {
+            let case = (if charm { &charms } else { &drains })
+                .array("cases")
+                .iter()
+                .find(|case| case.n::<i16>("spell") == spell)
+                .unwrap();
+            crate::support::native_expect! {
+                bytes crate::support::record_bytes(&state.warriors) => &case["warriors_after"], "Psi party";
+                bytes crate::support::record_bytes(&state.combat.as_ref().unwrap().enemies.records) => &case["records_after"], "Psi NPCs";
+            }
+            if charm {
+                crate::support::expect(state.bandage_ready.unwrap(), &case["gate_after"]);
+            }
+        }
+        if revival {
+            assert_eq!(state.warriors[0].stamina().unwrap(), -9);
+            assert_eq!(state.warriors[0].bytes[0x9df], 0);
+        }
+        if let Some(case) = ray_case {
+            let targets: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::SpellResolved { target, .. } => Some(*target),
+                    _ => None,
+                })
+                .collect();
+            crate::support::expect_array(&targets, &case["targets"]);
+        }
     }
 }
 #[test]

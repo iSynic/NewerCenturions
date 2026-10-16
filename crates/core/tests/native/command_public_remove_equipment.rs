@@ -124,4 +124,36 @@ fn four_public_removals_at_zero_ap_match_complete_native_state_and_saved_replay(
             assert_eq!(expected.health_context.as_ref().unwrap().affected[0], 1);
         }
     }
+
+    // Native wear/remove retries must not corrupt the subsequently loaded Psi packet.
+    let fixture = crate::support::fixture("equipment-spell-cache-alias.json");
+    for case in fixture.array("cases") {
+        let input = Warrior::read(&bytes(&fixture, &case["before"]["member_record"])).unwrap();
+        let result = if case["variant"] == "wear_retry_old1_to38" {
+            let worn = equipment::wear(
+                &input,
+                &content,
+                content.map(0).unwrap(),
+                case.n("slot"),
+                false,
+            )
+            .unwrap();
+            crate::support::expect_array(&worn.sounds, &case["sounds"]);
+            worn.warrior
+        } else {
+            input
+        };
+        crate::support::assert_bytes(
+            &result.bytes,
+            &bytes(&fixture, &case["after_equipment"]["member_record"]),
+            "equipment/cache alias",
+        );
+        let attacks = &content.map(0).unwrap().combat.as_ref().unwrap().attacks;
+        assert_eq!(
+            *attacks,
+            bytes(&fixture, &case["after_equipment"]["spell_cache"])
+        );
+        let packet = spells::load_packet(attacks, case.n("spell")).unwrap();
+        assert_eq!(packet, bytes(&fixture, &case["after_spell_load"]["packet"]));
+    }
 }

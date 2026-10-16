@@ -6,6 +6,8 @@ pub struct Treasure {
     pub warriors: Vec<Warrior>,
     pub items: Vec<InventoryRecord>,
     pub share: i32,
+    pub credits: i32,
+    pub inventory_record: Option<InventoryRecord>,
 }
 
 pub fn prepare(
@@ -16,13 +18,6 @@ pub fn prepare(
     difficulty: i16,
 ) -> Result<Treasure, RuleError> {
     let record = span(record, 0, 88)?;
-    let amount = long(record, 80)?;
-    if amount < 0 || long(record, 84)? != 0 {
-        return Err(RuleError::Unsupported {
-            action: "story.treasure",
-            dependency: "random experience or treasure credit awards",
-        });
-    }
     let mut result = story_inventory::normalize_story_loot(warriors)?;
     let mut next_random = random.clone();
     let mut loot = Vec::new();
@@ -44,6 +39,17 @@ pub fn prepare(
             )?);
         }
     }
+    // booty105c68..105f18 randomizes items, then experience, then credits.
+    let mut award = |offset| -> Result<i32, RuleError> {
+        let amount = long(record, offset)?;
+        Ok(if amount < 0 {
+            i32::from(next_random.bound(((amount >> 16) as i16).wrapping_abs()))
+        } else {
+            amount
+        })
+    };
+    let amount = award(80)?;
+    let credits = award(84)?;
     let eligible = result
         .iter()
         .filter(|warrior| {
@@ -90,10 +96,13 @@ pub fn prepare(
         warrior.bytes[0x9d2..0x9d6].copy_from_slice(&experience.to_be_bytes());
         warrior.bytes[0x9ce..0x9d2].copy_from_slice(&remaining.to_be_bytes());
     }
+    let inventory_record = items::sort_loot(&mut loot);
     *random = next_random;
     Ok(Treasure {
         warriors: result,
         items: loot,
         share,
+        credits,
+        inventory_record,
     })
 }

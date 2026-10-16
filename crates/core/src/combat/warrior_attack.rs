@@ -23,6 +23,7 @@ pub(crate) fn attack(
     if word(&attacker, 0xacc)? >= word(&attacker, 0xaca)? {
         return Ok((
             AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![45],
@@ -65,6 +66,7 @@ pub(crate) fn attack(
         increment(&mut warriors[actor].bytes, 0xa52, 1);
         return Ok((
             AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![],
@@ -99,6 +101,7 @@ pub(crate) fn attack(
         increment(&mut warriors[actor].bytes, 0xa52, 1);
         return Ok((
             AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![],
@@ -122,6 +125,7 @@ pub(crate) fn attack(
     }
     Ok((
         AttackResult {
+            feedback: None,
             damage,
             killed: health < 1,
             sounds: vec![match weapon {

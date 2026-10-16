@@ -73,7 +73,12 @@ pub(crate) fn prepare(
         .as_ref()
         .ok_or_else(|| RuleError::Invalid("combat content missing".into()))?
         .attacks;
-    firearm::prepare(warrior, weapon, ammo, attacks)
+    let mut prepared = firearm::prepare(warrior, weapon, ammo, attacks)?;
+    if let Some(quantity) = &state.target_quantity {
+        quantity.validate(c, &state.warriors)?;
+        prepared.shots = quantity.power;
+    }
+    Ok(prepared)
 }
 
 pub fn location_targeting(state: &Session, content: &Content) -> bool {
@@ -263,6 +268,7 @@ pub fn fire_selected(state: &mut Session, content: &Content) -> Result<Vec<Event
 }
 
 pub fn cancel(state: &mut Session) -> Result<Vec<Event>, RuleError> {
+    state.target_quantity = None;
     if let Some(selection) = state
         .combat
         .as_mut()

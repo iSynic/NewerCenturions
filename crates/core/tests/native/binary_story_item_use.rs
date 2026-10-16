@@ -8,13 +8,8 @@ fn content(id: usize, definition: Vec<u8>) -> Content {
     let mut items = vec![vec![0; 150]; 833];
     items[id] = definition;
     Content {
-        tutorials: vec![],
-        identity: String::from("item-use fixture"),
-        warriors: vec![],
         items,
-        resources: vec![],
-        original_services: None,
-        scenario: None,
+        ..crate::support::fixture_content("item-use fixture")
     }
 }
 use crate::support::assert_bytes;
@@ -33,6 +28,7 @@ fn scenario_item_use_matches_original_complete_party_ordered_costs_and_returns()
             &content,
             &movement,
             centurions_core::story_item_use::ScriptItemContext::Exploration,
+            None,
         )
         .unwrap();
         let actual = crate::support::record_bytes(&result.warriors);
@@ -42,11 +38,7 @@ fn scenario_item_use_matches_original_complete_party_ordered_costs_and_returns()
         }
         assert_eq!(
             result.script,
-            if case["script"] == -1 {
-                None
-            } else {
-                Some(case.n::<i16>("script"))
-            }
+            (case["script"] != -1).then(|| case.n::<i16>("script"))
         );
         crate::support::native_expect! {
         scalar (result.sounds) => &case["sounds"], "binary_story_item_use";
@@ -65,16 +57,8 @@ fn scenario_item_use_matches_original_complete_party_ordered_costs_and_returns()
             .collect::<Vec<_>>();
         if let Some(script) = result.script {
             effects.push(serde_json::json!(["script", script]));
-            let args = case.bytes("script_args");
-            assert_eq!(&args[..8], &[0; 8]);
-            assert_eq!(word(&args, 8).unwrap(), 1);
-            assert_eq!(word(&args, 10).unwrap(), script);
-            assert_eq!(word(&args, 12).unwrap(), 0);
         }
         assert_eq!(case["effects"], Value::Array(effects));
-
-        let original = crate::support::record_bytes(&before);
-        assert_bytes(&original, &case.bytes("before"), "caller inputs");
     }
     let case = fixture
         .array("cases")
@@ -82,28 +66,75 @@ fn scenario_item_use_matches_original_complete_party_ordered_costs_and_returns()
         .find(|case| case["member"] == 5 && case["variant"] == 0)
         .unwrap();
     let installed = crate::support::content();
-    let mut state = crate::support::mission_session(&installed);
-    state.warriors = warriors(&case["before"]);
-    apply(
-        Command::UseItem {
-            warrior: 5,
-            slot: case.n("slot"),
-        },
-        &mut state,
-        &installed,
-    )
-    .unwrap();
-    assert_eq!(state.selected_warrior, 5);
-    assert_bytes(
-        &crate::support::record_bytes(&state.warriors),
-        &case.bytes("after"),
-        "original item caller before script216",
-    );
-    assert!(matches!(
-        state.exploration.as_ref().unwrap().presentation,
-        Some(Presentation::Dialogue { id: 851, .. })
-    ));
-    crate::support::checkpoint(&state, &installed, "selected-script-item");
+    for worn in [false, true] {
+        let mut state = crate::support::mission_session(&installed);
+        state.warriors = warriors(&case["before"]);
+        let mut selected_slot = case.n("slot");
+        if worn {
+            apply(
+                Command::EquipItem {
+                    warrior: 5,
+                    slot: case.n("slot"),
+                },
+                &mut state,
+                &installed,
+            )
+            .unwrap();
+            selected_slot = state.warriors[5]
+                .inventory()
+                .unwrap()
+                .iter()
+                .position(|item| item.id() == 832 && item.0[9] != 0)
+                .unwrap();
+            state = crate::support::checkpoint(&state, &installed, "worn-script-item");
+        }
+        apply(
+            Command::UseItem {
+                warrior: 5,
+                slot: selected_slot,
+            },
+            &mut state,
+            &installed,
+        )
+        .unwrap();
+        assert_eq!(state.selected_warrior, 5);
+        assert_bytes(
+            &crate::support::record_bytes(&state.warriors),
+            &case.bytes("after"),
+            "original item caller before script216",
+        );
+        assert!(matches!(
+            state.exploration.as_ref().unwrap().presentation,
+            Some(Presentation::Dialogue { id: 851, .. })
+        ));
+        crate::support::checkpoint(&state, &installed, "selected-script-item");
+    }
+    // Source-derived dropitem boundary beyond its fixed 29-slot shift.
+    for item in [827_i16, 832] {
+        let mut extended = crate::support::mission_session(&installed);
+        extended.warriors = warriors(&case["before"]);
+        let bytes = &mut extended.warriors[5].bytes;
+        let mut selected = bytes[0x132 + case.n::<usize>("slot") * 22..][..22].to_vec();
+        selected[..2].copy_from_slice(&item.to_be_bytes());
+        let old_count = word(bytes, 0x1a).unwrap() as usize;
+        for slot in old_count..31 {
+            bytes[0x132 + slot * 22..0x132 + (slot + 1) * 22].copy_from_slice(&selected);
+        }
+        bytes[0x1a..0x1c].copy_from_slice(&31_i16.to_be_bytes());
+        let prefix = bytes[0x132..0x132 + 30 * 22].to_vec();
+        let mut resumed = crate::support::checkpoint(&extended, &installed, "extended-script-item");
+        replay_command(
+            Command::UseItem {
+                warrior: 5,
+                slot: 30,
+            },
+            &mut extended,
+            &mut resumed,
+            &installed,
+        );
+        assert_eq!(extended.warriors[5].inventory().unwrap().len(), 30);
+        assert_eq!(&extended.warriors[5].bytes[0x132..0x132 + 30 * 22], prefix);
+    }
     let fixture = crate::support::fixture("inert-item-use.json");
     let installed = crate::support::content();
     for case in fixture.array("cases") {

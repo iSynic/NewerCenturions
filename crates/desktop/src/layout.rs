@@ -7,15 +7,9 @@ pub const ROW_Y: f32 = 22.;
 pub const ROW_HEIGHT: f32 = 50.;
 pub const INFORMATION: Rect = Rect::new(488., 324., 308., 104.);
 pub const MESSAGE: Rect = Rect::new(0., 449., 468., 139.);
-pub const COMBAT_ITEMS: Rect = Rect::new(233., 475., 69., 22.);
-pub const COMBAT_CONDITIONS: Rect = Rect::new(154., 475., 75., 22.);
-pub const FIREARM: Rect = Rect::new(480., 540., 70., 48.);
-pub const RELOAD: Rect = Rect::new(552., 540., 70., 48.);
-pub const END_TURN: Rect = Rect::new(624., 540., 78., 48.);
-pub const GUARD: Rect = Rect::new(710., 540., 84., 48.);
+pub const COMBAT_ITEMS: Rect = Rect::new(234., 480., 66., 16.);
+pub const COMBAT_CONDITIONS: Rect = Rect::new(154., 480., 72., 16.);
 pub const CONTINUE: Rect = Rect::new(330., 558., 126., 25.);
-pub const INSPECT: Rect = Rect::new(32., 42., 736., 520.);
-pub const CLOSE: Rect = Rect::new(668., 52., 84., 24.);
 
 #[derive(Clone, Copy)]
 pub struct Canvas {

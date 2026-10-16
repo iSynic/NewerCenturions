@@ -2,30 +2,11 @@ use crate::prelude::*;
 
 use centurions_core::combat::build_tactical_map;
 
-#[derive(Deserialize)]
-struct Fixture {
-    land: String,
-    properties: String,
-    cases: Vec<Case>,
-}
-#[derive(Deserialize)]
-struct Case {
-    x: i32,
-    y: i32,
-    seed: u32,
-    after_seed: u32,
-    draws: u64,
-    edge_after: i16,
-    shift_x: i16,
-    shift_y: i16,
-    tiles: String,
-}
 #[test]
 fn tactical_map_matches_all_cells_and_random_consumption() {
-    let fixture: Fixture =
-        serde_json::from_value(crate::support::fixture("combat-map.json")).unwrap();
-    let land = decode(&fixture.land);
-    let properties = decode(&fixture.properties);
+    let fixture = crate::support::fixture("combat-map.json");
+    let land = fixture.bytes("land");
+    let properties = fixture.bytes("properties");
     let mission = OpeningMission {
         floor: land[..16200]
             .as_chunks::<2>()
@@ -46,22 +27,22 @@ fn tactical_map_matches_all_cells_and_random_consumption() {
         } else {
             1
         },
-        shared: std::sync::Arc::new(centurions_content::mission::StoryTables {
-            ..crate::support::stories()
-        }),
         ..crate::support::mission()
     };
-    for case in fixture.cases {
-        let mut random = RandomState::new(case.seed);
-        let map = build_tactical_map(&mission, (case.x, case.y), 0, &mut random).unwrap();
-        let expected: Vec<_> = crate::support::words(&decode(&case.tiles));
+    for case in fixture.array("cases") {
+        let mut random = RandomState::new(case.n("seed"));
+        let map = build_tactical_map(&mission, (case.n("x"), case.n("y")), 0, &mut random).unwrap();
+        let expected = case.words("tiles");
         assert_eq!(
             map.tiles, expected,
             "position {},{} seed {}",
-            case.x, case.y, case.seed
+            case["x"], case["y"], case["seed"]
         );
-        assert_eq!(map.shift, (case.shift_x, case.shift_y));
-        assert_eq!(map.edge_word, case.edge_after);
-        assert_eq!((random.seed, random.draws), (case.after_seed, case.draws));
+        assert_eq!(map.shift, (case.n("shift_x"), case.n("shift_y")));
+        assert_eq!(map.edge_word, case.n::<i16>("edge_after"));
+        assert_eq!(
+            (random.seed, random.draws),
+            (case.n("after_seed"), case.n("draws"))
+        );
     }
 }

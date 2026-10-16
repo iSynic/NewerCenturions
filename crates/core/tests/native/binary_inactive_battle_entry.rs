@@ -30,46 +30,7 @@ fn inactive_battle_entry_matches_original_complete_records_formation_order_and_r
         position.events.clone_from(&map.events);
         state.random = RandomState::new(case.n::<u32>("seed_before"));
         begin_battle(&mut state, &content, case.n::<i16>("battle"), 0).unwrap();
-        let combat = state.combat.as_ref().unwrap();
-        combat.validate(&state.warriors).unwrap();
-        let context = format!(
-            "variant{} battle{} seed{}",
-            case["variant"], case["battle"], case["seed_before"]
-        );
-        let encode = |v: &[i16]| crate::support::word_bytes(v);
-        assert_bytes(
-            &encode(&combat.map.tiles),
-            &case.bytes("tiles"),
-            &format!("{context} map"),
-        );
-        assert_eq!(
-            combat.map.shift,
-            (
-                case["shift"][0].as_i64().unwrap() as i16,
-                case["shift"][1].as_i64().unwrap() as i16
-            ),
-            "{context} shift"
-        );
-        crate::support::native_expect! {
-        scalar combat.map.edge_word => &case["edge"], "binary_inactive_battle_entry";
-        bytes crate::support::record_bytes(&state.warriors) => &case["warriors"], &format!("{context} warriors");
-        bytes crate::support::record_bytes(&combat
-                        .enemies.records) => &case["enemies"], &format!("{context} enemies");
-        scalar combat.enemies.records.len() => &case["count"], "binary_inactive_battle_entry";
-        }
-        let positions = |p: &[(i16, i16)]| p.iter().flat_map(|(x, y)| [*x, *y]).collect::<Vec<_>>();
-        crate::support::native_expect! {
-        bytes encode(&positions(&combat.squad.positions)) => &case["squad"], &format!("{context} squad");
-        words &(combat.squad.under_tiles) => &case["under"], "binary_inactive_battle_entry";
-        bytes encode(&positions(&combat.enemies.positions)) => &case["positions"], &format!("{context} enemy positions");
-        words &(combat.order) => &case["order"], "binary_inactive_battle_entry";
-        scalar combat.cursor => &case["cursor"], "binary_inactive_battle_entry";
-        }
-        assert_eq!(
-            (state.random.seed, state.random.draws),
-            (case.n::<u32>("seed_after"), case.n::<u64>("draws")),
-            "{context} RNG"
-        );
+        crate::binary_battle_entry::assert_battle(&state, case);
     }
 }
 #[test]

@@ -15,22 +15,11 @@ fn victory_rewards_match_original_branch() {
         ];
         let mut random = RandomState::new(12);
         victory_records(&mut warriors, &mut enemies, &mut random).unwrap();
-        let expected = case.bytes("after_warriors");
-        for (i, (a, b)) in warriors
-            .iter()
-            .flat_map(|w| w.bytes.iter())
-            .zip(&expected)
-            .enumerate()
-        {
-            assert_eq!(
-                a,
-                b,
-                "warrior {} byte {:#x} group {}",
-                i / 3138,
-                i % 3138,
-                case["body"]
-            );
-        }
+        crate::support::assert_bytes(
+            &crate::support::record_bytes(&warriors),
+            &case.bytes("after_warriors"),
+            "native victory records",
+        );
         crate::support::native_expect! {
         bytes enemies[0].bytes => &case["after_enemy"], "binary_victory";
         scalar random.seed => &case["seed"], "binary_victory";
@@ -54,38 +43,16 @@ fn army_rewards_and_sorted_loot_match_original_full_records_and_randomness() {
             Some(&content),
         )
         .unwrap();
-        let expected = case.bytes("after_warriors");
-        for (i, (a, b)) in warriors
-            .iter()
-            .flat_map(|w| w.bytes.iter())
-            .zip(&expected)
-            .enumerate()
-        {
-            assert_eq!(
-                a,
-                b,
-                "warrior {} offset {:#x} seed {}",
-                i / 3138,
-                i % 3138,
-                case["initial_seed"]
-            );
-        }
-        let expected = case.bytes("after_enemy");
-        for (i, (a, b)) in enemies
-            .iter()
-            .flat_map(|m| m.bytes.iter())
-            .zip(&expected)
-            .enumerate()
-        {
-            assert_eq!(
-                a,
-                b,
-                "enemy {} offset {:#x} seed {}",
-                i / 288,
-                i % 288,
-                case["initial_seed"]
-            );
-        }
+        crate::support::assert_bytes(
+            &crate::support::record_bytes(&warriors),
+            &case.bytes("after_warriors"),
+            "native victory records",
+        );
+        crate::support::assert_bytes(
+            &crate::support::record_bytes(&enemies),
+            &case.bytes("after_enemy"),
+            "native victory records",
+        );
         let expected: Vec<_> = case
             .bytes("loot")
             .as_chunks::<22>()

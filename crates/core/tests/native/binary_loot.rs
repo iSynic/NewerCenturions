@@ -4,38 +4,14 @@ use crate::support::bytes as hex;
 
 use centurions_core::items;
 
-#[derive(Deserialize)]
-struct Fixture {
-    item_id: i16,
-    definition: String,
-    cases: Vec<Case>,
-}
-#[derive(Deserialize)]
-struct Case {
-    seed: u32,
-    after_seed: u32,
-    draws: Vec<Draw>,
-    record: String,
-}
-#[derive(Deserialize)]
-struct Draw {
-    bound: i16,
-    raw: i16,
-    result: i16,
-}
-
 #[test]
 fn plain_loot_matches_original_item_execution() {
-    verify(include_str!(
-        "../../../../evidence/fixtures/plain-loot.json"
-    ));
+    verify("plain-loot.json");
 }
 
 #[test]
 fn starter_ammunition_matches_original_initialization() {
-    verify(include_str!(
-        "../../../../evidence/fixtures/ammunition-init.json"
-    ));
+    verify("ammunition-init.json");
 }
 
 #[test]
@@ -54,13 +30,8 @@ fn authored_supply_items_match_original_initialization() {
         definitions[id.parse::<usize>().unwrap()] = hex(bytes.as_str().unwrap());
     }
     let content = Content {
-        tutorials: vec![],
-        identity: "fixture".into(),
-        warriors: vec![],
         items: definitions,
-        resources: vec![],
-        original_services: None,
-        scenario: None,
+        ..crate::support::fixture_content("fixture")
     };
     for case in fixture.array("cases") {
         let id = case.n::<i16>("item_id");
@@ -79,32 +50,30 @@ fn authored_supply_items_match_original_initialization() {
     }
 }
 
-fn verify(input: &str) {
-    let fixture: Fixture = serde_json::from_str(input).unwrap();
+fn verify(name: &str) {
+    let fixture = crate::support::fixture(name);
     let mut definitions = vec![vec![0; 150]; 1000];
-    definitions[fixture.item_id as usize] = hex(&fixture.definition);
+    definitions[fixture.n::<usize>("item_id")] = fixture.bytes("definition");
     let content = Content {
-        tutorials: vec![],
-        identity: "fixture".into(),
-        warriors: vec![],
         items: definitions,
-        resources: vec![],
-        original_services: None,
-        scenario: None,
+        ..crate::support::fixture_content("fixture")
     };
-    for case in fixture.cases {
-        let mut random = RandomState::new(case.seed);
-        let actual = items::initialize_plain(fixture.item_id, &content, &mut random).unwrap();
-        assert_eq!(actual, InventoryRecord::read(&hex(&case.record)).unwrap());
-        assert_eq!(random.seed, case.after_seed);
-        assert_eq!(random.draws, case.draws.len() as u64);
-        let mut draws = RandomState::new(case.seed);
-        for draw in case.draws {
+    for case in fixture.array("cases") {
+        let mut random = RandomState::new(case.n("seed"));
+        let actual = items::initialize_plain(fixture.n("item_id"), &content, &mut random).unwrap();
+        assert_eq!(
+            actual,
+            InventoryRecord::read(&case.bytes("record")).unwrap()
+        );
+        assert_eq!(random.seed, case.n::<u32>("after_seed"));
+        assert_eq!(random.draws, case.array("draws").len() as u64);
+        let mut draws = RandomState::new(case.n("seed"));
+        for draw in case.array("draws") {
             let raw = draws.quickdraw();
-            assert_eq!(raw, draw.raw);
+            assert_eq!(raw, draw.n::<i16>("raw"));
             assert_eq!(
-                centurions_core::rules::random_bound(draw.bound, raw),
-                draw.result
+                centurions_core::rules::random_bound(draw.n("bound"), raw),
+                draw.n::<i16>("result")
             );
         }
     }

@@ -63,11 +63,13 @@ def catalogue(root):
         raw = menus[index * 426:(index + 1) * 426]
         choices = []
         for choice in range(4):
-            if raw[96 + choice]:
-                label = raw[106 + choice * 80:106 + (choice + 1) * 80]
-                choices.append(dict(index=choice, label=label[1:1 + min(label[0], 79)].decode("mac_roman"),
-                                    actions=[[raw[choice * 8 + j], words(raw, 1, 32 + choice * 16 + j * 2)[0]]
-                                             for j in range(8) if raw[choice * 8 + j]]))
+            label = raw[106 + choice * 80:106 + (choice + 1) * 80]
+            actions = [[raw[choice * 8 + j], words(raw, 1, 32 + choice * 16 + j * 2)[0]]
+                       for j in range(8) if raw[choice * 8 + j]]
+            # newland35 can enable an initially disabled authored choice.
+            if raw[96 + choice] or label[0] or actions:
+                choices.append(dict(index=choice, enabled=bool(raw[96 + choice]),
+                                    label=label[1:1 + min(label[0], 79)].decode("mac_roman"), actions=actions))
         if choices:
             authored_menus.append(dict(index=index, dialogue=words(raw, 1, 104)[0], choices=choices))
     typed_encounters = []
@@ -194,7 +196,7 @@ def completion_inventory(root, result):
     base = root / SCENARIO
     project = Path(__file__).resolve().parent.parent
     dispatch_arms = story_dispatch_arms(project)
-    nodes, edges, uncertainties = {}, [], []
+    nodes, edges, uncertainties, conditional_sources = {}, [], [], []
 
     def add(kind, identity, actions, source, root_entry=False):
         key = f"{kind}:{identity}"
@@ -227,7 +229,7 @@ def completion_inventory(root, result):
         record = schedule[index * 40:index * 40 + 40]
         identity = words(record, 1, 6)[0]
         if identity >= 0 and (identity + 1) * 42 <= len(scheduled):
-            add("schedule", index, script(scheduled[identity * 42:(identity + 1) * 42]),
+            add("schedule", index, [[39, identity]],
                 f"Data TD3+{index * 40}; Data ED3+{identity * 42}", True)
         else:
             uncertainties.append(dict(source=f"Data TD3+{index * 40}", reason="schedule record reference requires original-reader qualification"))
@@ -307,26 +309,74 @@ def completion_inventory(root, result):
                                    authored=bool(any(record)),
                                    eligibility="potential; promotion/profile qualification pending" if school < 3 else "engine packet band; no creation MOS selects school four"))
     references = {}
-    for key, node in nodes.items():
+    pending_nodes = deque(nodes)
+    headers = (base / "Data DD").read_bytes()
+    while pending_nodes:
+        key = pending_nodes.popleft()
+        node = nodes[key]
         for op, arg in node["actions"]:
             references.setdefault(op, []).append(dict(node=key, parameter=arg, source=node["source"]))
             extra = result["extra"][abs(arg)] if abs(arg) < len(result["extra"]) else None
-            targets = [arg] if op in (8, 39) else []
+            targets = [("script", arg)] if op == 39 else (
+                [("menu" if op == 4 else "typed", arg)] if op in (4, 5) else [])
+            if op == 8:  # newland1434d4 reads mutable Data DD, not Data ED3.
+                maps = [node["identity"].split("/")[0]] if node["kind"] == "header" else [
+                    str(m["index"]) for m in result["maps"]]
+                for map_id in maps:
+                    target = f"header:{map_id}/{arg}"
+                    if target in nodes:
+                        edges.append(dict(source=key, target=target, opcode=op,
+                                          relation="current-map mutable header actions"))
+                    elif 0 <= arg < 100:
+                        offset = int(map_id) * 4200 + arg * 42
+                        target = add("header", f"{map_id}/{arg}", script(headers[offset:offset + 42]),
+                                     f"Data DD+{offset}; opcode8-only entry")
+                        pending_nodes.append(target)
+                        edges.append(dict(source=key, target=target, opcode=op,
+                                          relation="current-map mutable header actions"))
             if extra:
-                if op in (33, 38, 42, 46) and extra[2] == 0:
-                    targets.append(extra[3])
+                if op == 3 and extra[1] == 1:  # newland0x142a36 question replacement.
+                    targets.append(("script", extra[2]))
+                elif op in (33, 38, 42, 46) and extra[2] == 0:
+                    targets.append(("script", extra[3]))
                 elif op == 7:
-                    targets.append(extra[2])
-                elif op in (4, 5, 31):
-                    targets.extend(extra[3:5])
+                    targets.append(("script", extra[2]))
+                elif op == 56 and extra[2] >= 0:
+                    targets.append(("script", extra[2]))
+                elif op == 107 and extra[4] != 0:
+                    targets.append(("script", extra[4]))
+                elif op == 31:
+                    targets.extend(("script", value) for value in extra[3:5])
                 elif op in (21, 76, 77, 85, 87, 126):
-                    # Mode-dependent fields need original caller proof; retain candidates.
-                    targets.extend(extra)
-                    uncertainties.append(dict(source=key, opcode=op, parameter=arg,
-                                              reason="conditional successor candidates; predicate qualification pending"))
-            for target in targets:
-                if f"script:{target}" in nodes:
-                    edges.append(dict(source=key, target=f"script:{target}", opcode=op))
+                    # newland's branch modes distinguish scripts from menus and typed encounters.
+                    modes = {0: "script", 1: "menu", 2: "typed"}
+                    branches = []
+                    if op == 21:  # 0x143ce4: found branch; absent mode 3 terminates.
+                        branches = [(extra[1], extra[3])]
+                        if extra[2] == 0:
+                            branches.append((0, extra[4]))
+                    elif op == 76 and extra[3] != 0:  # 0x14433c: zero disables the threshold.
+                        branches = [(extra[2] - 1, extra[4])]
+                    elif op == 77:  # 0x1443f8: target zero continues.
+                        branches = [(extra[2], value) for value in extra[3:5] if value]
+                    elif op == 85:  # 0x142642: inclusive random destination range.
+                        branches = [(extra[0], value) for value in range(extra[1], extra[2] + 1)]
+                    elif op == 87:  # 0x1421c0: absent branch has a separate restriction.
+                        branches = [(extra[1], extra[3])]
+                        if extra[2] == 0:
+                            branches.append((extra[1], extra[4]))
+                    elif op == 126:  # 0x141040: round/chance predicate and replacement.
+                        choices = range(extra[3], extra[4] + 1) if extra[2] == 2 else [extra[3]]
+                        branches = [(0, value) for value in choices]
+                    targets.extend((modes[mode], value) for mode, value in branches if mode in modes)
+                    conditional_sources.append(dict(source=key, opcode=op, parameter=arg, extra=extra,
+                                                    qualification="Original source establishes destination fields and modes; activation remains conditional."))
+            for kind, target in targets:
+                candidates = [f"script:{target}"] if kind == "script" else [
+                    name for name in nodes if name.startswith(f"{kind}:{target}/")]
+                for name in candidates:
+                    if name in nodes:
+                        edges.append(dict(source=key, target=name, opcode=op))
     pending = deque(k for k, node in nodes.items() if node["root"])
     potential = set(pending)
     adjacency = {}
@@ -342,6 +392,7 @@ def completion_inventory(root, result):
                 stages=result["stages"], difficulty_levels=[-2, -1, 0, 1, 2],
                 nodes=nodes, edges=edges, potential_nodes=sorted(potential),
                 unqualified_nodes=sorted(set(nodes) - potential), uncertainties=uncertainties,
+                conditional_sources=conditional_sources,
                 source_coverage_qualification="Located dispatch arms are source evidence only; guards, delegated calls and caller contexts still require command/native verification.",
                 opcodes={str(op): dict(source_arm_present=op in dispatch_arms,
                                       source_arms=dispatch_arms.get(op, []), references=refs)
@@ -358,6 +409,8 @@ if __name__ == "__main__":
     parser.add_argument("--typed", type=int)
     parser.add_argument("--summary", action="store_true")
     parser.add_argument("--completion-inventory", action="store_true")
+    parser.add_argument("--entry-qualification", type=Path,
+                        help="Apply a reviewed, hash-checked original script entry audit")
     parser.add_argument("--path", type=int, nargs=5, metavar=("MAP", "X", "Y", "TO_X", "TO_Y"))
     parser.add_argument("--region-path", type=int, nargs=4, metavar=("MAP", "X", "Y", "REGION"),
                         help="Find a static entry into an authored region")
@@ -367,6 +420,9 @@ if __name__ == "__main__":
     result = catalogue(args.input)
     if args.completion_inventory:
         result = completion_inventory(args.input, result)
+        if args.entry_qualification:
+            from source_audit import qualify_entries
+            result = qualify_entries(result, args.entry_qualification)
     elif args.path is not None:
         index, x, y, tx, ty = args.path
         result = static_path(args.input, result, index, (x, y), (tx, ty), args.avoid_slot, args.floor_change)

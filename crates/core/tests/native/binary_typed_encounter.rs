@@ -14,21 +14,54 @@ fn item_state(state: &mut Session, case: &Value) {
 #[test]
 fn password_prefix_and_case_selection_match_original_comparison() {
     let fixture = crate::support::fixture("typed-encounter.json");
+    let native =
+        centurions_content::native_text::NativeText::load(&content(), std::path::Path::new("."))
+            .unwrap();
+    let lowercase = native.bytes(0x3ffc50, 256).unwrap();
+    assert_eq!(
+        lowercase,
+        crate::support::fixture("case-fold.json").bytes("lowercase256")
+    );
     for case in fixture.array("password_cases") {
         let record = case.bytes("record");
         let input = case.bytes("input");
         assert_eq!(
-            select_password(&record, &input).unwrap(),
+            select_password(&record, &input, lowercase).unwrap(),
             PasswordSelection::Selected(case.n::<i8>("selector")),
             "{}",
             String::from_utf8_lossy(&input)
         );
         assert_eq!(
-            select_password(&record, b"").unwrap(),
+            select_password(&record, b"", lowercase).unwrap(),
             PasswordSelection::Retry
         );
-        assert!(select_password(&record, &[0x80]).is_err());
     }
+    let mut record = fixture.array("password_cases")[0].bytes("record");
+    record[476..480].copy_from_slice(&[2, 0x8a, b'x', 0]);
+    let content = content();
+    let mut state = crate::support::mission_session(&content);
+    state.typed_encounters = content.map(0).unwrap().typed_encounters.clone();
+    state.typed_encounters[..record.len()].copy_from_slice(&record);
+    let mut script = vec![0; 42];
+    script[8..10].copy_from_slice(&5_i16.to_be_bytes());
+    let position = state.exploration.as_mut().unwrap();
+    position.script = Some(crate::support::script_state(script, 0));
+    position.presentation = Some(Presentation::Dialogue {
+        id: 0,
+        text: String::new(),
+    });
+    apply(Command::Continue, &mut state, &content).unwrap();
+    let mut resumed = crate::support::checkpoint(&state, &content, "macroman-password");
+    replay_command(
+        Command::SubmitText { text: "ÄX".into() },
+        &mut state,
+        &mut resumed,
+        &content,
+    );
+    assert!(matches!(
+        state.exploration.as_ref().unwrap().presentation,
+        Some(Presentation::Dialogue { id: 507, .. })
+    ));
 }
 
 #[test]
@@ -66,7 +99,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
     let walking_items = crate::support::fixture("walking-encounter-item.json");
     let calendar_items = crate::support::fixture("calendar-encounter-item.json");
     let regional_return = crate::support::fixture("regional-item-return.json");
-    for (case, regional) in items
+    for (case, regional, returned) in items
         .array("cases")
         .iter()
         .chain(inert.array("cases"))
@@ -81,10 +114,13 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                 .iter()
                 .map(|case| (case, true)),
         )
+        .map(|(case, regional)| (case, regional, 0))
+        // Source-derived callers reuse the native consumption input and output.
+        .chain((1..=2).map(|caller| (&scripted.array("cases")[0], false, caller)))
     {
         let walking = case["caller"] == "walking";
         let calendar = case["caller"] == "calendar" && !regional;
-        let returning = walking || calendar || regional;
+        let returning = walking || calendar || regional || returned != 0;
         let mut content = content.clone();
         if case.get("definition").is_some() {
             content.items[case.n::<usize>("item")] = case.bytes("definition");
@@ -186,6 +222,18 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                 });
             }
             apply(Command::Continue, &mut state, &content).unwrap();
+        }
+        if returned != 0 {
+            if returned == 1 {
+                state.combat_story = Some(centurions_core::combat::runtime::DeathStory {
+                    shared_dispatch: true,
+                    child_returned: true,
+                    ..Default::default()
+                });
+            } else {
+                state.round_dispatch = Some(Default::default());
+                state.scripted_cleanup = Some(centurions_core::story_cleanup::Stage::Complete);
+            }
         }
         if case.get("mask_before").is_some() {
             state.party_mask.copy_from_slice(&case.words("mask_before"));
@@ -307,6 +355,10 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             let mut legacy: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             legacy["schema_version"] = 5.into();
+            legacy["session"]
+                .as_object_mut()
+                .unwrap()
+                .remove("inventory_record");
             std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
             assert!(load(&path, &content).is_err());
             legacy["session"]["exploration"]["script"]
@@ -315,6 +367,8 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                 .remove("item_return");
             std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
             let mut expected = state.clone();
+            expected.inventory_record = None;
+            expected.npc_backing = Default::default();
             expected
                 .exploration
                 .as_mut()
@@ -326,7 +380,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             assert_eq!(load(&path, &content).unwrap(), expected);
             std::fs::remove_file(path).unwrap();
         }
-        let events = replay_command(
+        let mut events = replay_command(
             Command::UseItem {
                 warrior: case.n("member"),
                 slot: case.n("slot"),
@@ -335,6 +389,14 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             &mut resumed,
             &content,
         );
+        if returned == 1 {
+            events.extend(replay_command(
+                Command::Continue,
+                &mut state,
+                &mut resumed,
+                &content,
+            ));
+        }
         crate::support::assert_bytes(
             &crate::support::record_bytes(&state.warriors),
             &case.bytes("after"),
@@ -347,12 +409,19 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             &case.bytes("item_work")
         );
         if returning {
-            assert_eq!(case.n::<i16>("caller_return"), -1);
-            assert_eq!(case.n::<i16>("caller_stack_delta"), 14);
+            if returned == 0 {
+                assert_eq!(case.n::<i16>("caller_return"), -1);
+                assert_eq!(case.n::<i16>("caller_stack_delta"), 14);
+            }
             let mut expected = before;
             item_state(&mut expected, case);
             expected.selected_warrior = case.n("member");
             expected.party_mask.copy_from_slice(&case.words("mask"));
+            if returned != 0 {
+                expected.combat_story = None;
+                expected.round_dispatch = None;
+                expected.scripted_cleanup = None;
+            }
             let position = expected.exploration.as_mut().unwrap();
             position.script = None;
             position.presentation = None;
@@ -371,10 +440,11 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                 }));
             }
             crate::support::same_session(&state, &expected);
-            assert_eq!(
-                crate::support::event_sounds(&events),
-                case.n::<Vec<i16>>("sounds")
-            );
+            let mut sounds = case.n::<Vec<i16>>("sounds");
+            if returned == 1 {
+                sounds.push(20);
+            }
+            assert_eq!(crate::support::event_sounds(&events), sounds);
             assert!(!events.contains(&Event::StoryPresented));
             crate::support::checkpoint(&state, &content, "walking-item-after");
             continue;
@@ -387,16 +457,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             let mut sounds = case.n::<Vec<i16>>("sounds");
             // The capture stops before newland; authored script216 starts with sound406.
             sounds.push(406);
-            assert_eq!(
-                events
-                    .iter()
-                    .filter_map(|event| match event {
-                        Event::Sound { resource_id } => Some(*resource_id),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>(),
-                sounds
-            );
+            assert_eq!(crate::support::event_sounds(&events), sounds);
             assert!(
                 !state
                     .exploration

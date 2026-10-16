@@ -109,6 +109,7 @@ pub fn use_item(
         content,
         races,
         crate::story_item_use::ScriptItemContext::Exploration,
+        state.inventory_record.as_ref(),
     )?;
     let id = state.warriors[warrior].inventory()?[slot].id();
     state.load_item_work(content, id)?;
@@ -155,6 +156,12 @@ pub fn move_squad(
             "movement requires an exploration direction".into(),
         ));
     }
+    if !crate::field_controls::free(state) {
+        return Err(RuleError::Refused { feedback: vec![] });
+    }
+    if let Some(events) = crate::field_controls::leave_camp(state, content, dx, dy)? {
+        return Ok(events);
+    }
     let map = active_map(state, content)?;
     let position = state.exploration.as_mut().unwrap();
     if position.presentation.is_some()
@@ -165,6 +172,11 @@ pub fn move_squad(
             "finish the current story page before moving".into(),
         ));
     }
+    if let Some(control) = state.field_controls.as_mut() {
+        control.camping = false;
+        control.clinic = None;
+    }
+    state.shop_access = None;
     position.last_move = [dx, dy];
     let x = position.x + i32::from(dx);
     let y = position.y + i32::from(dy);
@@ -324,6 +336,9 @@ pub(crate) fn resume_movement(
                 }
             }
             Some(MovementContinuation::Secrets) => {
+                if crate::field_controls::automatic_search(state) {
+                    continue;
+                }
                 let skill = travel::secret_search_skill(&state.warriors)?;
                 let position = state.exploration.as_mut().unwrap();
                 let search = travel::discover_secrets(
@@ -393,6 +408,35 @@ fn regional_selection_from(
     before: usize,
     random: &mut RandomState,
 ) -> Result<Regional, RuleError> {
+    regional_selection_chance(regions, position, before, 1, random)
+}
+
+pub(crate) fn check_region(
+    state: &mut Session,
+    content: &Content,
+    divisor: i16,
+) -> Result<Vec<Event>, RuleError> {
+    let position = state
+        .exploration
+        .as_mut()
+        .ok_or("regional position unavailable")?;
+    let region = regional_selection_chance(
+        &mut position.region_state,
+        (position.x as i16, position.y as i16),
+        20,
+        divisor,
+        &mut state.random,
+    )?;
+    apply_region(state, content, region)
+}
+
+fn regional_selection_chance(
+    regions: &mut [u8],
+    position: (i16, i16),
+    before: usize,
+    divisor: i16,
+    random: &mut RandomState,
+) -> Result<Regional, RuleError> {
     let (px, py) = position;
     for region in (0..before.min(20)).rev() {
         let offset = region * 8;
@@ -400,7 +444,7 @@ fn regional_selection_from(
             && rules::inclusive_range(py, word(regions, offset)?, word(regions, offset + 4)?)
         {
             let result = random.bound(10000);
-            if result <= word(regions, 160 + region * 2)? {
+            if result <= word(regions, 160 + region * 2)? / divisor {
                 for event in 0..3 {
                     if random.bound(100)
                         <= word(regions, 400 + region * 6 + event * 2)?.wrapping_abs()
@@ -772,15 +816,8 @@ pub fn choose(
             position.presentation = None;
             position.script = None;
             let mut events = vec![movement];
-            if state
-                .combat_story
-                .as_ref()
-                .is_some_and(|story| story.shared_dispatch)
-            {
-                events.extend(combat::runtime::finish_death_story(state, content)?);
-            }
-            if state.round_dispatch.is_some() {
-                events.extend(combat::runtime::finish_round_dispatch(state, content)?);
+            if let Some(closed) = finish_dispatch(state, content)? {
+                events.extend(closed);
             }
             return Ok(events);
         }
@@ -899,16 +936,8 @@ pub fn cancel_menu(state: &mut Session, content: &Content) -> Result<Vec<Event>,
         };
     position.presentation = None;
     position.script = None;
-    if state
-        .combat_story
-        .as_ref()
-        .is_some_and(|story| story.shared_dispatch)
-    {
-        events.extend(combat::runtime::finish_death_story(state, content)?);
-        return Ok(events);
-    }
-    if state.round_dispatch.is_some() {
-        events.extend(combat::runtime::finish_round_dispatch(state, content)?);
+    if let Some(closed) = finish_dispatch(state, content)? {
+        events.extend(closed);
     }
     Ok(events)
 }
@@ -1034,9 +1063,20 @@ pub fn submit_text(
     content: &Content,
     text: &str,
 ) -> Result<Vec<Event>, RuleError> {
+    let input = centurions_content::native_text::NativeText::encode(text)?;
+    if input.len() > 40 {
+        return Err(RuleError::Invalid(
+            "typed input exceeds the original 40-byte field".into(),
+        ));
+    }
     let record = typed_record(state, content)?;
+    if input.is_empty() {
+        return Ok(vec![]);
+    }
+    let native =
+        centurions_content::native_text::NativeText::load(content, std::path::Path::new("."))?;
     let typed_encounter::PasswordSelection::Selected(selected) =
-        typed_encounter::select_password(record, text.as_bytes())?
+        typed_encounter::select_password(record, &input, native.bytes(0x3ffc50, 256)?)?
     else {
         return Ok(vec![]);
     };
@@ -1147,7 +1187,13 @@ fn use_encounter_item(
                 state.movement_continuation,
                 Some(MovementContinuation::RegionalReturn { .. })
             );
-        if !manual && !walking && !calendar && !regional {
+        let shared_death = state
+            .combat_story
+            .as_ref()
+            .is_some_and(|story| story.shared_dispatch);
+        let completed_round = state.round_dispatch.is_some()
+            && state.scripted_cleanup == Some(crate::story_cleanup::Stage::Complete);
+        if !manual && !walking && !calendar && !regional && !shared_death && !completed_round {
             return Err(unsupported(
                 "story.encounter_item",
                 "script-item return caller",
@@ -1164,6 +1210,7 @@ fn use_encounter_item(
                 .ok_or("item movement tables unavailable")?
                 .race_moves,
             crate::story_item_use::ScriptItemContext::Encounter,
+            state.inventory_record.as_ref(),
         )?;
         // Only manual buttonchoice10a9ee decodes the script-item return.
         let record = if manual {
@@ -1195,7 +1242,7 @@ fn use_encounter_item(
             .into_iter()
             .map(|resource_id| Event::Sound { resource_id })
             .collect();
-        if manual {
+        if manual || shared_death || completed_round {
             effects.extend(run_script(state, content)?);
         }
         return Ok(effects);
@@ -1320,6 +1367,7 @@ pub fn take_loot(
         }
         if !stacked && let Some(last) = recipient.inventory()?.last() {
             let id = last.id();
+            state.inventory_record = Some(item.clone());
             state.load_item_work(content, id)?;
         }
     } else {
@@ -1367,7 +1415,10 @@ fn present_treasure(
         state.difficulty,
     )?;
     state.warriors = prepared.warriors;
-    state.inventory_record = None;
+    state.party_currency = state.party_currency.wrapping_add(prepared.credits);
+    if let Some(record) = prepared.inventory_record {
+        state.inventory_record = Some(record);
+    }
     state.booty_items.fill(InventoryRecord([0; 22]));
     for (slot, item) in prepared.items.into_iter().enumerate() {
         state.loaded_item_field32 = Some(state.ammunition_work.load_item(content, item.id())?);
@@ -1375,6 +1426,94 @@ fn present_treasure(
     }
     state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
     Ok(vec![Event::StoryPresented])
+}
+
+fn finish_dispatch(
+    state: &mut Session,
+    content: &Content,
+) -> Result<Option<Vec<Event>>, RuleError> {
+    if state
+        .round_dispatch
+        .as_ref()
+        .is_some_and(|frame| frame.owns_script(state))
+    {
+        return combat::runtime::finish_round_dispatch(state, content).map(Some);
+    }
+    if state
+        .combat_story
+        .as_ref()
+        .is_some_and(|story| story.shared_dispatch && !story.waiting_child)
+    {
+        return combat::runtime::finish_death_story(state, content).map(Some);
+    }
+    Ok(None)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum StoryBattle {
+    Ordinary,
+    Group,
+    Selected,
+    Npc,
+}
+
+pub(crate) fn begin_story_battle(
+    state: &mut Session,
+    content: &Content,
+    entry: StoryBattle,
+    parameter: i16,
+) -> Result<Vec<Event>, RuleError> {
+    let round_owns = state
+        .round_dispatch
+        .as_ref()
+        .is_some_and(|frame| frame.owns_script(state));
+    let prior_round = state.round_dispatch.clone();
+    let prior_cleanup = state.scripted_cleanup.clone();
+    let outer = (round_owns
+        && state.combat.is_some()
+        && prior_cleanup != Some(crate::story_cleanup::Stage::Complete))
+    .then(|| combat::round_stories::RoundBattleReturn {
+        after_message: state.battle_after_message,
+        treasure: state.battle_treasure,
+        group: state.battle_group_script,
+        npc: state.battle_npc.clone(),
+    });
+    let death_depth = combat::round_stories::RoundDispatch::death_depth(state);
+    if let Some(frame) = state
+        .round_dispatch
+        .as_mut()
+        .filter(|frame| !frame.child_battle)
+    {
+        frame.child_battle = true;
+        frame.outer_battle = outer;
+        frame.death_depth.get_or_insert(death_depth);
+    }
+    if prior_cleanup == Some(crate::story_cleanup::Stage::Complete) {
+        state.scripted_cleanup = None;
+    }
+    let mut continuation = state.combat_story.take();
+    let prior_wait = continuation.as_ref().map(|story| story.waiting_child);
+    if let Some(story) = continuation.as_mut().filter(|_| !round_owns) {
+        story.waiting_child = true;
+    }
+    let events = match entry {
+        StoryBattle::Ordinary => combat::begin(state, content, parameter),
+        StoryBattle::Group => combat::begin_group(state, content, parameter),
+        StoryBattle::Selected => combat::begin_selected_battle(state, content, parameter),
+        StoryBattle::Npc => combat::begin_npc(state, content, parameter),
+    }?;
+    if !events
+        .iter()
+        .any(|event| matches!(event, Event::CombatStarted { .. }))
+    {
+        state.round_dispatch = prior_round;
+        state.scripted_cleanup = prior_cleanup;
+        if let Some(story) = continuation.as_mut() {
+            story.waiting_child = prior_wait.unwrap();
+        }
+    }
+    combat::runtime::retain_death_parent(state, continuation);
+    Ok(events)
 }
 
 fn finish_script(
@@ -1389,17 +1528,11 @@ fn finish_script(
     let Some(mut script) = position.script.take() else {
         return Ok(vec![]);
     };
-    if state.round_dispatch.is_some() {
-        return combat::runtime::finish_round_dispatch(state, content);
+    if let Some(events) = finish_dispatch(state, content)? {
+        return Ok(events);
     }
+    let position = state.exploration.as_mut().unwrap();
     state.scripted_cleanup = None;
-    if state
-        .combat_story
-        .as_ref()
-        .is_some_and(|story| story.shared_dispatch)
-    {
-        return combat::runtime::finish_death_story(state, content);
-    }
     if script.scheduled {
         return Ok(vec![]);
     }
@@ -1500,21 +1633,46 @@ pub(crate) fn dialogue(
     Ok(text)
 }
 
+/// loaddoor2 preserves the first eight bytes; caller frames restore actions and byte40 only.
+pub(crate) fn retain_script_stamp(state: &mut Session, stamp: u8) {
+    fn write(script: Option<&mut ScriptState>, stamp: u8) {
+        if let Some(byte) = script.and_then(|s| s.record.get_mut(41)) {
+            *byte = stamp;
+        }
+    }
+    write(
+        state.exploration.as_mut().and_then(|p| p.script.as_mut()),
+        stamp,
+    );
+    let mut round = state.round_dispatch.as_mut();
+    while let Some(frame) = round {
+        write(frame.suspended_script.as_mut(), stamp);
+        round = frame.parent.as_deref_mut();
+    }
+    let mut death = state.combat_story.as_mut();
+    while let Some(story) = death {
+        write(story.suspended_script.as_mut(), stamp);
+        death = story.parent.as_deref_mut();
+    }
+}
+
 pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let mut effects = Vec::new();
     for _ in 0..128 {
+        if let Some(stamp) = state
+            .exploration
+            .as_ref()
+            .and_then(|p| p.script.as_ref())
+            .and_then(|s| s.record.get(41))
+            .copied()
+        {
+            retain_script_stamp(state, stamp);
+        }
         let map = active_map(state, content)?;
         let position = state.exploration.as_mut().unwrap();
         let Some(script) = position.script.as_mut() else {
-            if state.round_dispatch.is_some() {
-                effects.extend(combat::runtime::finish_round_dispatch(state, content)?);
-            }
-            if state
-                .combat_story
-                .as_ref()
-                .is_some_and(|story| story.shared_dispatch)
-            {
-                effects.extend(combat::runtime::finish_death_story(state, content)?);
+            if let Some(closed) = finish_dispatch(state, content)? {
+                effects.extend(closed);
             }
             return Ok(effects);
         };
@@ -1848,15 +2006,30 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                 crate::story_schedule::edit(&mut position.schedule, extra, position.day)?;
             }
             107 => {
-                effects.extend(combat::begin_group(state, content, parameter)?);
+                effects.extend(begin_story_battle(
+                    state,
+                    content,
+                    StoryBattle::Group,
+                    parameter,
+                )?);
                 return Ok(effects);
             }
             48 => {
-                effects.extend(combat::begin_selected_battle(state, content, parameter)?);
+                effects.extend(begin_story_battle(
+                    state,
+                    content,
+                    StoryBattle::Selected,
+                    parameter,
+                )?);
                 return Ok(effects);
             }
             56 => {
-                effects.extend(combat::begin_npc(state, content, parameter)?);
+                effects.extend(begin_story_battle(
+                    state,
+                    content,
+                    StoryBattle::Npc,
+                    parameter,
+                )?);
                 return Ok(effects);
             }
             14 if parameter == 1 => {
@@ -2038,7 +2211,11 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
             25 => {
                 script.persist = !script.scheduled;
             }
-            26 => effects.push(Event::StoryPresented),
+            26 => {
+                position.presentation = Some(Presentation::ScriptPause);
+                effects.push(Event::Feedback(crate::feedback::script_pause()));
+                return Ok(effects);
+            }
             128 => {
                 let extra = span(
                     &map.combat.as_ref().unwrap().encounters,
@@ -2445,13 +2622,18 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                 state.allies = removed.records;
                 state.ally_count = removed.count;
             }
-            8 | 39 => {
-                let replacement = map.script(parameter)?;
-                script.record[8..40].copy_from_slice(&replacement[8..40]);
+            8 => {
+                // newland1434d4 copies the current map's mutable header, not Data ED3.
+                let slot = usize::try_from(parameter)
+                    .map_err(|_| RuleError::Invalid("negative event header slot".into()))?;
+                let replacement = span(&position.event_headers, slot * 42, 42)?;
+                script.record[8..41].copy_from_slice(&replacement[8..41]);
                 script.cursor = 0;
-                if opcode == 8 {
-                    script.record[40] = replacement[40];
-                }
+            }
+            39 => {
+                let replacement = map.script(parameter)?;
+                script.record[8..].copy_from_slice(&replacement[8..]);
+                script.cursor = 0;
             }
             62 => {
                 if !map.movies.contains_key(&parameter) && parameter != 1000 {
@@ -2505,10 +2687,12 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                 return Ok(effects);
             }
             2 => {
-                if let Some(story) = state.combat_story.as_mut().filter(|s| s.shared_dispatch) {
-                    story.waiting_child = true;
-                }
-                effects.extend(super::combat::begin(state, content, parameter)?);
+                effects.extend(begin_story_battle(
+                    state,
+                    content,
+                    StoryBattle::Ordinary,
+                    parameter,
+                )?);
                 return Ok(effects);
             }
             _ => {

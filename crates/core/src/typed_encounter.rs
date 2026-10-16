@@ -44,7 +44,7 @@ pub fn validate_spell(
             .attacks,
         spell,
     )?;
-    if packet[1] == 7 && !(0..10).contains(&word(&packet, 40)?) {
+    if packet[1] == 7 && !matches!(word(&packet, 40)?, 0..=9 | 110) {
         return Err(RuleError::Unsupported {
             action: "story.encounter_spell",
             dependency: "indexed global spell effect outside recovered party durations",
@@ -117,7 +117,15 @@ pub fn cast_spell(
                 );
             }
         }
-        crate::combat::party_buffs::extend(&mut state.party_buffs, word(&packet, 40)?, duration)?;
+        if word(&packet, 40)? == 110 {
+            crate::combat::party_buffs::extend_scenario_tail(state, duration)?;
+        } else {
+            crate::combat::party_buffs::extend(
+                &mut state.party_buffs,
+                word(&packet, 40)?,
+                duration,
+            )?;
+        }
     }
     let record = crate::exploration::typed_record(state, content)?;
     let mut selector = 4;
@@ -249,7 +257,11 @@ pub fn password_label(record: &[u8]) -> Result<&[u8], RuleError> {
     Ok(&label[1..1 + usize::from(label[0])])
 }
 
-pub fn select_password(record: &[u8], input: &[u8]) -> Result<PasswordSelection, RuleError> {
+pub fn select_password(
+    record: &[u8],
+    input: &[u8],
+    lowercase: &[u8],
+) -> Result<PasswordSelection, RuleError> {
     let record = span(record, 0, RECORD_BYTES)?;
     if record[97] == 0 {
         return Err(RuleError::Invalid("typed input is unavailable".into()));
@@ -257,33 +269,32 @@ pub fn select_password(record: &[u8], input: &[u8]) -> Result<PasswordSelection,
     if input.is_empty() || input[0] == 0 {
         return Ok(PasswordSelection::Retry);
     }
-    if input.iter().any(|value| *value > 127) {
-        return Err(RuleError::Unsupported {
-            action: "story.typed_input",
-            dependency: "non-ASCII original character conversion",
-        });
+    let lowercase = span(lowercase, 0, 256)?;
+    let mut normalized = input.to_vec();
+    let expected = password_label(record)?;
+    let mut matched = true;
+    // encounter2 0x121b52 folds only the compared prefix, stopping on a mismatch.
+    // CODE 3 0x300a58 uses the initialized DATA table at A5-0x3b0.
+    for (index, value) in expected.iter().take(40).enumerate() {
+        if *value == 0 || *value == b' ' {
+            break;
+        }
+        let Some(actual) = normalized.get_mut(index) else {
+            matched = false;
+            break;
+        };
+        *actual = lowercase[usize::from(*actual)];
+        if *actual != *value {
+            matched = false;
+            break;
+        }
     }
-    let normalized: Vec<u8> = input.iter().map(u8::to_ascii_lowercase).collect();
     if [b"map".as_slice(), b"boat", b"mission"].contains(&normalized.as_slice()) {
         return Err(RuleError::Unsupported {
             action: "story.typed_input",
             dependency: "original developer command",
         });
     }
-    let expected = password_label(record)?;
-    if expected.iter().any(|value| *value > 127) {
-        return Err(RuleError::Unsupported {
-            action: "story.typed_input",
-            dependency: "non-ASCII original character conversion",
-        });
-    }
-    // encounter2 stops at the first space in the expected text, not the submitted text.
-    let matched = expected
-        .iter()
-        .take(40)
-        .take_while(|value| **value != 0 && **value != b' ')
-        .enumerate()
-        .all(|(index, value)| normalized.get(index) == Some(value));
     Ok(PasswordSelection::Selected(if matched {
         record[97] as i8
     } else {

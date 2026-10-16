@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::decode;
 #[derive(Deserialize)]
 struct Fixture {
     cases: Vec<Case>,
@@ -19,12 +20,6 @@ struct Case {
     allies_before: String,
     #[serde(default)]
     allies_after: String,
-}
-fn decode(hex: &str) -> Vec<u8> {
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
-        .collect()
 }
 #[test]
 fn hourly_update_matches_original_instruction_execution() {
@@ -89,6 +84,7 @@ fn hourly_update_matches_original_instruction_execution() {
                 let mut legacy: serde_json::Value =
                     serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
                 legacy["schema_version"] = 5.into();
+                legacy["session"]["inventory_record"] = serde_json::Value::Null;
                 fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
                 assert_eq!(
                     load(&path, &content).is_err(),
@@ -126,8 +122,7 @@ fn hourly_update_matches_original_instruction_execution() {
 fn calendar_content(schedule: Vec<u8>) -> Content {
     let mut properties = vec![0; 12000];
     properties[2..4].copy_from_slice(&1i16.to_be_bytes());
-    let fixture: serde_json::Value =
-        serde_json::from_str(include_str!("../../../../evidence/fixtures/calendar.json")).unwrap();
+    let fixture = crate::test_support::fixture("calendar.json");
     let mut items = vec![vec![0; 150]; 801];
     items[800] = decode(fixture["food_definition"].as_str().unwrap());
     Content {
@@ -196,8 +191,7 @@ fn calendar_state(content: &Content, input: &str, hour: i16, minute: i16) -> Ses
 
 #[test]
 fn noon_midnight_and_schedule_match_original_instruction_cases() {
-    let fixture: serde_json::Value =
-        serde_json::from_str(include_str!("../../../../evidence/fixtures/calendar.json")).unwrap();
+    let fixture = crate::test_support::fixture("calendar.json");
     for case in fixture["cases"].as_array().unwrap() {
         let content = calendar_content(decode(case["schedule_before"].as_str().unwrap()));
         let mut state = calendar_state(
@@ -265,8 +259,7 @@ fn noon_midnight_and_schedule_match_original_instruction_cases() {
 
 #[test]
 fn calendar_save_resume_and_legacy_migration_preserve_trigger_history() {
-    let fixture: serde_json::Value =
-        serde_json::from_str(include_str!("../../../../evidence/fixtures/calendar.json")).unwrap();
+    let fixture = crate::test_support::fixture("calendar.json");
     let case = &fixture["cases"][5];
     for eligible in [false, true] {
         let mut content = calendar_content(decode(case["schedule_before"].as_str().unwrap()));
@@ -319,6 +312,7 @@ fn calendar_save_resume_and_legacy_migration_preserve_trigger_history() {
     save(&path, &state, &content).unwrap();
     assert_eq!(load(&path, &content).unwrap(), state);
     let mut legacy = state.clone();
+    legacy.inventory_record = None;
     legacy.exploration.as_mut().unwrap().day = 1;
     legacy.exploration.as_mut().unwrap().schedule.clear();
     fs::write(
@@ -355,8 +349,7 @@ fn calendar_save_resume_and_legacy_migration_preserve_trigger_history() {
 
 #[test]
 fn hourly_party_protection_ticks_without_changing_other_rules_and_resumes() {
-    let fixture: serde_json::Value =
-        serde_json::from_str(include_str!("../../../../evidence/fixtures/calendar.json")).unwrap();
+    let fixture = crate::test_support::fixture("calendar.json");
     let case = &fixture["cases"][0];
     let content = calendar_content(decode(case["schedule_before"].as_str().unwrap()));
     for (duration, after) in [(20_i16, 19_i16), (1, 0), (-1, -1)] {

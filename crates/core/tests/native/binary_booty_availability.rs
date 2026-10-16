@@ -1,6 +1,5 @@
 use crate::prelude::*;
 
-use crate::support::field_bytes as bytes;
 use centurions_core::combat::rewards;
 
 use crate::support::record_bytes as flatten;
@@ -13,9 +12,9 @@ fn original_booty_recounts_unavailable_warriors_before_normalizing_and_preserves
     let cases = fixture.array("cases");
 
     for (index, case) in cases.iter().enumerate() {
-        let before = bytes(case, "before");
+        let before = case.bytes("before");
         let warriors: Vec<_> = crate::support::warriors(&before);
-        let enemies: Vec<_> = crate::support::monsters(&bytes(case, "enemies"));
+        let enemies: Vec<_> = crate::support::monsters(&case.bytes("enemies"));
         let mut random = RandomState {
             seed: case.n::<u32>("seed_before"),
             draws: 0,
@@ -26,7 +25,7 @@ fn original_booty_recounts_unavailable_warriors_before_normalizing_and_preserves
         let prepared = flatten(&result.warriors);
         assert_eq!(
             prepared,
-            bytes(case, "prepared"),
+            case.bytes("prepared"),
             "case {index}: preparation"
         );
         assert_eq!(digest(&prepared), case.text("prep_sha256"));
@@ -39,7 +38,7 @@ fn original_booty_recounts_unavailable_warriors_before_normalizing_and_preserves
             result.items.is_empty(),
             "case {index}: controlled empty loot"
         );
-        let native_enemy = bytes(case, "enemies");
+        let native_enemy = case.bytes("enemies");
         let mut expected_enemy = native_enemy;
         for change in case.array("enemy_changes") {
             expected_enemy[change[0].as_u64().unwrap() as usize] =
@@ -55,7 +54,7 @@ fn original_booty_recounts_unavailable_warriors_before_normalizing_and_preserves
         scalar random.draws => &case["rng_draws"], "binary_booty_availability";
         }
         let closed = flatten(&rewards::close_without_promotion(&result.warriors).unwrap());
-        assert_eq!(closed, bytes(case, "after"), "case {index}: Close");
+        assert_eq!(closed, case.bytes("after"), "case {index}: Close");
         assert_eq!(digest(&closed), case.text("after_sha256"));
         crate::support::expect(result.unavailable, &case["unavailable_after"]);
     }

@@ -3,6 +3,50 @@ use centurions_core::{Event, feedback::NativeFeedback};
 use macroquad::prelude::*;
 
 impl UiState {
+    pub fn prepare_capture_prompt(&mut self, state: &centurions_core::Session) {
+        let capturing = state
+            .combat
+            .as_ref()
+            .is_some_and(|c| c.capture_actor.is_some());
+        let own_prompt = matches!(
+            self.persistent_feedback,
+            Some(NativeFeedback::Flash {
+                address: 0x4024de,
+                ..
+            })
+        );
+        if capturing && self.persistent_feedback.is_none() {
+            // Restored targeting redraws its prompt without repeating entry sound or help.
+            self.persistent_feedback = Some(NativeFeedback::Flash {
+                address: 0x4024de,
+                x: 30,
+                y: 300,
+                wait: -1,
+                sound: 0,
+            });
+        } else if !capturing && own_prompt {
+            self.persistent_feedback = None;
+        }
+    }
+
+    /// Reconstruct a saved script's owned modal; other queued feedback keeps its order.
+    pub fn prepare_script_pause(&mut self, state: &centurions_core::Session) -> bool {
+        if !state.exploration.as_ref().is_some_and(|p| {
+            matches!(
+                p.presentation,
+                Some(centurions_core::Presentation::ScriptPause)
+            )
+        }) {
+            return false;
+        }
+        let pause = centurions_core::feedback::script_pause();
+        if self.feedback.is_empty() {
+            self.feedback.push_back(pause.clone());
+            self.feedback_started = None;
+        }
+        self.feedback.front() == Some(&pause)
+    }
+
     pub fn feedback_sound(&mut self, now: f64) -> Option<Event> {
         let feedback = self.feedback.front()?;
         if self.feedback_started.is_some() {
@@ -14,6 +58,11 @@ impl UiState {
                 *sound
             }
             NativeFeedback::Combat { .. } => -143,
+            NativeFeedback::CombatResult { code, audible, .. } => {
+                centurions_core::feedback::combat_result(*code)
+                    .filter(|_| *audible)
+                    .map_or(0, |(_, sound)| sound)
+            }
             NativeFeedback::Sound { resource_id } => *resource_id,
             NativeFeedback::Warning { .. } => 6000,
             NativeFeedback::Silent
@@ -33,6 +82,25 @@ impl UiState {
         let Some(feedback) = self.feedback.front() else {
             return false;
         };
+        if matches!(feedback, NativeFeedback::Flash { wait, .. } | NativeFeedback::ResourceFlash { wait, .. } if *wait < 0)
+        {
+            if matches!(feedback, NativeFeedback::Flash { sound, .. } | NativeFeedback::ResourceFlash { sound, .. } if *sound < 0)
+                && now < self.feedback_until
+            {
+                return true;
+            }
+            self.persistent_feedback = self.feedback.pop_front().filter(|feedback| {
+                !matches!(
+                    feedback,
+                    NativeFeedback::Flash {
+                        address: 0x40250d | 0x4036f1,
+                        ..
+                    }
+                )
+            });
+            self.feedback_started = None;
+            return !self.feedback.is_empty();
+        }
         if let NativeFeedback::Tutorial { first, last } = feedback {
             self.help_request = Some((*first, *last));
             self.feedback.pop_front();
@@ -60,6 +128,7 @@ impl UiState {
         }
         let started = self.feedback_started.unwrap_or(now);
         let done = match feedback {
+            NativeFeedback::CombatResult { .. } => now - started >= 20. / 60.,
             NativeFeedback::DialogText { wait, .. } => now - started >= f64::from(*wait) / 60.,
             NativeFeedback::Flash { wait, .. } | NativeFeedback::ResourceFlash { wait, .. }
                 if *wait > 0 =>
@@ -89,7 +158,12 @@ impl UiState {
             assets.wrapped(error, Rect::new(56., 200., 686., 196.), 14, 18.);
             return;
         }
-        let Some(feedback) = self.feedback.front() else {
+        let Some(feedback) = self
+            .feedback
+            .front()
+            .filter(|f| !matches!(f, NativeFeedback::Sound { .. } | NativeFeedback::Silent))
+            .or(self.persistent_feedback.as_ref())
+        else {
             return;
         };
         let (text, rect, picture) = match feedback {
@@ -140,6 +214,19 @@ impl UiState {
                 Rect::new(580., 536., 208., 62.),
                 156,
             ),
+            NativeFeedback::CombatResult { code, amount, .. } => {
+                let Some((address, _)) = centurions_core::feedback::combat_result(*code) else {
+                    return;
+                };
+                let text = assets.native_text.text(address, true).map(|label| {
+                    if matches!(code, -23..=-19 | -16 | -15) {
+                        format!("{amount}{label}")
+                    } else {
+                        label
+                    }
+                });
+                (text, Rect::new(580., 536., 208., 62.), 156)
+            }
             NativeFeedback::Warning { index } => (
                 assets
                     .warnings

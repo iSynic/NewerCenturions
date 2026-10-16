@@ -141,7 +141,7 @@ impl Audio {
     pub fn current_resource(&self) -> Option<i16> {
         self.current_music.get().map(|index| self.music[index].0)
     }
-    pub fn play(&self, events: &[Event]) {
+    pub fn play<'a>(&self, events: impl IntoIterator<Item = &'a Event>) {
         let mut at = self
             .pending_sounds
             .borrow()

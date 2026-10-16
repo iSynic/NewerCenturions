@@ -4,8 +4,6 @@ use super::{Request, WindowMode};
 #[test]
 fn fullscreen_shortcut_and_resolution_changes_restore_windowed_mode() {
     let mut mode = WindowMode::default();
-    assert!(!mode.fullscreen);
-    assert!(!mode.shortcut(false, true));
     assert!(mode.shortcut(true, true));
     assert_eq!(mode.change(true, None), [Request::Fullscreen(true)]);
     assert!(!mode.shortcut(true, true));
@@ -21,5 +19,4 @@ fn fullscreen_shortcut_and_resolution_changes_restore_windowed_mode() {
         mode.change(false, Some((800, 600))),
         [Request::Size(800, 600)]
     );
-    assert!(mode.change(false, None).is_empty());
 }

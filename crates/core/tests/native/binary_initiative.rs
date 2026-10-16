@@ -2,36 +2,24 @@ use crate::prelude::*;
 
 use centurions_core::combat::initiative;
 
-#[derive(Deserialize)]
-struct Fixture {
-    warrior_speeds: Vec<i16>,
-    enemy_speeds: Vec<i16>,
-    cases: Vec<Case>,
-}
-#[derive(Deserialize)]
-struct Case {
-    seed: u32,
-    after_seed: u32,
-    draws: u64,
-    mode: i16,
-    order: Vec<i16>,
-}
 #[test]
 fn initiative_matches_original_instruction_execution() {
-    let fixture: Fixture =
-        serde_json::from_value(crate::support::fixture("initiative.json")).unwrap();
-    for case in fixture.cases {
-        let mut random = RandomState::new(case.seed);
+    let fixture = crate::support::fixture("initiative.json");
+    for case in fixture.array("cases") {
+        let mut random = RandomState::new(case.n("seed"));
         assert_eq!(
             initiative(
-                &fixture.warrior_speeds,
-                &fixture.enemy_speeds,
-                case.mode,
+                &fixture.n::<Vec<i16>>("warrior_speeds"),
+                &fixture.n::<Vec<i16>>("enemy_speeds"),
+                case.n("mode"),
                 &mut random
             )
             .unwrap(),
-            case.order
+            case.n::<Vec<i16>>("order")
         );
-        assert_eq!((random.seed, random.draws), (case.after_seed, case.draws));
+        assert_eq!(
+            (random.seed, random.draws),
+            (case.n("after_seed"), case.n("draws"))
+        );
     }
 }

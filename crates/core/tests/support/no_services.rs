@@ -11,6 +11,7 @@ use centurions_core::recovered_combat_results::GraphicsDispatchRequest;
 use centurions_core::recovered_combat_ui::{CombatUiMemory, CombatUiObservation, CombatUiRequest};
 use centurions_core::recovered_detail_ui::{DetailReply, DetailRequest};
 use centurions_core::recovered_drawing::{BuildingWorld, PictureObservation};
+use centurions_core::recovered_feedback::FeedbackArg::{Long, Pointer, Word};
 use centurions_core::recovered_feedback::{FeedbackMemory, FeedbackObservation, FeedbackRequest};
 use centurions_core::recovered_files::{FileContext, FileObservation};
 use centurions_core::recovered_gamma::{GammaError, GammaMemory, GammaObservation, GammaRequest};
@@ -34,14 +35,21 @@ use centurions_core::recovered_status_panels::{StatusPanelObservation, StatusPan
 use centurions_core::recovered_storage::{StorageObservation, StorageRequest};
 use centurions_core::recovered_text::PascalString;
 use centurions_core::recovered_world_display::{WorldDisplayObservation, WorldDisplayRequest};
-pub struct NoServices;
+#[derive(Default)]
+pub struct NoServices {
+    pub music: Vec<serde_json::Value>,
+    pub cursor: std::cell::Cell<usize>,
+}
+
+use crate::fixture_hex::decode;
 
 macro_rules! unavailable {
-    ($trait:path { $(fn $name:ident($($args:tt)*) -> $result:ty;)* }) => {
+    ($trait:path { $(fn $name:ident($($args:tt)*) -> $result:ty;)* } $($custom:item)*) => {
         impl $trait for NoServices {
             $(fn $name($($args)*) -> $result {
                 panic!("unexpected service call: {}", stringify!($name))
             })*
+            $($custom)*
         }
     };
 }
@@ -57,17 +65,49 @@ unavailable! {
 
 unavailable! {
     centurions_core::recovered_feedback::FeedbackServices {
-        fn observe(
-            &self,
-            _: &FeedbackRequest,
-            _: &FeedbackMemory,
-        ) -> Result<FeedbackObservation, RuleError>;
-        fn sound_observations(
-            &self,
-            _: i16,
-            _: &AudioContext,
-            _: &FeedbackMemory,
-        ) -> Result<Vec<AudioObservation>, RuleError>;
+    fn sound_observations(
+        &self,
+        _: i16,
+        _: &AudioContext,
+        _: &FeedbackMemory,
+    ) -> Result<Vec<AudioObservation>, RuleError>;
+    }
+    fn observe(
+        &self,
+        request: &FeedbackRequest,
+        memory: &FeedbackMemory,
+    ) -> Result<FeedbackObservation, RuleError> {
+        let case = &self.music[self.cursor.get()];
+        assert_eq!(case["service"], "SndDoImmediate");
+        let FeedbackRequest::Toolbox {
+            opcode: 0xa804,
+            arguments,
+        } = request
+        else {
+            panic!("unexpected service: {request:?}")
+        };
+        assert_eq!(
+            arguments,
+            &vec![
+                Long(case["channel"].as_u64().unwrap() as u32),
+                Pointer(case["command_pointer"].as_u64().unwrap() as u32)
+            ]
+        );
+        let bytes = decode(case["command8"].as_str().unwrap());
+        for (offset, byte) in bytes.iter().enumerate() {
+            assert_eq!(
+                memory
+                    .byte(case["command_pointer"].as_u64().unwrap() as u32 + offset as u32)
+                    .unwrap(),
+                *byte
+            );
+        }
+        self.cursor.set(self.cursor.get() + 1);
+        Ok(FeedbackObservation {
+            value: 0,
+            d0: 0,
+            memory: memory.clone(),
+        })
     }
 }
 
@@ -194,18 +234,47 @@ unavailable! {
 
 unavailable! {
     centurions_core::recovered_prompt_control::PromptControlServices {
-        fn library(
-            &mut self,
-            _: &LibraryRequest,
-            _: &RenderingMemory,
-        ) -> Result<LibraryObservation, RuleError>;
-        fn quiet_observations(
-            &mut self,
-            _: i16,
-            _: &AudioContext,
-            _: &RenderingMemory,
-        ) -> Result<Vec<AudioObservation>, RuleError>;
-        fn incoming_mechanical_mode(&mut self, _: &RenderingMemory) -> Result<i16, RuleError>;
+    fn library(
+        &mut self,
+        _: &LibraryRequest,
+        _: &RenderingMemory,
+    ) -> Result<LibraryObservation, RuleError>;
+    fn quiet_observations(
+        &mut self,
+        _: i16,
+        _: &AudioContext,
+        _: &RenderingMemory,
+    ) -> Result<Vec<AudioObservation>, RuleError>;
+    fn incoming_mechanical_mode(&mut self, _: &RenderingMemory) -> Result<i16, RuleError>;
+    }
+    fn observe_registers(
+        &mut self,
+        request: &centurions_core::recovered_prompt_control::PromptRegisterRequest,
+        memory: &RenderingMemory,
+    ) -> Result<FeedbackObservation, RuleError> {
+        let case = &self.music[self.cursor.get()];
+        assert_eq!(case["service"], "SndChannelStatus");
+        assert_eq!(
+            (request.opcode, request.d0_input),
+            (0xa800, Some(0x05100008))
+        );
+        let destination = case["destination"].as_u64().unwrap() as u32;
+        assert_eq!(
+            request.arguments,
+            vec![
+                Long(case["channel"].as_u64().unwrap() as u32),
+                Word(24),
+                Pointer(destination)
+            ]
+        );
+        let mut memory = memory.clone();
+        memory.insert_region(destination, &decode(case["status24"].as_str().unwrap()));
+        self.cursor.set(self.cursor.get() + 1);
+        Ok(FeedbackObservation {
+            value: 0,
+            d0: 0,
+            memory,
+        })
     }
 }
 

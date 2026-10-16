@@ -1,16 +1,8 @@
 use super::*;
-fn decode(value: &str) -> Vec<u8> {
-    (0..value.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&value[i..i + 2], 16).unwrap())
-        .collect()
-}
+use crate::test_support::decode;
 #[test]
 fn stockpile_collection_matches_original_instruction_slice() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../evidence/fixtures/ammunition-collection.json"
-    ))
-    .unwrap();
+    let fixture = crate::test_support::fixture("ammunition-collection.json");
     let mut items = vec![vec![0; 150]; 1000];
     items[200] = decode(fixture["definition"].as_str().unwrap());
     let content = Content {
@@ -55,16 +47,8 @@ fn stockpile_collection_matches_original_instruction_slice() {
 
 #[test]
 fn carried_pack_removal_matches_original_drop_and_movement_recalculation() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let content = Content::load(
-        &root.join("NewCenturions"),
-        &root.join("analysis/extracted"),
-    )
-    .unwrap();
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../evidence/fixtures/ammunition-drop.json"
-    ))
-    .unwrap();
+    let content = crate::test_support::content();
+    let fixture = crate::test_support::fixture("ammunition-drop.json");
     for case in fixture["cases"].as_array().unwrap() {
         let warrior = Warrior::read(&decode(case["input"].as_str().unwrap())).unwrap();
         let mut state = Session::new(&content);
@@ -93,16 +77,8 @@ fn carried_pack_removal_matches_original_drop_and_movement_recalculation() {
 
 #[test]
 fn pack_command_is_atomic_and_resumes_with_the_same_events() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let content = Content::load(
-        &root.join("NewCenturions"),
-        &root.join("analysis/extracted"),
-    )
-    .unwrap();
-    let ammo: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../evidence/fixtures/ammunition-init.json"
-    ))
-    .unwrap();
+    let content = crate::test_support::content();
+    let ammo = crate::test_support::fixture("ammunition-init.json");
     let mut state = Session::new(&content);
     apply(Command::ImportStarters, &mut state, &content).unwrap();
     apply(

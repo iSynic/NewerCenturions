@@ -9,6 +9,16 @@ pub struct NativeText {
 }
 
 impl NativeText {
+    pub fn encode(text: &str) -> Result<Vec<u8>, ContentError> {
+        let (bytes, _, invalid) = encoding_rs::MACINTOSH.encode(text);
+        if invalid || bytes.iter().any(|byte| *byte < 32 || *byte == 127) {
+            return Err(ContentError::Invalid(
+                "text does not fit the original character set".into(),
+            ));
+        }
+        Ok(bytes.into_owned())
+    }
+
     pub fn load(content: &Content, root: &Path) -> Result<Self, ContentError> {
         let find = |kind: &str| {
             content

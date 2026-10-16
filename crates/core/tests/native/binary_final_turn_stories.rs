@@ -1,33 +1,20 @@
 use crate::prelude::*;
 
-use crate::support::field_bytes as bytes;
 use centurions_core::combat::final_turn_stories;
 use centurions_core::combat::final_turn_stories::TurnEffect;
 
 use crate::native_common::script_mission as mission;
 fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>, RandomState) {
-    let mut order = vec![-1; 110];
-    order[1] = 10 + case["active_index"].as_i64().unwrap_or(0) as i16;
+    let mut combat = crate::support::battle();
+    combat.battle = 134;
+    combat.map.tiles = case.words("map_before");
+    combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
+    combat.enemies.records = crate::support::monsters(&case["records_before"]);
+    combat.enemies.positions = crate::support::positions(&case["positions_before"]);
+    combat.order[1] = 10 + case["active_index"].as_i64().unwrap_or(0) as i16;
+    combat.script_enemy = case["actor_before"].as_u64().unwrap_or(0) as usize;
     (
-        Combat {
-            battle: 134,
-            map: TacticalMap {
-                tiles: words(&bytes(case, "map_before")),
-                edge_word: 0,
-                shift: (0, 0),
-            },
-            squad: SquadPlacement {
-                positions: (0..6).map(|i| (40 + i, 40)).collect(),
-                under_tiles: vec![1155; 6],
-            },
-            enemies: EnemySetup {
-                records: crate::support::monsters(&bytes(case, "records_before")),
-                positions: crate::support::positions(&case["positions_before"]),
-            },
-            order,
-            script_enemy: case["actor_before"].as_u64().unwrap_or(0) as usize,
-            ..crate::support::battle()
-        },
+        combat,
         crate::support::warriors(&case["warriors_before"]),
         RandomState::new(case.n::<u32>("seed_before")),
     )
@@ -37,8 +24,8 @@ fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>, RandomState) {
 fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
     let fixture = crate::support::fixture("final-turn-stories.json");
     let mission = mission(&fixture);
-    let definitions = bytes(&fixture, "monsters");
-    let extras = bytes(&fixture, "extras");
+    let definitions = fixture.bytes("monsters");
+    let extras = fixture.bytes("extras");
     let earlier = crate::support::fixture("earlier-turn-stories.json");
     let retained = crate::support::fixture("retained-turn-origin.json");
     let conditions = crate::support::fixture("npc-turn-conditions.json");
@@ -63,12 +50,7 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
                 .unwrap();
         tables.monsters[288..576].copy_from_slice(&definition);
         let extra = [1_i16, 0, 655, 469, 470];
-        tables.encounters[2470..2480].copy_from_slice(
-            &extra
-                .into_iter()
-                .flat_map(i16::to_be_bytes)
-                .collect::<Vec<_>>(),
-        );
+        tables.encounters[2470..2480].copy_from_slice(&crate::support::word_bytes(&extra));
         let mut state = crate::support::mission_session(&content);
         let mut arena = crate::support::battle();
         arena.difficulty = builder.n("difficulty");
@@ -133,15 +115,15 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
         )
         .unwrap_or_else(|error| panic!("case{index}: {error}"));
         let records: Vec<u8> = crate::support::record_bytes(&combat.enemies.records);
-        assert_eq!(records, bytes(case, "records_after"), "records case{index}");
+        assert_eq!(records, case.bytes("records_after"), "records case{index}");
         assert_eq!(
             combat.map.tiles,
-            words(&bytes(case, "map_after")),
+            words(&case.bytes("map_after")),
             "map case{index}"
         );
         assert_eq!(
             combat.order,
-            words(&bytes(case, "order_after")),
+            words(&case.bytes("order_after")),
             "order case{index}"
         );
         assert_eq!(
@@ -150,7 +132,7 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
             "positions case{index}"
         );
         let party: Vec<u8> = crate::support::record_bytes(&warriors);
-        assert_eq!(party, bytes(case, "warriors_after"), "party case{index}");
+        assert_eq!(party, case.bytes("warriors_after"), "party case{index}");
         crate::support::native_expect! {
         scalar random.seed as u64 => &case["seed_after"], "binary_final_turn_stories";
         scalar random.draws => &case["rng_draws"], "binary_final_turn_stories";
@@ -198,7 +180,7 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
                 arena.enemies.positions.push((25, 25));
                 arena.order[2] = 0;
             }
-            state.warriors = crate::support::warriors(&bytes(case, "warriors_before"));
+            state.warriors = crate::support::warriors(&case.bytes("warriors_before"));
             state.phase = Phase::Combat;
             state.combat = Some(arena);
             state.random = start_random;

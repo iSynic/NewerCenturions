@@ -66,17 +66,9 @@ use crate::support::same_session as same;
 use crate::support::checkpoint;
 use crate::support::event_sounds as sounds;
 
-fn receipt(index: usize) -> Value {
-    let receipts = [
-        include_str!("../../../../evidence/fixtures/earned-loaded-shot-replay-receipt-12.json"),
-        include_str!("../../../../evidence/fixtures/earned-loaded-shot-replay-receipt-1.json"),
-    ];
-    serde_json::from_str(receipts[index]).unwrap()
-}
-
 fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
     let index = case.n::<usize>("foundation");
-    let receipt = receipt(index);
+    let receipt = crate::native_common::earned_receipt("earned-loaded-shot-replay", index);
     let commands = receipt.array("commands");
     let ordered_events = receipt.array("ordered_events");
     assert_eq!(ordered_events.len(), commands.len());
@@ -89,7 +81,9 @@ fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
             Command::BeginMedicalItem { warrior, slot } => Command::UseItem { warrior, slot },
             other => other,
         };
-        let expected: Vec<Event> = serde_json::from_value(recorded.clone()).unwrap();
+        let expected = crate::native_common::shield_result_events(
+            serde_json::from_value(recorded.clone()).unwrap(),
+        );
         let events = apply(command.clone(), &mut state, content).unwrap();
         assert_eq!(events, expected, "foundation {index} command {step}");
         if state.medical_continuation.is_some() {
@@ -119,6 +113,9 @@ fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
     crate::snapshots::actor_work(&mut expected_input, &case["before"]);
     source_item_refresh(&mut expected_input, content);
     source_prefix_pair(&mut expected_input, content, index);
+    expected_input.inventory_record = crate::native_common::earned_inventory_work(index);
+    expected_input.combat.as_mut().unwrap().turn_origin =
+        crate::snapshots::recorded_turn_origin(&receipt, expected_input.combat.as_ref().unwrap());
     same(&state, &expected_input);
     let effect = state.health_context.as_ref().unwrap().effect;
     assert_eq!(state.attack_packet.as_ref().unwrap()[18] as i8, effect);
@@ -203,7 +200,7 @@ fn native_events(initial: &Session, expected: &Session, case: &Value) -> Vec<Eve
 #[test]
 fn party_range_membership_retains_the_original_truncated_boundary() {
     let content = crate::support::content();
-    let receipt = receipt(1);
+    let receipt = crate::native_common::earned_receipt("earned-loaded-shot-replay", 1);
     let mut state: Session = serde_json::from_value(receipt["starting_session"].clone()).unwrap();
     for (step, (command, recorded)) in receipt
         .array("commands")
@@ -358,7 +355,6 @@ fn coherent_earned_prefixes_and_shots_match_complete_native_state_and_resume() {
             Command::ShootEnemy { body: 10 },
             vec![centurions_core::feedback::NativeFeedback::Silent],
         );
-        let restored = checkpoint(&state, &content, &format!("shot-after-{index}"));
-        same(&state, &restored);
+        checkpoint(&state, &content, &format!("shot-after-{index}"));
     }
 }

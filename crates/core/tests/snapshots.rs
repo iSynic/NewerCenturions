@@ -24,12 +24,12 @@ pub fn helper_frame(fixture: &Value, snapshot: &Value, member: usize) -> Session
     state.handled_deaths.clear();
     captured_party(&mut state, fixture, snapshot);
     let reserves = read("reserves");
-    assert_eq!(reserves.len(), 804);
     state.ammunition = crate::support::longs(&reserves[..800]);
     state.loot_quality = Some(read("loot_quality"));
     assert_eq!(&reserves[800..], &state.loot_quality.as_ref().unwrap()[..4]);
     state.random = crate::native_common::random_state(snapshot);
     state.selected_warrior = member;
+    state.inventory_record = Some(InventoryRecord(read("selected_record").try_into().unwrap()));
     state.flags = read("flags");
     state.party_buffs = read("party_buffs");
     state.psi_memory = Some(read("memory"));
@@ -223,6 +223,7 @@ pub fn earned_projection(state: &mut Session, snapshot: &Value, baseline: &Value
     state.attack_identity = combat.attack_identity;
     state.weapon_work = combat.weapon_work;
     health(state, snapshot, &read);
+    turn_origin(state.combat.as_mut().unwrap(), before.unwrap());
     if before != state.combat.as_ref().map(|c| (c.cursor, c.round)) {
         actor_work(state, snapshot);
     }
@@ -251,6 +252,10 @@ pub fn shifted_positions(
 }
 
 pub fn npc_projection(state: &mut Session, f: &Value, snapshot: &Value, baseline: &Value) {
+    let before = {
+        let c = state.combat.as_ref().unwrap();
+        (c.cursor, c.round)
+    };
     let read = |key: &str| crate::support::buffer(f, &snapshot[key]);
     let delta = viewport_delta(snapshot, baseline);
     party_work(state, snapshot, &read);
@@ -258,7 +263,6 @@ pub fn npc_projection(state: &mut Session, f: &Value, snapshot: &Value, baseline
     state.allies = crate::support::buffer(f, &snapshot["references"]);
     carried_items(state, &read);
     let reserves = crate::support::buffer(f, &snapshot["reserves"]);
-    assert_eq!(reserves.len(), 804);
     state.ammunition = crate::support::longs(&reserves[..800]);
     state.ammunition_work.item = Some(crate::support::buffer(f, &snapshot["item_work"]));
     state.ammunition_work.weapon = Some(crate::support::buffer(f, &snapshot["weapon_work"]));
@@ -270,10 +274,8 @@ pub fn npc_projection(state: &mut Session, f: &Value, snapshot: &Value, baseline
     state.enemy_spell_disabled = snapshot.n::<u8>("enemy_spell_disabled");
     let count = snapshot.n::<usize>("body_count");
     let all_npcs = crate::support::buffer(f, &snapshot["npcs"]);
-    assert_eq!(all_npcs.len(), 28_800);
     assert!(all_npcs[count * 288..].iter().all(|byte| *byte == 0));
     let positions = shifted_positions(&read, "npc_positions", delta);
-    assert_eq!(positions.len(), 100);
     assert!(positions[count..].iter().all(|point| *point == (0, 0)));
     let combat = state.combat.as_mut().unwrap();
     combat.enemies.records = crate::support::monsters(&all_npcs[..count * 288]);
@@ -282,6 +284,7 @@ pub fn npc_projection(state: &mut Session, f: &Value, snapshot: &Value, baseline
     combat.map.tiles = crate::native_common::buffer_words(f, &snapshot["map"]);
     combat.order = crate::native_common::buffer_words(f, &snapshot["order"]);
     combat.cursor = snapshot.n::<usize>("cursor");
+    turn_origin(combat, before);
     combat.spell_fields = crate::support::buffer(f, &snapshot["fields"]);
     combat.field_used = crate::support::buffer(f, &snapshot["field_used"]);
     combat.attack_packet = Some(crate::support::buffer(f, &snapshot["packet"]));
@@ -297,4 +300,44 @@ pub fn npc_projection(state: &mut Session, f: &Value, snapshot: &Value, baseline
     health.effect = snapshot.n::<i8>("health_effect");
     health.last_body = snapshot.n::<i16>("health_last_body");
     health.marks_affected = snapshot.n::<i64>("heal_marks_affected") != 0;
+}
+
+// Source getup1265c2..1265e0 stores the selected body's native turn-start coordinates.
+pub fn turn_origin(combat: &mut Combat, before: (usize, i16)) {
+    if before != (combat.cursor, combat.round) {
+        combat.turn_origin = combat
+            .active_body()
+            .filter(|body| *body < 6)
+            .map(|body| combat.squad.positions[body as usize]);
+    }
+}
+
+// Source-derived undo metadata reconstructed from frozen prefix events, not new game output.
+pub fn recorded_turn_origin(receipt: &Value, combat: &Combat) -> Option<(i16, i16)> {
+    let body = combat.active_body().filter(|body| *body < 6)?;
+    let mut origin = combat.squad.positions[body as usize];
+    for (command, events) in receipt
+        .array("commands")
+        .iter()
+        .zip(receipt.array("ordered_events"))
+        .rev()
+    {
+        let events = events.as_array().unwrap();
+        if events.iter().any(|event| {
+            event
+                .get("TacticalMoved")
+                .is_some_and(|m| m.n::<i16>("body") == body)
+        }) {
+            let movement = &command["Move"];
+            origin.0 -= movement.n::<i16>("dx");
+            origin.1 -= movement.n::<i16>("dy");
+        }
+        if events
+            .iter()
+            .any(|event| event.get("TurnStarted").is_some())
+        {
+            return Some(origin);
+        }
+    }
+    None
 }

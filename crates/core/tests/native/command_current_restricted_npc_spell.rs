@@ -25,6 +25,7 @@ fn projected(before: &Session, fixture: &Value, snapshot: &Value, baseline: &Val
     expected.psi_disabled = number(snapshot, "psi_disabled") as u8;
     expected.enemy_spell_disabled = number(snapshot, "enemy_spell_disabled") as u8;
     let combat = expected.combat.as_mut().unwrap();
+    let previous = (combat.cursor, combat.round);
     crate::snapshots::records(combat, &|key| bytes(fixture, &snapshot[key]));
     // Preserve the command's viewport while comparing original absolute rule coordinates.
     let delta = crate::snapshots::viewport_delta(snapshot, baseline);
@@ -34,6 +35,7 @@ fn projected(before: &Session, fixture: &Value, snapshot: &Value, baseline: &Val
         number(snapshot, "round_script_counter")
             .wrapping_sub(number(baseline, "round_script_counter")),
     );
+    crate::snapshots::turn_origin(combat, previous);
     combat.round_scripts.counter = number(snapshot, "round_script_counter") as i8;
     combat.round_scripts.slots = words(fixture, &snapshot["round_slots"]).try_into().unwrap();
     crate::snapshots::spell_work(combat, &|key| bytes(fixture, &snapshot[key]));

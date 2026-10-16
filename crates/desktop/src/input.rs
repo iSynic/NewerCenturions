@@ -1,6 +1,6 @@
 use crate::{
     layout,
-    presentation::{Action, Control, Inspection, UiState, tactical_view},
+    presentation::{Action, Control, Inspection, UiState},
 };
 use centurions_core::{Command, Phase, Presentation, Session};
 use macroquad::prelude::*;
@@ -115,15 +115,34 @@ pub fn action(
     controls: &[Control],
     pointer: Option<Vec2>,
 ) -> Option<Action> {
+    if crate::collection::active(state, ui) && state.promotion.is_none() {
+        if let Some(action) = crate::collection::input(state, ui, pointer) {
+            return Some(action);
+        }
+        if is_mouse_button_pressed(MouseButton::Left)
+            && let Some(point) = pointer
+            && let Some(control) = controls.iter().rev().find(|c| c.rect.contains(point))
+        {
+            if let Action::Collection(crate::collection::CollectionAction::Item(slot)) =
+                control.action
+                && crate::application::command_modifier()
+            {
+                return Some(Action::Collection(
+                    crate::collection::CollectionAction::Store(slot),
+                ));
+            }
+            return control.enabled.then(|| control.action.clone());
+        }
+        return None;
+    }
+    if crate::targeting::active(state, ui) {
+        return crate::targeting::input(state, content, ui, controls, pointer);
+    }
     if state
         .exploration
         .as_ref()
         .is_some_and(|p| p.presentation == Some(Presentation::Shop))
-        || ui.inspection == Some(Inspection::Items)
-            && state
-                .exploration
-                .as_ref()
-                .is_some_and(|position| position.presentation.is_none())
+        || ui.inspection == Some(Inspection::Items) && !crate::collection::active(state, ui)
     {
         if is_mouse_button_released(MouseButton::Left)
             && let Some(action) = ui.inventory.release(pointer)
@@ -145,6 +164,69 @@ pub fn action(
         .filter(|action| available(state, ui.selected, action))
 }
 
+pub fn field_buttons(state: &Session) -> Vec<(i16, Action)> {
+    use centurions_core::field_controls::Action as Field;
+    let mut controls = vec![
+        (
+            154,
+            Action::Command(Command::FieldControl {
+                action: Field::Camp,
+            }),
+        ),
+        (155, Action::Open(Inspection::Items)),
+        (
+            142,
+            Action::Command(Command::FieldControl {
+                action: Field::SearchMode,
+            }),
+        ),
+        (300, Action::Open(Inspection::Psi)),
+        (305, Action::Open(Inspection::Items)),
+        (306, Action::Command(Command::Encounter)),
+        (
+            307,
+            Action::Command(Command::FieldControl {
+                action: Field::Search,
+            }),
+        ),
+        (
+            308,
+            Action::Command(Command::FieldControl {
+                action: Field::Rest,
+            }),
+        ),
+        (
+            309,
+            Action::Command(Command::FieldControl {
+                action: Field::Heal,
+            }),
+        ),
+    ];
+    if state.warriors.len() < 2 {
+        controls.retain(|(id, _)| *id != 305);
+    }
+    controls.push(
+        if state
+            .field_controls
+            .as_ref()
+            .and_then(|c| c.clinic)
+            .is_some()
+        {
+            (
+                302,
+                Action::Command(Command::FieldControl {
+                    action: Field::Clinic,
+                }),
+            )
+        } else if state.shop_access.is_some() {
+            (304, Action::Command(Command::OpenShop))
+        } else {
+            (303, Action::Open(Inspection::Crate))
+        },
+    );
+    controls
+}
+
 pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
     let active = state.combat.as_ref().and_then(|arena| arena.active_body());
     let member = active
@@ -159,15 +241,54 @@ pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
         && state.outdoor_psi.is_none()
         && (state.phase == Phase::Exploration
             || active.is_some_and(|body| (0..state.warriors.len() as i16).contains(&body)));
+    if state
+        .combat
+        .as_ref()
+        .is_some_and(|c| c.capture_actor.is_some())
+    {
+        return matches!(
+            action,
+            Action::Command(
+                Command::CancelCapture
+                    | Command::CombatClick { .. }
+                    | Command::SelectCaptureTarget { .. }
+                    | Command::Move { .. }
+            )
+        );
+    }
     match action {
+        Action::Command(
+            Command::BeginAutomaticTurn
+            | Command::DelayTurn
+            | Command::UndoCombatMove
+            | Command::RequestCombatEscape
+            | Command::EscapeCombat
+            | Command::ToggleCombatAuto { .. }
+            | Command::SelectCombatWeapon { .. },
+        )
+        | Action::Open(Inspection::Weapons)
+        | Action::Application(crate::application::ApplicationAction::CombatInformation(_)) => {
+            centurions_core::combat::controls::actor(state).is_ok()
+                && (matches!(
+                    action,
+                    Action::Command(Command::ToggleCombatAuto { .. }) | Action::Application(_)
+                ) || centurions_core::combat::runtime::controlled_warrior(state).is_none())
+        }
+        Action::Command(Command::BeginCapture) => {
+            centurions_core::combat::capture::available(state)
+        }
+        Action::CombatView(_) | Action::PanCombat(..) => free && state.phase == Phase::Combat,
         Action::Open(Inspection::Psi) => {
             (free
                 || state.exploration.as_ref().is_some_and(|position| {
                     matches!(position.presentation, Some(Presentation::Typed { .. }))
                 }))
-                && state.warriors.get(member).is_some_and(|warrior| {
-                    centurions_content::word(&warrior.bytes, 0x36).unwrap_or(0) != 0
-                })
+                && centurions_core::combat::player_psi::can_cast(
+                    &state.warriors,
+                    member as i16,
+                    state.psi_disabled,
+                )
+                .unwrap_or(false)
         }
         Action::Open(Inspection::Bandage) => {
             free && state.bandage_ready.is_some_and(|ready| ready != 0)
@@ -190,6 +311,16 @@ pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
                         && centurions_content::word(&warrior.bytes, 0x40).unwrap_or(0) >= 2
                 })
         }
+        Action::Command(Command::FieldControl { .. }) => {
+            centurions_core::field_controls::free(state)
+        }
+        Action::Open(Inspection::Items | Inspection::Crate) => {
+            free || matches!(action, Action::Open(Inspection::Items))
+                && state
+                    .exploration
+                    .as_ref()
+                    .is_some_and(|p| matches!(p.presentation, Some(Presentation::Typed { .. })))
+        }
         Action::Command(
             Command::Move { .. }
             | Command::CombatClick { .. }
@@ -202,6 +333,16 @@ pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
         Action::Command(Command::ChooseWarrior { index }) => *index < state.warriors.len(),
         _ => true,
     }
+}
+
+/// textbox15dc24 uses a negative scenario text ID without waiting for input.
+pub fn story_action(state: &Session, pressed: bool) -> Option<Action> {
+    let id = match state.exploration.as_ref()?.presentation.as_ref()? {
+        Presentation::Dialogue { id, .. } => *id,
+        Presentation::Messages { pages, .. } => pages.first()?.0,
+        _ => return None,
+    };
+    (id <= 0 || pressed).then_some(Action::Command(Command::Continue))
 }
 
 fn action_inner(
@@ -240,107 +381,44 @@ fn action_inner(
         }
         return None;
     }
-    if state.outdoor_psi.is_some() {
-        if is_mouse_button_pressed(MouseButton::Left)
-            && let Some(p) = pointer
-            && let Some(c) = controls.iter().rev().find(|c| c.rect.contains(p))
-        {
-            return c.enabled.then(|| c.action.clone());
-        }
-        if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::A) {
-            return Some(Action::Command(Command::CancelOutdoorPsi));
-        }
-        if is_key_pressed(KeyCode::Space) && state.party_mask.iter().any(|rank| *rank > 0) {
-            return Some(Action::Command(Command::FinishOutdoorPsi));
-        }
-        return None;
-    }
-    if state.psi_selection.is_some() {
-        if is_mouse_button_pressed(MouseButton::Left)
-            && let Some(p) = pointer
-            && let Some(c) = controls.iter().rev().find(|c| c.rect.contains(p))
-        {
-            return c.enabled.then(|| c.action.clone());
-        }
-        if is_key_pressed(KeyCode::Enter) && !ui.medical_cancel {
-            return Some(Action::Command(Command::FirePsiSelection));
-        }
+    if state
+        .combat
+        .as_ref()
+        .is_some_and(|c| c.capture_actor.is_some())
+    {
         if is_key_pressed(KeyCode::Escape) {
-            return Some(if ui.medical_cancel {
-                Action::KeepMedicalTarget
-            } else {
-                Action::MedicalCancel
-            });
-        }
-        return None;
-    }
-    if state.medical_continuation.is_some() {
-        if is_mouse_button_pressed(MouseButton::Left)
-            && let Some(p) = pointer
-            && let Some(c) = controls.iter().rev().find(|c| c.rect.contains(p))
-        {
-            return c.enabled.then(|| c.action.clone());
-        }
-        if is_key_pressed(KeyCode::Escape) {
-            return Some(if ui.medical_cancel {
-                Action::KeepMedicalTarget
-            } else {
-                Action::MedicalCancel
-            });
-        }
-        return None;
-    }
-    if ui.firearm_map_target {
-        if is_key_pressed(KeyCode::Escape) {
-            return Some(Action::Close);
+            return Some(Action::Command(Command::CancelCapture));
         }
         if is_mouse_button_pressed(MouseButton::Left)
             && let Some(p) = pointer
             && layout::MAP.contains(p)
-            && let Some((vx, vy)) = tactical_view(state)
+            && let Some((vx, vy)) = crate::combat_controls::origin(state, ui)
         {
-            return Some(Action::Command(Command::ShootAt {
+            return Some(Action::Command(Command::CombatClick {
                 x: vx + ((p.x - layout::MAP.x) / 32.) as i16,
                 y: vy + ((p.y - layout::MAP.y) / 32.) as i16,
             }));
         }
-        return None;
+        return ui
+            .movement
+            .step(movement_direction(is_key_down), get_time())
+            .map(Action::Command);
     }
-    if let Some((spell, power)) = ui.psi_pending {
-        ui.psi_preview = pointer.filter(|p| layout::MAP.contains(*p)).and_then(|p| {
-            tactical_view(state).map(|(vx, vy)| {
-                (
-                    vx + ((p.x - layout::MAP.x) / 32.) as i16,
-                    vy + ((p.y - layout::MAP.y) / 32.) as i16,
-                )
-            })
-        });
-        if is_key_pressed(KeyCode::Enter)
-            && content
-                .map(state.exploration.as_ref().map_or(0, |p| p.map))
-                .and_then(|m| m.combat.as_ref())
-                .and_then(|t| centurions_core::combat::spells::load_packet(&t.attacks, spell).ok())
-                .is_some_and(|p| p[7] != 0)
-        {
-            return Some(Action::RotatePsi);
-        }
+    if ui.combat_view.move_target {
         if is_key_pressed(KeyCode::Escape) {
-            return Some(Action::Close);
+            return Some(Action::CombatView(
+                crate::combat_controls::ViewAction::Center,
+            ));
         }
         if is_mouse_button_pressed(MouseButton::Left)
             && let Some(p) = pointer
             && layout::MAP.contains(p)
-            && let Some((vx, vy)) = tactical_view(state)
+            && let Some((vx, vy)) = crate::combat_controls::origin(state, ui)
         {
-            return Some(Action::Command(Command::CastPsi {
-                rotation: ui.psi_rotation,
-                spell,
-                power,
-                target: Some((
-                    vx + ((p.x - layout::MAP.x) / 32.) as i16,
-                    vy + ((p.y - layout::MAP.y) / 32.) as i16,
-                )),
-            }));
+            return Some(Action::PanCombat(
+                vx + ((p.x - layout::MAP.x) / 32.) as i16,
+                vy + ((p.y - layout::MAP.y) / 32.) as i16,
+            ));
         }
         return None;
     }
@@ -352,6 +430,40 @@ fn action_inner(
     {
         while get_char_pressed().is_some() {}
     }
+    let held = pointer
+        .and_then(|point| {
+            controls
+                .iter()
+                .rev()
+                .find(|control| control.rect.contains(point))
+        })
+        .filter(|control| control.enabled && is_mouse_button_down(MouseButton::Left));
+    if let Some(Control {
+        action: Action::Command(Command::FieldControl { action }),
+        ..
+    }) = held
+        && matches!(
+            action,
+            centurions_core::field_controls::Action::Search
+                | centurions_core::field_controls::Action::Rest
+                | centurions_core::field_controls::Action::Heal
+        )
+    {
+        let now = get_time();
+        if ui
+            .field_repeat
+            .is_none_or(|(previous, next)| previous != *action || now >= next)
+        {
+            ui.field_repeating = ui
+                .field_repeat
+                .is_some_and(|(previous, _)| previous == *action);
+            ui.field_repeat = Some((*action, now + ui.movement.repeat_seconds));
+            return Some(Action::Command(Command::FieldControl { action: *action }));
+        }
+        return None;
+    }
+    ui.field_repeat = None;
+    ui.field_repeating = false;
     if is_mouse_button_pressed(MouseButton::Left)
         && let Some(p) = pointer
         && let Some(c) = controls.iter().rev().find(|c| c.rect.contains(p))
@@ -373,6 +485,41 @@ fn action_inner(
         };
     }
     if ui.inspection.is_some() {
+        if ui.inspection == Some(Inspection::Psi) && is_key_pressed(KeyCode::Enter) {
+            return controls
+                .iter()
+                .find(|control| {
+                    control.enabled
+                        && matches!(
+                            control.action,
+                            Action::ChoosePsi(_)
+                                | Action::Command(
+                                    Command::CastPsi { .. }
+                                        | Command::CastPartyPsi { .. }
+                                        | Command::CastEncounterPsi { .. }
+                                        | Command::BeginLearnedHeal { .. }
+                                        | Command::BeginPsiSelection { .. }
+                                )
+                        )
+                })
+                .map(|control| control.action.clone());
+        }
+        if ui.inspection == Some(Inspection::Weapons) {
+            if is_mouse_button_pressed(MouseButton::Left) {
+                return Some(Action::Close);
+            }
+            let count =
+                centurions_core::combat::controls::weapons(state).map_or(0, |slots| slots.len());
+            let direction = if is_key_pressed(KeyCode::Down) {
+                1
+            } else if is_key_pressed(KeyCode::Up) {
+                -1
+            } else {
+                -mouse_wheel().1.signum() as i32
+            };
+            ui.page =
+                (ui.page as i32 + direction).clamp(0, count.saturating_sub(12) as i32) as usize;
+        }
         if ui.inspection == Some(Inspection::FireTargets)
             && state
                 .combat
@@ -446,8 +593,16 @@ fn action_inner(
             return is_key_pressed(KeyCode::Escape).then_some(Action::Command(Command::CancelMenu));
         }
         if matches!(p, Presentation::Typed { .. }) {
+            if !ui.typed_entry {
+                while get_char_pressed().is_some() {}
+                return is_key_pressed(KeyCode::Escape)
+                    .then_some(Action::Command(Command::CancelMenu));
+            }
             while let Some(character) = get_char_pressed() {
-                if !character.is_control() && ui.typed_text.len() < 40 {
+                if ui.typed_text.chars().count() < 40
+                    && centurions_content::native_text::NativeText::encode(&character.to_string())
+                        .is_ok()
+                {
                     ui.typed_text.push(character);
                 }
             }
@@ -455,8 +610,7 @@ fn action_inner(
                 ui.typed_text.pop();
             }
             if is_key_pressed(KeyCode::Escape) {
-                ui.typed_text.clear();
-                return Some(Action::Command(Command::CancelMenu));
+                return Some(Action::TextEntry(false));
             }
             return is_key_pressed(KeyCode::Enter).then(|| {
                 Action::Command(Command::SubmitText {
@@ -484,35 +638,65 @@ fn action_inner(
         return None;
     }
     let selected = active.map(|b| b as usize).unwrap_or(ui.selected);
-    if state.phase == Phase::Exploration && is_key_pressed(KeyCode::E) {
-        return Some(Action::Command(Command::Encounter));
+    if state.phase == Phase::Exploration {
+        for (key, id) in [
+            (KeyCode::C, 154),
+            (KeyCode::I, 155),
+            (KeyCode::S, 300),
+            (KeyCode::T, 305),
+            (KeyCode::E, 306),
+            (KeyCode::A, 307),
+            (KeyCode::R, 308),
+            (KeyCode::H, 309),
+        ] {
+            if is_key_pressed(key) {
+                return field_buttons(state)
+                    .into_iter()
+                    .find(|(control, _)| *control == id)
+                    .map(|(_, action)| action);
+            }
+        }
     }
-    if is_key_pressed(KeyCode::R) {
+    if state.phase == Phase::Exploration {
+        for (key, id) in [(KeyCode::X, 303), (KeyCode::G, 304), (KeyCode::L, 302)] {
+            if is_key_pressed(key) {
+                return field_buttons(state)
+                    .into_iter()
+                    .find(|(control, _)| *control == id)
+                    .map(|(_, action)| action);
+            }
+        }
+    }
+    if state.phase != Phase::Combat && is_key_pressed(KeyCode::R) {
         return Some(refill_action(state, content, selected));
     }
-    if is_key_pressed(KeyCode::P) {
-        return Some(Action::Open(Inspection::Psi));
-    }
     if state.phase == Phase::Combat {
-        if is_key_pressed(KeyCode::B) {
-            return Some(if state.bandage_ready.is_some_and(|ready| ready != 0) {
-                Action::Open(Inspection::Bandage)
-            } else {
-                Action::Command(Command::StopBleeding { warrior: None })
-            });
+        for key in [
+            KeyCode::A,
+            KeyCode::S,
+            KeyCode::D,
+            KeyCode::F,
+            KeyCode::G,
+            KeyCode::C,
+            KeyCode::B,
+            KeyCode::W,
+            KeyCode::E,
+            KeyCode::R,
+            KeyCode::T,
+            KeyCode::U,
+            KeyCode::I,
+            KeyCode::P,
+            KeyCode::L,
+            KeyCode::N,
+            KeyCode::M,
+            KeyCode::Space,
+        ] {
+            if is_key_pressed(key) {
+                return crate::combat_controls::shortcut(key, state, content, selected);
+            }
         }
-        if is_key_pressed(KeyCode::F) {
-            return Some(Action::Command(Command::SetFirearmMode {
-                warrior: selected,
-                enabled: state.warriors[selected].bytes[0x9dd] == 0,
-            }));
-        }
-        if is_key_pressed(KeyCode::G) {
-            return Some(Action::Command(Command::Guard));
-        }
-        if is_key_pressed(KeyCode::Space) {
-            return Some(Action::Command(Command::EndTurn));
-        }
+    } else if is_key_pressed(KeyCode::P) {
+        return Some(Action::Open(Inspection::Psi));
     }
     if let Some(command) = ui
         .movement
@@ -527,7 +711,7 @@ fn action_inner(
         let x = ((p.x - layout::MAP.x) / 32.) as i32;
         let y = ((p.y - layout::MAP.y) / 32.) as i32;
         if state.combat.is_some() {
-            let (vx, vy) = tactical_view(state).unwrap();
+            let (vx, vy) = crate::combat_controls::origin(state, ui).unwrap();
             let x = vx + x as i16;
             let y = vy + y as i16;
             return Some(Action::Command(Command::CombatClick { x, y }));

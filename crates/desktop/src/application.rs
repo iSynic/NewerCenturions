@@ -34,6 +34,8 @@ pub enum ApplicationAction {
     ScanAnswer(bool),
     OpenEditor(usize),
     OpenInformation(usize),
+    CombatInformation(i16),
+    EscapeAnswer(bool),
     InformationItem(usize),
     AppearanceItem(usize),
     OpenItemEditor(usize, usize),
@@ -53,9 +55,11 @@ pub enum ApplicationAction {
     CreatureItem(usize),
     CloseNote,
     ExchangeChoice(Option<bool>),
+    CloseAbout,
 }
 
 pub struct Application {
+    about: bool,
     exchange_offer: Option<i16>,
     exchange_swap: bool,
     note: Option<crate::note::Note>,
@@ -70,6 +74,8 @@ pub struct Application {
     roster_page: usize,
     order: Option<Vec<usize>>,
     end_question: bool,
+    escape_question: bool,
+    combat_information: bool,
     pub end_after_save: bool,
     creation: Option<crate::creation::Creation>,
     pub native_preferences: crate::preferences::Preferences,
@@ -114,6 +120,9 @@ pub struct Application {
 impl Application {
     pub fn observe(&mut self, events: &[Event]) {
         for event in events {
+            if matches!(event, Event::CombatEscapeOffered) {
+                self.escape_question = true;
+            }
             if let Event::ExchangeOffered { body } = event {
                 self.exchange_offer = Some(*body);
                 self.exchange_swap = true;
@@ -274,6 +283,7 @@ impl Application {
             preferences: centurions_core::CommandPreferences {
                 auto_refit: self.native_preferences.enabled(15),
                 suppress_round_message_sound: self.native_preferences.enabled(13),
+                animation_delay: self.speed as i16 * 5 - 5,
             },
         }
     }
@@ -281,7 +291,7 @@ impl Application {
         let Some(combat) = &state.combat else {
             return vec![];
         };
-        if previous_round == Some(combat.round) {
+        if previous_round.is_none_or(|round| round == combat.round) {
             return vec![];
         }
         use centurions_core::feedback::NativeFeedback;
@@ -310,14 +320,74 @@ impl Application {
                 sound: 0,
             }));
         }
+        // getup1263ca..1263f4 plays the round sound twice, then closes the flash.
+        for _ in 0..2 {
+            events.push(Event::Feedback(NativeFeedback::Sound { resource_id: -139 }));
+        }
+        if !self.native_preferences.enabled(13) {
+            events.push(Event::Feedback(NativeFeedback::Flash {
+                address: 0x4036f1,
+                x: 30,
+                y: 100,
+                wait: -1,
+                sound: -139,
+            }));
+        }
         events
     }
+    /// Preserve round sound order while presenting the paired nonblocking native flash.
+    pub fn prepare_combat_round(
+        &self,
+        previous: Option<i16>,
+        state: &Session,
+        events: &mut Vec<Event>,
+    ) {
+        let notices = self.combat_notices(previous, state);
+        if notices.is_empty() {
+            return;
+        }
+        let Some(start) = events
+            .iter()
+            .position(|event| matches!(event, Event::Sound { resource_id: -139 }))
+        else {
+            return;
+        };
+        let mut tail = events.split_off(start).into_iter().peekable();
+        let sounds = if self.native_preferences.enabled(13) {
+            2
+        } else {
+            3
+        };
+        while let Some(event) = tail.next() {
+            if matches!(event, Event::Sound { resource_id: -139 }) {
+                events.extend(self.combat_notices(previous, state));
+                for _ in 1..sounds {
+                    if tail
+                        .peek()
+                        .is_some_and(|e| matches!(e, Event::Sound { resource_id: -139 }))
+                    {
+                        tail.next();
+                    } else {
+                        break;
+                    }
+                }
+            } else if let Event::Sound { resource_id } = event {
+                events.push(Event::Feedback(
+                    centurions_core::feedback::NativeFeedback::Sound { resource_id },
+                ));
+            } else {
+                events.push(event);
+            }
+        }
+    }
+
     pub fn new(screen: Screen) -> Self {
         Self::at(screen, get_time())
     }
 
     pub(crate) fn at(screen: Screen, now: f64) -> Self {
         Self {
+            about: false,
             exchange_offer: None,
             exchange_swap: true,
             note: None,
@@ -332,6 +402,8 @@ impl Application {
             roster_page: 0,
             order: None,
             end_question: false,
+            escape_question: false,
+            combat_information: false,
             end_after_save: false,
             creation: None,
             native_preferences: crate::preferences::Preferences::default(),
@@ -417,7 +489,8 @@ impl Application {
     }
 
     pub fn blocks_game(&self) -> bool {
-        self.screen != Screen::Game
+        self.about
+            || self.screen != Screen::Game
             || self.menu.is_some()
             || self.quit_question
             || self.help.page.is_some()
@@ -429,6 +502,7 @@ impl Application {
             || self.item_editor.is_some()
             || self.order.is_some()
             || self.end_question
+            || self.escape_question
             || self.creation.is_some()
             || self.preferences_dialog.is_some()
             || self.creature.is_some()
@@ -486,8 +560,24 @@ impl Application {
                     .ok_or("creature dialog is not open")?;
                 if matches!(item, 1 | 4) {
                     self.creature = None;
+                    self.combat_information = false;
                     events.push(Event::Sound { resource_id: 205 });
                 } else if matches!(item, 2 | 3) {
+                    if self.combat_information {
+                        let c = state.combat.as_ref().ok_or("combat information missing")?;
+                        let count = c.enemies.records.len();
+                        let index = view.index.saturating_sub(10);
+                        let next = if item == 2 {
+                            index.saturating_sub(1)
+                        } else {
+                            (index + 1).min(count.saturating_sub(1))
+                        };
+                        return self.handle(
+                            ApplicationAction::CombatInformation(next as i16 + 10),
+                            state,
+                            content,
+                        );
+                    }
                     let entries: Vec<_> = if view.ally {
                         (0..state.ally_count).collect()
                     } else {
@@ -531,6 +621,7 @@ impl Application {
                     events.push(Event::Sound { resource_id: 202 });
                 }
             }
+            ApplicationAction::CloseAbout => self.about = false,
             ApplicationAction::PreferenceCancel => self.preferences_dialog = None,
             ApplicationAction::PreferenceItem(item) => {
                 let dialog = self
@@ -707,6 +798,39 @@ impl Application {
                     }
                 }
             }
+            ApplicationAction::EscapeAnswer(answer) => {
+                self.escape_question = false;
+                if answer {
+                    events = apply(self.command(Command::EscapeCombat), state, content)?;
+                }
+            }
+            ApplicationAction::CombatInformation(body) => {
+                events = apply(Command::ViewCombatBody { body }, state, content)?;
+                if body < 10 {
+                    self.information =
+                        Some(crate::information::WarriorInformation::new(body as usize));
+                } else {
+                    self.combat_information = true;
+                    self.creature = events.iter().find_map(|event| {
+                        if let Event::CreatureViewed {
+                            index,
+                            ally,
+                            record,
+                            description,
+                        } = event
+                        {
+                            Some(crate::creature::Creature {
+                                index: *index,
+                                ally: *ally,
+                                record: record.clone(),
+                                description: description.clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    });
+                }
+            }
             ApplicationAction::OpenInformation(warrior) => {
                 events = apply(Command::ViewWarrior { warrior }, state, content)?;
                 self.information = Some(crate::information::WarriorInformation::new(warrior));
@@ -741,7 +865,13 @@ impl Application {
                             4 => crate::presentation::Inspection::Specials,
                             _ => crate::presentation::Inspection::Modifiers,
                         };
-                        self.information = None;
+                        if item == 3 {
+                            self.information = None;
+                        } else {
+                            events.push(Event::Sound {
+                                resource_id: if item == 4 { 647 } else { 609 },
+                            });
+                        }
                         next = Some(Action::InformationInspection(member, inspection));
                     }
                     96 | 97 => {
@@ -968,6 +1098,15 @@ impl Application {
                 self.menu = None;
                 self.submenu = None;
                 match (id, item) {
+                    (128, 1) => {
+                        self.about = true;
+                        events.extend([
+                            Event::Sound { resource_id: 10107 },
+                            Event::Sound { resource_id: 30000 },
+                            Event::Delay { ticks: 20 },
+                            Event::Sound { resource_id: 10141 },
+                        ]);
+                    }
                     (200, 4..=22) => {
                         events = apply(Command::ViewNote { index: item - 4 }, state, content)?
                     }
@@ -1156,7 +1295,8 @@ impl Application {
     }
 
     fn supported(&self, id: i16, item: usize, state: &Session) -> bool {
-        if self.screen == Screen::Squad
+        if self.about
+            || self.screen == Screen::Squad
             || self.quit_question
             || self.help_reset_question
             || self.editor_question
@@ -1167,6 +1307,7 @@ impl Application {
             || self.help.page.is_some()
             || self.order.is_some()
             || self.end_question
+            || self.escape_question
             || self.preferences_dialog.is_some()
             || self.creature.is_some()
             || self.note.is_some()
@@ -1185,6 +1326,7 @@ impl Application {
                 .as_ref()
                 .is_some_and(|p| p.presentation.is_none());
         match (id, item) {
+            (128, 1) => true,
             (200, 4..=22) => game && state.notes[item - 4] != 0,
             (132, _) => game && item > 0 && item <= self.archives.len(),
             (146, _) => game && item > 0 && item <= state.ally_count,
@@ -1336,35 +1478,32 @@ impl Application {
         } else if let Some(info) = &self.information {
             controls.clear();
             info.draw(state, assets, &mut controls);
-        } else if self.screen == Screen::Game && state.phase == Phase::Exploration {
-            if self.editing && ui.inspection == Some(presentation::Inspection::Items) {
-                for (row, (slot, _)) in state.warriors[ui.selected]
-                    .inventory()
-                    .unwrap_or_default()
-                    .iter()
-                    .enumerate()
-                    .skip(ui.page * 8)
-                    .take(8)
-                    .enumerate()
-                {
-                    let rect = Rect::new(450., 162. + row as f32 * 39., 50., 32.);
-                    assets.panel(234, rect);
-                    controls.push(Control {
-                        rect,
-                        enabled: true,
-                        action: Action::Application(ApplicationAction::OpenItemEditor(
-                            ui.selected,
-                            slot,
-                        )),
-                    });
-                }
+            if ui.inspection == Some(presentation::Inspection::Specials) {
+                controls.clear();
+                presentation::draw_specials(state, assets, ui, &mut controls);
+            } else if crate::status_popup::active(ui) {
+                controls.clear();
+                crate::status_popup::draw(state, assets, ui, &mut controls);
             }
-            for (index, _) in state
-                .warriors
-                .iter()
-                .enumerate()
-                .filter(|_| ui.inspection.is_none())
+        } else if self.screen == Screen::Game && state.phase == Phase::Exploration {
+            if self.editing
+                && ui.inspection == Some(presentation::Inspection::Items)
+                && let Some((side, slot)) = ui.inventory.selected
             {
+                let member = ui.inventory.members[side];
+                let rect = Rect::new(724., 558., 70., 35.);
+                assets.panel(234, rect);
+                controls.push(Control {
+                    rect,
+                    enabled: true,
+                    action: Action::Application(ApplicationAction::OpenItemEditor(member, slot)),
+                });
+            }
+            for (index, _) in state.warriors.iter().enumerate().filter(|_| {
+                ui.inspection.is_none()
+                    && centurions_core::field_controls::free(state)
+                    && !crate::targeting::active(state, ui)
+            }) {
                 let mut rect = crate::layout::row(index);
                 rect.w = 50.;
                 controls.push(Control {
@@ -1395,6 +1534,25 @@ impl Application {
         if let Some(dialog) = &self.preferences_dialog {
             dialog.draw(assets, &mut controls);
         }
+        if self.about {
+            controls.clear();
+            assets.draw_dialog(166);
+            if let Some(icon) = assets.icons.get(&384) {
+                let rect = assets.dialog_rect(166, 3);
+                draw_texture(icon, rect.x, rect.y, WHITE);
+            }
+            let text = assets.dialogs[&166][16]
+                .text()
+                .replace("^0", "")
+                .replace("^1", "")
+                .replace("^2", &assets.executable_version);
+            assets.wrapped_color(&text, assets.dialog_rect(166, 17), 12, 14., YELLOW);
+            controls.push(Control {
+                rect: assets.dialog_rect(166, 12),
+                enabled: true,
+                action: Action::Application(ApplicationAction::CloseAbout),
+            });
+        }
         if self.exchange_offer.is_some() {
             controls.clear();
             assets.draw_dialog(136);
@@ -1412,6 +1570,26 @@ impl Application {
                     rect,
                     enabled: true,
                     action: Action::Application(ApplicationAction::ExchangeChoice(choice)),
+                });
+            }
+        }
+        if self.escape_question {
+            controls.clear();
+            assets.draw_dialog(136);
+            for (item, address, answer) in [(1, 0x403df4, false), (2, 0x403e04, true)] {
+                let rect = assets.dialog_rect(136, item);
+                draw_rectangle(rect.x + 2., rect.y + 2., rect.w - 4., rect.h - 4., BLACK);
+                assets.wrapped_color(
+                    &assets.native_text.text(address, true).unwrap_or_default(),
+                    rect,
+                    12,
+                    14.,
+                    YELLOW,
+                );
+                controls.push(Control {
+                    rect,
+                    enabled: true,
+                    action: Action::Application(ApplicationAction::EscapeAnswer(answer)),
                 });
             }
         }
@@ -1463,6 +1641,8 @@ impl Application {
                     enabled: true,
                     action: Action::Application(if keeping {
                         ApplicationAction::CreationAnswer(answer)
+                    } else if self.escape_question {
+                        ApplicationAction::EscapeAnswer(answer)
                     } else if self.end_question {
                         ApplicationAction::EndAnswer(answer)
                     } else if self.editor_question {
@@ -1770,9 +1950,10 @@ impl Application {
             } else {
                 (0..state.ally_count)
                     .map(|index| {
-                        centurions_content::ui::c_string(
-                            &state.allies[index * 288 + 218..(index + 1) * 288],
+                        centurions_content::combat::monster_name(
+                            &state.allies[index * 288..(index + 1) * 288],
                         )
+                        .unwrap_or_default()
                     })
                     .collect()
             };
@@ -1933,6 +2114,19 @@ impl Application {
         controls: &[Control],
         pointer: Option<Vec2>,
     ) -> Option<Action> {
+        if self.about {
+            if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Enter) {
+                return Some(Action::Application(ApplicationAction::CloseAbout));
+            }
+            return pointer
+                .and_then(|point| {
+                    controls
+                        .iter()
+                        .find(|control| control.enabled && control.rect.contains(point))
+                })
+                .filter(|_| is_mouse_button_pressed(MouseButton::Left))
+                .map(|control| control.action.clone());
+        }
         if self.exchange_offer.is_some() {
             if is_key_pressed(KeyCode::Escape) {
                 return Some(Action::Application(ApplicationAction::ExchangeChoice(None)));
@@ -2133,6 +2327,12 @@ impl Application {
             && let Some(information) = self.information.as_ref()
         {
             if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Enter) {
+                if controls
+                    .iter()
+                    .any(|control| matches!(control.action, Action::Close))
+                {
+                    return Some(Action::Close);
+                }
                 return Some(Action::Application(ApplicationAction::InformationItem(
                     if information.detailed { 58 } else { 72 },
                 )));
@@ -2189,10 +2389,13 @@ impl Application {
             || self.help_reset_question
             || self.editor_question
             || self.end_question
+            || self.escape_question
         {
             let answer = |answer| {
                 Action::Application(if keeping {
                     ApplicationAction::CreationAnswer(answer)
+                } else if self.escape_question {
+                    ApplicationAction::EscapeAnswer(answer)
                 } else if self.end_question {
                     ApplicationAction::EndAnswer(answer)
                 } else if self.editor_question {
@@ -2203,10 +2406,15 @@ impl Application {
                     ApplicationAction::QuitAnswer(answer)
                 })
             };
-            if is_key_pressed(KeyCode::Y) {
+            if is_key_pressed(KeyCode::Y) && !self.escape_question
+                || self.escape_question && is_key_pressed(KeyCode::E)
+            {
                 return Some(answer(true));
             }
-            if is_key_pressed(KeyCode::N) {
+            if is_key_pressed(KeyCode::N) && !self.escape_question
+                || is_key_pressed(KeyCode::Escape)
+                || self.escape_question && is_key_pressed(KeyCode::S)
+            {
                 return Some(answer(false));
             }
             if is_mouse_button_pressed(MouseButton::Left)
@@ -2224,6 +2432,7 @@ impl Application {
                                         | ApplicationAction::HelpResetAnswer(_)
                                         | ApplicationAction::EditorAnswer(_)
                                         | ApplicationAction::EndAnswer(_)
+                                        | ApplicationAction::EscapeAnswer(_)
                                         | ApplicationAction::CreationAnswer(_)
                                 )
                             )

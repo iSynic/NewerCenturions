@@ -2,11 +2,7 @@ use centurions_content::Content;
 use std::path::Path;
 
 fn bytes(value: &serde_json::Value) -> Vec<u8> {
-    let text = value.as_str().unwrap();
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
-        .collect()
+    crate::fixture_hex::decode(value.as_str().unwrap())
 }
 
 pub fn write(directory: &Path, _content: &Content) -> (centurions_core::Session, Vec<u8>, Vec<u8>) {

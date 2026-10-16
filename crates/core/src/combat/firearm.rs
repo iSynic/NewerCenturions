@@ -20,76 +20,6 @@ pub struct FitAmmunitionResult {
     pub loaded: bool,
 }
 
-pub struct EarnedRefitResult {
-    pub warrior: Warrior,
-    pub reserve: i32,
-    pub loaded_item_field32: i16,
-    pub weapon_work: weapon_work::WeaponWork,
-}
-
-pub fn refit_earned_secondary(
-    warrior: &Warrior,
-    content: &centurions_content::Content,
-    reserve: i32,
-) -> Result<EarnedRefitResult, RuleError> {
-    let unsupported = || RuleError::Unsupported {
-        action: "combat.refit",
-        dependency: "other earned secondary refill instance or stock",
-    };
-    let w = &warrior.bytes;
-    if w.len() != 3138
-        || w[0x9dd] != 1
-        || word(w, 0xe4)? != 165
-        || word(w, 0x126)? != 280
-        || !(1..=3).contains(&reserve)
-    {
-        return Err(unsupported());
-    }
-    let inventory = warrior.inventory()?;
-    let item = inventory.first().ok_or_else(unsupported)?;
-    if item.id() != 165
-        || word(&item.0, 2)? != 0
-        || word(&item.0, 4)? != 280
-        || word(&item.0, 6)? != 1
-        || item.0[8] != 0
-        || item.0[9] != 1
-        || item.0[10] != 15
-        || item.0[11..13].iter().any(|value| *value != 0)
-        || !matches!((item.0[13], item.0[18]), (2, 0) | (3, 10))
-        || item.0[14..18].iter().any(|value| *value != 0)
-        || item.0[19..].iter().any(|value| *value != 0)
-    {
-        return Err(unsupported());
-    }
-    let weapon = content.items.get(165).ok_or_else(unsupported)?;
-    let ammunition = content.items.get(280).ok_or_else(unsupported)?;
-    if weapon.len() != 150
-        || ammunition.len() != 150
-        || word(weapon, 26)? != 15
-        || word(weapon, 32)? != 16
-        || word(weapon, 22)? != 1
-        || word(weapon, 90)? != 0
-        || word(weapon, 102)? != 165
-        || word(ammunition, 26)? != 26
-        || word(ammunition, 34)? != 16
-        || word(ammunition, 102)? != 280
-    {
-        return Err(unsupported());
-    }
-    let mut result = EarnedRefitResult {
-        warrior: warrior.clone(),
-        reserve,
-        loaded_item_field32: word(weapon, 32)?,
-        weapon_work: weapon_work::WeaponWork::zero(),
-    };
-    result.weapon_work.load_pair(weapon, ammunition)?;
-    let needed = word(&item.0, 6)?.wrapping_sub(word(&item.0, 2)?);
-    let loaded = word(&item.0, 2)?.wrapping_add(needed);
-    put_word(&mut result.warrior.bytes, 0x134, loaded);
-    result.reserve = reserve.wrapping_sub(i32::from(needed));
-    Ok(result)
-}
-
 fn fit_battery(
     warrior: &Warrior,
     slot: usize,
@@ -494,6 +424,7 @@ pub fn resolve_enemy_after_duration(
             .wrapping_sub(word(w, 0x16)?.wrapping_mul(word(w, 0x3a)?));
         if random.bound(100) > hit.clamp(15 - difficulty * 5, 90 - difficulty * 5) {
             return Ok(AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![],
@@ -530,6 +461,7 @@ pub fn resolve_enemy_after_duration(
         }
     }
     Ok(AttackResult {
+        feedback: None,
         damage: result.total,
         killed: word(w, 0x50)? <= 0,
         sounds,
@@ -590,6 +522,7 @@ pub(crate) fn resolve_friendly_after_duration(
             .wrapping_sub(word(w, 0x16)?.wrapping_mul(word(w, 0x3a)?));
         if random.bound(100) > crate::rules::pin(hit, 15 - difficulty * 5, 90 - difficulty * 5) {
             return Ok(AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![],
@@ -616,6 +549,7 @@ pub(crate) fn resolve_friendly_after_duration(
         put_word(w, 0x50, previous.wrapping_sub(result.total));
     }
     Ok(AttackResult {
+        feedback: None,
         damage: result.total,
         killed: previous > 0 && word(w, 0x50)? < 1,
         sounds: if result.shield_sound {
@@ -669,6 +603,7 @@ pub(crate) fn resolve_after_duration(
         let maximum = 90_i16.wrapping_sub(difficulty.wrapping_mul(5));
         if random.bound(100) > hit.clamp(minimum, maximum) {
             return Ok(AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![],
@@ -707,6 +642,7 @@ pub(crate) fn resolve_after_duration(
         }
     }
     Ok(AttackResult {
+        feedback: None,
         damage,
         killed: word(m, 0x110)? <= 0,
         sounds,

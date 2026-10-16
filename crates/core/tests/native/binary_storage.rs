@@ -1,50 +1,28 @@
 use crate::prelude::*;
 
-#[derive(Deserialize)]
-struct Fixture {
-    cases: Vec<Case>,
-}
-#[derive(Deserialize)]
-struct Case {
-    #[serde(rename = "crate")]
-    crate_storage: bool,
-    hole: i32,
-    result: i16,
-    sound: i16,
-    sha256: String,
-}
-
 #[test]
 fn storage_matches_independent_68k_execution() {
-    let fixture: Fixture = serde_json::from_value(crate::support::fixture("storage.json")).unwrap();
-    let content = Content {
-        tutorials: vec![],
-        identity: "fixture".into(),
-        warriors: vec![],
-        items: vec![],
-        resources: vec![],
-        original_services: None,
-        scenario: None,
-    };
+    let fixture = crate::support::fixture("storage.json");
+    let content = crate::support::fixture_content("fixture");
     let mut item = InventoryRecord([0; 22]);
     for (index, byte) in item.0.iter_mut().enumerate().skip(2) {
         *byte = index as u8;
     }
     item.0[1] = 7;
-    for case in fixture.cases {
+    for case in fixture.array("cases") {
         let mut state = Session::new(&content);
         let mut occupied = item.clone();
         occupied.0[1] = 9;
-        let records = if case.crate_storage {
+        let records = if case.n::<bool>("crate") {
             &mut state.crate_items
         } else {
             &mut state.booty_items
         };
         records.fill(occupied);
-        if case.hole >= 0 {
-            records[case.hole as usize] = InventoryRecord([0; 22]);
+        if case.n::<i32>("hole") >= 0 {
+            records[case.n::<usize>("hole")] = InventoryRecord([0; 22]);
         }
-        let command = if case.crate_storage {
+        let command = if case.n::<bool>("crate") {
             Command::AddToCrate { item: item.clone() }
         } else {
             Command::AddToBooty { item: item.clone() }
@@ -52,7 +30,7 @@ fn storage_matches_independent_68k_execution() {
         let events = apply(command, &mut state, &content).unwrap();
         assert_eq!(
             i16::from(events.iter().any(|e| matches!(e, Event::ItemAdded { .. }))),
-            case.result
+            case.n::<i16>("result")
         );
         let sound = events
             .iter()
@@ -64,14 +42,14 @@ fn storage_matches_independent_68k_execution() {
                 }
             })
             .unwrap_or(0);
-        assert_eq!(sound, case.sound);
-        let records = if case.crate_storage {
+        assert_eq!(sound, case.n::<i16>("sound"));
+        let records = if case.n::<bool>("crate") {
             &state.crate_items
         } else {
             &state.booty_items
         };
         let bytes: Vec<u8> = records.iter().flat_map(|record| record.0).collect();
-        assert_eq!(digest(&bytes), case.sha256);
+        assert_eq!(digest(&bytes), case.text("sha256"));
         assert_eq!(state.random.draws, 0);
     }
 }

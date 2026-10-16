@@ -330,6 +330,28 @@ impl Content {
             )?;
             let mut tables = (*selected.maps[0].shared).clone();
             tables.item_cache = item_cache.clone();
+            let archive = format!("TheNewCenturions/Scenarios/{}/{level}/Data MENU", parts[0]);
+            if manifest
+                .forks
+                .iter()
+                .any(|fork| fork.kind == "data" && fork.path == archive)
+            {
+                let bytes = read_fork(originals, &manifest.forks, &archive)?;
+                if bytes.len() != 502 {
+                    return Err(ContentError::Invalid("invalid bestiary order table".into()));
+                }
+                tables.archive_order = Some(
+                    bytes
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .filter_map(|bytes| {
+                            let index = u16::from_be_bytes(*bytes);
+                            (index != 0).then(|| usize::from(index) - 1)
+                        })
+                        .collect(),
+                );
+            }
             let owner = format!("TheNewCenturions/Scenarios/{}/{level}/Scenario", parts[0]);
             for resource in manifest
                 .resources

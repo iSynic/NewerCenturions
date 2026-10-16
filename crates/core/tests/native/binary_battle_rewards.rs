@@ -1,6 +1,5 @@
 use crate::prelude::*;
 
-use crate::support::field_bytes as bytes;
 use centurions_core::combat::rewards;
 
 use crate::native_common::patched;
@@ -12,13 +11,13 @@ fn complete_original_reward_table_cash_drops_and_ordinary_close() {
     let fixture: Value = crate::support::fixture("battle-rewards.json");
 
     let content = crate::support::content();
-    let baseline = bytes(&fixture, "warriors");
+    let baseline = fixture.bytes("warriors");
     let cases = fixture.array("cases");
 
     for case in cases {
         let name = case.text("name");
         let before = patched(baseline.clone(), &case["before_changes"]);
-        let enemy_bytes = bytes(case, "enemies");
+        let enemy_bytes = case.bytes("enemies");
         let enemies: Vec<_> = crate::support::monsters(&enemy_bytes);
         let mut random = RandomState {
             seed: case.n::<u32>("seed_before"),

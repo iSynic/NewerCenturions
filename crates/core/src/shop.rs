@@ -245,6 +245,44 @@ pub fn preview(content: &Content, id: i16) -> Result<InventoryRecord, RuleError>
     Ok(record)
 }
 
+/// updateshop139244 stock rows preserve the two unwritten instance bytes.
+pub(crate) fn display_record(
+    state: &mut Session,
+    content: &Content,
+    id: i16,
+) -> Result<(), RuleError> {
+    state.load_item_work(content, id)?;
+    let item = crate::ammunition::definition(content, id)?;
+    let Some(record) = state.inventory_record.as_mut() else {
+        return Ok(());
+    };
+    for (offset, value) in [
+        (0, word(&item, 102)?),
+        (2, word(&item, 20)?),
+        (4, 0),
+        (6, word(&item, 20)?),
+    ] {
+        record.0[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
+    }
+    record.0[9] = 0;
+    for (destination, source) in [
+        (13, 139),
+        (8, 35),
+        (10, 27),
+        (14, 78),
+        (15, 81),
+        (16, 83),
+        (17, 84),
+        (18, 85),
+        (19, 86),
+        (21, 80),
+        (20, 79),
+    ] {
+        record.0[destination] = item[source];
+    }
+    Ok(())
+}
+
 fn mutate_stock(state: &mut Session) -> &mut [u8] {
     let access = state.shop_access.as_ref().unwrap();
     &mut state.shops.get_mut(&access.level).unwrap()

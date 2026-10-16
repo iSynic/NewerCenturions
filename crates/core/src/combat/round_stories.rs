@@ -119,12 +119,7 @@ fn spawn(
     random: &mut RandomState,
     result: &mut RoundOutcome,
 ) -> Result<(), RuleError> {
-    let center = combat
-        .enemies
-        .positions
-        .get(active)
-        .copied()
-        .ok_or_else(|| unsupported("retained NPC coordinates outside the captured roster"))?;
+    let center = combat.story_position(active)?;
     spawn_at(
         combat,
         mission,
@@ -233,9 +228,126 @@ pub struct RoundProgram {
     pub delegated: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RoundDispatch {
     pub suspended_script: Option<crate::ScriptState>,
+    #[serde(default)]
+    pub child_battle: bool,
+    #[serde(default)]
+    pub outer_battle: Option<RoundBattleReturn>,
+    #[serde(default)]
+    pub parent: Option<Box<RoundDispatch>>,
+    #[serde(default)]
+    pub death_depth: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RoundBattleReturn {
+    pub after_message: i16,
+    pub treasure: i16,
+    pub group: Option<i16>,
+    pub npc: Option<crate::story_npc_battle::NpcBattleStart>,
+}
+
+impl RoundDispatch {
+    pub(crate) fn death_depth(state: &crate::Session) -> usize {
+        std::iter::successors(state.combat_story.as_ref(), |story| story.parent.as_deref())
+            .take(33)
+            .count()
+    }
+
+    pub(crate) fn owns_script(&self, state: &crate::Session) -> bool {
+        let current = Self::death_depth(state);
+        current <= self.death_depth.unwrap_or(current)
+    }
+
+    pub(crate) fn validate(
+        &self,
+        state: &crate::Session,
+        content: &centurions_content::Content,
+    ) -> Result<(), RuleError> {
+        let mut current = Some(self);
+        let mut depth = 0;
+        while let Some(frame) = current {
+            depth += 1;
+            if depth > 32
+                || frame
+                    .death_depth
+                    .is_some_and(|saved| saved > 32 || saved > Self::death_depth(state))
+                || (frame.child_battle && frame.death_depth.is_none())
+                || (depth > 1 && !frame.child_battle)
+                || (frame.outer_battle.is_some() && !frame.child_battle)
+                || frame
+                    .suspended_script
+                    .as_ref()
+                    .is_some_and(|script| !script.valid(content))
+            {
+                return Err(RuleError::Invalid("invalid round caller ownership".into()));
+            }
+            if let Some(outer) = &frame.outer_battle {
+                let map = state
+                    .map(content, state.exploration.as_ref().map_or(0, |p| p.map))
+                    .ok_or("round caller map unavailable")?;
+                if outer.after_message != 0 {
+                    map.dialogue(outer.after_message)?;
+                }
+                if outer.treasure != 0 {
+                    span(
+                        &map.treasure,
+                        usize::from(outer.treasure.unsigned_abs()) * 88,
+                        88,
+                    )?;
+                }
+                if let Some(script) = outer.group {
+                    map.script(script)?;
+                }
+                if let Some(npc) = &outer.npc {
+                    if !(0..=8).contains(&npc.frame.action_index) {
+                        return Err("invalid round NPC caller cursor".into());
+                    }
+                    let battles = &map
+                        .combat
+                        .as_ref()
+                        .ok_or("round battle definitions missing")?
+                        .battles;
+                    centurions_content::combat::BattleRecord::read(battles, npc.battle)?;
+                    if npc.maximum_battle != 0 {
+                        centurions_content::combat::BattleRecord::read(
+                            battles,
+                            npc.maximum_battle,
+                        )?;
+                    }
+                    if npc.escape_script >= 0 {
+                        map.script(npc.escape_script)?;
+                    }
+                }
+            }
+            current = frame.parent.as_deref();
+        }
+        if state
+            .exploration
+            .as_ref()
+            .is_none_or(|position| position.script.is_none())
+            || (state.combat.is_none()
+                && !self.child_battle
+                && state.scripted_cleanup != Some(crate::story_cleanup::Stage::Complete))
+            || (state.combat.is_some()
+                && !self.child_battle
+                && state
+                    .combat
+                    .as_ref()
+                    .unwrap()
+                    .round_scripts
+                    .pending
+                    .as_ref()
+                    .is_none_or(|program| !program.delegated))
+        {
+            return Err(RuleError::Invalid(
+                "invalid active round dispatch frame".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl RoundProgram {
@@ -322,11 +434,11 @@ pub(crate) fn destroy_class(
         usize::try_from(body)
             .ok()
             .and_then(|index| combat.squad.positions.get(index))
+            .copied()
+            .ok_or_else(|| unsupported("retained killbody position"))?
     } else {
-        combat.enemies.positions.get((body - 10) as usize)
-    }
-    .copied()
-    .ok_or_else(|| unsupported("retained killbody position"))?;
+        combat.story_position((body - 10) as usize)?
+    };
     let class = word(extra, 0)?;
     let count = match word(extra, 2)? {
         0 => 999,

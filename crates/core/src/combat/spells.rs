@@ -425,15 +425,7 @@ fn validate_direct(packet: &[u8]) -> Result<(), RuleError> {
     }
     let unresisted_damage =
         packet[9] == 3 && packet[19] == 8 && packet[20] == 8 && word(packet, 40)? == 0;
-    let poison = packet[..11] == [0, 1, 6, 0, 0, 0, 0, 0, 0, 0, 0]
-        && packet[11..23] == [0, 0, 0, 0, 1, 3, 5, 10, 1, 1, 1, 0]
-        && packet[30..36] == [5, 0, 0, 0, 0, 0]
-        && word(packet, 36)? == 431
-        && word(packet, 38)? == 430
-        && word(packet, 40)? == 4
-        && packet[42..50].iter().all(|value| *value == 0)
-        && word(packet, 50)? == 0x2000
-        && packet[52..].iter().all(|value| *value == 0);
+    let poison = word(packet, 40)? == 4 && packet[19] == 1 && packet[20] == 1;
     let scripted = word(packet, 40)? == 23 && packet[9] == 3 && matches!(packet[19], 7 | 8);
     if (word(packet, 40)? != 0 && !poison && !scripted)
         || (!(0..=6).contains(&packet[19]) && !unresisted_damage && !scripted)
@@ -628,7 +620,7 @@ pub fn resolve_support_with_context(
     context: &DirectSpell<'_>,
     random: &mut RandomState,
 ) -> Result<SupportSpellResult, RuleError> {
-    resolve_support_for_caster(warriors, enemies, mask, id, context, None, random)
+    resolve_support_for_caster(warriors, enemies, mask, id, context, (None, None), random)
 }
 
 /// resist150588..150742 for nonphysical status categories7,8,10.
@@ -640,6 +632,21 @@ fn status_resisted(
 ) -> Result<bool, RuleError> {
     if context.armor_filter || !matches!(context.packet[9], 0 | 2) {
         return Ok(false);
+    }
+    if context.packet[19] <= 6
+        && monster
+        && (target[0x8b + usize::from(context.packet[19])] as i8 > 100 || word(target, 0xa)? > 100)
+    {
+        return Ok(true);
+    }
+    if context.packet[19] == 5
+        && if monster {
+            target[0xcb] != 0
+        } else {
+            word(target, 0x90)? != 0
+        }
+    {
+        return Ok(true);
     }
     let immune = (context.level..7).any(|level| {
         if monster {
@@ -658,6 +665,146 @@ fn status_resisted(
     })
 }
 
+/// resolvespell151022 and spelllist15bd50 retain the original Psi-drain ordering.
+/// Party targets clear the amount before Siphon's transfer; NPC targets transfer
+/// the negative half before clearing it. Neither branch applies stamina damage.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_psi_drain(
+    warriors: &[Warrior],
+    enemies: &[MonsterRecord],
+    mask: &[i16],
+    context: &DirectSpell<'_>,
+    caster: i16,
+    memory: RestrictionMemoryView<'_>,
+    random: &mut RandomState,
+) -> Result<BodySpellResult, RuleError> {
+    let packet = context.packet;
+    if packet.len() != 58
+        || warriors.len() > 6
+        || enemies.len() > 100
+        || mask.len() < 10 + enemies.len()
+        || !(1..=7).contains(&context.count)
+        || !(0..7).contains(&context.level)
+    {
+        return Err(RuleError::Invalid("Psi drain inputs".into()));
+    }
+    let effect = word(packet, 40)?;
+    if !matches!(effect, 60 | 61) || packet[19] != 5 {
+        return Err(RuleError::Unsupported {
+            action: "combat.spell.drain",
+            dependency: "other Psi-drain packet category",
+        });
+    }
+    let caster =
+        usize::try_from(caster).map_err(|_| RuleError::Invalid("negative Psi caster".into()))?;
+    if caster >= warriors.len() && caster < 10
+        || caster >= 10 + enemies.len()
+        || warriors.iter().any(|record| record.bytes.len() != 3138)
+        || enemies.iter().any(|record| record.bytes.len() != 288)
+        || mask[warriors.len()..10].iter().any(|flag| *flag > 0)
+    {
+        return Err(RuleError::Invalid("Psi drain body records".into()));
+    }
+    let mut next_random = random.clone();
+    let mut result = BodySpellResult {
+        warriors: warriors.to_vec(),
+        enemies: enemies.to_vec(),
+        sounds: vec![],
+        targets: vec![],
+        race_excluded: vec![],
+    };
+    next_random.range(i16::from(packet[13] as i8), i16::from(packet[14] as i8));
+    if packet[15] != 0 {
+        for _ in 0..context.count {
+            next_random.range(i16::from(packet[15] as i8), i16::from(packet[16] as i8));
+        }
+    }
+    for body in (0..warriors.len()).chain(10..10 + enemies.len()) {
+        if mask[body] <= 0 {
+            continue;
+        }
+        let monster = body >= 10;
+        let excluded = if monster {
+            word(packet, 50)? != 0 && monster_race_is_excluded(packet, body, Some(memory))?
+        } else {
+            race_is_excluded(packet, &result.warriors[body].bytes, "combat.spell.drain")?
+        };
+        if excluded {
+            result.race_excluded.push(body);
+            continue;
+        }
+        let target = spell_body(&mut result.warriors, &mut result.enemies, body)?;
+        if status_resisted(target, monster, context, &mut next_random)? {
+            continue;
+        }
+        let damage = resolve_damage_with_amount(
+            target,
+            monster,
+            &DamagePacket {
+                bytes: packet.to_vec(),
+                attack_count: context.count,
+            },
+            DamageFlags {
+                shield: true,
+                armor: true,
+                saves: true,
+                armor_filter: context.armor_filter,
+            },
+            0,
+            &mut next_random,
+        )?;
+        let reflected = !monster && word(target, 0x9a)? != 0 && next_random.bound(100) < 34;
+        let actual = if reflected { caster } else { body };
+        let target = spell_body(&mut result.warriors, &mut result.enemies, actual)?;
+        let offset = if actual < 10 { 0x58 } else { 0x10e };
+        let amount = damage.total.wrapping_neg();
+        let mut points = word(target, offset)?.wrapping_add(amount).max(0);
+        if actual < 10 {
+            points = points.min(word(target, 0x5a)?);
+        }
+        put_word(target, offset, points);
+        if effect == 61 && actual >= 10 {
+            let target = spell_body(&mut result.warriors, &mut result.enemies, caster)?;
+            let offset = if caster < 10 { 0x58 } else { 0x10e };
+            let points = word(target, offset)?.wrapping_add(amount / 2);
+            put_word(target, offset, points);
+        }
+        result.targets.push((
+            body,
+            AttackResult {
+                feedback: None,
+                damage: 0,
+                killed: false,
+                sounds: if damage.shield_sound {
+                    vec![206]
+                } else {
+                    vec![]
+                },
+            },
+        ));
+    }
+    *random = next_random;
+    Ok(result)
+}
+
+fn spell_body<'a>(
+    warriors: &'a mut [Warrior],
+    enemies: &'a mut [MonsterRecord],
+    body: usize,
+) -> Result<&'a mut [u8], RuleError> {
+    if body < 10 {
+        Ok(&mut warriors
+            .get_mut(body)
+            .ok_or("Psi party body missing")?
+            .bytes)
+    } else {
+        Ok(&mut enemies
+            .get_mut(body - 10)
+            .ok_or("Psi enemy body missing")?
+            .bytes)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_support_for_caster(
     warriors: &[Warrior],
@@ -665,9 +812,10 @@ pub(crate) fn resolve_support_for_caster(
     mask: &[i16],
     _id: i16,
     context: &DirectSpell<'_>,
-    caster: Option<i16>,
+    caller: (Option<i16>, Option<RestrictionMemoryView<'_>>),
     random: &mut RandomState,
 ) -> Result<SupportSpellResult, RuleError> {
+    let (caster, memory) = caller;
     let DirectSpell {
         packet,
         count,
@@ -685,7 +833,7 @@ pub(crate) fn resolve_support_for_caster(
         return Err(RuleError::Invalid("support spell inputs".into()));
     }
     let effect = word(packet, 40)?;
-    if !(effect == 57 || (1..=40).contains(&effect))
+    if !(matches!(effect, 0..=41 | 51 | 57 | 64))
         || packet[9] > 3
         || !matches!(packet[19], 7 | 8 | 10)
         || (packet[20] as i8) < 0
@@ -751,9 +899,66 @@ pub(crate) fn resolve_support_for_caster(
             &mut next_random,
         )?
         .total;
+        let damage = if effect == 28 { duration } else { damage };
         amount = damage;
         let mut sounds = vec![];
         let mut follow_up = None;
+        // Authored effect0 has no spelllist work; effect41 returns presentation only.
+        if matches!(effect, 0 | 41) {
+            if effect == 41 && word(w, 0x9a)? != 0 {
+                next_random.bound(100);
+            }
+            result.targets.push((
+                member,
+                AttackResult {
+                    feedback: None,
+                    damage: 0,
+                    killed: false,
+                    sounds: if effect == 41 {
+                        vec![word(packet, 38)?]
+                    } else {
+                        vec![]
+                    },
+                },
+            ));
+            continue;
+        }
+        if matches!(effect, 51 | 64) {
+            let target = if word(w, 0x9a)? != 0 && next_random.bound(100) < 34 {
+                usize::try_from(caster.unwrap_or(member as i16))
+                    .map_err(|_| RuleError::Invalid("negative special-effect caster".into()))?
+            } else {
+                member
+            };
+            if effect == 51 {
+                let caster = usize::try_from(caster.ok_or("charm caller missing")?)
+                    .map_err(|_| RuleError::Invalid("negative charm caster".into()))?;
+                let delta = spell_conditions::change_allegiance(
+                    &mut result.warriors,
+                    &mut result.enemies,
+                    target,
+                    caster,
+                )?;
+                result.recovered = result.recovered.wrapping_sub(delta as u8);
+            } else if target < result.warriors.len() {
+                spell_conditions::follow_up(&mut result.warriors[target].bytes, false, effect)?;
+            } else {
+                return Err(RuleError::Unsupported {
+                    action: "combat.spell.support",
+                    dependency: "revival caller outside the party",
+                });
+            }
+            result.targets.push((
+                member,
+                AttackResult {
+                    feedback: None,
+                    damage: 0,
+                    killed: false,
+                    sounds: vec![word(packet, 38)?],
+                },
+            ));
+            continue;
+        }
         if (1..=40).contains(&effect) {
             spell_conditions::add_duration(w, false, effect, duration)?;
             let reflected = word(w, 0x9a)? != 0 && next_random.bound(100) < 34;
@@ -762,7 +967,9 @@ pub(crate) fn resolve_support_for_caster(
             } else {
                 member as i16
             });
-            sounds.push(word(packet, 38)?);
+            if damage == 0 {
+                sounds.push(word(packet, 38)?);
+            }
         } else {
             let previous = word(w, 0x50)?;
             if damage < 0 && previous > -10 {
@@ -787,11 +994,18 @@ pub(crate) fn resolve_support_for_caster(
                 result.healed = true;
             }
         }
+        let previous = word(w, 0x50)?;
+        if effect == 28 && damage > 0 && previous >= 0 {
+            put_word(w, 0x50, previous.wrapping_sub(damage));
+            put_word(w, 0x14, 1);
+            sounds.push(word(packet, 38)?);
+        }
         result.targets.push((
             member,
             AttackResult {
+                feedback: None,
                 damage,
-                killed: false,
+                killed: effect == 28 && previous > 0 && word(w, 0x50)? < 1,
                 sounds,
             },
         ));
@@ -814,11 +1028,18 @@ pub(crate) fn resolve_support_for_caster(
             }
         }
     }
-    for (index, enemy) in result.enemies.iter_mut().enumerate() {
+    for index in 0..result.enemies.len() {
         if mask[index + 10] <= 0 {
             continue;
         }
-        let m = &mut enemy.bytes;
+        if matches!(effect, 0 | 41 | 51)
+            && word(packet, 50)? != 0
+            && monster_race_is_excluded(packet, index + 10, memory)?
+        {
+            result.sounds.push(651);
+            continue;
+        }
+        let m = &mut result.enemies[index].bytes;
         centurions_content::span(m, 0, 288)?;
         if status_resisted(m, true, context, &mut next_random)? {
             continue;
@@ -839,15 +1060,57 @@ pub(crate) fn resolve_support_for_caster(
             amount,
             &mut next_random,
         )?;
-        amount = damage.total;
+        let total = if effect == 28 { duration } else { damage.total };
+        amount = total;
         let mut sounds = if damage.shield_sound {
             vec![206]
         } else {
             vec![]
         };
+        if matches!(effect, 0 | 41) {
+            if effect == 41 {
+                sounds.push(word(packet, 38)?);
+            }
+            result.targets.push((
+                index + 10,
+                AttackResult {
+                    feedback: None,
+                    damage: 0,
+                    killed: false,
+                    sounds,
+                },
+            ));
+            continue;
+        }
+        if effect == 51 {
+            let caster = usize::try_from(caster.ok_or("charm caller missing")?)
+                .map_err(|_| RuleError::Invalid("negative charm caster".into()))?;
+            spell_conditions::change_allegiance(
+                &mut result.warriors,
+                &mut result.enemies,
+                index + 10,
+                caster,
+            )?;
+            result.targets.push((
+                index + 10,
+                AttackResult {
+                    feedback: None,
+                    damage: 0,
+                    killed: false,
+                    sounds: vec![word(packet, 38)?],
+                },
+            ));
+            continue;
+        }
+        if effect == 64 {
+            return Err(RuleError::Unsupported {
+                action: "combat.spell.support",
+                dependency: "revival caller outside the party",
+            });
+        }
         if (1..=40).contains(&effect) {
             spell_conditions::apply(m, true, effect, duration, &mut next_random)?;
-            if damage.total == 0 {
+            if total == 0 {
                 sounds.push(word(packet, 38)?);
             }
         }
@@ -859,11 +1122,21 @@ pub(crate) fn resolve_support_for_caster(
             sounds.push(weapon_sound);
             sounds.push(word(packet, 38)?);
         }
+        if effect == 28 && total != 0 {
+            let health = word(m, 0x110)?.wrapping_sub(total);
+            put_word(m, 0x110, health);
+            m[0x105] = 1;
+            sounds.push(word(packet, 38)?);
+            if health > 0 {
+                sounds.push(weapon_sound);
+            }
+        }
         result.targets.push((
             index + 10,
             AttackResult {
-                damage: damage.total,
-                killed: false,
+                feedback: None,
+                damage: total,
+                killed: effect == 28 && total != 0 && word(m, 0x110)? < 1,
                 sounds,
             },
         ));
@@ -1335,7 +1608,7 @@ fn resolve_party(
         return Err(RuleError::Invalid("spell resolution inputs".into()));
     }
     let poison = word(packet, 40)? == 4;
-    if poison && (level != 1 || !(1..=7).contains(&count) || usage.is_some()) {
+    if poison && (!(1..=7).contains(&count) || usage.is_some()) {
         return Err(RuleError::Unsupported {
             action: "combat.spell",
             dependency: "other poison count, defense or field collision",
@@ -1437,6 +1710,7 @@ fn resolve_party(
         result.targets.push((
             member,
             AttackResult {
+                feedback: None,
                 damage: damage.total,
                 killed: previous > 0 && word(w, 0x50)? < 1,
                 sounds,
@@ -1582,6 +1856,7 @@ fn resolve_bodies_inner(
                 (
                     body,
                     AttackResult {
+                        feedback: None,
                         damage: 0,
                         killed: false,
                         sounds: vec![word(packet, 38).unwrap_or(0)],
@@ -1731,6 +2006,7 @@ fn resolve_bodies_inner(
         result.targets.push((
             index + 10,
             AttackResult {
+                feedback: None,
                 damage: damage.total,
                 killed: word(m, 0x110)? < 1 && damage.total != 0,
                 sounds,
@@ -1801,6 +2077,7 @@ pub fn resolve_enemy_firearm_body_after_duration(
         if next_random.bound(100) > hit.clamp(minimum, maximum) {
             *random = next_random;
             return Ok(AttackResult {
+                feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![],
@@ -1835,6 +2112,7 @@ pub fn resolve_enemy_firearm_body_after_duration(
         }
     }
     let result = AttackResult {
+        feedback: None,
         damage: damage.total,
         killed: damage.total != 0 && word(m, 0x110)? < 1,
         sounds,

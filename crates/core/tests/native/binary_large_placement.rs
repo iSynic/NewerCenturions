@@ -6,14 +6,7 @@ use centurions_core::combat::footprint::restore;
 #[test]
 fn all_footprint_placement_and_restore_match_original() {
     let fixture: serde_json::Value = crate::support::fixture("large-placement.json");
-    let properties = fixture.bytes("properties");
-    let mission = OpeningMission {
-        tile_properties: properties[64..12064].to_vec(),
-        shared: std::sync::Arc::new(centurions_content::mission::StoryTables {
-            ..crate::support::stories()
-        }),
-        ..crate::support::mission()
-    };
+    let mission = crate::support::terrain_mission(&fixture);
     for (index, case) in fixture.array("cases").iter().enumerate() {
         let map = TacticalMap {
             tiles: crate::support::words(&case.bytes("map")),
@@ -41,10 +34,8 @@ fn all_footprint_placement_and_restore_match_original() {
         scalar random.draws => &case["draws"], "binary_large_placement";
         }
         let restored = restore(&placed.map, &placed.monster, placed.position).unwrap();
-        assert_eq!(
-            crate::support::word_bytes(&restored.tiles),
-            case.bytes("restored"),
-            "restore case {index}"
-        );
+        crate::support::native_expect! {
+        words restored.tiles => &case["restored"], format!("restore case {index}");
+        }
     }
 }

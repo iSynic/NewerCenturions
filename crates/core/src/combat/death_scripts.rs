@@ -49,6 +49,12 @@ impl Default for DeathQueue {
     }
 }
 impl DeathQueue {
+    pub(crate) fn validate(&self) -> Result<(), RuleError> {
+        if self.entries.len() != 100 || self.count > 100 || self.cursor > 100 {
+            return Err("invalid retained death queue".into());
+        }
+        Ok(())
+    }
     pub fn enqueue(&mut self, entry: DeathEntry) -> Result<(), RuleError> {
         if self.entries.len() != 100 || self.count >= 100 {
             return Err(RuleError::Invalid("death queue capacity exceeded".into()));

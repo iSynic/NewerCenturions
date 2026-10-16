@@ -49,8 +49,11 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                 shared.combat.as_mut().unwrap().encounters[2470..2480]
                     .copy_from_slice(&case.bytes("extra"));
                 let mut state = crate::support::mission_session(&content);
-                state.warriors = before;
                 state.inventory_record = retained;
+                if state.inventory_record.is_some() {
+                    apply(Command::RefitParty, &mut state, &content).unwrap();
+                }
+                state.warriors = before;
                 let position = state.exploration.as_mut().unwrap();
                 position.presentation = Some(Presentation::Dialogue {
                     id: 469,

@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use crate::support::checkpoint;
+use crate::support::{checkpoint, replay_command as step};
 
 use std::path::PathBuf;
 
@@ -142,11 +142,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         let mut resumed = checkpoint(&casting, &content, "script-spell");
         let events = replay_command(Command::Continue, &mut casting, &mut resumed, &content);
         assert_eq!(
-            casting
-                .warriors
-                .iter()
-                .flat_map(|w| w.bytes.clone())
-                .collect::<Vec<_>>(),
+            crate::support::record_bytes(&casting.warriors),
             case.bytes("after")
         );
         assert_eq!(
@@ -154,14 +150,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             (case.n("seed"), case.n("draws"))
         );
         assert_eq!(
-            events
-                .iter()
-                .filter_map(|e| if let Event::Sound { resource_id } = e {
-                    Some(*resource_id)
-                } else {
-                    None
-                })
-                .collect::<Vec<_>>(),
+            crate::support::event_sounds(&events),
             case.n::<Vec<i16>>("sounds")
         );
     }
@@ -302,11 +291,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     });
     apply(Command::Continue, &mut curse, &content).unwrap();
     assert_eq!(
-        curse
-            .warriors
-            .iter()
-            .flat_map(|w| w.bytes.clone())
-            .collect::<Vec<_>>(),
+        crate::support::record_bytes(&curse.warriors),
         case.bytes("after")
     );
     assert_eq!(
@@ -382,13 +367,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
                 bytes[0x14..0x16].fill(0);
             }
         }
-        assert_eq!(
-            warriors
-                .iter()
-                .flat_map(|w| w.bytes.clone())
-                .collect::<Vec<_>>(),
-            expected
-        );
+        assert_eq!(crate::support::record_bytes(&warriors), expected);
         assert_eq!(
             (random.seed, random.draws),
             (case.n("seed"), case.n("draws"))
@@ -451,12 +430,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         assert_eq!(summoning.mission_score, 8);
         let combat = summoning.combat.as_ref().unwrap();
         assert_eq!(
-            combat
-                .enemies
-                .records
-                .iter()
-                .flat_map(|m| m.bytes.clone())
-                .collect::<Vec<_>>(),
+            crate::support::record_bytes(&combat.enemies.records),
             case.bytes("after")
         );
         assert_eq!(combat.map.tiles, case.words("map_after"));
@@ -728,6 +702,7 @@ fn v2_migration_preserves_recovered_history_and_rejects_unknown_maps() {
         "ally_count",
         "party_mask",
         "selected_warrior",
+        "inventory_record",
     ] {
         session.remove(field);
     }
@@ -750,51 +725,51 @@ fn v2_migration_preserves_recovered_history_and_rejects_unknown_maps() {
 }
 
 #[test]
-fn queued_death_child_battle_resumes_parent_without_restoring_roster_or_duplicate_rewards() {
+fn shared_direct_death_child_preserves_original_header_and_saved_dialogue_return() {
     use centurions_core::{
         Event, MapState,
-        combat::{self, death_scripts::DeathEntry, runtime::DeathStory},
+        combat::{self, runtime::DeathStory},
     };
-    let (content, mut state) = fixture();
+
+    let (mut content, mut state) = fixture();
     let position = state.exploration.as_mut().unwrap();
     position.restore_map(1, MapState::authored(content.map(1).unwrap()));
     position.x = 77;
     position.y = 9;
     position.presentation = None;
     position.script = Some(ScriptState {
-        record: content.map(1).unwrap().script(55).unwrap().to_vec(),
-        cursor: 1,
         map_slot: 8,
-        item_return: false,
-        scheduled: true,
-        menu: None,
-        persist: false,
-        origin: None,
+        ..crate::support::script_state(content.map(1).unwrap().script(55).unwrap().to_vec(), 1)
     });
     combat::begin_battle(&mut state, &content, 14, 0).unwrap();
     // Controlled defeat is the same boundary used by the native nested-caller fixture.
     let arena = state.combat.as_mut().unwrap();
+    arena.direct_deaths = true;
     arena.enemies.records[0].bytes[0x110..0x112].fill(0);
     combat::lifecycle::kill_body(arena, &mut state.warriors, 10).unwrap();
-    arena.death_queue.begin();
-    let (_, entry) = arena.death_queue.current().unwrap();
+    arena.death_queue.processing = true;
+    let entry = arena.direct_death.take().unwrap().1;
     assert_eq!(entry.script, 51);
+
+    // Source-derived delegated caller; zero score replaces one sound, not native receipt bytes.
+    let scripts =
+        &mut std::sync::Arc::make_mut(&mut content.scenario.as_mut().unwrap().maps[1].shared)
+            .door_scripts;
+    scripts[51 * 42 + 10..51 * 42 + 12].copy_from_slice(&109_i16.to_be_bytes());
+    scripts[51 * 42 + 26..51 * 42 + 28].fill(0);
+
     state.combat_story = Some(DeathStory {
+        direct: true,
         body: 0,
         script: 51,
         actor: 0,
-        entry: DeathEntry { ..entry },
+        entry,
         ..Default::default()
     });
     let mut resumed = checkpoint(&state, &content, "nested-death");
     let mut started = vec![14];
     for _ in 0..20 {
-        let events = apply(Command::Continue, &mut state, &content).unwrap();
-        assert_eq!(
-            apply(Command::Continue, &mut resumed, &content).unwrap(),
-            events
-        );
-        assert_eq!(state, resumed);
+        let events = step(Command::Continue, &mut state, &mut resumed, &content);
         for event in events {
             if let Event::CombatStarted { battle, .. } = event {
                 started.push(battle);
@@ -809,60 +784,36 @@ fn queued_death_child_battle_resumes_parent_without_restoring_roster_or_duplicat
         }
     }
     assert_eq!(started, [14, 15]);
-    assert_eq!(state.combat.as_ref().unwrap().battle, 15);
-    assert_eq!(state.combat.as_ref().unwrap().enemies.records.len(), 1);
-    assert_eq!(
-        state.combat.as_ref().unwrap().enemies.records[0].bytes[0x103],
-        67
-    );
     for candidate in [&mut state, &mut resumed] {
         candidate.combat.as_mut().unwrap().enemies.records[0].bytes[0x110..0x112].fill(0);
     }
-    let child_events = combat::runtime::confirm_survivors(&mut state, &content).unwrap();
-    assert_eq!(
-        combat::runtime::confirm_survivors(&mut resumed, &content).unwrap(),
-        child_events
-    );
-    assert_eq!(state, resumed);
+    step(Command::EndTurn, &mut state, &mut resumed, &content);
     assert!(state.combat.is_none());
     let rewarded = state.warriors.clone();
     let rewarded_random = state.random.clone();
-    let events = apply(Command::Continue, &mut state, &content).unwrap();
-    assert_eq!(
-        apply(Command::Continue, &mut resumed, &content).unwrap(),
-        events
-    );
-    assert_eq!(state, resumed);
+    // Source-derived post-child prompt; the complete queued controls run in binary_nested_victory.
+
+    let script = state.exploration.as_mut().unwrap().script.as_mut().unwrap();
+    let cursor = usize::from(script.cursor);
+    script.record[8 + cursor * 2..10 + cursor * 2].copy_from_slice(&1_i16.to_be_bytes());
+    script.record[24 + cursor * 2..26 + cursor * 2].copy_from_slice(&851_i16.to_be_bytes());
+    resumed = checkpoint(&state, &content, "delegated-child-return");
+    step(Command::Continue, &mut state, &mut resumed, &content);
+    assert!(state.combat_story.as_ref().unwrap().child_returned);
+    state = checkpoint(&state, &content, "returned-child-dialogue");
+    assert!(matches!(
+        state.exploration.as_ref().unwrap().presentation,
+        Some(Presentation::Dialogue { id: 851, .. })
+    ));
+
+    step(Command::Continue, &mut state, &mut resumed, &content);
     assert!(state.combat_story.is_none());
+    let returned = state.exploration.as_ref().unwrap().script.as_ref().unwrap();
+    assert_eq!(
+        &returned.record,
+        &crate::support::fixture("nested-caller.json").array("cases")[0].bytes("body_after")
+    );
     assert_eq!(state.warriors, rewarded);
     assert_eq!(state.random, rewarded_random);
-    assert_eq!(
-        state
-            .exploration
-            .as_ref()
-            .unwrap()
-            .script
-            .as_ref()
-            .unwrap()
-            .cursor,
-        1
-    );
-    for _ in 0..20 {
-        let events = apply(Command::Continue, &mut state, &content).unwrap();
-        assert_eq!(
-            apply(Command::Continue, &mut resumed, &content).unwrap(),
-            events
-        );
-        assert_eq!(state, resumed);
-        for event in events {
-            if let Event::CombatStarted { battle, .. } = event {
-                started.push(battle);
-            }
-        }
-        if state.combat.is_some() {
-            break;
-        }
-    }
-    assert_eq!(started, [14, 15, 15]);
-    assert!(state.combat_story.is_none());
+    assert_eq!(returned.cursor, 1);
 }

@@ -45,6 +45,33 @@ fn scripted_map_mutations_match_original_complete_map_layers() {
             }
         }
     }
+    // Opcode8 reads the mutable map header; opcode39 instead loads Data ED3.
+    let captured = crate::support::fixture("header-dispatch.json");
+    let content = content();
+    let mut state = crate::support::mission_session(&content);
+    let position = state.exploration.as_mut().unwrap();
+    position.x = 30;
+    position.y = 78;
+    position.floor.fill(155);
+    position.region_state.fill(0);
+    position.presentation = None;
+    position.event_headers = captured.bytes("headers");
+    let mut restored = crate::support::checkpoint(&state, &content, "header-alias");
+    crate::support::replay_command(
+        Command::Move { dx: 0, dy: 1 },
+        &mut state,
+        &mut restored,
+        &content,
+    );
+    let position = state.exploration.as_ref().unwrap();
+    assert!(matches!(
+        position.presentation,
+        Some(Presentation::Dialogue { id: 124, .. })
+    ));
+    assert_eq!(
+        position.script.as_ref().unwrap().record,
+        captured.bytes("after")
+    );
 }
 
 #[test]

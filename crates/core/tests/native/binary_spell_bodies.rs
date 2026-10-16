@@ -14,7 +14,7 @@ fn additional_spells_match_original_ordered_party_and_monster_records() {
 }
 
 fn assert_resolution(fixture: &serde_json::Value) {
-    for (index, case) in fixture.array("cases").iter().enumerate() {
+    for case in fixture.array("cases") {
         let warriors = crate::support::warriors(&case.bytes("warriors_before"));
         let enemies = crate::support::monsters(&case.bytes("enemies_before"));
         let mask = crate::support::words(&case.bytes("mask"));
@@ -34,28 +34,16 @@ fn assert_resolution(fixture: &serde_json::Value) {
             &mut random,
         )
         .unwrap();
-        let actual = crate::support::record_bytes(&result.warriors);
-        assert_bytes(
-            &actual,
-            &case.bytes("warriors_after"),
-            &format!("case {index} party"),
+        crate::native_common::assert_body_records(
+            &result.warriors,
+            &result.enemies,
+            &case["warriors_after"],
+            &case["enemies_after"],
         );
-        let actual = crate::support::record_bytes(&result.enemies);
         crate::support::native_expect! {
-        bytes actual => &case["enemies_after"], &format!("case {index} enemies");
         scalar random.seed => &case["seed_after"], "binary_spell_bodies";
         scalar random.draws => &case["rng_draws"], "binary_spell_bodies";
-        scalar (result
-                        .sounds
-                        .iter()
-                        .copied()
-                        .chain(
-                            result
-                                .targets
-                                .iter()
-                                .flat_map(|(_, r)| r.sounds.iter().copied()),
-                        )
-                        .collect::<Vec<_>>()) => &case["sounds"], "binary_spell_bodies";
+        scalar crate::native_common::body_spell_sounds(&result) => &case["sounds"], "binary_spell_bodies";
         }
     }
 }
@@ -96,31 +84,18 @@ fn enemy_firearms_match_original_scientist_records_sounds_and_randomness() {
 
 #[test]
 fn global_spell_masks_match_original_faction_and_living_body_rules() {
-    use centurions_core::combat::{
-        Combat, EnemySetup, SquadPlacement, TacticalMap, spells::global_targets,
-    };
+    use centurions_core::combat::spells::global_targets;
     let fixture: serde_json::Value = crate::support::fixture("additional-spells.json");
     for (index, case) in fixture.array("mask_cases").iter().enumerate() {
         let warriors = crate::support::warriors(&case.bytes("warriors"));
         let enemies = crate::support::monsters(&case.bytes("enemies_before"));
-        let combat = Combat {
-            map: TacticalMap {
-                tiles: vec![],
-                shift: (0, 0),
-                edge_word: 0,
-            },
-            squad: SquadPlacement {
-                positions: vec![],
-                under_tiles: vec![],
-            },
-            enemies: EnemySetup {
-                records: enemies,
-                positions: vec![],
-            },
-            order: vec![],
-            cursor: 0,
-            ..crate::support::battle()
-        };
+        let mut combat = crate::support::battle();
+        combat.map.tiles.clear();
+        combat.squad.positions.clear();
+        combat.squad.under_tiles.clear();
+        combat.enemies.records = enemies;
+        combat.order.clear();
+        combat.cursor = 0;
         let packet = case.bytes("packet");
         let result = global_targets(&combat, &warriors, 0, &packet).unwrap();
         let actual = crate::support::word_bytes(&result.mask);

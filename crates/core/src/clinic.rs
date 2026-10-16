@@ -11,10 +11,14 @@ pub(crate) fn validate(state: &Session) -> Result<(), RuleError> {
     if let Some(member) = pending(state)
         && (state.phase != Phase::Exploration
             || member >= state.warriors.len()
-            || state
-                .exploration
-                .as_ref()
-                .is_none_or(|p| p.script.is_none()))
+            || state.exploration.as_ref().is_none_or(|p| {
+                p.script.is_none()
+                    && state
+                        .field_controls
+                        .as_ref()
+                        .and_then(|c| c.clinic)
+                        .is_none()
+            }))
     {
         return Err("invalid clinic continuation".into());
     }
@@ -38,6 +42,7 @@ pub(crate) fn pending(state: &Session) -> Option<usize> {
 
 /// newland144bd8 and temple15d2f0: pool on entry, even if no treatment is bought.
 pub(crate) fn visit(state: &mut Session, percent: i16) -> Result<Vec<Event>, RuleError> {
+    state.field_controls.get_or_insert_default().clinic = Some(percent);
     crate::party::pool_credits(&mut state.warriors, &mut state.party_currency)?;
     state
         .exploration

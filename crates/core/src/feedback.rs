@@ -36,9 +36,51 @@ pub enum NativeFeedback {
     Combat {
         kind: CombatRefusal,
     },
+    CombatResult {
+        body: i16,
+        code: i16,
+        amount: i16,
+        audible: bool,
+    },
     Sound {
         resource_id: i16,
     },
+}
+
+/// newland144632: original Click Mouse flash before the script resumes.
+pub fn script_pause() -> NativeFeedback {
+    NativeFeedback::Flash {
+        address: 0x401c9e,
+        x: 100,
+        y: 200,
+        wait: 0,
+        sound: 30005,
+    }
+}
+
+/// showresults 0x158454 fixed result branches; addresses reference Pascal DATA strings.
+pub fn combat_result(code: i16) -> Option<(u32, i16)> {
+    Some(match code {
+        -34 => (0x400e9a, 104),
+        -33 => (0x400e8e, 624),
+        -32 => (0x400e84, 630),
+        -30 => (0x400e76, 651),
+        -29 => (0x400e6c, 659),
+        -28 => (0x400e62, 667),
+        -27 => (0x400e58, 644),
+        -26 => (0x400e50, 664),
+        -23 => (0x400e0e, 649),
+        -22 => (0x400df8, 107),
+        -21 => (0x400de2, 344),
+        -20 => (0x400dd0, 431),
+        -19 => (0x400dbe, 601),
+        -16 => (0x400d8a, 618),
+        -15 => (0x400d76, 360),
+        -51 => (0x400d34, 629),
+        -50 => (0x400d22, 629),
+        -45 => (0x400d0e, 629),
+        _ => return None,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

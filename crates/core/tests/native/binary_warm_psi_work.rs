@@ -1,67 +1,7 @@
 use crate::native_common::decoded_positions as positions;
 use crate::prelude::*;
 
-fn native_work(s: &Value) -> WeaponWork {
-    let weapon = s.bytes("weapon_work");
-    let ammo = s.bytes("ammo_work");
-    let work = WeaponWork {
-        sound: Some(word(&weapon, 0x0e).unwrap()),
-        weapon_armor_filter: Some(word(&weapon, 0x88).unwrap()),
-        ammunition_armor_filter: Some(word(&ammo, 0x88).unwrap()),
-    };
-    let projection = &s["work_projection"];
-    crate::support::native_expect! {
-    scalar work.sound.unwrap() => &projection["sound"], "binary_warm_psi_work";
-    scalar work.weapon_armor_filter.unwrap() => &projection["weapon_armor_filter"], "binary_warm_psi_work";
-    scalar work.ammunition_armor_filter.unwrap() => &projection["ammunition_armor_filter"], "binary_warm_psi_work";
-    }
-    assert_eq!(work.armor_filter().unwrap(), projection["armor_filter"]);
-    work
-}
-
-fn state(content: &Content, s: &Value) -> Session {
-    let mut state = crate::support::mission_session(content);
-    state.warriors = crate::support::warriors(&s["party"]);
-    state.psi_memory = Some(s.bytes("memory"));
-    state.party_buffs = s.bytes("party_buffs");
-    state.loaded_item_field32 = Some(s.n::<i16>("item_context"));
-    state.attack_count = s.n::<i16>("count");
-    state.weapon_work = native_work(s);
-    state.attack_packet = Some(s.bytes("packet"));
-    state.attack_identity = Some(s.words("identity").try_into().unwrap());
-    state.random = RandomState {
-        seed: s.n::<u32>("seed"),
-        draws: s.n::<u64>("draws"),
-    };
-    state.combat = Some(Combat {
-        battle: 85,
-        map: TacticalMap {
-            tiles: s.words("map"),
-            shift: (0, 0),
-            edge_word: 0,
-        },
-        squad: SquadPlacement {
-            positions: positions(&s["party_positions"]),
-            under_tiles: vec![1155; 6],
-        },
-        enemies: EnemySetup {
-            records: crate::support::monsters(&s["records"]),
-            positions: positions(&s["monster_positions"]),
-        },
-        order: s.words("order"),
-        cursor: s.n::<usize>("cursor"),
-        round: s.n::<i16>("round"),
-        spell_fields: s.bytes("fields"),
-        field_used: s.bytes("used"),
-        attack_packet: Some(s.bytes("packet")),
-        attack_identity: Some(s.words("identity").try_into().unwrap()),
-        weapon_work: state.weapon_work,
-        unavailable: s.n::<i8>("unavailable"),
-        ..crate::support::battle()
-    });
-    state.phase = Phase::Combat;
-    state
-}
+use crate::native_common::{psi_snapshot as state, psi_work as native_work};
 
 fn assert_snapshot(state: &Session, expected: &Value, events: &[Event], label: &str) {
     let c = state.combat.as_ref().unwrap();

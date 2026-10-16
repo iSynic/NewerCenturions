@@ -56,7 +56,16 @@ impl WarriorEditor {
                     .map_err(|e| e.to_string())?
                     == 0
                 {
-                    return Err("That warrior can't perform scans".into());
+                    // upgradewarrior1628b6 returns to the editor after this native flash.
+                    return Ok(vec![Event::Feedback(
+                        centurions_core::feedback::NativeFeedback::Flash {
+                            address: 0x4005d4,
+                            x: 50,
+                            y: 50,
+                            wait: 0,
+                            sound: 6000,
+                        },
+                    )]);
                 }
                 let map = content.map(0).ok_or("Scan profiles unavailable.")?;
                 self.scans = Some(ScanEditor {

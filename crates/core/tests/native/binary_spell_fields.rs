@@ -48,27 +48,15 @@ fn complete_collisions_match_original_all_bodies_fields_usage_and_randomness() {
     let rotated = crate::support::fixture("rotated-fields.json");
     for case in fixture.array("cases").iter().chain(rotated.array("cases")) {
         let mut warriors = crate::support::warriors(&case["warriors_before"]);
-        let mut combat = Combat {
-            battle: 28,
-            map: TacticalMap {
-                tiles: fixture.words("map"),
-                shift: (0, 0),
-                edge_word: 0,
-            },
-            squad: SquadPlacement {
-                positions: (0..6).map(|i| (20 + i, 20)).collect(),
-                under_tiles: vec![1155; 6],
-            },
-            enemies: EnemySetup {
-                records: crate::support::monsters(&case["enemies_before"]),
-                positions: vec![(20, 22), (22, 22)],
-            },
-            order: vec![-1, 10],
-            spell_fields: case.bytes("fields_before"),
-            field_used: case.bytes("used_before"),
-            ..crate::support::battle()
-        };
-        combat.weapon_work = centurions_core::combat::weapon_work::WeaponWork::zero();
+        let mut combat = crate::support::battle();
+        combat.battle = 28;
+        combat.map.tiles = fixture.words("map");
+        combat.squad.positions = (0..6).map(|i| (20 + i, 20)).collect();
+        combat.enemies.records = crate::support::monsters(&case["enemies_before"]);
+        combat.enemies.positions = vec![(20, 22), (22, 22)];
+        combat.order = vec![-1, 10];
+        combat.spell_fields = case.bytes("fields_before");
+        combat.field_used = case.bytes("used_before");
         if case.get("armor").and_then(Value::as_i64) == Some(1) {
             combat
                 .weapon_work
