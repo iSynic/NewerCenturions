@@ -40,6 +40,8 @@ def main() -> None:
         "LICENSE": "LICENSE",
         "THIRD_PARTY.md": "THIRD_PARTY.md",
         "docs/public-readme.md": "README.md",
+        "docs/installation.md": "docs/installation.md",
+        "docs/building.md": "docs/building.md",
         "docs/reconstruction.md": "docs/reconstruction.md",
         "docs/maintainability.md": "docs/maintainability.md",
         "vendor/miniquad/LICENSE-MIT": "licenses/miniquad-MIT.txt",
