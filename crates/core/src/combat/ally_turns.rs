@@ -1,5 +1,8 @@
-use super::*;
+use crate::combat::{Combat, attack, damage, enemy_weapons, firearm, lifecycle, put_word, runtime};
+use crate::{Event, RandomState, RuleError};
 use attack::AttackResult;
+use centurions_content::combat::MonsterRecord;
+use centurions_content::{Warrior, word};
 use damage::{DamageFlags, DamagePacket, resolve_damage};
 
 fn position(c: &Combat, body: i16) -> (i16, i16) {
@@ -11,7 +14,7 @@ fn position(c: &Combat, body: i16) -> (i16, i16) {
 }
 fn alive(c: &Combat, w: &[Warrior], body: i16) -> bool {
     if (0..6).contains(&body) {
-        w[body as usize].bytes[0x9df] != 0
+        w[body as usize].record().active_flag() != 0
     } else if body >= 10 {
         c.enemies
             .records
@@ -23,9 +26,9 @@ fn alive(c: &Combat, w: &[Warrior], body: i16) -> bool {
 }
 fn faction(c: &Combat, w: &[Warrior], body: i16) -> Result<i16, RuleError> {
     if body < 10 {
-        Ok(word(&w[body as usize].bytes, 0x10)?)
+        Ok(w[body as usize].record().faction()?)
     } else {
-        Ok(word(&c.enemies.records[(body - 10) as usize].bytes, 0xe)?)
+        Ok(c.enemies.records[(body - 10) as usize].record().faction()?)
     }
 }
 
@@ -328,7 +331,9 @@ fn natural_attack_enemy_inner(
             }
         }
     }
-    let health = word(&c.enemies.records[t].bytes, 0x110)?
+    let health = c.enemies.records[t]
+        .record()
+        .stamina()?
         .wrapping_sub(resolved.total)
         .wrapping_sub(extra_damage);
     if resolved.total != 0 {
@@ -612,7 +617,10 @@ fn fire(
         events.push(Event::Sound { resource_id: 206 });
     }
     if result.total != 0 {
-        let hp = word(&c.enemies.records[t].bytes, 0x110)?.wrapping_sub(result.total);
+        let hp = c.enemies.records[t]
+            .record()
+            .stamina()?
+            .wrapping_sub(result.total);
         put_word(&mut c.enemies.records[t].bytes, 0x110, hp);
         if hp < 1 {
             lifecycle::kill_body(c, w, target as i16)?;
@@ -710,7 +718,8 @@ fn scientist_turn_inner(
         return Err(RuleError::Invalid("active scientist is warrior".into()));
     }
     let e = (body - 10) as usize;
-    if word(&c.enemies.records[e].bytes, 0xe)? != 0 || word(&c.enemies.records[e].bytes, 0x26)? != 1
+    if c.enemies.records[e].record().faction()? != 0
+        || c.enemies.records[e].record().primary_weapon()? != 1
     {
         return Err(RuleError::Unsupported {
             action: "combat.scientist",

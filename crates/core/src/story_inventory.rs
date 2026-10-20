@@ -194,7 +194,7 @@ pub fn consume_party_items_retained(
             let weight = word(definition, 0x10)?.wrapping_add(
                 word(definition, 0x24)?.wrapping_mul(word(&warrior.bytes, 0x134 + slot * 22)?),
             );
-            let carried = word(&warrior.bytes, 0x9d6)?.wrapping_sub(weight);
+            let carried = warrior.record().carried_weight()?.wrapping_sub(weight);
             warrior.bytes[0x9d6..0x9d8].copy_from_slice(&carried.to_be_bytes());
             for destination in slot..29 {
                 let start = 0x132 + (destination + 1) * 22;
@@ -204,7 +204,7 @@ pub fn consume_party_items_retained(
             }
             warrior.bytes[0x1a..0x1c].copy_from_slice(&((count - 1) as i16).to_be_bytes());
             warrior.bytes[0x132 + (count - 1) * 22..0x132 + 100 * 22].fill(0);
-            let race = word(&warrior.bytes, 0x32)?.wrapping_sub(1);
+            let race = warrior.record().race()?.wrapping_sub(1);
             let movement = race_movements.get(race as usize).ok_or_else(|| {
                 RuleError::Invalid("consumed item race movement is unavailable".into())
             })?;

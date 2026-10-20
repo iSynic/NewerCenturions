@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    BTreeMap, BodyRect, Content, InventoryRecord, NativeText, RenderingMemory, RuleError,
+    unavailable, word,
+};
+use crate::recovered_drawing::{BuildingWorld, DrawingServices, PictureObservation};
+use crate::recovered_text::{NumericServices, PascalString};
 use crate::{
     recovered_detail_ui::{DetailPlan, DetailReply, DetailRequest, DetailServices, quick_info},
     recovered_files::{FileReply, FileRequest},
@@ -144,7 +149,7 @@ pub fn attack_estimate(
         memory.insert_region(0x439d3c + (body - 10) as u32 * 288, &enemy.bytes);
     }
     for id in [
-        word(&warrior.bytes, 0xe4)?,
+        warrior.record().equipped_weapon()?,
         word(&warrior.bytes, 0xca)?,
         word(&warrior.bytes, 0x12c)?,
         word(&warrior.bytes, 0x12e)?,

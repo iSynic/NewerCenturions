@@ -215,7 +215,7 @@ pub fn initial_items(
     }
     let mos = span(
         &mission.profiles,
-        (word(&warrior.bytes, 0x34)? as usize - 1) * 576,
+        (warrior.record().profession()? as usize - 1) * 576,
         576,
     )?;
     use crate::recovered_install::{InstallMemory, InstallRequest, installitem_complete};
@@ -243,9 +243,9 @@ pub fn initial_items(
             .ok_or("creation item definition missing")?;
         let weight = word(definition, 20)?
             .wrapping_mul(word(definition, 36)?)
-            .wrapping_add(word(&warrior.bytes, 0x9d6)?)
+            .wrapping_add(warrior.record().carried_weight()?)
             .wrapping_add(word(definition, 16)?);
-        if weight as u16 > word(&warrior.bytes, 0x9d8)? as u16
+        if weight as u16 > warrior.record().weight_capacity()? as u16
             || !crate::equipment::can_use(warrior, definition, mission)?
         {
             continue;

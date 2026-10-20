@@ -298,7 +298,7 @@ pub fn draw_weapons(
     let mut category = None;
     for slot in slots.into_iter().skip(ui.page).take(12) {
         let item = &inventory[slot];
-        let kind = (item.0[10] as i8).unsigned_abs();
+        let kind = (item.category_code() as i8).unsigned_abs();
         if category != Some(kind) {
             let address = if kind == 15 { 0x403d28 } else { 0x403cfc };
             rows.push((
@@ -321,7 +321,7 @@ pub fn draw_weapons(
                 .unwrap_or_default();
             label.push_str(&format!("{prefix}{amount}{suffix}"));
         }
-        rows.push((label, Some(slot), item.0[9] != 0));
+        rows.push((label, Some(slot), item.equipment_flag() != 0));
     }
     let width = rows
         .iter()
@@ -369,4 +369,13 @@ pub fn draw_weapons(
             });
         }
     }
+}
+
+/// Converts an in-map logical point using the same visible origin as targeting.
+pub fn map_position(state: &Session, ui: &UiState, pointer: Vec2) -> Option<(i16, i16)> {
+    let (x, y) = origin(state, ui)?;
+    Some((
+        x + ((pointer.x - crate::layout::MAP.x) / 32.) as i16,
+        y + ((pointer.y - crate::layout::MAP.y) / 32.) as i16,
+    ))
 }

@@ -20,7 +20,7 @@ pub fn single_warrior(warriors: &[Warrior], index: usize) -> Result<[i16; 6], Ru
     let warrior = warriors
         .get(index)
         .ok_or_else(|| RuleError::Invalid("selected warrior is unavailable".into()))?;
-    if word(&warrior.bytes, 0x50)? < 1 {
+    if warrior.record().stamina()? < 1 {
         return Err(RuleError::Invalid("selected warrior has no stamina".into()));
     }
     let mut selected = [0; 6];

@@ -154,7 +154,7 @@ def accounting(root):
         for path in sorted(test_root.rglob("*")):
             if path.is_file() and path.suffix in (".rs", ".py", ".ps1", ".java"):
                 add_count(totals, inventory, path.relative_to(root), path.read_text(encoding="utf-8"), "tests")
-    for name in ("Run-Tests.ps1", "Run-Cargo.ps1", "Build.ps1", "source_audit.py", "check_menu_boundary.py",
+    for name in ("Run-Tests.ps1", "Run-Cargo.ps1", "Build.ps1", "build_portable.py", "source_audit.py", "check_menu_boundary.py",
                  "audit_public.py", "oracle_cache.py", "capture_reference.py", "reference.py",
                  "reference_debug.py", "registration_status.py", "verify_mace3_audio.py",
                  "Setup-Reference.ps1"):

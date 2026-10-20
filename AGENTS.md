@@ -4,6 +4,8 @@
 - Preserve `NewCenturions/` byte-for-byte. Generated extraction and Ghidra outputs belong in ignored `analysis/`.
 - Recover actions with resource/address evidence, integer widths, ordered effects, and RNG consumption. Unsupported gameplay must return a diagnostic without changing state.
 - Keep rule state and randomness independent of desktop presentation. Use the same command boundary for desktop and replay.
+- Keep maintained modules focused on one subsystem or screen workflow. Facades own contracts and routing; put rules, presentation, persistence and platform services in their respective owners. Use explicit imports at maintained boundaries and review growing controllers before adding another responsibility. See `docs/maintainability.md`.
+- During structural changes, preserve serialized commands/events, save fields/defaults, validation order, partial-effect commits and native effect/RNG order. Keep native record offsets in documented record views and rule adapters; preserve public paths with re-exports.
 - Verify independent binary/reference cases before calling behavior faithful. Static analysis, bounded emulation, and live original-game observations are distinct evidence levels.
 - Prioritize broad source translation before parity refinement. Ghidra source can establish provisional actions and Rust implementations without a native fixture first; record uncertain fields and service boundaries, compile each batch, and keep existing verified behavior working. Native comparison establishes fidelity, not eligibility to implement recovered logic.
 - New saves are versioned and never overwrite original warriors or game saves.

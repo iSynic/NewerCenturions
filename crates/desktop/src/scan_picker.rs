@@ -117,7 +117,7 @@ pub fn draw(
     };
     let level = ui.page.min(6);
     let power = ui.psi_power.clamp(1, 7);
-    let school = word(&warrior.bytes, 0x36).unwrap_or(0);
+    let school = warrior.record().psi_school().unwrap_or(0);
     let field = |item, text: &str| assets.wrapped_color(text, rectangle(item), 12, 14., YELLOW);
     let mut chosen = None;
     for row in 0..7 {
@@ -164,7 +164,9 @@ pub fn draw(
             });
         }
     }
-    if let Some(image) = word(&warrior.bytes, 0x54)
+    if let Some(image) = warrior
+        .record()
+        .portrait()
         .ok()
         .and_then(|id| assets.portraits.get(&id))
     {

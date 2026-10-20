@@ -1,4 +1,7 @@
-use super::*;
+#[cfg(all(test, feature = "original-fixtures"))]
+use crate::*;
+use crate::{Event, Phase, RuleError, ScriptState, Session, TimeContinuation, story_allies};
+use centurions_content::Content;
 use centurions_content::word;
 
 fn put(bytes: &mut [u8], offset: usize, value: i16) {
@@ -260,7 +263,7 @@ fn consume_food(state: &mut Session, content: &Content) -> Result<bool, RuleErro
                 .get(800)
                 .ok_or_else(|| RuleError::Invalid("food definition unavailable".into()))?;
             let weight = word(definition, 0x24)?;
-            let carried = word(&warrior.bytes, 0x9d6)?.wrapping_sub(weight);
+            let carried = warrior.record().carried_weight()?.wrapping_sub(weight);
             put(&mut warrior.bytes, 0x9d6, carried);
             put(&mut warrior.bytes, 0x132 + slot * 22 + 2, quantity - 1);
             if quantity == 1 && word(definition, 0x26)? != 0 {

@@ -1,0 +1,495 @@
+//! Conditions script operations, preserving original dispatch order.
+use super::super::{present_menu, present_typed};
+use super::{Operation, ScriptStep};
+use crate::{
+    Event, MapState, Presentation, RuleError, Session, story, story_inventory, story_variables,
+    travel, typed_encounter,
+};
+use centurions_content::mission::OpeningMission;
+use centurions_content::records::{
+    ItemDefinition, ObjectRectangleExtra, StoryRecordMut, TravelExtra,
+};
+use centurions_content::{Content, span, word};
+
+pub(super) fn execute(
+    operation: Operation,
+    parameter: i16,
+    state: &mut Session,
+    content: &Content,
+    map: &OpeningMission,
+    _cursor: usize,
+    effects: &mut Vec<Event>,
+) -> Result<ScriptStep, RuleError> {
+    let opcode = operation.native();
+    let position = state.exploration.as_mut().unwrap();
+    let script = position.script.as_mut().unwrap();
+    match operation {
+        Operation::ChangeRegion => {
+            let extra = span(
+                &map.combat.as_ref().unwrap().encounters,
+                parameter as usize * 10,
+                10,
+            )?;
+            let target = i32::from(word(extra, 0)?);
+            let authored = content
+                .map(target)
+                .ok_or_else(|| RuleError::Invalid("region target map unavailable".into()))?;
+            if !(0..20).contains(&word(extra, 2)?) {
+                return Err(RuleError::Invalid("region index unavailable".into()));
+            }
+            let regions = if target == position.map {
+                &mut position.region_state
+            } else {
+                &mut state
+                    .visited_maps
+                    .entry(target)
+                    .or_insert_with(|| MapState::authored(authored))
+                    .regions
+            };
+            let region = word(extra, 2)? as usize;
+            regions[160 + region * 2..162 + region * 2].copy_from_slice(&extra[4..6]);
+            for (source, target) in [(6, 200 + region * 4), (8, 202 + region * 4)] {
+                if word(extra, source)? >= 0 {
+                    regions[target..target + 2].copy_from_slice(&extra[source..source + 2]);
+                }
+            }
+        }
+        Operation::ClearObjects => {
+            let extra = span(
+                &map.combat.as_ref().unwrap().encounters,
+                parameter.unsigned_abs() as usize * 10,
+                10,
+            )?;
+            let rectangle = ObjectRectangleExtra(extra);
+            let target = rectangle.map()?;
+            let authored = content
+                .map_at(state.mission.as_deref(), state.scenario_level, target)
+                .ok_or("object clearing map unavailable")?;
+            let first = rectangle.first()?;
+            let last = rectangle.last()?;
+            OpeningMission::index(first.0, first.1)?;
+            OpeningMission::index(last.0, last.1)?;
+            let objects = if target == position.map {
+                &mut position.objects
+            } else {
+                &mut state
+                    .visited_maps
+                    .entry(target)
+                    .or_insert_with(|| MapState::authored(authored))
+                    .objects
+            };
+            for x in first.0..=last.0 {
+                for y in first.1..=last.1 {
+                    objects[OpeningMission::index(x, y)?] = 0;
+                }
+            }
+        }
+        Operation::ReplaceMapEvent | Operation::ChangeTiles | Operation::SetEventChances => {
+            let extra = span(
+                &map.combat.as_ref().unwrap().encounters,
+                parameter as usize * 10,
+                10,
+            )?;
+            let target = i32::from(word(extra, 0)?);
+            let authored = content
+                .map(target)
+                .ok_or_else(|| RuleError::Invalid("map mutation target unavailable".into()))?;
+            if operation == Operation::ChangeTiles {
+                let mutation = travel::tile_mutation(extra)?;
+                if target == position.map {
+                    let layer = match mutation.layer {
+                        travel::TileLayer::Floor => &mut position.floor,
+                        travel::TileLayer::Object => &mut position.objects,
+                    };
+                    *layer = travel::apply_tile(layer, &mutation)?;
+                } else {
+                    let records = state
+                        .visited_maps
+                        .entry(target)
+                        .or_insert_with(|| MapState::authored(authored));
+                    let layer = match mutation.layer {
+                        travel::TileLayer::Floor => &mut records.floor,
+                        travel::TileLayer::Object => &mut records.objects,
+                    };
+                    *layer = travel::apply_tile(layer, &mutation)?;
+                }
+            } else {
+                let headers = if target == position.map {
+                    &mut position.event_headers
+                } else {
+                    &mut state
+                        .visited_maps
+                        .entry(target)
+                        .or_insert_with(|| MapState::authored(authored))
+                        .event_headers
+                };
+                *headers = if operation == Operation::SetEventChances {
+                    travel::set_event_chances(headers, extra)?
+                } else {
+                    let replacement = travel::event_replacement(extra)?;
+                    travel::replace_event_script(
+                        headers,
+                        replacement.slot,
+                        &map.script(replacement.script)?,
+                    )?
+                };
+            }
+        }
+        Operation::Pause => {
+            position.presentation = Some(Presentation::ScriptPause);
+            effects.push(Event::Feedback(crate::feedback::script_pause()));
+            return Ok(ScriptStep::Pause);
+        }
+        Operation::MapEffect => {
+            let extra = span(
+                &map.combat.as_ref().unwrap().encounters,
+                parameter as usize * 10,
+                10,
+            )?;
+            effects.push(Event::OutdoorEffect {
+                effect: word(extra, 0)?,
+                x: word(extra, 2)?,
+                y: word(extra, 4)?,
+                size: word(extra, 6)?,
+                delay: word(extra, 8)?,
+            });
+        }
+        Operation::ConsumePartyItems => {
+            let tables = map.combat.as_ref().unwrap();
+            let extra = span(&tables.encounters, parameter as usize * 10, 10)?;
+            let consumed = story_inventory::consume_party_items_retained(
+                &state.warriors,
+                content,
+                &tables.race_moves,
+                extra,
+                state.inventory_record.as_ref(),
+            )?;
+            if let Some(definition) = consumed.definition {
+                state.loaded_item_field32 = Some(ItemDefinition(&definition).retained_field32()?);
+                state.ammunition_work.item = Some(definition);
+            } else if consumed.consumed != 0 {
+                let loaded = word(extra, if word(extra, 4)? == 3 { 8 } else { 0 })?;
+                state.loaded_item_field32 = Some(state.ammunition_work.load_item(content, loaded)?);
+            }
+            state.inventory_record = consumed.record;
+            state.warriors = consumed.warriors;
+            effects.extend(consumed.events);
+        }
+        Operation::ChooseWarrior => {
+            position.presentation = Some(Presentation::WarriorChoice { extra: parameter });
+            effects.push(Event::StoryPresented);
+            return Ok(ScriptStep::Pause);
+        }
+        Operation::Travel => {
+            let extra = span(
+                &map.combat.as_ref().unwrap().encounters,
+                parameter as usize * 10,
+                10,
+            )?;
+            let destination = TravelExtra(extra);
+            let target = destination.map(position.map)?;
+            let x = destination.x(position.x)?;
+            let y = destination.y(position.y)?;
+            OpeningMission::index(x, y)?;
+            if target != position.map {
+                let authored = content
+                    .map_at(state.mission.as_deref(), state.scenario_level, target)
+                    .ok_or_else(|| RuleError::Invalid("travel target map unavailable".into()))?;
+                let records = state
+                    .visited_maps
+                    .remove(&target)
+                    .unwrap_or_else(|| MapState::authored(authored));
+                state
+                    .visited_maps
+                    .insert(position.map, position.map_state());
+                // The script stays active across loadland; only its coordinates change.
+                position.restore_map(target, records);
+            }
+            position.x = x;
+            position.y = y;
+            let script = position.script.as_mut().unwrap();
+            StoryRecordMut(&mut script.record).relocate(position.map, x, y);
+            effects.push(Event::Moved { x, y });
+            if destination.sound()? != 0 {
+                effects.push(Event::Sound {
+                    resource_id: destination.sound()?,
+                });
+            }
+            if destination.dialogue()? != 0 {
+                position.presentation = Some(Presentation::Dialogue {
+                    id: destination.dialogue()?,
+                    text: map.dialogue(destination.dialogue()?)?,
+                });
+                effects.push(Event::StoryPresented);
+                return Ok(ScriptStep::Pause);
+            }
+        }
+        Operation::Menu => {
+            effects.push(Event::Sound { resource_id: 20005 });
+            let table = if state.menus.is_empty() {
+                &map.menus
+            } else {
+                &state.menus
+            };
+            position.presentation = present_menu(map, table, script, parameter)?;
+            if position.presentation.is_some() {
+                effects.push(Event::StoryPresented);
+                return Ok(ScriptStep::Pause);
+            }
+        }
+        Operation::TypedMenu => {
+            script.menu = None;
+            position.presentation = Some(present_typed(
+                map,
+                if state.typed_encounters.is_empty() {
+                    &map.typed_encounters
+                } else {
+                    &state.typed_encounters
+                },
+                script,
+                parameter,
+            )?);
+            effects.push(Event::Sound { resource_id: 20005 });
+            effects.push(Event::StoryPresented);
+            return Ok(ScriptStep::Pause);
+        }
+        Operation::PartyItemBranch
+        | Operation::UpdateVariable
+        | Operation::VariableBranch
+        | Operation::RandomBranch
+        | Operation::AllyClassBranch => {
+            let extra = span(
+                &map.combat.as_ref().unwrap().encounters,
+                parameter as usize * 10,
+                10,
+            )?;
+            let continuation = match opcode {
+                21 => story_variables::party_item_condition(&state.warriors, extra)?,
+                76 => {
+                    let update = story_variables::update_variable(&state.flags, extra)?;
+                    state.flags = update.flags;
+                    update.continuation
+                }
+                77 => story_variables::variable_predicate(&state.flags, extra)?.continuation,
+                85 => {
+                    for (offset, sound) in [(6, true), (8, false)] {
+                        let id = word(extra, offset)?;
+                        if id != 0 {
+                            if sound {
+                                effects.push(Event::Sound { resource_id: id });
+                            } else {
+                                effects.push(Event::Message {
+                                    id,
+                                    text: map.dialogue(id)?,
+                                });
+                            }
+                        }
+                    }
+                    let target = state.random.range(word(extra, 2)?, word(extra, 4)?);
+                    story_variables::branch(word(extra, 0)?, target)
+                }
+                _ => {
+                    let matched = state
+                        .allies
+                        .as_chunks::<288>()
+                        .0
+                        .iter()
+                        .take(state.ally_count)
+                        .any(|record| i16::from(record[0x103] as i8) == word(extra, 0).unwrap());
+                    if matched || word(extra, 4)? == 0 {
+                        story_variables::branch(
+                            word(extra, 2)?,
+                            word(extra, if matched { 6 } else { 8 })?,
+                        )
+                    } else {
+                        story_variables::StoryContinuation::Continue
+                    }
+                }
+            };
+            match continuation {
+                story_variables::StoryContinuation::Continue => {}
+                story_variables::StoryContinuation::ReplaceScript(id) => {
+                    script.restart_from(&map.script(id)?);
+                }
+                story_variables::StoryContinuation::Encounter(id) => {
+                    script.menu = None;
+                    let table = if state.menus.is_empty() {
+                        &map.menus
+                    } else {
+                        &state.menus
+                    };
+                    position.presentation = present_menu(map, table, script, id)?;
+                    if position.presentation.is_some() {
+                        effects.push(Event::StoryPresented);
+                        return Ok(ScriptStep::Pause);
+                    }
+                }
+                story_variables::StoryContinuation::TypedEncounter(id) => {
+                    script.menu = None;
+                    position.presentation = Some(present_typed(
+                        map,
+                        if state.typed_encounters.is_empty() {
+                            &map.typed_encounters
+                        } else {
+                            &state.typed_encounters
+                        },
+                        script,
+                        id,
+                    )?);
+                    effects.push(Event::StoryPresented);
+                    return Ok(ScriptStep::Pause);
+                }
+                story_variables::StoryContinuation::EndScript => {
+                    position.script = None;
+                    return Ok(ScriptStep::Pause);
+                }
+            }
+        }
+        Operation::DisableMenuEntry => {
+            let menu = script.menu.as_ref().ok_or_else(|| {
+                RuleError::Invalid("menu mutation has no active encounter".into())
+            })?;
+            let id = menu.id;
+            if state.menus.is_empty() {
+                state.menus = map.menus.clone();
+            }
+            let offset = id as usize * story::MENU_RECORD_BYTES;
+            let replacement = story::disable_menu_entry(
+                span(&state.menus, offset, story::MENU_RECORD_BYTES)?,
+                parameter,
+            )?;
+            state.menus[offset..offset + story::MENU_RECORD_BYTES].copy_from_slice(&replacement);
+            script.record = menu.original.clone();
+            position.presentation = present_menu(map, &state.menus, script, id)?;
+            if position.presentation.is_some() {
+                effects.push(Event::StoryPresented);
+                return Ok(ScriptStep::Pause);
+            }
+        }
+        Operation::PaymentBranch
+        | Operation::ItemPrerequisiteBranch
+        | Operation::ChanceBranch
+        | Operation::FlagBranch => {
+            let extra = span(
+                &map.combat.as_ref().unwrap().encounters,
+                usize::from(parameter.unsigned_abs()) * 10,
+                10,
+            )?;
+            let jump = if operation == Operation::PaymentBranch {
+                let payment = crate::recovered_inventory::takegold(
+                    &crate::recovered_inventory::GoldState {
+                        party_gold: state.party_currency,
+                        highest_party_index: state.warriors.len() as i8 - 1,
+                        warriors: state.warriors.clone(),
+                    },
+                    word(extra, 0)?,
+                )?;
+                state.party_currency = payment.state.party_gold;
+                state.warriors = payment.state.warriors;
+                for effect in payment.effects {
+                    if let crate::recovered_inventory::InventoryEffect::Warning(index) = effect {
+                        effects.push(Event::Feedback(crate::feedback::NativeFeedback::Warning {
+                            index,
+                        }));
+                    }
+                }
+                let paid = payment.native_return != 0;
+                if !paid && word(extra, 2)? == -1 {
+                    script.cursor = 6;
+                }
+                if matches!(word(extra, 2)?, 2)
+                    || (word(extra, 2)? == 0 && !paid)
+                    || (word(extra, 2)? == 1 && paid)
+                {
+                    story::condition_jump(extra)?
+                } else {
+                    None
+                }
+            } else if operation == Operation::ItemPrerequisiteBranch {
+                if story_inventory::item_prerequisite_matches(&state.warriors, extra)? {
+                    story::condition_jump(extra)?
+                } else {
+                    None
+                }
+            } else if operation == Operation::ChanceBranch {
+                if state.random.bound(100) <= word(extra, 0)? {
+                    match word(extra, 2)? {
+                        -2 => {
+                            script.cursor = 8;
+                            None
+                        }
+                        1 => story::condition_jump(extra)?,
+                        2 => Some(story::ConditionalJump::EndMenu),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                story::flag_condition_jump(&state.flags, extra)?
+            };
+            if let Some(jump) = jump {
+                match jump {
+                    story::ConditionalJump::ReplaceScript(id) => {
+                        let replacement = map.script(id)?;
+                        script.restart_from(&replacement);
+                    }
+                    story::ConditionalJump::MenuBranch { branch, start } => {
+                        let id = script
+                            .menu
+                            .as_ref()
+                            .ok_or_else(|| {
+                                RuleError::Invalid("conditional branch has no active menu".into())
+                            })?
+                            .id;
+                        let table = if state.menus.is_empty() {
+                            &map.menus
+                        } else {
+                            &state.menus
+                        };
+                        let menu = span(
+                            table,
+                            id as usize * story::MENU_RECORD_BYTES,
+                            story::MENU_RECORD_BYTES,
+                        )?;
+                        script.record[8..40]
+                            .copy_from_slice(&story::dispatch_menu_branch(menu, branch as i8 + 1)?);
+                        script.cursor = start;
+                    }
+                    story::ConditionalJump::TypedBranch { branch, start } => {
+                        let id = script
+                            .menu
+                            .as_ref()
+                            .filter(|m| m.typed)
+                            .ok_or("conditional branch has no active typed encounter")?
+                            .id;
+                        let table = if state.typed_encounters.is_empty() {
+                            &map.typed_encounters
+                        } else {
+                            &state.typed_encounters
+                        };
+                        let record = span(
+                            table,
+                            id as usize * typed_encounter::RECORD_BYTES,
+                            typed_encounter::RECORD_BYTES,
+                        )?;
+                        script.record[8..40].copy_from_slice(&story::dispatch_menu_branch(
+                            record,
+                            branch as i8 + 1,
+                        )?);
+                        script.cursor = start;
+                    }
+                    story::ConditionalJump::EndMenu => {
+                        position.script = None;
+                        return Ok(ScriptStep::Pause);
+                    }
+                    story::ConditionalJump::LastAction => {
+                        script.cursor = 7;
+                    }
+                }
+            }
+        }
+        _ => unreachable!("opcode routed to wrong story adapter"),
+    }
+    Ok(ScriptStep::Continue)
+}

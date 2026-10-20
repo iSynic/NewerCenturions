@@ -70,10 +70,10 @@ impl Creation {
         let mut view = Self::new(state, content);
         view.read_only = true;
         view.stage = if race { Stage::Race } else { Stage::Mos };
-        view.request.race = word(&warrior.bytes, 0x32)?;
-        view.request.mos = word(&warrior.bytes, 0x34)?;
-        view.request.portrait = word(&warrior.bytes, 0x54)?;
-        view.request.icon = word(&warrior.bytes, 0x56)?;
+        view.request.race = warrior.record().race()?;
+        view.request.mos = warrior.record().profession()?;
+        view.request.portrait = warrior.record().portrait()?;
+        view.request.icon = warrior.record().tactical_icon()?;
         Ok(view)
     }
     pub fn dialog(&self) -> i16 {

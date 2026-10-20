@@ -87,13 +87,13 @@ impl WarriorInformation {
                     73 + index,
                     assets
                         .portraits
-                        .get(&centurions_content::word(&member.bytes, 0x54).unwrap_or(0)),
+                        .get(&member.record().portrait().unwrap_or(0)),
                 ),
                 (
                     90 + index,
                     assets
                         .icons
-                        .get(&centurions_content::word(&member.bytes, 0x56).unwrap_or(0)),
+                        .get(&member.record().tactical_icon().unwrap_or(0)),
                 ),
             ] {
                 if let Some(image) = image {
@@ -104,13 +104,13 @@ impl WarriorInformation {
         let member = &state.warriors[self.member];
         if let Some(image) = assets
             .portraits
-            .get(&centurions_content::word(&member.bytes, 0x54).unwrap_or(0))
+            .get(&member.record().portrait().unwrap_or(0))
         {
             self.image(assets, 68, image);
         }
         if let Some(image) = assets
             .icons
-            .get(&centurions_content::word(&member.bytes, 0x56).unwrap_or(0))
+            .get(&member.record().tactical_icon().unwrap_or(0))
         {
             self.image(assets, 80, image);
         }
@@ -147,7 +147,7 @@ impl WarriorInformation {
         for (index, warrior) in state.warriors.iter().enumerate() {
             if let Some(image) = assets
                 .portraits
-                .get(&centurions_content::word(&warrior.bytes, 0x54).unwrap_or(0))
+                .get(&warrior.record().portrait().unwrap_or(0))
             {
                 Self::dialog_image(assets.dialog_rect(177, 78 + index), image);
             }
@@ -163,13 +163,13 @@ impl WarriorInformation {
                 86,
                 assets
                     .portraits
-                    .get(&centurions_content::word(&warrior.bytes, 0x54).unwrap_or(0)),
+                    .get(&warrior.record().portrait().unwrap_or(0)),
             ),
             (
                 87,
                 assets
                     .icons
-                    .get(&centurions_content::word(&warrior.bytes, 0x56).unwrap_or(0)),
+                    .get(&warrior.record().tactical_icon().unwrap_or(0)),
             ),
         ] {
             if let Some(image) = image {

@@ -1,5 +1,8 @@
 //! combatchoice0011a4f4/0011a650: quantity, target ceiling and incremental Psi payment.
-use super::*;
+use crate::combat::Combat;
+use crate::{Event, RuleError, Session};
+use centurions_content::{Content, Warrior, word};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FirearmQuantity {
@@ -12,7 +15,7 @@ impl FirearmQuantity {
         if !(0..warriors.len() as i16).contains(&self.actor)
             || combat.active_body() != Some(self.actor)
             || !(1..=7).contains(&self.power)
-            || word(&warriors[self.actor as usize].bytes, 0xe4)? != self.weapon
+            || warriors[self.actor as usize].record().equipped_weapon()? != self.weapon
         {
             return Err("invalid targeting quantity".into());
         }
@@ -62,7 +65,7 @@ pub(crate) fn begin_firearm(
     let prepared = super::shooting::prepare(state, content)?;
     let actor = state.combat.as_ref().unwrap().active_body().unwrap();
     let warrior = &state.warriors[actor as usize];
-    let weapon_id = word(&warrior.bytes, 0xe4)?;
+    let weapon_id = warrior.record().equipped_weapon()?;
     let ammo_id = word(&warrior.bytes, 0x132 + prepared.slot * 22 + 4)?;
     let weapon = &content.items[weapon_id.unsigned_abs() as usize];
     let ammunition = &content.items[ammo_id.unsigned_abs() as usize];
@@ -167,7 +170,7 @@ pub(crate) fn adjust(
         };
         let power = adjusted_quantity(prepared.shots, ceiling, selected, false, 0, 0, increase)?;
         let actor = c.active_body().ok_or("targeting actor missing")?;
-        let weapon = word(&state.warriors[actor as usize].bytes, 0xe4)?;
+        let weapon = state.warriors[actor as usize].record().equipped_weapon()?;
         state.target_quantity = Some(FirearmQuantity {
             actor,
             weapon,

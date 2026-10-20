@@ -63,7 +63,7 @@ impl MonsterRecord {
         })
     }
     pub fn stamina(&self) -> Result<i16, ContentError> {
-        word(&self.bytes, 0x110)
+        self.record().stamina()
     }
     pub fn maximum_stamina(&self) -> Result<i16, ContentError> {
         word(&self.bytes, 0x112)

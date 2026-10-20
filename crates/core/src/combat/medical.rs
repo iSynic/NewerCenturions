@@ -1,6 +1,8 @@
-use super::*;
+use crate::combat::{Combat, lifecycle, player_psi, put_word, spells, weapon_work};
+use crate::{Event, Phase, RandomState, RuleError, Session};
 use crate::{MedicalContinuation, MedicalOrigin, MedicalTarget, equipment, items};
 use centurions_content::{Content, mission::OpeningMission};
+use centurions_content::{Warrior, word};
 
 pub struct BeginRequest {
     pub warrior: usize,
@@ -149,7 +151,7 @@ pub fn begin(
         .warriors
         .get(request.warrior)
         .ok_or_else(|| RuleError::Invalid("medical warrior missing".into()))?;
-    if word(&warrior.bytes, 0x40)? < 1 {
+    if warrior.record().action_points()? < 1 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
     let item = warrior
@@ -432,7 +434,7 @@ fn resolve_inner(
             (warrior, true, vec![Event::Sound { resource_id: -141 }])
         }
         MedicalTarget::LivingPoint { x, y } => {
-            if word(&warriors[pending.actor].bytes, 0x40)? < 1 {
+            if warriors[pending.actor].record().action_points()? < 1 {
                 return Err(RuleError::Invalid(
                     "medical continuation has no action point".into(),
                 ));
@@ -459,7 +461,7 @@ fn resolve_inner(
             )?;
             let body = combat.map.tiles[cell].wrapping_abs();
             if !(0..warriors.len() as i16).contains(&body)
-                || word(&warriors[body as usize].bytes, 0x50)? <= 0
+                || warriors[body as usize].record().stamina()? <= 0
             {
                 return Err(RuleError::Invalid(
                     "medical point requires a living warrior".into(),
@@ -527,7 +529,7 @@ fn resolve_inner(
             defeated: false,
         });
     }
-    if portrait && word(&warriors[member].bytes, 0x50)? > 0 {
+    if portrait && warriors[member].record().stamina()? > 0 {
         restore_portrait(combat, warriors, mission, member)?;
         events.push(Event::Sound { resource_id: 631 });
     }

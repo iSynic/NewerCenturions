@@ -1,7 +1,6 @@
+use crate::combat::{Combat, death_scripts, footprint};
 use crate::{RandomState, RuleError};
 use centurions_content::{Warrior, combat::MonsterRecord, mission::OpeningMission, span, word};
-
-use super::{Combat, death_scripts, footprint};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TurnEffect {
@@ -167,7 +166,7 @@ fn spawn(
             "summon count exceeds the native roster capacity",
         ));
     }
-    let faction = word(&combat.enemies.records[active].bytes, 0xe)?;
+    let faction = combat.enemies.records[active].record().faction()?;
     for _ in 0..count {
         let monster = build_monster(definitions, id, faction, combat.difficulty, random)?;
         let body = combat.enemies.records.len() as i16 + 10;

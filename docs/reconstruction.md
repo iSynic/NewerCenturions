@@ -1,5 +1,10 @@
 # Source translation workflow
 
+The maintained runtime and desktop are organized by game subsystem and screen.
+See [Maintaining the runtime](maintainability.md) for ownership, the complete
+combat-click path, save contracts and change guides. The refactor preserves
+expanded translation libraries and their existing compiler profiles.
+
 Desktop integration is tracked separately from source translation. Recovered
 routine coverage does not mean that every original menu or control is connected.
 The runtime correction pass connects original editor feedback, paid/free upgrades,
@@ -54,9 +59,9 @@ The two nested-caller cases compare the
 complete captured three-window sequence, retained records, queue/header bytes,
 RNG and ordered feedback. Their controlled service boundaries remain explicit.
 
-Current enforced accounting is 26,128 test code lines / 104,677 maintained
-production code lines (24.960593%, ceiling 25%). Physical totals are 27,323 test
-and 107,695 production lines. Test helpers and verification scripts are counted;
+Current enforced accounting is 26,849 test code lines / 108,920 maintained
+production code lines (24.650202%, ceiling 25%). Physical totals are 28,084 test
+and 112,232 production lines. Test helpers and verification scripts are counted;
 expanded bodies, generated catalogs, fixtures, vendor code and recovery tools
 are excluded from maintained production code. All frozen native references
 remain intact. New bounded native cases compare natural effects and all 256
@@ -74,7 +79,9 @@ memory guards remain in place.
 Native file dialogs, fullscreen restoration, held movement and targeting,
 inventory/trade/shops, music/audio, original visuals/help and actual desktop
 resource use require user-operated acceptance. Complete populated Mac save
-import, other genuine scenarios, ports and publishing remain separate work.
+import, other genuine scenarios and publishing remain separate work. Experimental
+Linux and macOS builds are available; live acceptance on those platforms remains
+separate from compilation and save roundtrip checks.
 No automated desktop control or public release is part of this pass.
 
 ## Recovery workflow

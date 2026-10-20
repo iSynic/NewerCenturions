@@ -1,4 +1,7 @@
-use super::*;
+#[cfg(all(test, feature = "original-fixtures"))]
+use crate::*;
+use crate::{Event, Phase, RandomState, RuleError, Session};
+use centurions_content::{Content, InventoryRecord, Warrior};
 
 /// booty1061fc..10630c retains the last higher-class record copied during sorting.
 pub(crate) fn sort_loot(items: &mut [InventoryRecord]) -> Option<InventoryRecord> {

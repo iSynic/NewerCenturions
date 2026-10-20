@@ -1,7 +1,10 @@
 //! Mechanical disable/capture: updatecontrols16043e, entercapturemode136928,
 //! combatchoice11c15a and attack100af0..1010e2.
-use super::*;
+use crate::combat::{put_word, runtime};
 use crate::feedback::NativeFeedback;
+use crate::{Event, Phase, RandomState, RuleError, Session};
+use centurions_content::combat::MonsterRecord;
+use centurions_content::{Content, Warrior, word};
 
 fn silent() -> RuleError {
     RuleError::Refused { feedback: vec![] }

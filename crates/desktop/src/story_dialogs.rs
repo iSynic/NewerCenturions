@@ -130,7 +130,9 @@ pub fn portraits(
     for (member, warrior) in state.warriors.iter().enumerate() {
         if let Some(action) = action(member) {
             let rect = Rect::new(490., 20. + member as f32 * 50., 50., 50.);
-            if let Some(image) = centurions_content::word(&warrior.bytes, 0x54)
+            if let Some(image) = warrior
+                .record()
+                .portrait()
                 .ok()
                 .and_then(|id| assets.portraits.get(&id))
             {

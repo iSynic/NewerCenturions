@@ -462,7 +462,7 @@ impl ScanSelection {
                 dependency: "warrior cannot perform scans",
             });
         }
-        let profile = word(&warrior.bytes, 0x34)?;
+        let profile = warrior.record().profession()?;
         if profile < 1 {
             return Err(RuleError::Invalid("scan MOS profile is unavailable".into()));
         }

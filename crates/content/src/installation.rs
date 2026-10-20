@@ -23,6 +23,21 @@ pub struct Installation {
 }
 
 impl Installation {
+    pub fn default_root() -> PathBuf {
+        let executable = std::env::current_exe().unwrap_or_default();
+        let directory = executable.parent().unwrap_or(Path::new("."));
+        #[cfg(target_os = "macos")]
+        if directory.file_name().is_some_and(|name| name == "MacOS")
+            && let Some(contents) = directory.parent()
+            && contents.file_name().is_some_and(|name| name == "Contents")
+            && let Some(bundle) = contents.parent()
+            && bundle.extension().is_some_and(|ext| ext == "app")
+        {
+            return bundle.parent().unwrap_or(Path::new(".")).to_path_buf();
+        }
+        directory.to_path_buf()
+    }
+
     pub fn open(root: &Path) -> Result<Self, ContentError> {
         if root.join("Data Files").is_dir() && root.join("Scenarios").is_dir() {
             return Self::direct(root);
@@ -36,7 +51,7 @@ impl Installation {
             });
         }
         Err(ContentError::Invalid(
-            "place the Windows binaries beside the original New Centurions Mac application, Data Files, Scenarios and Warriors folders; preserve resource forks as .rsrc or AppleDouble sidecars".into(),
+            "place the reconstructed application beside the original New Centurions Mac application, Data Files, Scenarios and Warriors folders; preserve resource forks as .rsrc or AppleDouble sidecars, or native macOS forks".into(),
         ))
     }
 
@@ -53,6 +68,8 @@ impl Installation {
         let mut forks = vec![];
         let mut resources = vec![];
         let mut owners = BTreeSet::new();
+        #[cfg(target_os = "macos")]
+        let native_files = files.clone();
         for path in files {
             let name = Path::new(&path)
                 .file_name()
@@ -97,6 +114,22 @@ impl Installation {
                 }
             }
         }
+        #[cfg(target_os = "macos")]
+        for path in native_files {
+            let name = Path::new(&path).file_name().unwrap().to_string_lossy();
+            if name.starts_with("._") || name.ends_with(".rsrc") || owners.contains(&path) {
+                continue;
+            }
+            if let Some(native) = native_resource(&safe_path(root, &path)?)? {
+                add_resources(&native, &path, &path, &mut owners, &mut resources)?;
+                forks.push(Fork {
+                    path: format!("TheNewCenturions/{path}.rsrc"),
+                    kind: "resource".into(),
+                    size: native.len(),
+                    sha256: digest(&native),
+                });
+            }
+        }
         let identities: Vec<_> = forks
             .iter()
             .map(|f| (&f.path, &f.kind, &f.sha256))
@@ -112,6 +145,17 @@ impl Installation {
             content: Content::from_manifest(root, root, manifest)?,
             resource_root: root.to_path_buf(),
         })
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn native_resource(path: &Path) -> Result<Option<Vec<u8>>, ContentError> {
+    let fork = path.join("..namedfork/rsrc");
+    match fs::metadata(&fork) {
+        Ok(metadata) if metadata.len() == 0 => Ok(None),
+        Ok(_) => read_file(&fork).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
     }
 }
 

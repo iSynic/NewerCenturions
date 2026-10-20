@@ -16,26 +16,17 @@ fn unavailable() -> RuleError {
 
 /// edititems 0x134034: wrapped BYTE edits precede signed pin calls.
 pub fn change_record(record: &mut InventoryRecord, control: u16) -> Result<(), RuleError> {
-    const OFFSETS: [usize; 10] = [13, 15, 16, 11, 17, 18, 19, 14, 21, 20];
     let mut candidate = record.clone();
-    let bytes = &mut candidate.0;
     match control {
-        40..=49 => {
-            let i = OFFSETS[usize::from(control - 40)];
-            bytes[i] = bytes[i].wrapping_sub(1);
-        }
-        52..=61 => {
-            let i = OFFSETS[usize::from(control - 52)];
-            bytes[i] = bytes[i].wrapping_add(1);
-        }
-        50 => bytes[2..4].copy_from_slice(&0_i16.to_be_bytes()),
-        62 => {
-            let capacity = word(bytes, 6)?;
-            bytes[2..4].copy_from_slice(&capacity.to_be_bytes());
-        }
+        40..=49 => candidate.adjust_editor_modifier(usize::from(control - 40), -1),
+        52..=61 => candidate.adjust_editor_modifier(usize::from(control - 52), 1),
+        50 => candidate.set_quantity(0),
+        62 => candidate.set_quantity(candidate.capacity()?),
         51 | 63 => {
-            let capacity = word(bytes, 6)?.wrapping_add(if control == 51 { -1 } else { 1 });
-            bytes[6..8].copy_from_slice(&capacity.to_be_bytes());
+            let capacity = candidate
+                .capacity()?
+                .wrapping_add(if control == 51 { -1 } else { 1 });
+            candidate.set_capacity(capacity);
         }
         _ => {
             return Err(RuleError::Invalid(
@@ -43,22 +34,23 @@ pub fn change_record(record: &mut InventoryRecord, control: u16) -> Result<(), R
             ));
         }
     }
-    for (offset, minimum, maximum) in [
-        (13, 1, 200),
-        (15, 0, 200),
-        (16, 0, 100),
-        (11, 0, 100),
-        (17, 0, 100),
-        (18, 0, 200),
-        (19, 0, 50),
-        (14, 0, 50),
-        (21, -10, 10),
-        (20, 0, 50),
+    for (row, minimum, maximum) in [
+        (0, 1, 200),
+        (1, 0, 200),
+        (2, 0, 100),
+        (3, 0, 100),
+        (4, 0, 100),
+        (5, 0, 200),
+        (6, 0, 50),
+        (7, 0, 50),
+        (8, -10, 10),
+        (9, 0, 50),
     ] {
-        bytes[offset] = rules::pin(i16::from(bytes[offset] as i8), minimum, maximum) as u8;
+        let value = rules::pin(i16::from(candidate.editor_modifier(row)), minimum, maximum);
+        candidate.set_editor_modifier(row, value as u8);
     }
-    let quantity = rules::pin(word(bytes, 2)?, 0, word(bytes, 6)?);
-    bytes[2..4].copy_from_slice(&quantity.to_be_bytes());
+    let quantity = rules::pin(candidate.quantity()?, 0, candidate.capacity()?);
+    candidate.set_quantity(quantity);
     *record = candidate;
     Ok(())
 }

@@ -83,15 +83,14 @@ pub fn refill_action(
             .get(warrior)
             .and_then(|actor| actor.inventory().ok())
             .and_then(|inventory| {
-                inventory
-                    .into_iter()
-                    .enumerate()
-                    .find(|(_, item)| item.0[9] != 0 && matches!(item.0[10], 2 | 15))
+                inventory.into_iter().enumerate().find(|(_, item)| {
+                    item.equipment_flag() != 0 && matches!(item.category_code(), 2 | 15)
+                })
             })
     {
         let candidates =
             centurions_core::ammunition::compatible_ammunition(content, &item).unwrap_or_default();
-        let loaded = centurions_content::word(&item.0, 4).unwrap_or(0);
+        let loaded = item.ammunition_id().unwrap_or(0);
         if let Some(ammunition) = candidates
             .iter()
             .copied()
@@ -306,9 +305,9 @@ pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
                     .as_ref()
                     .is_none_or(|story| story.waiting_child)
                 && state.warriors.get(member).is_some_and(|warrior| {
-                    warrior.bytes[0x9df] != 0
+                    warrior.record().active_flag() != 0
                         && warrior.stamina().unwrap_or(0) > 0
-                        && centurions_content::word(&warrior.bytes, 0x40).unwrap_or(0) >= 2
+                        && warrior.record().action_points().unwrap_or(0) >= 2
                 })
         }
         Action::Command(Command::FieldControl { .. }) => {
@@ -392,12 +391,9 @@ fn action_inner(
         if is_mouse_button_pressed(MouseButton::Left)
             && let Some(p) = pointer
             && layout::MAP.contains(p)
-            && let Some((vx, vy)) = crate::combat_controls::origin(state, ui)
+            && let Some((x, y)) = crate::combat_controls::map_position(state, ui, p)
         {
-            return Some(Action::Command(Command::CombatClick {
-                x: vx + ((p.x - layout::MAP.x) / 32.) as i16,
-                y: vy + ((p.y - layout::MAP.y) / 32.) as i16,
-            }));
+            return Some(Action::Command(Command::CombatClick { x, y }));
         }
         return ui
             .movement
@@ -711,9 +707,7 @@ fn action_inner(
         let x = ((p.x - layout::MAP.x) / 32.) as i32;
         let y = ((p.y - layout::MAP.y) / 32.) as i32;
         if state.combat.is_some() {
-            let (vx, vy) = crate::combat_controls::origin(state, ui).unwrap();
-            let x = vx + x as i16;
-            let y = vy + y as i16;
+            let (x, y) = crate::combat_controls::map_position(state, ui, p).unwrap();
             return Some(Action::Command(Command::CombatClick { x, y }));
         } else {
             return outdoor_move(state, x, y);

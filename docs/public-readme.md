@@ -50,6 +50,62 @@ Desktop and replay use the same atomic command
 boundary. Unsupported gameplay reports its missing dependency without changing
 the represented state or random stream.
 
+## Experimental Linux and macOS builds
+
+The **Experimental platforms** GitHub Actions workflow produces downloadable
+Windows x86_64, Linux x86_64, macOS Apple Silicon and macOS Intel artifacts.
+Linux and macOS packages remain experimental, including when attached to a
+beta release. Original game content is never included. A successful build does not establish original-game or live
+desktop parity.
+
+On Linux, extract the ZIP beside your original installation and run
+`./The\ New\ Centurions`. Install `zenity` or `kdialog` for Save/Open dialogs;
+the application invokes these system file pickers without a shell. Ubuntu
+build dependencies are `pkg-config libx11-dev libxi-dev libgl1-mesa-dev
+libasound2-dev`; runtime needs the corresponding X11, OpenGL and ALSA libraries.
+The validation script also needs `xvfb` and `xdotool` to exercise file pickers
+on an isolated virtual display.
+An X11 session or XWayland is required by the current desktop backend.
+If your extractor drops executable permissions, run
+`chmod +x 'The New Centurions' centurions-tools`.
+
+On modern macOS, put **The New Centurions.app** beside the original Mac
+application and the Data Files, Scenarios and Warriors folders. Finder launch
+discovers content beside the bundle, independently of the working directory.
+Save/Open uses the macOS file panels through the system scripting host. The
+experimental bundle has an ad-hoc signature, not Developer ID signing or
+notarization; macOS may require an explicit approval in Privacy & Security.
+Use the Apple Silicon or Intel package matching your Mac.
+
+Resource forks can be preserved as `.rsrc`, AppleDouble or AppleSingle on either
+platform; macOS also reads native resource forks without modifying originals.
+Keep the same content and fork representation when moving reconstructed saves
+between installations, because saves validate the installation identity.
+
+Saves, preferences, created warriors and logs use persistent per-user storage:
+`$XDG_DATA_HOME/NewCenturions` (default `~/.local/share/NewCenturions`) on Linux,
+`~/Library/Application Support/NewCenturions` on macOS, and the existing
+`%LOCALAPPDATA%/NewCenturions` on Windows. Fast Save retains the selected named
+file. Cancelling a picker or loading a malformed save leaves the session intact.
+The `--save-path`, `--preferences-path` and `--roster-path` overrides remain available.
+
+To build and validate on Linux/macOS with stable Rust and Python 3.11 or newer:
+
+```sh
+python3 tools/build_portable.py
+```
+
+This checks the source ceiling and public-source boundary, runs the essential
+asset-independent checks, Clippy and a timed release build, and packages the
+native binaries. Compiler jobs use available CPUs at reduced priority with a
+16 GiB aggregate ceiling (lower on small runners); tests run separately with
+a 512 MiB resident-memory limit. Private native references remain a local suite.
+
+For acceptance on each platform, exercise named Save/Open, cancellation and
+Fast Save; Alt+Enter and window restoration; held movement and targeting;
+inventory/shop dialogs; music/audio; and comparison with the original visuals.
+Interactive acceptance remains pending until someone actually observes it.
+
 ## Install the Windows beta
 
 Download the Windows x86_64 ZIP from the GitHub Releases page and extract its

@@ -1,4 +1,7 @@
 use super::*;
+use crate::presentation::{Action, UiState};
+use centurions_content::word;
+use centurions_core::{Command, apply};
 
 fn native_fixture(name: &str) -> serde_json::Value {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evidence/fixtures");
@@ -157,7 +160,14 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
     driver.act(ApplicationAction::CreationCancel);
     assert_eq!(driver.app.roster.as_ref().unwrap().warriors.len(), supplied);
     driver.act(ApplicationAction::Menu(136, 5));
-    driver.app.creation.as_mut().unwrap().request.name = "New Warrior".into();
+    driver
+        .app
+        .characters
+        .creation
+        .as_mut()
+        .unwrap()
+        .request
+        .name = "New Warrior".into();
     for item in [4, 3, 29] {
         driver.act(ApplicationAction::CreationItem(item));
     }
@@ -167,17 +177,32 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
     for item in [56, 2, 6, 2, 2, 66] {
         driver.act(ApplicationAction::CreationItem(item));
     }
-    assert!(driver.app.editor.is_none());
+    assert!(driver.app.characters.editor.is_none());
     assert_eq!(
         word(
-            &driver.app.creation.as_ref().unwrap().draft.warriors[0].bytes,
+            &driver
+                .app
+                .characters
+                .creation
+                .as_ref()
+                .unwrap()
+                .draft
+                .warriors[0]
+                .bytes,
             0xe4
         )
         .unwrap(),
         1
     );
     assert!(
-        driver.app.creation.as_ref().unwrap().draft.warriors[0]
+        driver
+            .app
+            .characters
+            .creation
+            .as_ref()
+            .unwrap()
+            .draft
+            .warriors[0]
             .inventory()
             .unwrap()
             .len()
@@ -189,7 +214,14 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
     assert_eq!(roster.warriors.len(), supplied + 1);
     assert_eq!(roster.warriors.last().unwrap().name, "New Warrior");
     driver.act(ApplicationAction::Menu(136, 5));
-    driver.app.creation.as_mut().unwrap().request.name = "New Psion".into();
+    driver
+        .app
+        .characters
+        .creation
+        .as_mut()
+        .unwrap()
+        .request
+        .name = "New Psion".into();
     for item in [4, 3, 29] {
         driver.act(ApplicationAction::CreationItem(item));
     }
@@ -199,16 +231,32 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
     for item in [56, 2, 6, 2, 2, 66] {
         driver.act(ApplicationAction::CreationItem(item));
     }
-    assert!(driver.app.editor.as_ref().unwrap().scans.is_some());
+    assert!(
+        driver
+            .app
+            .characters
+            .editor
+            .as_ref()
+            .unwrap()
+            .scans
+            .is_some()
+    );
     driver.act(ApplicationAction::EditorItem(10));
     driver.act(ApplicationAction::EditorItem(32));
     driver.act(ApplicationAction::ScanAnswer(true));
     assert!(
-        driver.app.creation.as_ref().unwrap().draft.warriors[0]
+        driver
+            .app
+            .characters
+            .creation
+            .as_ref()
+            .unwrap()
+            .draft
+            .warriors[0]
             .knows_spell(1101)
             .unwrap()
     );
-    assert!(driver.app.editor.is_none());
+    assert!(driver.app.characters.editor.is_none());
     driver.act(ApplicationAction::CreationAnswer(false));
     assert_eq!(
         driver.app.roster.as_ref().unwrap().warriors.len(),
@@ -575,13 +623,13 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     driver.app.screen = Screen::Game;
     let before = driver.state.clone();
     for item in [45, 82, 45, 83, 45, 1] {
-        if driver.app.editor.is_none() {
+        if driver.app.characters.editor.is_none() {
             driver.act(ApplicationAction::OpenEditor(0));
         }
         driver.act(ApplicationAction::EditorItem(item));
         assert_eq!(driver.state, before);
         if matches!(item, 82 | 83) {
-            assert_eq!(driver.app.editor.as_ref().unwrap().draft, before);
+            assert_eq!(driver.app.characters.editor.as_ref().unwrap().draft, before);
         }
     }
     driver.act(ApplicationAction::OpenEditor(0));
@@ -629,6 +677,7 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     assert!(
         driver
             .app
+            .characters
             .editor
             .as_ref()
             .unwrap()
@@ -638,7 +687,16 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
             .question
     );
     driver.act(ApplicationAction::ScanAnswer(false));
-    assert!(driver.app.editor.as_ref().unwrap().scans.is_some());
+    assert!(
+        driver
+            .app
+            .characters
+            .editor
+            .as_ref()
+            .unwrap()
+            .scans
+            .is_some()
+    );
     driver.act(ApplicationAction::EditorItem(32));
     driver.act(ApplicationAction::ScanAnswer(true));
     assert_eq!(driver.state, before_scans);
@@ -659,15 +717,18 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     );
     driver.act(ApplicationAction::Menu(136, 8));
     driver.act(ApplicationAction::OpenEditor(0));
-    assert!(!driver.app.editor.as_ref().unwrap().free);
-    let declined = driver.app.editor.as_ref().unwrap().draft.clone();
+    assert!(!driver.app.characters.editor.as_ref().unwrap().free);
+    let declined = driver.app.characters.editor.as_ref().unwrap().draft.clone();
     assert!(matches!(
         driver.handle(ApplicationAction::EditorItem(45)),
         Err(centurions_core::RuleError::Refused { .. })
     ));
-    assert_eq!(driver.app.editor.as_ref().unwrap().draft, declined);
+    assert_eq!(
+        driver.app.characters.editor.as_ref().unwrap().draft,
+        declined
+    );
     driver.state.warriors[0].bytes[0x9d2..0x9d6].copy_from_slice(&5000_i32.to_be_bytes());
-    driver.app.editor.as_mut().unwrap().draft = driver.state.clone();
+    driver.app.characters.editor.as_mut().unwrap().draft = driver.state.clone();
     let before_payment = driver.state.clone();
     let actor = &driver.state.warriors[0];
     let mos = word(&actor.bytes, 0x34).unwrap() as usize;
@@ -714,7 +775,14 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     driver.act(ApplicationAction::Menu(136, 2));
     driver.act(ApplicationAction::AppearanceItem(10));
     assert_eq!(driver.state, before_appearance);
-    let draft = driver.app.appearance.as_ref().unwrap().draft.clone();
+    let draft = driver
+        .app
+        .characters
+        .appearance
+        .as_ref()
+        .unwrap()
+        .draft
+        .clone();
     assert!(
         centurions_core::apply(
             Command::SetWarriorAppearance {
@@ -722,12 +790,15 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
                 portrait: true,
                 resource: 1,
             },
-            &mut driver.app.appearance.as_mut().unwrap().draft,
+            &mut driver.app.characters.appearance.as_mut().unwrap().draft,
             &driver.content
         )
         .is_err()
     );
-    assert_eq!(driver.app.appearance.as_ref().unwrap().draft, draft);
+    assert_eq!(
+        driver.app.characters.appearance.as_ref().unwrap().draft,
+        draft
+    );
     driver.act(ApplicationAction::AppearanceItem(34));
     driver.act(ApplicationAction::AppearanceItem(11));
     driver.act(ApplicationAction::AppearanceItem(2));
@@ -805,11 +876,14 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     }
     let viewed = driver.state.clone();
     driver.act(ApplicationAction::InformationItem(100));
-    assert!(driver.app.information.as_ref().unwrap().detailed);
+    assert!(driver.app.characters.information.as_ref().unwrap().detailed);
     driver.act(ApplicationAction::InformationItem(73));
-    assert_eq!(driver.app.information.as_ref().unwrap().member, 1);
+    assert_eq!(
+        driver.app.characters.information.as_ref().unwrap().member,
+        1
+    );
     driver.act(ApplicationAction::InformationItem(58));
-    assert!(!driver.app.information.as_ref().unwrap().detailed);
+    assert!(!driver.app.characters.information.as_ref().unwrap().detailed);
     assert_eq!(driver.state, viewed);
     driver.app.restore_information(0);
     for item in 2..=5 {
@@ -820,14 +894,14 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     }
     for item in [96, 97] {
         driver.act(ApplicationAction::InformationItem(item));
-        assert!(driver.app.creation.as_ref().unwrap().read_only);
+        assert!(driver.app.characters.creation.as_ref().unwrap().read_only);
         driver.act(ApplicationAction::CreationChoice(1));
         driver.act(ApplicationAction::CreationItem(56));
-        assert!(driver.app.information.is_some());
+        assert!(driver.app.characters.information.is_some());
         assert_eq!(driver.state, viewed);
     }
     driver.act(ApplicationAction::InformationItem(65));
-    assert!(!driver.app.editor.as_ref().unwrap().free);
+    assert!(!driver.app.characters.editor.as_ref().unwrap().free);
     driver.act(ApplicationAction::EditorItem(1));
     driver.act(ApplicationAction::InformationItem(72));
     assert!(!driver.app.blocks_game());
@@ -866,12 +940,12 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
     app.handle(ApplicationAction::ItemEditorItem(54), &mut state, &content)
         .unwrap();
     assert_eq!(state, before);
-    let draft = app.item_editor.as_ref().unwrap().draft.clone();
+    let draft = app.characters.item_editor.as_ref().unwrap().draft.clone();
     assert!(
         app.handle(ApplicationAction::ItemEditorItem(39), &mut state, &content)
             .is_err()
     );
-    assert_eq!(app.item_editor.as_ref().unwrap().draft, draft);
+    assert_eq!(app.characters.item_editor.as_ref().unwrap().draft, draft);
     app.handle(ApplicationAction::ItemEditorItem(2), &mut state, &content)
         .unwrap();
     assert_eq!(state, draft);

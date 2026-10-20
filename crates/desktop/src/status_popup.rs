@@ -55,7 +55,7 @@ fn rows(state: &Session, assets: &Assets, ui: &UiState) -> Vec<Row> {
     for warrior in &state.warriors {
         rows.push(Row {
             text: warrior.name.clone(),
-            portrait: word(&warrior.bytes, 0x54).ok(),
+            portrait: warrior.record().portrait().ok(),
             checked: false,
             timed: false,
         });

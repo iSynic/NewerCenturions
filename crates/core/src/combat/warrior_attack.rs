@@ -1,5 +1,8 @@
-use super::*;
+use crate::combat::attack;
+use crate::combat::{damage, put_word};
+use crate::{RandomState, RuleError};
 use attack::AttackResult;
+use centurions_content::{Warrior, word};
 use damage::{DamageFlags, DamagePacket, resolve_damage};
 
 /// Warrior-to-warrior branch of attack 0x100af0, including the unconditional reflection roll.

@@ -1,5 +1,8 @@
+use super::battle_entry::initial_cursor;
 use super::*;
+use crate::RandomState;
 use crate::test_support::{bytes, fixture};
+use centurions_content::combat::MonsterRecord;
 #[test]
 fn sparse_initial_order_matches_original_getup_execution() {
     let fixture = fixture("sparse-turn.json");

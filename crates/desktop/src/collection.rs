@@ -156,7 +156,11 @@ pub fn draw(
         if let Some(icon) = content
             .items
             .get(item.id().unsigned_abs() as usize)
-            .and_then(|definition| word(definition, 10).ok())
+            .and_then(|definition| {
+                centurions_content::records::ItemDefinition(definition)
+                    .icon()
+                    .ok()
+            })
             .and_then(|id| assets.icons.get(&id))
             .or_else(|| assets.icons.get(&6520))
         {
@@ -171,7 +175,7 @@ pub fn draw(
                 },
             );
         }
-        let quantity = word(&item.0, 2).unwrap_or(0);
+        let quantity = item.quantity().unwrap_or(0);
         if quantity != 0 {
             assets.text(&quantity.to_string(), rect.x + 4., rect.y + 57., 10, BLACK);
         }
@@ -187,7 +191,9 @@ pub fn draw(
     for (member, warrior) in state.warriors.iter().enumerate() {
         let y = 20. + member as f32 * 50.;
         assets.panel(184, Rect::new(540., y, 260., 50.));
-        if let Some(texture) = word(&warrior.bytes, 0x54)
+        if let Some(texture) = warrior
+            .record()
+            .portrait()
             .ok()
             .and_then(|id| assets.portraits.get(&id))
         {
@@ -357,7 +363,7 @@ fn draw_drop_menu(
             12,
             BLACK,
         );
-        if item.0[9] != 0 {
+        if item.equipment_flag() != 0 {
             assets.menu_text("✓", rect.x + 4., rect.y + 13., 12, BLACK);
         }
         controls.push(Control {

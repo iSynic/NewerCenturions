@@ -1,5 +1,8 @@
-use super::*;
+use crate::combat::{EnemySetup, TacticalMap, footprint, put_word};
+use crate::{Event, RandomState, RuleError};
+use centurions_content::combat::MonsterRecord;
 use centurions_content::mission::OpeningMission;
+use centurions_content::word;
 
 pub fn place_allies(
     menu: &[u8],

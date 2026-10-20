@@ -1,4 +1,6 @@
-use super::*;
+use crate::combat::put_word;
+use crate::{RandomState, RuleError};
+use centurions_content::word;
 
 #[derive(Clone, Debug)]
 pub struct DamagePacket {

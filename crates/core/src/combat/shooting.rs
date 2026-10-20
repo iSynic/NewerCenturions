@@ -1,4 +1,8 @@
-use super::*;
+use crate::combat::{Combat, firearm, lifecycle, player_psi, runtime};
+use crate::{Event, RuleError, Session};
+use centurions_content::records::AttackPacket;
+use centurions_content::{Content, Warrior};
+use serde::{Deserialize, Serialize};
 
 /// Native combatchoice retains up to seven targets and charges ammunition as each is selected.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -16,7 +20,7 @@ impl Selection {
             || self.targets.is_empty()
             || self.targets.len() > 7
             || self.original_first_item.len() != 22
-            || word(&warriors[self.actor].bytes, 0xe4)? != self.weapon
+            || warriors[self.actor].record().equipped_weapon()? != self.weapon
             || self.targets.iter().any(|body| {
                 *body < 0
                     || (*body >= warriors.len() as i16 && *body < 10)
@@ -42,12 +46,12 @@ pub(crate) fn prepare(
             .filter(|b| (0..6).contains(b))
             .ok_or_else(|| RuleError::Invalid("active warrior missing".into()))? as usize;
     let warrior = &state.warriors[body];
-    let id = word(&warrior.bytes, 0xe4)?;
+    let id = warrior.record().equipped_weapon()?;
     let ammunition = warrior
         .inventory()?
         .iter()
-        .find(|item| item.id() == id && item.0[9] == 1)
-        .map(|item| word(&item.0, 4))
+        .find(|item| item.id() == id && item.equipment_flag() == 1)
+        .map(|item| item.ammunition_id())
         .transpose()?
         .ok_or_else(|| RuleError::Invalid("equipped firearm absent from inventory".into()))?;
     if ammunition == 0 {
@@ -82,7 +86,8 @@ pub(crate) fn prepare(
 }
 
 pub fn location_targeting(state: &Session, content: &Content) -> bool {
-    prepare(state, content).is_ok_and(|prepared| prepared.packet[1] >= 2)
+    prepare(state, content)
+        .is_ok_and(|prepared| AttackPacket(&prepared.packet).requires_area_mask())
 }
 
 pub(crate) fn admit(
@@ -127,11 +132,11 @@ pub(crate) fn admit(
     if !lifecycle::can_see(c, mission, start, end, 0)? {
         return Err(refused(crate::feedback::CombatRefusal::Blocked));
     }
-    let w = &state.warriors[actor as usize].bytes;
-    if word(w, 0x40)? < 2 {
+    let warrior = &state.warriors[actor as usize];
+    if warrior.record().action_points()? < 2 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
-    if !paid && word(w, 0x134 + 22 * p.slot)? < p.rounds {
+    if !paid && warrior.record().inventory_quantity(p.slot)? < p.rounds {
         return Err(RuleError::Refused {
             feedback: vec![
                 crate::feedback::NativeFeedback::Tutorial {
@@ -163,7 +168,7 @@ pub(crate) fn admit_location(
         i32::from(location.1) + i32::from(c.map.shift.1) + 5,
     );
     centurions_content::mission::OpeningMission::index(point.0, point.1)?;
-    if prepared.packet[1] < 2 {
+    if !AttackPacket(&prepared.packet).requires_area_mask() {
         return Err(RuleError::Refused {
             feedback: vec![crate::feedback::NativeFeedback::Combat {
                 kind: crate::feedback::CombatRefusal::InvalidTarget,
@@ -225,28 +230,34 @@ pub fn select(
 ) -> Result<Vec<Event>, RuleError> {
     let p = prepare(state, content)?;
     admit(state, content, target, &p, false)?;
-    if p.packet[1] != 0 || !(2..=7).contains(&p.shots) {
+    if !AttackPacket(&p.packet).divides_shots_between_targets() || !(2..=7).contains(&p.shots) {
         return runtime::player_shoot_immediate(state, content, target);
     }
     let c = state.combat.as_mut().unwrap();
     let actor = c.active_body().unwrap() as usize;
-    let w = &mut state.warriors[actor].bytes;
+    let warrior = &mut state.warriors[actor];
     let selection = c.firearm_selection.get_or_insert_with(|| Selection {
         actor,
-        weapon: word(w, 0xe4).unwrap(),
+        weapon: warrior.record().equipped_weapon().unwrap(),
         targets: vec![],
-        original_first_item: w[0x132..0x148].to_vec(),
+        original_first_item: warrior.record().first_inventory_work().to_vec(),
     });
     if selection.targets.len() >= p.shots as usize {
         return Err(RuleError::Refused { feedback: vec![] });
     }
     selection.targets.push(target);
-    let slot = 0x134 + 22 * p.slot;
-    let loaded = word(w, slot)?.wrapping_sub(p.rounds);
-    put_word(w, slot, loaded);
-    // The original subtracts a WORD from the LONG load field at 0x9d6.
-    let weight = word(w, 0x9d6)?.wrapping_sub(p.rounds.wrapping_mul(p.weight));
-    put_word(w, 0x9d6, weight);
+    let slot = p.slot;
+    let loaded = warrior
+        .record()
+        .inventory_quantity(slot)?
+        .wrapping_sub(p.rounds);
+    warrior.record_mut().set_inventory_quantity(slot, loaded);
+    // Preserve the native signed-word load adjustment, independently of inventory rollback.
+    let weight = warrior
+        .record()
+        .carried_weight()?
+        .wrapping_sub(p.rounds.wrapping_mul(p.weight));
+    warrior.record_mut().set_carried_weight(weight);
     Ok(vec![Event::Sound { resource_id: 145 }])
 }
 
@@ -275,8 +286,9 @@ pub fn cancel(state: &mut Session) -> Result<Vec<Event>, RuleError> {
         .and_then(|c| c.firearm_selection.take())
     {
         // Cancel restores the native first inventory work record, not the separate load field.
-        state.warriors[selection.actor].bytes[0x132..0x148]
-            .copy_from_slice(&selection.original_first_item);
+        state.warriors[selection.actor]
+            .record_mut()
+            .restore_first_inventory_work(&selection.original_first_item);
     }
     Ok(vec![])
 }

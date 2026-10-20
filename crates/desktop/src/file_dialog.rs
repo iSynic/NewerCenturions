@@ -106,9 +106,130 @@ pub fn choose(saving: bool, initial: &Path, title: &str) -> std::io::Result<Opti
     Ok(Some(std::ffi::OsString::from_wide(&file[..end]).into()))
 }
 
-#[cfg(not(windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn choose(saving: bool, initial: &Path, title: &str) -> std::io::Result<Option<PathBuf>> {
+    let directory = initial.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(directory)?;
+    let initial = directory
+        .canonicalize()?
+        .join(initial.file_name().unwrap_or_default());
+    platform_choose(saving, &initial, title)
+}
+
+#[cfg(target_os = "macos")]
+fn platform_choose(saving: bool, initial: &Path, title: &str) -> std::io::Result<Option<PathBuf>> {
+    // Arguments remain separate from the script, including filenames containing quotes.
+    const SCRIPT: &str = r#"function run(args) {
+        var app = Application.currentApplication();
+        app.includeStandardAdditions = true;
+        try {
+            var options = {withPrompt: args[3], defaultLocation: Path(args[1])};
+            var file;
+            if (args[0] === 'save') {
+                options.defaultName = args[2];
+                file = app.chooseFileName(options);
+            } else {
+                file = app.chooseFile(options);
+            }
+            return JSON.stringify(file.toString());
+        } catch (error) {
+            if (error.errorNumber === -128) return 'null';
+            throw error;
+        }
+    }"#;
+    let output = std::process::Command::new("/usr/bin/osascript")
+        .args(["-l", "JavaScript", "-e", SCRIPT, "--"])
+        .arg(if saving { "save" } else { "open" })
+        .arg(initial.parent().unwrap())
+        .arg(initial.file_name().unwrap_or_default())
+        .arg(title)
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "macOS file dialog failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    serde_json::from_slice::<Option<String>>(&output.stdout)
+        .map(|path| path.map(PathBuf::from))
+        .map_err(std::io::Error::other)
+}
+
+#[cfg(target_os = "linux")]
+fn platform_choose(saving: bool, initial: &Path, title: &str) -> std::io::Result<Option<PathBuf>> {
+    let mut zenity = std::process::Command::new("zenity");
+    zenity
+        .args(["--file-selection", "--title", title, "--filename"])
+        .arg(initial);
+    if saving {
+        zenity.args(["--save", "--confirm-overwrite"]);
+    }
+    let output = match zenity.output() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut kdialog = std::process::Command::new("kdialog");
+            kdialog
+                .arg(if saving {
+                    "--getsavefilename"
+                } else {
+                    "--getopenfilename"
+                })
+                .arg(initial)
+                .args(["--title", title]);
+            kdialog.output().map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    std::io::Error::other("Save/Open requires zenity or kdialog. Install one with your system package manager, or use --save-path.")
+                } else { error }
+            })?
+        }
+        result => result?,
+    };
+    linux_selection(output.status.code(), &output.stdout, &output.stderr)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_selection(
+    code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> std::io::Result<Option<PathBuf>> {
+    match code {
+        Some(1) => Ok(None),
+        Some(0) => {
+            let bytes = stdout.strip_suffix(b"\n").unwrap_or(stdout);
+            if bytes.is_empty() {
+                return Err(std::io::Error::other(
+                    "File dialog returned an empty filename.",
+                ));
+            }
+            #[cfg(unix)]
+            let path = {
+                use std::os::unix::ffi::OsStringExt;
+                PathBuf::from(std::ffi::OsString::from_vec(bytes.to_vec()))
+            };
+            #[cfg(not(unix))]
+            let path =
+                PathBuf::from(String::from_utf8(bytes.to_vec()).map_err(std::io::Error::other)?);
+            if !path.is_absolute() {
+                return Err(std::io::Error::other(
+                    "File dialog returned a relative filename.",
+                ));
+            }
+            Ok(Some(path))
+        }
+        _ => Err(std::io::Error::other(format!(
+            "File dialog failed: {}",
+            String::from_utf8_lossy(stderr).trim()
+        ))),
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub fn choose(_saving: bool, _initial: &Path, _title: &str) -> std::io::Result<Option<PathBuf>> {
     Err(std::io::Error::other(
-        "Native file dialogs are currently available on Windows only; use --save-path.",
+        "Native file dialogs are unavailable on this platform; use --save-path.",
     ))
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/file_dialog.rs"]
+mod tests;

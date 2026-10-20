@@ -1,7 +1,6 @@
+use crate::combat::{Combat, footprint};
 use crate::{RandomState, RuleError};
 use centurions_content::{combat::MonsterRecord, mission::OpeningMission, span, word};
-
-use super::{Combat, footprint};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RoundEffect {

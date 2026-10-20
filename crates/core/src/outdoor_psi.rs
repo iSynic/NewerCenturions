@@ -91,7 +91,10 @@ pub(crate) fn begin_item(
     let warrior = &mut state.warriors[actor];
     warrior.bytes[0x132 + slot * 22 + 2..0x132 + slot * 22 + 4]
         .copy_from_slice(&quantity.wrapping_sub(1).to_be_bytes());
-    let weight = word(&warrior.bytes, 0x9d6)?.wrapping_sub(word(&definition, 36)?);
+    let weight = warrior
+        .record()
+        .carried_weight()?
+        .wrapping_sub(word(&definition, 36)?);
     warrior.bytes[0x9d6..0x9d8].copy_from_slice(&weight.to_be_bytes());
     let mut events = vec![];
     if quantity == 1 && word(&definition, 38)? != 0 {

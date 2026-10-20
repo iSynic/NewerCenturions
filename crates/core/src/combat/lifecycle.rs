@@ -1,4 +1,6 @@
-use super::*;
+use crate::RuleError;
+use crate::combat::{Combat, put_word};
+use centurions_content::{Warrior, word};
 
 pub fn kill_body(
     combat: &mut Combat,

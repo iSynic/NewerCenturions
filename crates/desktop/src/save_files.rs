@@ -76,6 +76,6 @@ impl SaveFiles {
     }
 }
 
-#[cfg(all(test, feature = "original-fixtures"))]
+#[cfg(test)]
 #[path = "../tests/unit/save_files.rs"]
 mod tests;

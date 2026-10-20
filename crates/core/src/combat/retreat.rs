@@ -1,6 +1,8 @@
-use super::*;
+use crate::combat::{put_word, runtime};
 use crate::feedback::NativeFeedback;
+use crate::{Event, Phase, Presentation, RuleError, ScriptState, Session};
 use centurions_content::mission::OpeningMission;
+use centurions_content::{Content, word};
 
 /// combatchoice11bdce..11bfb8 removes an escaped warrior without death cleanup.
 pub(crate) fn leave_edge(

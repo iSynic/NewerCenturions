@@ -1,4 +1,7 @@
-use super::*;
+use crate::combat::{damage, put_word};
+use crate::{RandomState, RuleError};
+use centurions_content::combat::MonsterRecord;
+use centurions_content::{Warrior, word};
 use damage::{DamageFlags, DamagePacket, resolve_damage};
 
 #[derive(Debug, PartialEq, Eq)]

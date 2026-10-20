@@ -1,0 +1,198 @@
+# Maintaining the runtime
+
+The maintained runtime is the editing surface for game behavior. The Centurions
+1.3.2 binary remains the behavioral authority. Native receipts, source-derived
+implementations and live visual observations establish different kinds of
+evidence; a structural refactor does not improve their qualification by itself.
+
+## Ownership and dependencies
+
+| Responsibility | Owner | Calls into |
+| --- | --- | --- |
+| Command admission and transactions | core `commands` | maintained game subsystems |
+| Native records and saved session representation | core `state` | content records and explicit defaults |
+| Session validation | core `session` | subsystem validation |
+| Save encoding, migrations and atomic writes | core `persistence` | session validation and filesystem |
+| Click routing and occupied-cell continuations | core combat `interaction`, `occupied_cell` | record views, movement and shooting |
+| Attack, reaction, turn and round execution | core combat `runtime` submodules | recovered arithmetic and record adapters |
+| Spell selection, restrictions and effects | core combat `spells`, `player_psi` | packet, mask and native record rules |
+| Equipment and shops | core `equipment`, `shop` | record rules, inventory transactions and catalog |
+| Exploration and scripts | core `exploration` | movement, choices, script execution and return ownership |
+| Desktop screen lifecycle | desktop `application` submodules | the shared commands and screen-specific views |
+| Rendering and hit rectangles | desktop `presentation`, `layout`, individual screens | original resources and input availability |
+| Input and command presentation | desktop `input`, `targeting`, `view_actions`, `command_result` | the shared commands |
+| Native dialogs, storage discovery, windows and audio | desktop platform services | operating-system and presentation services |
+
+Desktop and replay both enter `apply`. Core and desktop do not depend on the
+complete translated registry. The composition crate combines expanded
+translations in separate production libraries; its compatibility entry points
+are not the ordinary gameplay interface. Their optimizer settings remain separate.
+
+Public imports are forwarded from the original module paths. Internal helpers
+shared by extracted sibling modules are visible only to their owning subtree.
+Record algorithms use explicit imports so their dependencies can be read locally.
+
+## Following a combat click
+
+1. The canvas converts the window pointer to logical coordinates. The combat
+   camera maps the logical map point to a tactical position. Capture and target
+   selection use that same camera conversion.
+2. Input produces an existing serialized command. The desktop classifies its
+   original identity for gesture and presentation consequences.
+3. `apply` resolves the content context, unwraps command preferences and validates
+   the session in the established order. Combat click resolution is read-only.
+4. Routing checks the actor and map location before capture, then firing-mode
+   occupied targets, then a single movement step. Clicking the actor requests no
+   action. A movement request during capture becomes a capture target.
+5. Execution classification uses the normalized command. Admission and dispatch
+   operate on a candidate session. Ordinary errors discard it; the existing
+   `RefusedAfterEffects` variant validates and commits deliberate partial effects.
+6. Successful targeting-only actions validate and commit immediately. Other
+   actions process medical readiness, movement/script continuation, retained work
+   context and message presentation in their original order before final commit.
+7. Desktop command-result handling updates targeting and repeat state, prepares
+   round notices, enqueues feedback, observes application events and plays sounds
+   in their existing order. Failed automatic actions stop scheduling retries.
+
+Native body values, coordinate arithmetic and record storage have not changed.
+`CombatBodyId`, `CombatPosition` and borrowed warrior/enemy views provide names at
+the interaction boundary. In particular, an active byte being nonzero and being
+exactly one are distinct original checks. Unknown record bytes remain untouched.
+
+## Changing a feature
+
+### Record interpretation and semantic boundaries
+
+Ordinary command handlers and the click-to-movement/firearm workflow use borrowed
+views in `centurions_content::records`. For example, a movement-point check reads
+`warrior.record().movement_points()`; it does not know the warrior byte offset.
+Writes use `record_mut()` and affect only the original field. No view is saved,
+and none replaces the original record bytes. Warrior and enemy durations retain
+their different signed widths. Active flags remain values: a caller requiring
+exactly one must not use another caller's nonzero test.
+
+The following boundaries are intended editing surfaces:
+
+| Change | Start here | Native interpretation |
+| --- | --- | --- |
+| Ground/capture/firearm click precedence | combat `interaction::resolve_click` | `CombatBodyId`, `CombatPosition` and record views |
+| Occupied cells and movement | combat `movement`, `occupied_cell` | warrior/enemy views; named terrain properties |
+| Firearm selection, cost and cancellation | combat `shooting`, runtime `shooting` | inventory views and `AttackPacket` |
+| Actor choice and turn scheduling | runtime `enemy_actions`, `actor_turns`, `turns` | signed actor fields and native turn primitives |
+| Equip/transfer/buy/sell | equipment `transactions`, shop `transactions` | `ItemDefinition`, `ShopRecord`, equipment `record_rules` |
+| Enhanced shop stock | shop `generated_stock` | bounded installitem memory/services adapter |
+| Script operation and resumption | exploration `script_execution`, `ScriptState::restart_from` | named `Operation`, `StoryRecord`, operation-specific EXTRA views |
+| Upgrade selection and drawing | desktop editor `controls`, warrior upgrade view | original DITL IDs and base/derived/purchase fields |
+| Save acceptance and restoration | persistence `compatibility::restore` | ordered compatibility steps for versions 1-12 |
+
+Native arithmetic is still implemented by bounded routines such as firearm
+resolution, turn initialization and equipment record rules. Their purpose is to
+interpret original records and reproduce original arithmetic. They are not an
+alternative application controller: keep input, screen state, command dispatch,
+filesystem access and turn scheduling out of those adapters. Expanded translation
+crates remain a separate recovery surface, not the normal place to edit a feature.
+
+An uncertain field must keep an honest context-specific name. For example,
+`retained_field32` is category-dependent native work data, not a universal item
+statistic. The owned-firearm health-context ID restriction is documented at its
+caller and is not generalized by this refactor. Broadening such qualifications
+requires a behavioral change with independent evidence.
+
+### Following and changing a workflow
+
+For a combat click, start with `Command::CombatClick` and follow normalization to
+`ClickIntent`: no action, capture, fire at a body, or one movement step. Capture
+comes first. An occupied firing-mode click selects a target; selection and attack
+execution are separate. Movement then owns friendly exchange/confirmation,
+occupied-cell reload, reaction processing, terrain cost and the final map update.
+Firearm execution owns payment and ordered impacts. Cancellation restores the
+native first inventory work record but deliberately does not refund the separate
+load field. Do not replace that behavior with a seemingly cleaner full rollback.
+
+For a story, inspect the named operation before its numeric native identity. The
+instruction cursor advances before execution. Branch replacement restarts the
+instruction body while retaining its eight-byte header. A pause retains the
+session's existing continuation; presentation does not own the script. Fatigue
+percentage arithmetic divides before multiplying with word wrapping, even when
+a more conventional percentage calculation would produce a different result.
+
+For a save, read the compatibility pipeline in order: version/schedule, control
+contexts, nested story contexts, actor defaults, campaign contexts, then map and
+spell-memory restoration. Rejection and restoration are interleaved intentionally;
+moving all defaults ahead of rejection would change which legacy files are accepted.
+
+**Combat:** start at command routing, then the relevant combat owner. Attack
+resolution, reactions, actor turns, round effects, medical work, shooting and
+battle returns have separate implementations. Preserve integer widths and RNG
+draw order. Do not merge apparently similar costs or active-state checks without
+native evidence.
+
+**Inventory:** desktop inventory selection owns members, scrolling, dragging and
+detail caches. View and detail modules render that state. Equipment inspection,
+record rules and transactions are separate. Shop access owns the retained caller;
+the catalog supplies stock and prices; transactions commit purchases, sales and
+reloads through existing commands.
+
+**Stories:** the bounded interpreter advances the script cursor. Operation
+adapters return Continue or Pause explicitly. Choices, typed menus, item use,
+loot, battle entry and script return ownership have separate modules. The
+derived script owner retains round-before-death precedence and introduces no
+new saved fields. Do not infer exclusivity between stored contexts where the
+original handlers did not enforce it.
+
+**Screens:** use the application action entry point. Character dialogs, squad
+selection and introductions own independent private state. Settings, information,
+menus, input, rendering and combat notices have named handlers. Early handler
+returns explicitly bypass the outer observer and preference writes exactly as
+before extraction. A common ancestor must not become the implementation site for
+each child screen.
+
+**Saves:** keep serialized field/variant names, defaults and order stable during a
+structural refactor. Schema 12 and readers for 1–11 retain their validation and
+rejection rules. Newly required persistence belongs in a separate, explicitly
+versioned feature change. A loaded session is validated before replacement;
+original assets and imported saves remain read-only.
+
+**Controls:** drawing and hit testing consume the same Control records and
+original resource rectangles. Mouse and keyboard eligibility remains in the
+existing shared policy. Preserve explicit modal precedence and deliberate
+differences between gestures. Operating-system file panels and audio services
+remain outside rule execution.
+
+## Code hygiene
+
+- Give each maintained module one game or presentation responsibility. Review
+  orchestration modules approaching 600 physical lines; split by responsibility,
+  rather than by arbitrary line ranges. Keep native record algorithms bounded by
+  their original routine or transaction.
+- A facade owns contracts and routing. Avoid placing arithmetic, rendering,
+  filesystem handling and campaign rules into the same controller.
+- Use named imports and small boundary types. Introduce abstractions only where
+  they replace repeated knowledge; avoid a universal engine context or generic
+  dialog framework.
+- Keep native offsets inside documented record views and native record/rule
+  adapters. Recovered compatibility bodies and mechanically expanded routines
+  retain their source shape; moving their callers does not turn them into
+  idiomatic domain code.
+- Retain native address/resource comments where they explain a behavioral
+  constraint. Use maintainer-facing names for ordinary workflow code.
+- Preserve independent native cases. Reuse command/replay groups for critical
+  changes and keep all test helpers under test directories. Count verification
+  code in the 25% ceiling, including when production code becomes smaller.
+
+## Local acceptance
+
+Headless comparisons cover state, RNG, ordered events, save/load continuations
+and handler behavior. The following checks require a user-operated desktop:
+
+- Click ground, nearby and distant actors in movement and firing modes; try a
+  blocked or ammunition-limited action and verify original feedback.
+- Enter and cancel capture, firearm and Psi targeting; change target quantity
+  and return to ordinary movement.
+- Dismiss round/story feedback and confirm that movement and the next turn resume.
+- Open inventory, transfer/equip an item, close it and return to the prior screen.
+- Save a named file, reload it and resume a pending selection where permitted.
+- Open character information, creation/editor and preferences; cancel and confirm
+  their child dialogs, then return to gameplay.
+- Check native file panels, Alt+Enter, held movement, music and original visuals on
+  each available platform. Compilation alone does not close live acceptance.

@@ -346,6 +346,14 @@ impl OpeningMission {
         }
         word(&self.tile_properties, tile as usize * 40 + field)
     }
+
+    pub fn movement_blocker(&self, tile: i16) -> Result<i16, ContentError> {
+        self.tile_word(tile, 4)
+    }
+
+    pub fn movement_sound(&self, tile: i16) -> Result<i16, ContentError> {
+        self.tile_word(tile, 0)
+    }
 }
 
 impl StoryTables {

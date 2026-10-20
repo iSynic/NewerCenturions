@@ -43,10 +43,14 @@ fn body_at(state: &Session, point: (i16, i16)) -> Option<i16> {
     .ok()?;
     let body = combat.map.tiles[index].wrapping_abs();
     ((0..state.warriors.len() as i16).contains(&body)
-        && state.warriors[body as usize].bytes[0x9df] != 0
+        && state.warriors[body as usize].record().active_flag() != 0
         || (10..10 + combat.enemies.records.len() as i16).contains(&body)
-            && word(&combat.enemies.records[(body - 10) as usize].bytes, 0x110).unwrap_or(0) > 0)
-        .then_some(body)
+            && combat.enemies.records[(body - 10) as usize]
+                .record()
+                .stamina()
+                .unwrap_or(0)
+                > 0)
+    .then_some(body)
 }
 
 fn map_action(
@@ -123,15 +127,9 @@ pub fn input(
             ))
     {
         if let Some(pointer) = pointer.filter(|point| layout::MAP.contains(*point))
-            && let Some((x, y)) = crate::combat_controls::origin(state, ui)
+            && let Some(point) = crate::combat_controls::map_position(state, ui, pointer)
         {
-            ui.estimate_target = body_at(
-                state,
-                (
-                    x + (pointer.x / 32.) as i16,
-                    y + ((pointer.y - 20.) / 32.) as i16,
-                ),
-            );
+            ui.estimate_target = body_at(state, point);
         }
         if is_key_pressed(KeyCode::Equal) || is_key_pressed(KeyCode::KpAdd) {
             return Some(Action::TargetQuantity(true));
@@ -143,14 +141,7 @@ pub fn input(
     if ui.inspection == Some(Inspection::PsiTargets) {
         ui.psi_preview = pointer
             .filter(|point| layout::MAP.contains(*point))
-            .and_then(|point| {
-                crate::combat_controls::origin(state, ui).map(|(x, y)| {
-                    (
-                        x + (point.x / 32.) as i16,
-                        y + ((point.y - 20.) / 32.) as i16,
-                    )
-                })
-            });
+            .and_then(|point| crate::combat_controls::map_position(state, ui, point));
         if is_key_pressed(KeyCode::Enter)
             && let Some((spell, _)) = ui.psi_choice
             && let Some(attacks) = state
@@ -200,17 +191,9 @@ pub fn input(
         }
         if !ui.medical_cancel
             && layout::MAP.contains(pointer)
-            && let Some((x, y)) = crate::combat_controls::origin(state, ui)
+            && let Some(point) = crate::combat_controls::map_position(state, ui, pointer)
         {
-            return map_action(
-                state,
-                content,
-                ui,
-                (
-                    x + ((pointer.x - layout::MAP.x) / 32.) as i16,
-                    y + ((pointer.y - layout::MAP.y) / 32.) as i16,
-                ),
-            );
+            return map_action(state, content, ui, point);
         }
     }
     None

@@ -1,5 +1,8 @@
-use super::*;
+use crate::combat::{player_psi, runtime, spells};
+use crate::{Event, Phase, PsiMenuChoice, RuleError, Session};
 use centurions_content::mission::OpeningMission;
+use centurions_content::{Content, word};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Selection {
@@ -49,9 +52,12 @@ impl Selection {
         }
         for body in &self.targets {
             let active = if *body < 10 {
-                state.warriors[*body as usize].bytes[0x9df] != 0
+                state.warriors[*body as usize].record().active_flag() != 0
             } else {
-                word(&combat.enemies.records[(*body - 10) as usize].bytes, 0x110)? > 0
+                combat.enemies.records[(*body - 10) as usize]
+                    .record()
+                    .stamina()?
+                    > 0
             };
             if !active {
                 return Err(RuleError::Invalid(

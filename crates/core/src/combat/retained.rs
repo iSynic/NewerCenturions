@@ -1,5 +1,6 @@
-use super::{Combat, MonsterRecord};
 use crate::RuleError;
+use crate::combat::Combat;
+use centurions_content::combat::MonsterRecord;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

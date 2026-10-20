@@ -1,5 +1,9 @@
 use super::*;
+use crate::persistence::Save;
 use crate::test_support::decode;
+use centurions_content::Warrior;
+use serde::Deserialize;
+use std::fs;
 #[derive(Deserialize)]
 struct Fixture {
     cases: Vec<Case>,

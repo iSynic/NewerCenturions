@@ -1,5 +1,6 @@
 use super::*;
 use crate::test_support::decode;
+use std::fs;
 #[test]
 fn stockpile_collection_matches_original_instruction_slice() {
     let fixture = crate::test_support::fixture("ammunition-collection.json");

@@ -51,9 +51,9 @@ pub fn collect_story_item(
     }
     let needed = word(definition, 0x14)?
         .wrapping_mul(word(definition, 0x24)?)
-        .wrapping_add(word(&warrior.bytes, 0x9d6)?)
+        .wrapping_add(warrior.record().carried_weight()?)
         .wrapping_add(word(definition, 0x10)?) as u16;
-    if needed > word(&warrior.bytes, 0x9d8)? as u16 {
+    if needed > warrior.record().weight_capacity()? as u16 {
         result.warnings.push(19);
         return Ok(result);
     }

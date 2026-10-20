@@ -1,5 +1,5 @@
 use crate::{Event, MapState, Presentation, RuleError, ScriptState, Session};
-use centurions_content::{Content, Warrior, word};
+use centurions_content::{Content, Warrior};
 
 /// partyloss 0x14913e closes the active mission; rule randomness is not reset by that UI flow.
 pub(crate) fn defeat(state: &mut Session, content: &Content) -> Vec<Event> {
@@ -76,10 +76,12 @@ pub fn stage_target(parameter: i16) -> Result<usize, RuleError> {
 pub fn restore_stage_warriors(warriors: &[Warrior]) -> Result<Vec<Warrior>, RuleError> {
     let mut restored = warriors.to_vec();
     for warrior in restored.iter_mut().take(warriors.len().saturating_sub(1)) {
-        for (target, maximum) in [(0x50, 0x52), (0x58, 0x5a)] {
-            let value = word(&warrior.bytes, maximum)?;
-            warrior.bytes[target..target + 2].copy_from_slice(&value.to_be_bytes());
-        }
+        // The original stage caller restores all but the final party member.
+        // Keep its read/write sequence, including partial failure behavior.
+        let stamina = warrior.record().maximum_stamina()?;
+        warrior.record_mut().set_stamina(stamina);
+        let psi = warrior.record().maximum_psi()?;
+        warrior.record_mut().set_psi_points(psi);
     }
     Ok(restored)
 }

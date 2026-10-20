@@ -1,4 +1,5 @@
-use super::*;
+use crate::combat::Combat;
+use crate::{RandomState, RuleError};
 use centurions_content::mission::OpeningMission;
 
 #[derive(Debug, PartialEq, Eq)]

@@ -10,6 +10,7 @@ pub mod graphics;
 pub mod installation;
 pub mod mission;
 pub mod native_text;
+pub mod records;
 pub mod ui;
 
 pub const WARRIOR_BYTES: usize = 0xc42;
@@ -76,10 +77,10 @@ impl Warrior {
     }
 
     pub fn stamina(&self) -> Result<i16, ContentError> {
-        word(&self.bytes, 0x50)
+        self.record().stamina()
     }
     pub fn psi_points(&self) -> Result<i16, ContentError> {
-        word(&self.bytes, 0x58)
+        self.record().psi_points()
     }
     pub fn knows_spell(&self, spell: i16) -> Result<bool, ContentError> {
         let school = spell / 1000;

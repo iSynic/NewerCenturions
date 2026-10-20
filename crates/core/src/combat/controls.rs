@@ -1,6 +1,8 @@
 //! Manual combat controls recovered from combat114378 and changeweapon1174f0.
-use super::*;
+use crate::combat::{Combat, put_word, runtime};
 use crate::feedback::NativeFeedback;
+use crate::{Event, Phase, RuleError, Session};
+use centurions_content::{Content, word};
 
 fn warning(index: i16) -> RuleError {
     RuleError::Refused {
@@ -35,7 +37,7 @@ pub fn actor(state: &Session) -> Result<usize, RuleError> {
             state.warriors[*b as usize]
                 .stamina()
                 .is_ok_and(|stamina| stamina > 0)
-                && state.warriors[*b as usize].bytes[0x9df] != 0
+                && state.warriors[*b as usize].record().active_flag() != 0
         })
         .map(|b| b as usize)
         .ok_or(RuleError::Refused { feedback: vec![] })

@@ -1,5 +1,8 @@
-use super::*;
+use crate::combat::{Combat, attack, damage, put_word};
+use crate::{Event, Phase, RandomState, RuleError, Session};
 use attack::AttackResult;
+use centurions_content::combat::MonsterRecord;
+use centurions_content::{Content, Warrior, word};
 use damage::{DamageFlags, DamagePacket, resolve_damage};
 
 pub struct PreparedFirearm {
@@ -139,7 +142,7 @@ pub fn fit_ammunition(
         || item.0[16..].iter().any(|value| *value != 0)
         || word(&item.0, 6)? != capacity
         || !loaded_supported
-        || word(&warrior.bytes, 0xe4)? != item.id()
+        || warrior.record().equipped_weapon()? != item.id()
         || warrior.bytes[0x9dd] != 1
         || (item.id() != 2 && word(&warrior.bytes, 0x126)? != ammunition)
     {
@@ -658,7 +661,7 @@ pub fn reload(
     silent: bool,
     random: &mut RandomState,
 ) -> Result<(bool, Vec<i16>), RuleError> {
-    if word(&warrior.bytes, 0xe4)? == 165 {
+    if warrior.record().equipped_weapon()? == 165 {
         return Err(RuleError::Unsupported {
             action: "combat.firearm.reload",
             dependency: "earned firearm reload",
@@ -679,7 +682,7 @@ pub fn reload(
                 || word(&item.0, 6)? != 12
                 || word(&item.0, 4)? != 201
                 || loaded != 0
-                || word(&warrior.bytes, 0xe4)? != 2
+                || warrior.record().equipped_weapon()? != 2
                 || word(&warrior.bytes, 0x126)? != 201
                 || warrior.bytes[0x9dd] != 1
                 || !(0..=i32::from(i16::MAX)).contains(reserve)
