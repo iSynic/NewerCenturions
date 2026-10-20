@@ -2072,7 +2072,15 @@ impl Application {
                     assets.menu_text("▶", rect.right() - 18., y + 14., 12, color);
                 } else if item.key.is_ascii_alphanumeric() {
                     assets.menu_text(
-                        &format!("Ctrl+{}", char::from(item.key)),
+                        &format!(
+                            "{}{}",
+                            if cfg!(target_os = "macos") {
+                                "⌘"
+                            } else {
+                                "Ctrl+"
+                            },
+                            char::from(item.key)
+                        ),
                         rect.right() - 52.,
                         y + 14.,
                         12,

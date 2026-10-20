@@ -79,6 +79,9 @@ def main():
                 executables.add(executable)
     for executable in sorted(executables):
         run([executable, "--test-threads=1"], memory=512, test=True)
+        if sys.platform == "linux" and Path(executable).name.startswith("centurions_desktop-"):
+            run(["xvfb-run", "-a", sys.executable, "tests/python/native_dialog_driver.py", executable],
+                seconds=120, memory=512, test=True)
     run(["cargo", "clippy", *cargo, "--all-targets", "--", "-D", "warnings"], memory=memory)
     run(["cargo", "build", *cargo, "--release", "--timings"], memory=memory)
     run([sys.executable, "tools/package.py"])

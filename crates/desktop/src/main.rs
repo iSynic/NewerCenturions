@@ -142,7 +142,7 @@ async fn main() {
         .unwrap_or_else(|| {
             std::env::var_os("CENTURIONS_ASSET_ROOT")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| Installation::default_root())
+                .unwrap_or_else(Installation::default_root)
         });
     let capture = option("--capture");
     let session_file = option("--session");
