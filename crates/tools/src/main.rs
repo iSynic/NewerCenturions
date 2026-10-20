@@ -13,13 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .next()
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("CENTURIONS_ASSET_ROOT").map(PathBuf::from))
-        .unwrap_or_else(|| {
-            std::env::current_exe()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .to_path_buf()
-        });
+        .unwrap_or_else(Installation::default_root);
     let installation = Installation::open(&root)?;
     let content = installation.content;
     let resource_root = installation.resource_root;

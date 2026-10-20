@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 #[cfg(all(test, feature = "original-fixtures"))]
 #[path = "../../core/tests/hex.rs"]
@@ -80,10 +80,27 @@ fn preferences_path() -> PathBuf {
         .unwrap_or_else(|| user_directory().join("ui.json"))
 }
 fn user_directory() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("NewCenturions")
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("NewCenturions")
+    }
+    #[cfg(not(windows))]
+    {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()));
+        #[cfg(target_os = "macos")]
+        let base = home.join("Library/Application Support");
+        #[cfg(not(target_os = "macos"))]
+        let base = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .unwrap_or_else(|| home.join(".local/share"));
+        base.join("NewCenturions")
+    }
 }
 fn startup_preferences() -> preferences::Preferences {
     std::fs::metadata(preferences_path())
@@ -125,13 +142,7 @@ async fn main() {
         .unwrap_or_else(|| {
             std::env::var_os("CENTURIONS_ASSET_ROOT")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| {
-                    std::env::current_exe()
-                        .unwrap()
-                        .parent()
-                        .unwrap()
-                        .to_path_buf()
-                })
+                .unwrap_or_else(|| Installation::default_root())
         });
     let capture = option("--capture");
     let session_file = option("--session");
@@ -168,9 +179,7 @@ async fn main() {
     };
     let mut state = loaded.as_ref().ok().map(Session::new);
     let mut ui = UiState {
-        diagnostic_path: std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .map(|root| root.join("NewCenturions/logs/desktop.log")),
+        diagnostic_path: Some(user_directory().join("logs/desktop.log")),
         ..Default::default()
     };
     let screen = match option("--screen").as_deref() {

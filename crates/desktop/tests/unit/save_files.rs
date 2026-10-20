@@ -1,10 +1,12 @@
 use super::*;
 
 #[path = "../../../core/tests/support/native_save_receipts.rs"]
+#[cfg(feature = "original-fixtures")]
 mod native_receipts;
 
 // Protects multiple saves, cancellation, Fast Save selection, and failed-load/original-file isolation.
 #[test]
+#[cfg(feature = "original-fixtures")]
 fn selected_files_and_cancellation_preserve_the_session_and_originals() {
     let content = crate::original_content::load();
     let mut state = Session::new(&content);
@@ -135,5 +137,72 @@ fn selected_files_and_cancellation_preserve_the_session_and_originals() {
     for file in [first, second, original] {
         std::fs::remove_file(file).unwrap();
     }
+    std::fs::remove_dir(directory).unwrap();
+}
+
+// Runs on every platform without original assets: named saves, atomic replacement and rollback.
+#[test]
+fn portable_named_save_roundtrip_and_failed_load() {
+    let content = Content {
+        identity: "portable-save".into(),
+        tutorials: vec![],
+        warriors: vec![],
+        items: vec![],
+        resources: vec![],
+        original_services: None,
+        scenario: None,
+    };
+    let mut state = Session::new(&content);
+    let directory =
+        std::env::temp_dir().join(format!("centurions-portable-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut files = SaveFiles {
+        current: None,
+        default: directory.join("first 'α'.json"),
+        explicit: None,
+        protected: vec![],
+    };
+    let first = files.default.clone();
+    files
+        .perform(&Action::Save, &mut state, &content, |_, _| {
+            Ok(Some(first.clone()))
+        })
+        .unwrap();
+    let original = state.clone();
+    state.random.seed = state.random.seed.wrapping_add(1);
+    let second = directory.join("second.json");
+    files
+        .perform(&Action::Save, &mut state, &content, |_, _| {
+            Ok(Some(second.clone()))
+        })
+        .unwrap();
+    files
+        .perform(&Action::FastSave, &mut state, &content, |_, _| {
+            panic!("Fast Save reopened dialog")
+        })
+        .unwrap();
+    files
+        .perform(&Action::Load, &mut state, &content, |_, _| {
+            Ok(Some(first.clone()))
+        })
+        .unwrap();
+    assert_eq!(state, original);
+    assert!(
+        !files
+            .perform(&Action::Save, &mut state, &content, |_, _| Ok(None))
+            .unwrap()
+    );
+    std::fs::write(&second, b"incomplete save").unwrap();
+    assert!(
+        files
+            .perform(&Action::Load, &mut state, &content, |_, _| Ok(Some(
+                second.clone()
+            )))
+            .is_err()
+    );
+    assert_eq!(state, original);
+    assert_eq!(files.current.as_ref(), Some(&first));
+    std::fs::remove_file(first).unwrap();
+    std::fs::remove_file(second).unwrap();
     std::fs::remove_dir(directory).unwrap();
 }
