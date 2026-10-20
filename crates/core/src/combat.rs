@@ -228,10 +228,9 @@ fn move_warrior_inner(
         .active_body()
         .ok_or_else(|| RuleError::Invalid("no active body".into()))?;
     if !(0..6).contains(&body) {
-        return Err(RuleError::Unsupported {
-            action: "combat.move",
-            dependency: "enemy turn dispatch",
-        });
+        return Err(RuleError::Invalid(
+            "movement requires an active warrior".into(),
+        ));
     }
     let body = body as usize;
     let mission = content

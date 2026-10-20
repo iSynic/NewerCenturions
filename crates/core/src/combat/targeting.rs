@@ -148,6 +148,15 @@ pub(crate) fn adjust(
             choice.power = power;
         }
     } else {
+        let firearm_mode = state
+            .combat
+            .as_ref()
+            .and_then(|c| c.active_body())
+            .and_then(|body| state.warriors.get(usize::try_from(body).ok()?))
+            .is_some_and(|warrior| warrior.bytes[0x9dd] != 0);
+        if !firearm_mode {
+            return Err(RuleError::Invalid("no targeting quantity is active".into()));
+        }
         let prepared = super::shooting::prepare(state, content)?;
         let c = state.combat.as_ref().unwrap();
         let selected = c.firearm_selection.as_ref().map_or(0, |p| p.targets.len());

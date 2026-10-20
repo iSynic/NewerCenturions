@@ -63,6 +63,10 @@ pub fn kill_body(
             *entry = -1;
         }
     }
+    // The Undo origin belongs to the active warrior's turn and ends with it.
+    if combat.active_body().is_none() {
+        combat.turn_origin = None;
+    }
     for warrior in warriors {
         if word(&warrior.bytes, 0x18)? == body {
             put_word(&mut warrior.bytes, 0x18, -1);

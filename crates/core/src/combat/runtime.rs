@@ -2958,7 +2958,10 @@ fn select_turn_bounded(
 ) -> Result<Vec<Event>, RuleError> {
     let mut events = vec![];
     if advance {
-        let combat = state.combat.as_mut().unwrap();
+        let combat = state
+            .combat
+            .as_mut()
+            .ok_or_else(|| RuleError::Invalid("combat missing".into()))?;
         combat.capture_actor = None;
         combat.turn_origin = None;
         state.party_mask.fill(0);

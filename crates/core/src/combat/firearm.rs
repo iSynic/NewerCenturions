@@ -215,6 +215,9 @@ pub fn prepare(
 ) -> Result<PreparedFirearm, RuleError> {
     let w = &warrior.bytes;
     let id = word(w, 0xe4)?;
+    if w[0x9dd] == 0 {
+        return Err(RuleError::Invalid("firearm mode is not active".into()));
+    }
     if w[0x9dd] != 1
         || weapon.len() != 150
         || ammo.len() != 150

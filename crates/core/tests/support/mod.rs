@@ -417,9 +417,12 @@ pub fn checkpoint(
     content: &centurions_content::Content,
     label: &str,
 ) -> centurions_core::Session {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    // Parallel tests may share a label; each checkpoint needs its own file.
     let path = std::env::temp_dir().join(format!(
-        "centurions-reference-{}-{label}.json",
-        std::process::id()
+        "centurions-reference-{}-{label}-{}.json",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     centurions_core::save(&path, state, content).unwrap();
     let restored = centurions_core::load(&path, content).unwrap();
