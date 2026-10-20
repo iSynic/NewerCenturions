@@ -63,6 +63,8 @@ On Linux, extract the ZIP beside your original installation and run
 the application invokes these system file pickers without a shell. Ubuntu
 build dependencies are `pkg-config libx11-dev libxi-dev libgl1-mesa-dev
 libasound2-dev`; runtime needs the corresponding X11, OpenGL and ALSA libraries.
+The validation script also needs `xvfb` and `xdotool` to exercise file pickers
+on an isolated virtual display.
 An X11 session or XWayland is required by the current desktop backend.
 If your extractor drops executable permissions, run
 `chmod +x 'The New Centurions' centurions-tools`.
