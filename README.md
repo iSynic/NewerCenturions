@@ -35,7 +35,7 @@ See [installation notes](docs/installation.md) if you need help getting it runni
 [Building and testing](docs/building.md) · [Code guide](docs/maintainability.md) ·
 [Recovery notes and known limitations](docs/reconstruction.md)
 
-Built with Codex Astra 6 and Sol 6.1.
+Built with the help of Codex Astra 6 and Sol 6.1.
 
 The reconstruction code is [MIT licensed](LICENSE). The original game belongs
 to its respective owners. See [THIRD_PARTY.md](THIRD_PARTY.md) for bundled code
