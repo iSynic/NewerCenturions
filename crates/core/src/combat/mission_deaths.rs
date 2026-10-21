@@ -1,5 +1,10 @@
 use crate::RuleError;
-use centurions_content::{Warrior, mission::OpeningMission, span, word};
+use centurions_content::{
+    Warrior,
+    mission::OpeningMission,
+    records::{Condition, EnemyRecordMut, StoryRecord},
+    span, word,
+};
 
 use super::Combat;
 
@@ -21,10 +26,6 @@ fn unsupported(dependency: &'static str) -> RuleError {
         action: "combat.mission_death",
         dependency,
     }
-}
-
-fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
-    bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
 }
 
 /// Authored death336/337 after killbody cleanup; queued stories retain global actor zero.
@@ -62,7 +63,7 @@ pub fn apply(
     };
     let record = span(&mission.door_scripts, script as usize * 42, 42)?;
     for index in 0..8 {
-        let actual = (word(record, 8 + index * 2)?, word(record, 24 + index * 2)?);
+        let actual = StoryRecord(record).instruction(index)?;
         if actual != expected.get(index).copied().unwrap_or((0, 0)) {
             return Err(unsupported(
                 "mission death script differs from verified actions",
@@ -81,30 +82,30 @@ pub fn apply(
                 ));
             }
         }
-        let faction = deferred_faction.unwrap_or(word(&next.enemies.records[actor].bytes, 0xe)?);
+        let faction = deferred_faction.unwrap_or(next.enemies.records[actor].record().faction()?);
         for class in [113, 114, 115] {
             for record in &mut next.enemies.records {
-                if i16::from(record.bytes[0x103] as i8) == class
-                    && word(&record.bytes, 0xe)? == faction
+                if i16::from(record.record().definition_id()) == class
+                    && record.record().faction()? == faction
                 {
-                    record.bytes[0xb2] = 255;
-                    put_word(&mut record.bytes, 0x46, 70);
+                    record.record_mut().set_condition(Condition::Retreating, -1);
+                    record.record_mut().set_fleeing_chance(70);
                 }
             }
         }
         false
     } else if 5 < i16::from(next_unavailable) {
         for warrior in &mut next_warriors {
-            put_word(&mut warrior.bytes, 0x50, 1);
-            put_word(&mut warrior.bytes, 0x90, 0);
+            warrior.record_mut().set_stamina(1);
+            warrior.record_mut().set_automatic_mode(0);
             next_unavailable = 0;
         }
         true
     } else {
         let record = &mut next.enemies.records[actor].bytes;
-        put_word(record, 0x110, 1);
-        put_word(record, 0xe, 0);
-        record[0x82] = 1;
+        EnemyRecordMut::from_bytes(record).set_stamina(1);
+        EnemyRecordMut::from_bytes(record).set_faction(0);
+        EnemyRecordMut::from_bytes(record).set_target_scan_excluded(true);
         false
     };
     *combat = next;

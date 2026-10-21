@@ -1,5 +1,9 @@
 use crate::{RandomState, RuleError};
-use centurions_content::{Warrior, span, word};
+use centurions_content::{
+    Warrior,
+    records::{WarriorRecord, WarriorRecordMut},
+    span, word,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HealthContext {
@@ -38,7 +42,8 @@ pub fn context(
         unavailable: warriors
             .iter()
             .filter(|warrior| {
-                warrior.stamina().unwrap_or(0) < 1 || word(&warrior.bytes, 0x90).unwrap_or(0) != 0
+                warrior.stamina().unwrap_or(0) < 1
+                    || warrior.record().automatic_mode().unwrap_or(0) != 0
             })
             .count() as i8,
         selected_warrior,
@@ -71,8 +76,10 @@ fn heal_member(
     random: &mut RandomState,
 ) {
     let warrior = &mut outcome.warriors[member].bytes;
-    let before = word(warrior, 0x50).unwrap();
-    let maximum = word(warrior, 0x52).unwrap();
+    let before = WarriorRecord::from_bytes(warrior).stamina().unwrap();
+    let maximum = WarriorRecord::from_bytes(warrior)
+        .maximum_stamina()
+        .unwrap();
     let living = before > 0;
     let permanent = before < -9;
     let unconscious = !living && !permanent;
@@ -93,7 +100,7 @@ fn heal_member(
         outcome.context.unavailable = outcome.context.unavailable.wrapping_sub(1);
     }
     after = after.min(maximum);
-    warrior[0x50..0x52].copy_from_slice(&after.to_be_bytes());
+    WarriorRecordMut::from_bytes(warrior).set_stamina(after);
     outcome.amounts.push((member, amount));
     if after < -9 && !permanent && !living {
         outcome

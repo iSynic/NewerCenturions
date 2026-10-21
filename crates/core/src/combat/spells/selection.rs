@@ -1,7 +1,10 @@
 //! Selection for combat/spells.
-use super::{Combat, RandomState, RuleError, firearm, lifecycle, put_word, validate_direct};
+use super::{Combat, RandomState, RuleError, firearm, lifecycle, validate_direct};
 use centurions_content::combat::MonsterRecord;
-use centurions_content::{Warrior, word};
+use centurions_content::{
+    Warrior,
+    records::{AttackPacket, EnemyRecord},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpellTarget {
@@ -35,23 +38,19 @@ pub(super) fn faction(
     body: usize,
 ) -> Result<i16, RuleError> {
     if body < 10 {
-        Ok(word(
-            &warriors
-                .get(body)
-                .ok_or_else(|| RuleError::Invalid("spell warrior body".into()))?
-                .bytes,
-            0x10,
-        )?)
+        Ok(warriors
+            .get(body)
+            .ok_or_else(|| RuleError::Invalid("spell warrior body".into()))?
+            .record()
+            .faction()?)
     } else {
-        Ok(word(
-            &combat
-                .enemies
-                .records
-                .get(body - 10)
-                .ok_or_else(|| RuleError::Invalid("spell monster body".into()))?
-                .bytes,
-            0xe,
-        )?)
+        Ok(combat
+            .enemies
+            .records
+            .get(body - 10)
+            .ok_or_else(|| RuleError::Invalid("spell monster body".into()))?
+            .record()
+            .faction()?)
     }
 }
 
@@ -85,7 +84,7 @@ pub(super) fn best_choice(
                 .enemies
                 .records
                 .get(candidate - 10)
-                .is_some_and(|m| word(&m.bytes, 0x110).unwrap_or(0) > 0)
+                .is_some_and(|m| m.record().stamina().unwrap_or(0) > 0)
         } else {
             false
         };
@@ -119,7 +118,11 @@ pub(super) fn best_choice(
                 }
                 seen[body] = true;
                 let same = faction(combat, warriors, body)? == side
-                    || (body >= 10 && combat.enemies.records[body - 10].bytes[0xb0] == 0xff);
+                    || (body >= 10
+                        && combat.enemies.records[body - 10]
+                            .record()
+                            .mechanical_state()
+                            == 0xff);
                 if same {
                     friendly += 1;
                 } else {
@@ -153,16 +156,20 @@ pub fn select_targets(
     packet: &[u8],
     random: &mut RandomState,
 ) -> Result<SpellSelection, RuleError> {
-    if packet.len() == 58 && word(packet, 40)? == 36 {
-        if packet[9] != 3 || packet[19] != 8 || packet[20] != 8 || word(packet, 50)? != 0 {
+    if packet.len() == 58 && AttackPacket(packet).effect()? == 36 {
+        if AttackPacket(packet).saving_throw_mode() != 3
+            || AttackPacket(packet).defense_category() != 8
+            || packet[20] != 8
+            || AttackPacket(packet).race_restriction()? != 0
+        {
             return Err(RuleError::Unsupported {
                 action: "combat.spell.target",
                 dependency: "other spell condition packet",
             });
         }
-    } else if !(word(packet, 40)? == 57
-        && packet[9] == 3
-        && packet[19] == 8
+    } else if !(AttackPacket(packet).effect()? == 57
+        && AttackPacket(packet).saving_throw_mode() == 3
+        && AttackPacket(packet).defense_category() == 8
         && packet[20] == 8
         && packet[4] == 0)
     {
@@ -188,7 +195,7 @@ pub fn select_firearm_targets(
     prepared: &firearm::PreparedFirearm,
     random: &mut RandomState,
 ) -> Result<SpellSelection, RuleError> {
-    if prepared.packet.len() != 58 || prepared.packet[19] != 9 {
+    if prepared.packet.len() != 58 || AttackPacket(&prepared.packet).defense_category() != 9 {
         return Err(RuleError::Invalid("firearm target packet".into()));
     }
     select_targets_impl(
@@ -214,7 +221,7 @@ pub fn select_retained_targets(
     if prepared.packet.len() != 58 {
         return Err(RuleError::Invalid("retained target packet".into()));
     }
-    let count = (prepared.packet[19] == 9).then_some(prepared.shots);
+    let count = (AttackPacket(&prepared.packet).defense_category() == 9).then_some(prepared.shots);
     select_targets_impl(
         combat,
         warriors,
@@ -236,7 +243,10 @@ pub(super) fn select_targets_impl(
     random: &mut RandomState,
 ) -> Result<SpellSelection, RuleError> {
     let (packet, firearm_count) = targeting;
-    if !matches!(packet[1], 0 | 1 | 3 | 6 | 9 | 10 | 12) {
+    if !matches!(
+        AttackPacket(packet).targeting_mode(),
+        0 | 1 | 3 | 6 | 9 | 10 | 12
+    ) {
         return Err(RuleError::Unsupported {
             action: "combat.spell.target",
             dependency: "other spell targeting",
@@ -248,17 +258,18 @@ pub(super) fn select_targets_impl(
         .get(caster_index)
         .ok_or_else(|| RuleError::Invalid("spell caster index".into()))?;
     let start = combat.enemies.positions[caster_index];
-    let side = word(&caster.bytes, 0xe)?;
+    let side = caster.record().faction()?;
     let mut next_random = random.clone();
     let mut count = next_random.bound(7);
     if let Some(firearm_count) = firearm_count {
         count = firearm_count;
     }
-    let mut range = i16::from(packet[3] as i8)
+    let mut range = AttackPacket(packet)
+        .range_per_power()
         .wrapping_mul(count)
-        .wrapping_add(i16::from(packet[2] as i8))
+        .wrapping_add(AttackPacket(packet).base_range())
         .wrapping_abs();
-    let size = word(&caster.bytes, 0x10)?.wrapping_abs();
+    let size = caster.record().size()?.wrapping_abs();
     range = range.wrapping_add(i16::from(size != 0) + i16::from(size == 3));
     let mut result = SpellSelection {
         cast: false,
@@ -276,9 +287,13 @@ pub(super) fn select_targets_impl(
             warriors[body].record().active_flag() != 0 && warriors[body].record().stamina()? > 0
         } else {
             let m = &combat.enemies.records[body - 10].bytes;
-            word(m, 0x110)? > 0 && m[0xb0] != 0xff
+            EnemyRecord::from_bytes(m).stamina()? > 0
+                && EnemyRecord::from_bytes(m).mechanical_state() != 0xff
         };
-        if !eligible || ((faction(combat, warriors, body)? == side) != (packet[9] == 4)) {
+        if !eligible
+            || ((faction(combat, warriors, body)? == side)
+                != (AttackPacket(packet).saving_throw_mode() == 4))
+        {
             continue;
         }
         let end = position(combat, body)
@@ -296,7 +311,7 @@ pub(super) fn select_targets_impl(
             distance <= f32::from(range)
         };
         if in_range
-            && (i16::from(packet[0] as i8) + i16::from(packet[2] as i8) <= 0
+            && (AttackPacket(packet).attack_count() + AttackPacket(packet).base_range() <= 0
                 || lifecycle::can_see(combat, mission, start, end, 0)?)
         {
             result.distances[body] = distance.trunc() as i16;
@@ -307,11 +322,11 @@ pub(super) fn select_targets_impl(
         *random = next_random;
         return Ok(result);
     }
-    if packet[1] == 0 {
+    if AttackPacket(packet).targeting_mode() == 0 {
         count = next_random.bound(available);
     }
     count = count.min(7);
-    while i16::from(packet[30]).wrapping_mul(count) > word(&caster.bytes, 0x10e)? {
+    while AttackPacket(packet).psi_cost().wrapping_mul(count) > caster.record().psi_points()? {
         count -= 1;
         if count == 0 {
             result.count = 0;
@@ -320,18 +335,21 @@ pub(super) fn select_targets_impl(
         }
     }
     result.count = count;
-    let desired = if packet[1] > 0 && packet[19] != 9 {
+    let desired = if AttackPacket(packet).targeting_mode() > 0
+        && AttackPacket(packet).defense_category() != 9
+    {
         1
     } else {
         count
     };
-    let random_point = packet[1] == 3 && packet[31] == 10;
-    if !random_point && packet[1] > 1 && result.nearest < range {
+    let random_point =
+        AttackPacket(packet).targeting_mode() == 3 && AttackPacket(packet).area_shape() == 10;
+    if !random_point && AttackPacket(packet).targeting_mode() > 1 && result.nearest < range {
         if let Some(body) = best_choice(
             combat,
             warriors,
             areas,
-            usize::from(packet[31]),
+            usize::from(AttackPacket(packet).area_shape()),
             side,
             &result.distances,
             range,
@@ -343,7 +361,8 @@ pub(super) fn select_targets_impl(
                 kind: 3,
             });
         }
-    } else if (random_point && result.nearest < range) || (packet[1] < 2 && result.nearest <= range)
+    } else if (random_point && result.nearest < range)
+        || (AttackPacket(packet).targeting_mode() < 2 && result.nearest <= range)
     {
         for _ in 0..desired {
             let mut selected = None;
@@ -374,19 +393,26 @@ pub(super) fn select_targets_impl(
         }
     }
     if !result.targets.is_empty()
-        || (firearm_count == Some(0) && packet[1] < 2 && result.nearest <= range)
+        || (firearm_count == Some(0)
+            && AttackPacket(packet).targeting_mode() < 2
+            && result.nearest <= range)
     {
         result.cast = true;
-        result.caster.bytes[0x109] = result.caster.bytes[0x109].wrapping_sub(2);
-        result.caster.bytes[0x106] = result.caster.bytes[0x106].wrapping_sub(3);
-        result.caster.bytes[0x104] = u8::from((result.caster.bytes[0x109] as i8) >= 1);
-        let psi = word(&result.caster.bytes, 0x10e)?
-            .wrapping_sub(i16::from(packet[30]).wrapping_mul(count));
-        put_word(&mut result.caster.bytes, 0x10e, psi);
+        let actions = result.caster.record().action_points().wrapping_sub(2);
+        let movement = result.caster.record().movement_points().wrapping_sub(3);
+        result.caster.record_mut().set_action_points(actions);
+        result.caster.record_mut().set_movement_points(movement);
+        result.caster.record_mut().set_reaction_ready(actions >= 1);
+        let psi = result
+            .caster
+            .record()
+            .psi_points()?
+            .wrapping_sub(AttackPacket(packet).psi_cost().wrapping_mul(count));
+        result.caster.record_mut().set_psi_points(psi);
         if firearm_count.is_some() {
             result.count = 1;
         }
-        if packet[7] != 0 {
+        if AttackPacket(packet).has_randomized_animation() {
             result.rotation = (next_random.bound(4) - 1) as u8;
         }
     }

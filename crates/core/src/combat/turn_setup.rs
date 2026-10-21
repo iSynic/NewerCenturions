@@ -1,8 +1,10 @@
 //! Turn setup for combat.
-use super::put_word;
 use crate::{RandomState, RuleError, items};
 use centurions_content::combat::MonsterRecord;
-use centurions_content::{Warrior, word};
+use centurions_content::{
+    Warrior,
+    records::{Condition, EnemyRecord, EnemyRecordMut},
+};
 
 pub fn direction_offset(direction: i16, distance: i16) -> (i16, i16) {
     let radians = (f64::from(direction) / 57.3) as f32 as f64;
@@ -26,21 +28,20 @@ pub fn initialize_turn(
         let monster = enemies
             .get_mut((body - 10) as usize)
             .ok_or_else(|| RuleError::Invalid("enemy outside battle".into()))?;
-        let bytes = &mut monster.bytes;
-        if bytes[0xb3] != 0 || word(bytes, 0x110)? <= 0 {
+        if monster.record().turn_skip_duration() != 0 || monster.record().stamina()? <= 0 {
             return Err(RuleError::Unsupported {
                 action: "combat.turn",
                 dependency: "inactive enemy",
             });
         }
-        let chance = word(bytes, 0x5c)?;
+        let chance = monster.record().turn_script_chance()?;
         if random.bound(100) <= chance {
             return Err(RuleError::Unsupported {
                 action: "combat.turn",
                 dependency: "enemy turn script",
             });
         }
-        initialize_enemy_record(bytes, random)?;
+        initialize_enemy_record(&mut monster.bytes, random)?;
     } else {
         return Err(RuleError::Invalid("invalid active body".into()));
     }
@@ -54,51 +55,53 @@ pub(crate) fn initialize_warrior_record(
     random: &mut RandomState,
 ) -> Result<(bool, i8), RuleError> {
     centurions_content::span(&warrior.bytes, 0, 3138)?;
-    let bytes = &mut warrior.bytes;
-    if (word(bytes, 0x5e)? != 0 || word(bytes, 0x10)? != 0) && word(bytes, 0x90)? == 0 {
-        put_word(bytes, 0x90, 1);
+    if (warrior.record().fleeing_duration()? != 0 || warrior.record().faction()? != 0)
+        && warrior.record().automatic_mode()? == 0
+    {
+        warrior.record_mut().set_automatic_mode(1);
     }
-    let faction = word(bytes, 0x10)?;
-    if word(bytes, 0x90)? >= 0 && word(bytes, 0x98)? != 0 {
+    let faction = warrior.record().faction()?;
+    if warrior.record().automatic_mode()? >= 0 && warrior.record().confusion_duration()? != 0 {
         let roll = random.bound(100);
         if roll < 30 {
             if random.bound(2) == 1 && faction == 0 {
-                put_word(bytes, 0x10, faction.wrapping_add(1));
-                if word(bytes, 0x90)? == 0 {
-                    put_word(bytes, 0x90, 1);
+                warrior.record_mut().set_faction(faction.wrapping_add(1));
+                if warrior.record().automatic_mode()? == 0 {
+                    warrior.record_mut().set_automatic_mode(1);
                 }
             } else if random.bound(2) == 2 && faction != 0 {
-                put_word(bytes, 0x10, 0);
+                warrior.record_mut().set_faction(0);
             }
         } else if roll > 70 {
-            let fleeing = word(bytes, 0x5e)?.wrapping_add(30);
-            put_word(bytes, 0x5e, fleeing);
+            let fleeing = warrior.record().fleeing_duration()?.wrapping_add(30);
+            warrior
+                .record_mut()
+                .set_condition(Condition::Retreating, fleeing);
         } else {
-            let sleeping = word(bytes, 0x60)?.wrapping_add(1);
-            put_word(bytes, 0x60, sleeping);
+            let sleeping = warrior.record().turn_skip_duration()?.wrapping_add(1);
+            warrior.record_mut().set_turn_skip_duration(sleeping);
             return Ok((true, 0));
         }
     }
-    let unavailable_delta = i8::from(word(bytes, 0x10)? != 0) - i8::from(faction != 0);
+    let unavailable_delta = i8::from(warrior.record().faction()? != 0) - i8::from(faction != 0);
     items::compact(warrior)?;
-    let bytes = &mut warrior.bytes;
-    let carry = word(bytes, 0x40)?.clamp(0, 1);
+    let carry = warrior.record().action_points()?.clamp(0, 1);
     let mut points = carry
-        .wrapping_add(word(bytes, 0x12)?)
-        .wrapping_add(word(bytes, 0x1e)?);
-    if word(bytes, 0x8c)? != 0 {
+        .wrapping_add(warrior.record().actions_per_round()?)
+        .wrapping_add(warrior.record().action_point_bonus()?);
+    if warrior.record().condition(Condition::Speedy)? != 0 {
         points = points.wrapping_add(4);
     }
-    put_word(bytes, 0x40, points);
-    let race = word(bytes, 0x32)? - 1;
+    warrior.record_mut().set_action_points(points);
+    let race = warrior.record().race()? - 1;
     let race_move = *race_moves
         .get(race as usize)
         .ok_or_else(|| RuleError::Invalid("race movement missing".into()))?;
     calculate_movement(warrior, race_move)?;
-    let maximum = word(&warrior.bytes, 0x3e)?;
-    put_word(&mut warrior.bytes, 0x3c, maximum);
-    put_word(&mut warrior.bytes, 0xacc, 0);
-    put_word(&mut warrior.bytes, 0xac8, 0);
+    let maximum = warrior.record().movement_per_round()?;
+    warrior.record_mut().set_movement_points(maximum);
+    warrior.record_mut().set_attacks_used(0);
+    warrior.record_mut().set_scans_used(0);
     Ok((false, unavailable_delta))
 }
 
@@ -107,42 +110,59 @@ pub(crate) fn initialize_enemy_record(
     bytes: &mut [u8],
     random: &mut RandomState,
 ) -> Result<(bool, i16), RuleError> {
-    put_word(bytes, 0x5c, word(bytes, 0x5c)?.wrapping_abs());
-    bytes[0x109] = (bytes[0x109] as i8).min(1).wrapping_add(bytes[0x8a] as i8) as u8;
-    let faction = word(bytes, 0xe)?;
-    if bytes[0xcf] != 0 {
+    let chance = EnemyRecord::from_bytes(bytes)
+        .turn_script_chance()?
+        .wrapping_abs();
+    EnemyRecordMut::from_bytes(bytes).set_turn_script_chance(chance);
+    let record = EnemyRecord::from_bytes(bytes);
+    let actions = record
+        .action_points()
+        .min(1)
+        .wrapping_add(record.actions_per_round());
+    EnemyRecordMut::from_bytes(bytes).set_action_points(actions);
+    let faction = EnemyRecord::from_bytes(bytes).faction()?;
+    if EnemyRecord::from_bytes(bytes).condition(Condition::Confused) != 0 {
         match random.bound(100) {
             1..40 => {
                 if random.bound(2) == 1 && faction == 0 {
-                    put_word(bytes, 0xe, 1);
+                    EnemyRecordMut::from_bytes(bytes).set_faction(1);
                 } else if random.bound(2) == 1 && faction != 0 {
-                    put_word(bytes, 0xe, 0);
+                    EnemyRecordMut::from_bytes(bytes).set_faction(0);
                 }
             }
             40..61 => {
-                bytes[0xb3] = bytes[0xb3].wrapping_add(1);
+                let duration = EnemyRecord::from_bytes(bytes)
+                    .condition(Condition::Helpless)
+                    .wrapping_add(1);
+                EnemyRecordMut::from_bytes(bytes).set_condition(Condition::Helpless, duration);
                 return Ok((true, 0));
             }
-            _ => bytes[0xb2] = bytes[0xb2].wrapping_add(1),
-        }
-    }
-    let mut movement = (word(bytes, 6)? as i8).wrapping_sub(bytes[0xb4] as i8);
-    if bytes[0xb8] != 0 {
-        movement /= 2;
-    }
-    if bytes[0xc9] != 0 {
-        movement = movement.wrapping_mul(2);
-        let points = (bytes[0x109] as i8).wrapping_add(4).min(11);
-        bytes[0x109] = points as u8;
-        for slot in 1..points / 2 {
-            let offset = 0x93 + slot as usize * 4;
-            if bytes[offset] == 0 {
-                bytes.copy_within(0x93..0x97, offset);
+            _ => {
+                let duration = EnemyRecord::from_bytes(bytes)
+                    .condition(Condition::Retreating)
+                    .wrapping_add(1);
+                EnemyRecordMut::from_bytes(bytes).set_condition(Condition::Retreating, duration);
             }
         }
     }
-    bytes[0x106] = movement as u8;
-    let hostile_change = i16::from(word(bytes, 0xe)? != 0) - i16::from(faction != 0);
+    let record = EnemyRecord::from_bytes(bytes);
+    let mut movement = (record.movement_per_round()? as i8)
+        .wrapping_sub(record.condition(Condition::Entangled) as i8);
+    if record.condition(Condition::MovingSlowly) != 0 {
+        movement /= 2;
+    }
+    if record.condition(Condition::Speedy) != 0 {
+        movement = movement.wrapping_mul(2);
+        let points = record.action_points().wrapping_add(4).min(11);
+        let mut record = EnemyRecordMut::from_bytes(bytes);
+        record.set_action_points(points);
+        for slot in 1..points / 2 {
+            record.fill_missing_natural_attack(slot as usize);
+        }
+    }
+    EnemyRecordMut::from_bytes(bytes).set_movement_points(movement);
+    let hostile_change =
+        i16::from(EnemyRecord::from_bytes(bytes).faction()? != 0) - i16::from(faction != 0);
     Ok((false, hostile_change))
 }
 
@@ -156,11 +176,11 @@ pub struct EncounterBattle {
 
 /// CODE 1 movecalc. Each SANE-to-single conversion is an explicit f32 rounding.
 pub fn calculate_movement(warrior: &mut Warrior, race_movement: i8) -> Result<(), RuleError> {
-    let bytes = &warrior.bytes;
+    let record = warrior.record();
     let maximum = 1000_i16
-        .wrapping_add(word(bytes, 0x9e2)?.wrapping_mul(100))
-        .wrapping_add(word(bytes, 0xace)?.wrapping_mul(10));
-    let available = maximum.wrapping_sub(word(bytes, 0x9d6)?) as u16;
+        .wrapping_add(record.brawn()?.wrapping_mul(100))
+        .wrapping_add(record.brawn_upgrades()?.wrapping_mul(10));
+    let available = maximum.wrapping_sub(record.carried_weight()?) as u16;
     if maximum == 0 {
         return Err(RuleError::Unsupported {
             action: "combat.movement",
@@ -169,14 +189,14 @@ pub fn calculate_movement(warrior: &mut Warrior, race_movement: i8) -> Result<()
     }
     let mut movement =
         ((available as f64 / (maximum as u16) as f64) as f32 as f64 * race_movement as f64) as f32;
-    movement = (movement as f64 - word(bytes, 0x62)? as f64) as f32;
-    if word(bytes, 0x6a)? != 0 {
+    movement = (movement as f64 - record.condition(Condition::Entangled)? as f64) as f32;
+    if record.condition(Condition::MovingSlowly)? != 0 {
         movement = (movement as f64 / 2.0) as f32;
     }
-    if word(bytes, 0x8c)? != 0 {
+    if warrior.record().condition(Condition::Speedy)? != 0 {
         movement = (movement as f64 * 2.0) as f32;
     }
-    movement = (movement as f64 + word(bytes, 0x30)? as f64) as f32;
+    movement = (movement as f64 + record.movement_bonus()? as f64) as f32;
     movement = ((movement as f64 + 0.5) as f32).max(5.0);
     if !movement.is_finite() || movement as f64 > i32::MAX as f64 {
         return Err(RuleError::Unsupported {
@@ -185,8 +205,8 @@ pub fn calculate_movement(warrior: &mut Warrior, race_movement: i8) -> Result<()
         });
     }
     let movement = (movement.trunc() as i32) as i16;
-    warrior.bytes[0x9d8..0x9da].copy_from_slice(&maximum.to_be_bytes());
-    warrior.bytes[0x3e..0x40].copy_from_slice(&movement.to_be_bytes());
+    warrior.record_mut().set_weight_capacity(maximum);
+    warrior.record_mut().set_movement_per_round(movement);
     Ok(())
 }
 

@@ -1,5 +1,5 @@
 use crate::RuleError;
-use centurions_content::{WARRIOR_BYTES, Warrior, span, word};
+use centurions_content::{WARRIOR_BYTES, Warrior, span};
 
 /// CODE 1 pool, 0x1366a8: unsigned carried WORDs added to a wrapping LONG pool.
 pub fn pool_credits(warriors: &mut [Warrior], pool: &mut i32) -> Result<(), RuleError> {
@@ -12,8 +12,8 @@ pub fn pool_credits(warriors: &mut [Warrior], pool: &mut i32) -> Result<(), Rule
         span(&warrior.bytes, 0, WARRIOR_BYTES)?;
     }
     for warrior in warriors {
-        *pool = pool.wrapping_add(i32::from(word(&warrior.bytes, 0x9da)? as u16));
-        warrior.bytes[0x9da..0x9dc].fill(0);
+        *pool = pool.wrapping_add(i32::from(warrior.record().carried_credits()? as u16));
+        warrior.record_mut().set_carried_credits(0);
     }
     Ok(())
 }
@@ -28,7 +28,7 @@ pub fn share_credits(warriors: &mut [Warrior], pool: &mut i32) -> Result<i16, Ru
     let each = (*pool / count) as i16;
     *pool = 0;
     for warrior in warriors {
-        warrior.bytes[0x9da..0x9dc].copy_from_slice(&each.to_be_bytes());
+        warrior.record_mut().set_carried_credits(each);
     }
     Ok(each)
 }
@@ -44,7 +44,7 @@ pub fn item_charges(warriors: &[Warrior], item_id: i16) -> Result<i16, RuleError
     for warrior in warriors {
         for item in warrior.inventory()? {
             if item.id() == item_id {
-                total = total.wrapping_add(word(&item.0, 2)?);
+                total = total.wrapping_add(item.quantity()?);
             }
         }
     }

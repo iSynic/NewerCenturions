@@ -9,14 +9,34 @@ const EDITOR_MODIFIERS: [usize; 10] = [13, 15, 16, 11, 17, 18, 19, 14, 21, 20];
 pub struct ItemDefinition<'a>(pub &'a [u8]);
 
 impl ItemDefinition<'_> {
+    /// Class-23 items interpret this shared WORD as their continuation script.
+    pub fn story_script(&self) -> Result<i16, ContentError> {
+        word(self.0, 0x32)
+    }
+
     pub fn icon(&self) -> Result<i16, ContentError> {
         word(self.0, 10)
     }
     pub fn description_id(&self) -> Result<i16, ContentError> {
         word(self.0, 102)
     }
+    /// Matched against the enemy's special weapon-immunity classes by attack.
+    pub fn immunity_class(&self) -> Result<i16, ContentError> {
+        word(self.0, 100)
+    }
+    pub fn impact_sound(&self) -> Result<i16, ContentError> {
+        word(self.0, 14)
+    }
     pub fn pickup_sound(&self) -> Result<i16, ContentError> {
         word(self.0, 12)
+    }
+    /// fit/refit use this field as the weapon's ammunition compatibility key.
+    /// Other item categories assign different meanings to the same stored word.
+    pub fn ammunition_caliber(&self) -> Result<i16, ContentError> {
+        word(self.0, 32)
+    }
+    pub fn supplies_shield_energy(&self) -> Result<bool, ContentError> {
+        Ok(word(self.0, 18)? != 0)
     }
     pub fn base_weight(&self) -> Result<i16, ContentError> {
         word(self.0, 16)
@@ -24,8 +44,51 @@ impl ItemDefinition<'_> {
     pub fn supplied_quantity(&self) -> Result<i16, ContentError> {
         word(self.0, 20)
     }
+    pub fn magazine_capacity(&self) -> Result<i16, ContentError> {
+        word(self.0, 24)
+    }
+    pub fn battery_capacity(&self) -> Result<i16, ContentError> {
+        word(self.0, 90)
+    }
+    pub fn capacity_bonus(&self) -> Result<i16, ContentError> {
+        word(self.0, 148)
+    }
+    pub fn required_level(&self) -> Result<i16, ContentError> {
+        word(self.0, 138)
+    }
+    pub fn base_melee_accuracy(&self) -> i8 {
+        self.0[82] as i8
+    }
+    pub fn base_accuracy(&self) -> i8 {
+        self.0[81] as i8
+    }
     pub fn rounds_per_shot(&self) -> Result<i16, ContentError> {
         word(self.0, 22)
+    }
+    pub fn missile_damage(&self) -> Result<i16, ContentError> {
+        word(self.0, 62)
+    }
+    /// prepattack treats the low byte as signed, while the estimate uses the word.
+    pub fn selected_attack_count(&self) -> i8 {
+        self.0[77] as i8
+    }
+    pub fn hit_roll_filter(&self) -> Result<i16, ContentError> {
+        word(self.0, 136)
+    }
+    pub fn attack_count(&self) -> Result<i16, ContentError> {
+        word(self.0, 76)
+    }
+    pub fn bypasses_hit_roll(&self) -> Result<bool, ContentError> {
+        Ok(word(self.0, 136)? != 0)
+    }
+    pub fn damage_enhancement(&self) -> i8 {
+        self.0[85] as i8
+    }
+    pub fn melee_damage(&self) -> Result<i16, ContentError> {
+        word(self.0, 40)
+    }
+    pub fn elemental_damage(&self, element: usize) -> Result<i16, ContentError> {
+        word(self.0, [140, 64, 66, 68, 70, 72, 74][element])
     }
     pub fn category(&self) -> Result<i16, ContentError> {
         word(self.0, 26)
@@ -41,11 +104,55 @@ impl ItemDefinition<'_> {
     pub fn unit_weight(&self) -> Result<i16, ContentError> {
         word(self.0, 36)
     }
+    pub fn discarded_when_empty(&self) -> Result<i16, ContentError> {
+        word(self.0, 38)
+    }
+    pub fn effect_selector(&self) -> Result<i16, ContentError> {
+        word(self.0, 42)
+    }
     pub fn spell(&self) -> Result<i16, ContentError> {
         word(self.0, 44)
     }
     pub fn price(&self) -> Result<i32, ContentError> {
         long(self.0, 142)
+    }
+    /// randomitem copies these initial modifiers before its random upgrades.
+    pub fn install_generated_modifiers(&self, record: &mut InventoryRecord) {
+        for (target, source) in [
+            (14, 78),
+            (15, 81),
+            (11, 82),
+            (16, 83),
+            (17, 84),
+            (18, 85),
+            (19, 86),
+            (21, 80),
+            (20, 79),
+            (13, 139),
+        ] {
+            record.0[target] = self.0[source];
+        }
+    }
+    pub fn shield_chance(&self) -> Result<i16, ContentError> {
+        word(self.0, 88)
+    }
+    pub fn armor(&self) -> Result<i16, ContentError> {
+        word(self.0, 94)
+    }
+    pub fn missile_dodge_limit(&self) -> i8 {
+        self.0[3] as i8
+    }
+    pub fn melee_dodge_limit(&self) -> i8 {
+        self.0[4] as i8
+    }
+    pub fn range(&self) -> Result<i16, ContentError> {
+        word(self.0, 60)
+    }
+    pub fn base_range_modifier(&self) -> i8 {
+        self.0[79] as i8
+    }
+    pub fn generated_required_level(&self) -> i8 {
+        self.0[139] as i8
     }
     /// installitem 0x12c874 fresh-stock branch. Capacity selection and copied
     /// modifiers stay distinct from updateshop's retained display record.
@@ -78,6 +185,15 @@ impl ItemDefinition<'_> {
             record.0[destination] = self.0[source];
         }
         Ok(record)
+    }
+
+    /// install_fresh leaves the two private instance bytes 11/12 untouched.
+    pub fn install_fresh_into(&self, record: &mut InventoryRecord) -> Result<(), ContentError> {
+        let fresh = self.fresh_stock()?;
+        record.0[..11].copy_from_slice(&fresh.0[..11]);
+        record.0[13..].copy_from_slice(&fresh.0[13..]);
+        record.0[10] = self.category()?.wrapping_abs() as u8;
+        Ok(())
     }
 
     /// updateshop 0x139244 deliberately leaves instance bytes 11 and 12 intact.
@@ -114,6 +230,21 @@ impl ItemDefinition<'_> {
 }
 
 impl InventoryRecord {
+    pub fn required_level(&self) -> i8 {
+        self.0[13] as i8
+    }
+    pub fn clear_id(&mut self) {
+        self.0[..2].fill(0);
+    }
+    pub fn accuracy_modifier(&self) -> i8 {
+        self.0[15] as i8
+    }
+    pub fn damage_enhancement(&self) -> i8 {
+        self.0[18] as i8
+    }
+    pub fn range_modifier(&self) -> u8 {
+        self.0[20]
+    }
     pub fn editor_modifier(&self, row: usize) -> i8 {
         self.0[EDITOR_MODIFIERS[row]] as i8
     }
@@ -123,6 +254,18 @@ impl InventoryRecord {
     pub fn adjust_editor_modifier(&mut self, row: usize, delta: i8) {
         let value = &mut self.0[EDITOR_MODIFIERS[row]];
         *value = value.wrapping_add(delta as u8);
+    }
+    pub fn set_id(&mut self, id: i16) {
+        super::put_word(&mut self.0, 0, id);
+    }
+    pub fn set_category(&mut self, category: u8) {
+        self.0[10] = category;
+    }
+    pub fn set_ammunition(&mut self, id: i16) {
+        super::put_word(&mut self.0, 4, id);
+    }
+    pub fn set_equipment_flag(&mut self, value: u8) {
+        self.0[9] = value;
     }
     pub fn set_quantity(&mut self, quantity: i16) {
         super::put_word(&mut self.0, 2, quantity);

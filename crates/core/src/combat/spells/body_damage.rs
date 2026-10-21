@@ -1,11 +1,14 @@
 //! Body damage for combat/spells.
 use super::{
     AttackResult, BodySpellResult, DamageFlags, DamagePacket, DirectSpell, FieldUsage, RandomState,
-    RestrictionMemoryView, RuleError, monster_race_is_excluded, put_word,
-    resolve_damage_with_amount, resolve_party, spell_conditions, validate_direct,
+    RestrictionMemoryView, RuleError, monster_race_is_excluded, resolve_damage_with_amount,
+    resolve_party, spell_conditions, validate_direct,
 };
 use centurions_content::combat::MonsterRecord;
-use centurions_content::{Warrior, word};
+use centurions_content::{
+    Warrior,
+    records::{AttackPacket, Condition, EnemyRecord, EnemyRecordMut},
+};
 
 pub fn resolve_bodies(
     warriors: &[Warrior],
@@ -126,7 +129,7 @@ pub(super) fn resolve_bodies_inner(
     if warriors.len() > 6 || enemies.len() > 100 || mask.len() < 10 + enemies.len() {
         return Err(RuleError::Invalid("spell body inputs".into()));
     }
-    if word(packet, 40)? == 36 {
+    if AttackPacket(packet).effect()? == 36 {
         if usage.is_some() {
             return Err(RuleError::Unsupported {
                 action: "combat.spell.collision",
@@ -145,7 +148,7 @@ pub(super) fn resolve_bodies_inner(
                         feedback: None,
                         damage: 0,
                         killed: false,
-                        sounds: vec![word(packet, 38).unwrap_or(0)],
+                        sounds: vec![AttackPacket(packet).impact_sound().unwrap_or(0)],
                     },
                 )
             })
@@ -159,7 +162,7 @@ pub(super) fn resolve_bodies_inner(
         });
     }
     validate_direct(packet)?;
-    let poison = word(packet, 40)? == 4;
+    let poison = AttackPacket(packet).effect()? == 4;
     if poison && mask[6..10].iter().any(|flag| *flag > 0) {
         return Err(RuleError::Unsupported {
             action: "combat.spell",
@@ -167,7 +170,7 @@ pub(super) fn resolve_bodies_inner(
         });
     }
     let mut excluded_monsters = vec![false; enemies.len()];
-    if word(packet, 50)? != 0 {
+    if AttackPacket(packet).race_restriction()? != 0 {
         for (body, flag) in mask.iter().enumerate().skip(10) {
             if *flag <= 0 {
                 continue;
@@ -194,7 +197,7 @@ pub(super) fn resolve_bodies_inner(
     let mut result = BodySpellResult {
         warriors: party.warriors,
         enemies: enemies.to_vec(),
-        sounds: if matches!(packet[1], 9 | 10) {
+        sounds: if matches!(AttackPacket(packet).targeting_mode(), 9 | 10) {
             vec![6001]
         } else {
             vec![]
@@ -213,29 +216,47 @@ pub(super) fn resolve_bodies_inner(
             continue;
         }
         if !armor_filter {
-            if packet[19] == 0 {
-                let threshold = word(m, 0)?
+            if AttackPacket(packet).defense_category() == 0 {
+                let threshold = EnemyRecord::from_bytes(m)
+                    .level()?
                     .wrapping_mul(4)
-                    .wrapping_add(if m[0xab] != 0 { 1035 } else { 35 })
-                    .wrapping_add(i16::from(packet[8] as i8).wrapping_mul(count));
+                    .wrapping_add(if EnemyRecord::from_bytes(m).has_creature_category(3) {
+                        1035
+                    } else {
+                        35
+                    })
+                    .wrapping_add(
+                        AttackPacket(packet)
+                            .save_bonus_per_attack()
+                            .wrapping_mul(count),
+                    );
                 if next_random.bound(100) <= threshold {
                     continue;
                 }
             }
             // Categories above six skip both indexed and general NPC immunity checks.
-            if packet[19] <= 6
-                && (m[0x8b + usize::from(packet[19])] as i8 >= 101 || word(m, 0xa)? >= 101)
+            if AttackPacket(packet).defense_category() <= 6
+                && (EnemyRecord::from_bytes(m)
+                    .saving_throw(usize::from(AttackPacket(packet).defense_category()))
+                    >= 101
+                    || EnemyRecord::from_bytes(m).magic_immunity()? >= 101)
             {
                 continue;
             }
-            if matches!(packet[9], 0 | 2) {
-                if matches!(packet[19], 0 | 5) && m[0xcb] != 0 {
+            if matches!(AttackPacket(packet).saving_throw_mode(), 0 | 2) {
+                if matches!(AttackPacket(packet).defense_category(), 0 | 5)
+                    && EnemyRecord::from_bytes(m).condition(Condition::ComputerControl) != 0
+                {
                     continue;
                 }
-                let immune =
-                    (level..7).any(|school_level| m[0xb2 + school_level as usize + 16] != 0);
-                let threshold =
-                    word(m, 0xa)?.wrapping_add(i16::from(packet[10] as i8).wrapping_mul(count));
+                let immune = (level..7).any(|school_level| {
+                    EnemyRecord::from_bytes(m).level_protection(school_level as usize) != 0
+                });
+                let threshold = EnemyRecord::from_bytes(m).magic_immunity()?.wrapping_add(
+                    AttackPacket(packet)
+                        .resistance_bonus_per_attack()
+                        .wrapping_mul(count),
+                );
                 if next_random.bound(100) <= threshold || immune {
                     continue;
                 }
@@ -268,13 +289,19 @@ pub(super) fn resolve_bodies_inner(
         if damage.shield_sound {
             sounds.push(206);
         }
-        if poison || word(packet, 40)? == 23 {
-            spell_conditions::apply(m, true, word(packet, 40)?, duration, &mut next_random)?;
+        if poison || AttackPacket(packet).effect()? == 23 {
+            spell_conditions::apply(
+                m,
+                true,
+                AttackPacket(packet).effect()?,
+                duration,
+                &mut next_random,
+            )?;
             if poison || damage.total == 0 {
-                sounds.push(word(packet, 38)?);
+                sounds.push(AttackPacket(packet).impact_sound()?);
             }
         }
-        let previous = word(m, 0x110)?;
+        let previous = EnemyRecord::from_bytes(m).stamina()?;
         if damage.total != 0 {
             if damage.total < 0 {
                 return Err(RuleError::Unsupported {
@@ -282,10 +309,10 @@ pub(super) fn resolve_bodies_inner(
                     dependency: "spell healing",
                 });
             }
-            sounds.push(word(packet, 38)?);
-            m[0x105] = 1;
-            put_word(m, 0x110, previous.wrapping_sub(damage.total));
-            if word(m, 0x110)? > 0 {
+            sounds.push(AttackPacket(packet).impact_sound()?);
+            EnemyRecordMut::from_bytes(m).mark_damaged();
+            EnemyRecordMut::from_bytes(m).set_stamina(previous.wrapping_sub(damage.total));
+            if EnemyRecord::from_bytes(m).stamina()? > 0 {
                 sounds.push(weapon_sound);
             }
         }
@@ -294,7 +321,7 @@ pub(super) fn resolve_bodies_inner(
             AttackResult {
                 feedback: None,
                 damage: damage.total,
-                killed: word(m, 0x110)? < 1 && damage.total != 0,
+                killed: EnemyRecord::from_bytes(m).stamina()? < 1 && damage.total != 0,
                 sounds,
             },
         ));

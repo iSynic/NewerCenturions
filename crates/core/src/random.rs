@@ -1,4 +1,4 @@
-use crate::{recovered_ai, rules};
+use crate::rules;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -21,6 +21,6 @@ impl RandomState {
         rules::random_bound(bound, self.quickdraw())
     }
     pub fn range(&mut self, min: i16, max: i16) -> i16 {
-        recovered_ai::random_range(min, max, self)
+        rules::random_range(min, max, self.quickdraw())
     }
 }

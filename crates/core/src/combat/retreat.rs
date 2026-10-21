@@ -1,8 +1,11 @@
-use crate::combat::{put_word, runtime};
+use crate::combat::runtime;
 use crate::feedback::NativeFeedback;
 use crate::{Event, Phase, Presentation, RuleError, ScriptState, Session};
 use centurions_content::mission::OpeningMission;
-use centurions_content::{Content, word};
+use centurions_content::{
+    Content,
+    records::{CharacterStatisticsMut, Statistic},
+};
 
 /// combatchoice11bdce..11bfb8 removes an escaped warrior without death cleanup.
 pub(crate) fn leave_edge(
@@ -28,11 +31,10 @@ pub(crate) fn leave(
     c.map.tiles[cell] = c.squad.under_tiles[member];
     c.squad.positions[member] = (-1, -1);
     c.order[c.cursor] = -1;
-    let w = &mut state.warriors[member].bytes;
-    put_word(w, 0x20, -1);
-    w[0x9df] = 0;
-    let penalty = i32::from_be_bytes(w[0xa72..0xa76].try_into().unwrap()).wrapping_add(200);
-    w[0xa72..0xa76].copy_from_slice(&penalty.to_be_bytes());
+    let warrior = &mut state.warriors[member];
+    warrior.record_mut().set_defeated_marker(-1);
+    warrior.record_mut().set_active_flag(0);
+    CharacterStatisticsMut(&mut warrior.bytes).add(Statistic::ScorePenalty, 200);
     let mut events = vec![];
     if edge_message {
         events.push(Event::Feedback(NativeFeedback::Flash {
@@ -49,7 +51,7 @@ pub(crate) fn leave(
     if state
         .warriors
         .iter()
-        .any(|w| w.bytes[0x9df] != 0 && word(&w.bytes, 0x10).is_ok_and(|f| f == 0))
+        .any(|w| w.record().active_flag() != 0 && w.record().faction().is_ok_and(|f| f == 0))
     {
         events.extend(runtime::end_turn(state, content)?);
     } else {
@@ -81,19 +83,8 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
         }
     }
     for warrior in &mut state.warriors {
-        let w = &mut warrior.bytes;
-        put_word(w, 0x10, 0);
-        w[0x9de] = 0;
-        put_word(w, 0x60, 0);
-        for offset in (0x5e..=0x64).step_by(2) {
-            if word(w, offset)? > 0 {
-                put_word(w, offset, 0);
-            }
-        }
-        if word(w, 0x90)? > 0 {
-            put_word(w, 0x90, 0);
-        }
-        w[0x9df] = 1;
+        crate::story_inventory::normalize_warrior_after_battle(warrior)?;
+        warrior.record_mut().set_active_flag(1);
     }
     state.retain_npcs();
     let combat = state.combat.take().ok_or("retreat combat missing")?;

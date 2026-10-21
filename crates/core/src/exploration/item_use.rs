@@ -4,6 +4,7 @@ use crate::{
     Event, MovementContinuation, Phase, Presentation, RuleError, ScriptState, Session,
     typed_encounter,
 };
+use centurions_content::records::ItemDefinition;
 use centurions_content::{Content, word};
 
 pub fn use_item(
@@ -31,14 +32,18 @@ pub fn use_item(
         return crate::combat::runtime::begin_medical_item(state, content, warrior, slot);
     }
     let definition = crate::ammunition::definition(content, item.id())?;
-    if state.combat.is_none() && word(&definition, 26)? == 28 && word(&definition, 44)? > 1100 {
+    if state.combat.is_none()
+        && ItemDefinition(&definition).category()? == 28
+        && ItemDefinition(&definition).spell()? > 1100
+    {
         return crate::outdoor_psi::begin_item(state, content, warrior, slot);
     }
-    if word(&definition, 26)? == 27 {
+    if ItemDefinition(&definition).category()? == 27 {
         return crate::item_modifiers::use_item(state, content, warrior, slot);
     }
     crate::story_item_use::reject_inert_item(&definition)?;
-    if state.phase == Phase::Combat && word(&definition, 26)?.wrapping_abs() == 23 {
+    if state.phase == Phase::Combat && ItemDefinition(&definition).category()?.wrapping_abs() == 23
+    {
         return refuse_combat_script_item(state, content, warrior, item.id(), false);
     }
     if state.phase != Phase::Exploration
@@ -100,7 +105,7 @@ pub(crate) fn check_item_actor(state: &Session, warrior: usize) -> Result<(), Ru
     if let Some(combat) = &state.combat {
         let warning = if combat.active_body() != Some(warrior as i16) {
             Some(10)
-        } else if word(&actor.bytes, 0x40)? < 1 {
+        } else if actor.record().action_points()? < 1 {
             Some(17)
         } else {
             None
@@ -145,8 +150,8 @@ pub(super) fn use_encounter_item(
         .ok_or("inventory item unavailable")?;
     let selected = typed_encounter::select_item(typed_record(state, content)?, item.id())?;
     let definition = crate::ammunition::definition(content, item.id())?;
-    let class = word(&definition, 26)?.wrapping_abs();
-    if word(&definition, 26)? == 27 {
+    let class = ItemDefinition(&definition).category()?.wrapping_abs();
+    if ItemDefinition(&definition).category()? == 27 {
         return crate::item_modifiers::use_item(state, content, warrior, slot);
     }
     if class == 23 {
@@ -236,8 +241,8 @@ pub(super) fn use_encounter_item(
         }
         return Ok(effects);
     }
-    let activating =
-        word(&definition, 44)? > 1100 && (word(&item.0, 2)? > 0 || word(&definition, 20)? < 0);
+    let activating = ItemDefinition(&definition).spell()? > 1100
+        && (word(&item.0, 2)? > 0 || word(&definition, 20)? < 0);
     if activating && class == 28 && state.combat.is_none() {
         return crate::outdoor_psi::begin_item(state, content, warrior, slot);
     }

@@ -45,7 +45,7 @@ pub(super) fn alive(c: &Combat, w: &[Warrior], body: i16) -> bool {
         c.enemies
             .records
             .get((body - 10) as usize)
-            .is_some_and(|m| m.stamina().unwrap_or(0) > 0 && m.bytes[0xb0] != 255)
+            .is_some_and(|m| m.stamina().unwrap_or(0) > 0 && !m.record().removed())
     } else {
         false
     }

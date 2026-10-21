@@ -1,7 +1,11 @@
+mod modifiers;
 mod record_rules;
+mod retained;
 pub use record_rules::{EquipmentResult, can_use, collect_item, remove, wear};
 pub(crate) use record_rules::{calculate_weight, drop, force_drop, removal_blocked};
 use record_rules::{item_definition, race_movement, remove_retained, unsupported, wear_retained};
+pub(crate) use retained::edit_record;
+pub(crate) use retained::{RetainedEquipment, apply as retained_equipment};
 mod inspection;
 pub(crate) use inspection::inspect;
 mod transactions;

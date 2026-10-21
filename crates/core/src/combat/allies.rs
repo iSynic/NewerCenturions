@@ -1,8 +1,8 @@
-use crate::combat::{EnemySetup, TacticalMap, footprint, put_word};
+use crate::combat::{EnemySetup, TacticalMap, footprint};
 use crate::{Event, RandomState, RuleError};
 use centurions_content::combat::MonsterRecord;
 use centurions_content::mission::OpeningMission;
-use centurions_content::word;
+use centurions_content::records::{Condition, EnemyRecord, EnemyRecordMut};
 
 pub fn place_allies(
     menu: &[u8],
@@ -23,9 +23,9 @@ pub fn place_allies(
     };
     for index in 0..count {
         let mut bytes = menu[index * 288..(index + 1) * 288].to_vec();
-        put_word(&mut bytes, 0x10c, -1);
-        bytes[0x82] = 0;
-        bytes[0x104] = 0;
+        EnemyRecordMut::from_bytes(&mut bytes).set_target_body(-1);
+        EnemyRecordMut::from_bytes(&mut bytes).set_target_scan_excluded(false);
+        EnemyRecordMut::from_bytes(&mut bytes).set_reaction_ready(false);
         let mut found = None;
         let mut attempted = [false; 8100];
         'search: for ring in 1..=180_i16 {
@@ -101,8 +101,8 @@ impl SurvivorSelection {
                 self.eligible[..position].contains(index)
                     || records.get(*index).is_none_or(|record| {
                         record.stamina().unwrap_or(0) <= 0
-                            || word(&record.bytes, 14).unwrap_or(1) != 0
-                            || word(&record.bytes, 0x5a).unwrap_or(0) == 0
+                            || record.record().faction().unwrap_or(1) != 0
+                            || record.record().survivor_marker().unwrap_or(0) == 0
                     })
             })
         {
@@ -130,7 +130,7 @@ impl SurvivorSelection {
         } else {
             self.selected[row] = !self.selected[row];
             events.push(Event::Sound { resource_id: 141 });
-            (!self.selected[row] && word(&records[self.eligible[row]].bytes, 0x5a)? == -1)
+            (!self.selected[row] && records[self.eligible[row]].record().survivor_marker()? == -1)
                 .then_some(0x403fb0)
         };
         if let Some(address) = warning {
@@ -161,17 +161,30 @@ pub fn prepare_survivors(
     let mut eligible = vec![];
     for (index, record) in records.iter_mut().enumerate() {
         let bytes = &mut record.bytes;
-        if bytes[0xb0] == 255 && bytes[0xb1] == 1 {
-            bytes[0xb0] = 1;
-            put_word(bytes, 0xe, 0);
+        if EnemyRecord::from_bytes(bytes).mechanical_state() == 255
+            && EnemyRecord::from_bytes(bytes).capture_flag() == 1
+        {
+            EnemyRecordMut::from_bytes(bytes).set_mechanical_state(1);
+            EnemyRecordMut::from_bytes(bytes).set_faction(0);
         }
-        for offset in [0xd8, 0xcf, 0xb7, 0xb4, 0xb3, 0xb2, 0x105] {
-            bytes[offset] = 0;
+        for condition in [
+            Condition::IncreasedDefense,
+            Condition::Confused,
+            Condition::ScanBlocked,
+            Condition::Entangled,
+            Condition::Helpless,
+            Condition::Retreating,
+        ] {
+            EnemyRecordMut::from_bytes(bytes).set_condition(condition, 0);
         }
-        if word(bytes, 0x5a)? < 0 {
-            put_word(bytes, 0xe, 0);
+        EnemyRecordMut::from_bytes(bytes).clear_damage_marker();
+        if EnemyRecord::from_bytes(bytes).survivor_marker()? < 0 {
+            EnemyRecordMut::from_bytes(bytes).set_faction(0);
         }
-        if word(bytes, 0x110)? > 0 && word(bytes, 0xe)? == 0 && word(bytes, 0x5a)? != 0 {
+        if EnemyRecord::from_bytes(bytes).stamina()? > 0
+            && EnemyRecord::from_bytes(bytes).faction()? == 0
+            && EnemyRecord::from_bytes(bytes).survivor_marker()? != 0
+        {
             eligible.push(index);
         }
     }
@@ -182,7 +195,10 @@ pub fn prepare_survivors(
         for position in 0..eligible.len() - 1 {
             let left = &records[eligible[position]].bytes;
             let right = &records[eligible[position + 1]].bytes;
-            if word(left, 0x110)? < word(right, 0x110)? || word(right, 0x5a)? == -1 {
+            if EnemyRecord::from_bytes(left).stamina()?
+                < EnemyRecord::from_bytes(right).stamina()?
+                || EnemyRecord::from_bytes(right).survivor_marker()? == -1
+            {
                 eligible.swap(position, position + 1);
             }
         }
@@ -191,7 +207,7 @@ pub fn prepare_survivors(
     let mut selected = vec![false; eligible.len()];
     let mut selected_count = 0;
     for (position, &index) in eligible.iter().enumerate() {
-        if word(&records[index].bytes, 0x5a)? == -1 && selected_count < 18 {
+        if records[index].record().survivor_marker()? == -1 && selected_count < 18 {
             selected[position] = true;
             selected_count += 1;
         }
@@ -269,20 +285,16 @@ pub fn commit_survivors(
         let bytes = &mut records[index].bytes;
         let destination = &mut menu[selected_count * 288..(selected_count + 1) * 288];
         destination.copy_from_slice(bytes);
-        for value in &mut destination[0xb2..0xb6] {
-            if (*value as i8) > 0 {
-                *value = 0;
+        for condition in 0..4 {
+            if EnemyRecord::from_bytes(destination).condition_duration(condition) > 0 {
+                EnemyRecordMut::from_bytes(destination).set_condition_duration(condition, 0);
             }
         }
-        put_word(bytes, 0, 0);
-        put_word(bytes, 0x110, 0);
-        for offset in (0x26..0x32).step_by(2) {
-            put_word(bytes, offset, 0);
-        }
-        put_word(bytes, 0x3a, 0);
+        let mut record = EnemyRecordMut::from_bytes(bytes);
+        record.clear_survivor_rewards();
     }
     for record in records {
-        put_word(&mut record.bytes, 0x110, 0);
+        record.record_mut().set_stamina(0);
     }
     normalize_menu(&mut menu, count);
     Ok(AllySynchronization {
@@ -296,7 +308,7 @@ pub fn commit_survivors(
 fn normalize_menu(menu: &mut [u8], count: usize) {
     for index in 0..count {
         let bytes = &mut menu[index * 288..(index + 1) * 288];
-        put_word(bytes, 0x10c, 0);
-        bytes[0x105] = 0;
+        EnemyRecordMut::from_bytes(bytes).set_target_body(0);
+        EnemyRecordMut::from_bytes(bytes).clear_damage_marker();
     }
 }

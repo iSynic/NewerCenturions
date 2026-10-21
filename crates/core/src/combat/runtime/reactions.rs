@@ -1,8 +1,8 @@
 //! Reactions in the original combat execution order.
 use super::{alive, has_active_warrior, neighbors, refresh_body_item, resolve_attack};
-use crate::combat::{Combat, put_word};
+use crate::combat::Combat;
 use crate::{Event, RandomState, RuleError};
-use centurions_content::{Warrior, word};
+use centurions_content::Warrior;
 
 pub fn check_neighbors(
     c: &mut Combat,
@@ -126,13 +126,13 @@ pub(super) fn check_neighbors_with_items(
         let mut changed = false;
         for &other in &list {
             let guard = if other < 10 {
-                word(&w[other as usize].bytes, 0x16)? != 0
+                w[other as usize].record().guarding()? != 0
                     && w[other as usize].record().turn_skip_duration()? == 0
             } else {
-                let m = &c.enemies.records[(other - 10) as usize].bytes;
-                m[0x104] != 0
-                    && m[0xb3] == 0
-                    && m[0xb0] != 255
+                let m = c.enemies.records[(other - 10) as usize].record();
+                m.guarding() != 0
+                    && m.turn_skip_duration() == 0
+                    && !m.removed()
                     && (body >= 10 || !matches!(w[body as usize].record().profession()?, 4 | 5))
             };
             if guard {
@@ -141,9 +141,11 @@ pub(super) fn check_neighbors_with_items(
                 }
                 changed = true;
                 if other < 10 {
-                    put_word(&mut w[other as usize].bytes, 0x16, 0);
+                    w[other as usize].record_mut().set_guarding(0);
                 } else {
-                    c.enemies.records[(other - 10) as usize].bytes[0x104] = 0;
+                    c.enemies.records[(other - 10) as usize]
+                        .record_mut()
+                        .set_reaction_ready(false);
                 }
                 if other >= 10 {
                     c.weapon_work.natural_attack_index = Some(0);
@@ -167,22 +169,24 @@ pub(super) fn check_neighbors_with_items(
         }
         let target = list[(random.bound(list.len() as i16) - 1) as usize];
         let e = (body - 10) as usize;
-        put_word(&mut c.enemies.records[e].bytes, 0x10c, target);
-        let count = (c.enemies.records[e].bytes[0x8a] as i8) / 2;
+        c.enemies.records[e].record_mut().set_target_body(target);
+        let count = c.enemies.records[e].record().actions_per_round() / 2;
         let mut killed = false;
         c.weapon_work.natural_attack_index = Some(0);
         for index in 0..count.max(0) as usize {
-            let m = &mut c.enemies.records[e].bytes;
-            m[0x109] = (m[0x109] as i8).wrapping_sub(2) as u8;
-            if (m[0x109] as i8) < 0 {
-                if m[0x109] == 255 {
-                    m[0x104] = 1;
+            let actor = &mut c.enemies.records[e];
+            let actions = actor.record().action_points().wrapping_sub(2);
+            actor.record_mut().set_action_points(actions);
+            if actions < 0 {
+                if actions == -1 {
+                    actor.record_mut().set_reaction_ready(true);
                 }
                 return Ok(events);
             }
-            m[0x106] = (m[0x106] as i8).wrapping_sub(3) as u8;
-            if (m[0x109] as i8) < 2 {
-                m[0x104] = u8::from((m[0x109] as i8) >= 1);
+            let movement = actor.record().movement_points().wrapping_sub(3);
+            actor.record_mut().set_movement_points(movement);
+            if actions < 2 {
+                actor.record_mut().set_reaction_ready(actions >= 1);
             }
             events.extend(resolve_attack(
                 c, w, random, body, target, index, body, items, attacks, buffs, buffers,

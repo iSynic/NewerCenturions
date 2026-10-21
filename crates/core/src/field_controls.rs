@@ -1,6 +1,6 @@
 //! Outdoor branches of buttonchoice109530 and checkforsecret11177e.
 use crate::{Content, Event, Phase, RuleError, Session, feedback::NativeFeedback};
-use centurions_content::word;
+use centurions_content::records::{EnemyRecord, EnemyRecordMut, WarriorRecord};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
@@ -244,7 +244,7 @@ pub(crate) fn automatic_search(state: &mut Session) -> bool {
 
 fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Result<(), RuleError> {
     for caster in 0..state.warriors.len() {
-        if state.warriors[caster].bytes[0x9dc] == 0
+        if !state.warriors[caster].record().healing_available()
             || !crate::combat::player_psi::can_cast(
                 &state.warriors,
                 caster as i16,
@@ -254,23 +254,26 @@ fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Resu
             continue;
         }
         for target in 0..state.warriors.len() + state.ally_count {
-            if word(&state.warriors[caster].bytes, 0x58)? <= 9 {
+            if state.warriors[caster].record().psi_points()? <= 9 {
                 break;
             }
             let needs_heal = if target < state.warriors.len() {
                 let bytes = &state.warriors[target].bytes;
-                word(bytes, 0x50)? > -10
-                    && word(bytes, 0x50)? < word(bytes, 0x52)?
-                    && word(bytes, 0x32)? != 3
+                WarriorRecord::from_bytes(bytes).stamina()? > -10
+                    && WarriorRecord::from_bytes(bytes).stamina()?
+                        < WarriorRecord::from_bytes(bytes).maximum_stamina()?
+                    && WarriorRecord::from_bytes(bytes).race()? != 3
             } else {
                 let bytes = &state.allies[(target - state.warriors.len()) * 288..];
-                word(bytes, 0x110)? > -10 && word(bytes, 0x110)? < word(bytes, 0x112)?
+                EnemyRecord::from_bytes(bytes).stamina()? > -10
+                    && EnemyRecord::from_bytes(bytes).stamina()?
+                        < EnemyRecord::from_bytes(bytes).maximum_stamina()?
             };
             if !needs_heal {
                 continue;
             }
-            let psi = word(&state.warriors[caster].bytes, 0x58)? - 10;
-            state.warriors[caster].bytes[0x58..0x5a].copy_from_slice(&psi.to_be_bytes());
+            let psi = state.warriors[caster].record().psi_points()? - 10;
+            state.warriors[caster].record_mut().set_psi_points(psi);
             let amount = state.random.bound(8);
             if target < state.warriors.len() {
                 let context = crate::story_health::context(
@@ -302,10 +305,11 @@ fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Resu
                 }
             } else {
                 let bytes = &mut state.allies[(target - state.warriors.len()) * 288..];
-                let stamina = word(bytes, 0x110)?
+                let stamina = EnemyRecord::from_bytes(bytes)
+                    .stamina()?
                     .wrapping_add(amount)
-                    .min(word(bytes, 0x112)?);
-                bytes[0x110..0x112].copy_from_slice(&stamina.to_be_bytes());
+                    .min(EnemyRecord::from_bytes(bytes).maximum_stamina()?);
+                EnemyRecordMut::from_bytes(bytes).set_stamina(stamina);
             }
         }
     }

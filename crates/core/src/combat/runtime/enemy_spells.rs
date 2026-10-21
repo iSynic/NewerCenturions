@@ -2,7 +2,7 @@
 use super::{EnemyWork, resolve_spell_mask, spell_identity};
 use crate::combat::Combat;
 use crate::{Event, RandomState, RuleError};
-use centurions_content::{Warrior, word};
+use centurions_content::{Warrior, records::AttackPacket};
 
 pub(super) fn refresh_enemy_item_alias(
     c: &Combat,
@@ -20,7 +20,7 @@ pub(super) fn refresh_enemy_item_alias(
     let item = items
         .get(index)
         .ok_or_else(|| RuleError::Invalid("NPC selected item missing".into()))?;
-    Ok(Some(word(item, 0x32)?))
+    Ok(Some(centurions_content::word(item, 0x32)?))
 }
 
 pub(super) fn enemy_spell(
@@ -51,7 +51,7 @@ pub(super) fn enemy_spell_continue(
         .combat
         .as_ref()
         .ok_or_else(|| RuleError::Invalid("spell content missing".into()))?;
-    let attempts = c.enemies.records[e].bytes[0x7e] as i8;
+    let attempts = c.enemies.records[e].record().spell_attempts();
     let mut cast = false;
     while work.spell_attempt < attempts {
         let Some((id, packet)) =
@@ -115,7 +115,7 @@ pub(super) fn enemy_spell_continue(
                 collision: false,
             };
             events.push(Event::Sound {
-                resource_id: word(&packet, 36)?,
+                resource_id: AttackPacket(&packet).launch_sound()?,
             });
             let mask = crate::combat::spells::target_mask_rotated_with_origin(
                 c,

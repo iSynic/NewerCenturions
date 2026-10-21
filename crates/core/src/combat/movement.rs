@@ -144,7 +144,7 @@ pub(super) fn move_warrior_inner(
         effects.push(Event::Sound { resource_id: -130 });
         return Ok(effects);
     }
-    let cost = crate::recovered_preparation::movement_cost(&mission.tile_properties, tile, dx, dy)?;
+    let cost = crate::rules::movement_cost(mission.tactical_movement_property(tile)?, dx, dy);
     let remaining = state.warriors[body]
         .record()
         .movement_points()?

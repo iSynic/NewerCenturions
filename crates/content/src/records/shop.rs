@@ -23,6 +23,11 @@ impl ShopRecord<'_> {
 pub struct ShopRecordMut<'a>(pub &'a mut [u8]);
 
 impl ShopRecordMut<'_> {
+    pub fn set_stock(&mut self, slot: usize, id: i16, quantity: u8) {
+        put_word(self.0, slot * 2, id);
+        self.0[QUANTITIES + slot] = quantity;
+    }
+
     pub fn buy_one(&mut self, slot: usize) {
         let quantity = &mut self.0[QUANTITIES + slot];
         *quantity = quantity.wrapping_sub(1);

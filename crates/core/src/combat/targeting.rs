@@ -1,7 +1,7 @@
 //! combatchoice0011a4f4/0011a650: quantity, target ceiling and incremental Psi payment.
 use crate::combat::Combat;
 use crate::{Event, RuleError, Session};
-use centurions_content::{Content, Warrior, word};
+use centurions_content::{Content, Warrior};
 use serde::{Deserialize, Serialize};
 mod actor_selection;
 pub(crate) use actor_selection::select_actor_target;
@@ -68,10 +68,10 @@ pub(crate) fn begin_firearm(
     let actor = state.combat.as_ref().unwrap().active_body().unwrap();
     let warrior = &state.warriors[actor as usize];
     let weapon_id = warrior.record().equipped_weapon()?;
-    let ammo_id = word(&warrior.bytes, 0x132 + prepared.slot * 22 + 4)?;
+    let ammo_id = warrior.record().inventory_ammunition(prepared.slot)?;
     let weapon = &content.items[weapon_id.unsigned_abs() as usize];
     let ammunition = &content.items[ammo_id.unsigned_abs() as usize];
-    let spell = word(weapon, 44)?;
+    let spell = centurions_content::records::ItemDefinition(weapon).spell()?;
     let identity = [spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1];
     let combat = state.combat.as_mut().unwrap();
     combat.weapon_work.prepare(weapon, ammunition)?;
@@ -83,7 +83,8 @@ pub(crate) fn begin_firearm(
     state.weapon_work = combat.weapon_work;
     state.ammunition_work.prepare_pair(weapon, ammunition)?;
     state.ammunition_work.item = Some(crate::ammunition::definition(content, weapon_id)?);
-    state.loaded_item_field32 = Some(word(weapon, 32)?);
+    state.loaded_item_field32 =
+        Some(centurions_content::records::ItemDefinition(weapon).retained_field32()?);
     state.target_quantity = Some(FirearmQuantity {
         actor,
         weapon: weapon_id,
@@ -118,7 +119,7 @@ pub(crate) fn adjust(
             let psi = state.warriors[actor]
                 .psi_points()?
                 .wrapping_add(i16::from(packet[30]) * if increase { -1 } else { 1 });
-            state.warriors[actor].bytes[0x58..0x5a].copy_from_slice(&psi.to_be_bytes());
+            state.warriors[actor].record_mut().set_psi_points(psi);
             if let Some(choice) = &mut state.psi_menu_choices[actor] {
                 choice.power = power;
             }
@@ -140,13 +141,15 @@ pub(crate) fn adjust(
             if packet[1] == 0 { pending.power } else { 1 },
             pending.targets.len(),
             true,
-            word(&state.warriors[actor].bytes, 0x58)?,
+            state.warriors[actor].record().psi_points()?,
             packet[30],
             increase,
         )?;
-        let psi = word(&state.warriors[actor].bytes, 0x58)?
+        let psi = state.warriors[actor]
+            .record()
+            .psi_points()?
             .wrapping_add(i16::from(packet[30]).wrapping_mul(if increase { -1 } else { 1 }));
-        state.warriors[actor].bytes[0x58..0x5a].copy_from_slice(&psi.to_be_bytes());
+        state.warriors[actor].record_mut().set_psi_points(psi);
         state.psi_selection.as_mut().unwrap().power = power;
         state.attack_count = power;
         if let Some(choice) = &mut state.psi_menu_choices[actor] {
@@ -158,7 +161,7 @@ pub(crate) fn adjust(
             .as_ref()
             .and_then(|c| c.active_body())
             .and_then(|body| state.warriors.get(usize::try_from(body).ok()?))
-            .is_some_and(|warrior| warrior.bytes[0x9dd] != 0);
+            .is_some_and(|warrior| warrior.record().firing_mode());
         if !firearm_mode {
             return Err(RuleError::Invalid("no targeting quantity is active".into()));
         }

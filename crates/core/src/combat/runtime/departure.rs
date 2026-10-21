@@ -1,6 +1,6 @@
 //! Departure in the original combat execution order.
 use super::{alive, neighbors, neighbors_at, refresh_body_item, resolve_attack};
-use crate::combat::{Combat, enemy, put_word};
+use crate::combat::{Combat, enemy};
 use crate::{Event, RandomState, RuleError};
 use centurions_content::Warrior;
 
@@ -99,7 +99,7 @@ pub(super) fn warrior_departure_inner(
             if w[other as usize].record().turn_skip_duration()? != 0 {
                 continue;
             }
-            put_word(&mut w[other as usize].bytes, 0x16, 0);
+            w[other as usize].record_mut().set_guarding(0);
         } else {
             let m = &mut c.enemies.records[(other - 10) as usize].bytes;
             if m[0xb3] != 0

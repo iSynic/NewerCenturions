@@ -1,10 +1,13 @@
 //! Party damage for combat/spells.
 use super::{
     AttackResult, DamageFlags, DamagePacket, DirectSpell, FieldUsage, RandomState, RuleError,
-    WarriorSpellResult, put_word, race_is_excluded, resolve_damage_with_amount, spell_conditions,
+    WarriorSpellResult, race_is_excluded, resolve_damage_with_amount, spell_conditions,
     validate_direct,
 };
-use centurions_content::{Warrior, word};
+use centurions_content::{
+    Warrior,
+    records::{AttackPacket, Condition, SavingThrow, WarriorRecord, WarriorRecordMut},
+};
 
 pub fn resolve_warriors(
     warriors: &[Warrior],
@@ -51,7 +54,7 @@ pub(super) fn resolve_party(
     if mask.len() < warriors.len() || !(0..7).contains(&level) || count < 0 {
         return Err(RuleError::Invalid("spell resolution inputs".into()));
     }
-    let poison = word(packet, 40)? == 4;
+    let poison = AttackPacket(packet).effect()? == 4;
     if poison && (!(1..=7).contains(&count) || usage.is_some()) {
         return Err(RuleError::Unsupported {
             action: "combat.spell",
@@ -64,12 +67,14 @@ pub(super) fn resolve_party(
         targets: vec![],
         race_excluded: vec![],
     };
-    let mut duration = next_random.range(i16::from(packet[13] as i8), i16::from(packet[14] as i8));
-    if packet[15] != 0 {
+    let (minimum, maximum) = AttackPacket(packet).duration_bounds();
+    let mut duration = next_random.range(minimum, maximum);
+    let (additional_minimum, additional_maximum) =
+        AttackPacket(packet).additional_duration_bounds();
+    if additional_minimum != 0 {
         for _ in 0..count {
-            duration = duration.wrapping_add(
-                next_random.range(i16::from(packet[15] as i8), i16::from(packet[16] as i8)),
-            );
+            duration =
+                duration.wrapping_add(next_random.range(additional_minimum, additional_maximum));
         }
     }
     for (member, warrior) in result.warriors.iter_mut().enumerate() {
@@ -81,23 +86,42 @@ pub(super) fn resolve_party(
             result.race_excluded.push(member);
             continue;
         }
-        if !armor_filter && matches!(packet[9], 0 | 2) {
-            if packet[19] == 0 {
-                let threshold = word(w, 0x112)?
-                    .wrapping_add(if word(w, 0x32)? == 3 { 1000 } else { 0 })
-                    .wrapping_add(i16::from(packet[8] as i8).wrapping_mul(count));
+        if !armor_filter && matches!(AttackPacket(packet).saving_throw_mode(), 0 | 2) {
+            if AttackPacket(packet).defense_category() == 0 {
+                let threshold = WarriorRecord::from_bytes(w)
+                    .saving_throw(SavingThrow::Mental)?
+                    .wrapping_add(if WarriorRecord::from_bytes(w).race()? == 3 {
+                        1000
+                    } else {
+                        0
+                    })
+                    .wrapping_add(
+                        AttackPacket(packet)
+                            .save_bonus_per_attack()
+                            .wrapping_mul(count),
+                    );
                 if next_random.bound(100) <= threshold {
                     continue;
                 }
             }
-            if matches!(packet[19], 0 | 5) && word(w, 0x90)? != 0 {
+            if matches!(AttackPacket(packet).defense_category(), 0 | 5)
+                && WarriorRecord::from_bytes(w).condition(Condition::ComputerControl)? != 0
+            {
                 continue;
             }
             let immune = (level..7).any(|school_level| {
-                word(w, 0x5e + (school_level as usize + 16) * 2).unwrap_or(0) != 0
+                WarriorRecord::from_bytes(w)
+                    .level_protection(school_level as usize)
+                    .unwrap_or(0)
+                    != 0
             });
-            let threshold =
-                word(w, 0x22)?.wrapping_add(i16::from(packet[10] as i8).wrapping_mul(count));
+            let threshold = WarriorRecord::from_bytes(w)
+                .base_psionic_resistance()?
+                .wrapping_add(
+                    AttackPacket(packet)
+                        .resistance_bonus_per_attack()
+                        .wrapping_mul(count),
+                );
             if next_random.bound(100) > threshold && immune {
                 continue;
             }
@@ -129,15 +153,21 @@ pub(super) fn resolve_party(
         if damage.shield_sound {
             sounds.push(206);
         }
-        if poison || word(packet, 40)? == 23 {
-            spell_conditions::apply(w, false, word(packet, 40)?, duration, &mut next_random)?;
+        if poison || AttackPacket(packet).effect()? == 23 {
+            spell_conditions::apply(
+                w,
+                false,
+                AttackPacket(packet).effect()?,
+                duration,
+                &mut next_random,
+            )?;
             if poison || damage.total == 0 {
-                sounds.push(word(packet, 38)?);
+                sounds.push(AttackPacket(packet).impact_sound()?);
             }
         }
-        let previous = word(w, 0x50)?;
+        let previous = WarriorRecord::from_bytes(w).stamina()?;
         if damage.total != 0 && previous > -10 {
-            sounds.push(word(packet, 38)?);
+            sounds.push(AttackPacket(packet).impact_sound()?);
             if damage.total < 0 {
                 return Err(RuleError::Unsupported {
                     action: "combat.spell",
@@ -145,9 +175,9 @@ pub(super) fn resolve_party(
                 });
             }
             if previous >= 0 {
-                put_word(w, 0x50, previous.wrapping_sub(damage.total));
+                WarriorRecordMut::from_bytes(w).set_stamina(previous.wrapping_sub(damage.total));
                 if damage.total > 0 {
-                    put_word(w, 0x14, 1);
+                    WarriorRecordMut::from_bytes(w).mark_damaged();
                 }
             }
         }
@@ -156,7 +186,7 @@ pub(super) fn resolve_party(
             AttackResult {
                 feedback: None,
                 damage: damage.total,
-                killed: previous > 0 && word(w, 0x50)? < 1,
+                killed: previous > 0 && WarriorRecord::from_bytes(w).stamina()? < 1,
                 sounds,
             },
         ));

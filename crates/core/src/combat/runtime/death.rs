@@ -1,7 +1,7 @@
 //! Death in the original combat execution order.
 use super::{alive, end_turn, finish_battle_wrapper, finish_victory, select_turn};
 use crate::{Event, Phase, Presentation, RuleError, ScriptState, Session};
-use centurions_content::{Content, word};
+use centurions_content::Content;
 use serde::{Deserialize, Serialize};
 
 /// killbody12e8a4 uses showresults -14 for alternate bodies; both NPC
@@ -12,7 +12,7 @@ pub(super) fn enemy_death_feedback(
 ) -> Result<Vec<Event>, RuleError> {
     centurions_content::span(&monster.bytes, 0, 288)?;
     let mut events = vec![];
-    if monster.bytes[0xab] != 0 {
+    if monster.record().has_creature_category(3) {
         events.push(Event::Feedback(
             crate::feedback::NativeFeedback::CombatResult {
                 body,
@@ -23,7 +23,7 @@ pub(super) fn enemy_death_feedback(
         ));
     }
     events.push(Event::Sound {
-        resource_id: word(&monster.bytes, 0x6a)?,
+        resource_id: monster.record().death_sound()?,
     });
     Ok(events)
 }
@@ -177,8 +177,8 @@ pub(super) fn finish_action(
     c.death_queue.finish();
     if c.enemies.records.iter().all(|m| {
         m.stamina().unwrap_or(0) <= 0
-            || m.bytes[0xb0] == 255
-            || word(&m.bytes, 0xe).unwrap_or(1) == 0
+            || m.record().mechanical_state() == 255
+            || m.record().faction().unwrap_or(1) == 0
     }) {
         return finish_victory(state, content);
     }
@@ -336,8 +336,8 @@ pub fn continue_death(state: &mut Session, content: &Content) -> Result<Vec<Even
             return Ok(events);
         }
         let record = map.script(story.script)?;
-        let opcode = word(&record, 8 + story.cursor * 2)?;
-        let parameter = word(&record, 24 + story.cursor * 2)?;
+        let (opcode, parameter) =
+            centurions_content::records::StoryRecord(&record).instruction(story.cursor)?;
         story.cursor += 1;
         match opcode {
             0 => {}

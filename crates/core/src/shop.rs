@@ -5,6 +5,7 @@ pub use access::Access;
 use access::{active, records, refused};
 pub(crate) use access::{close, command_allowed, open, validate, visit, visit_restricted};
 mod catalog;
+mod pricing;
 pub(crate) use catalog::display_record;
 use catalog::enhanced_stock;
 pub use catalog::{preview, price, stock};

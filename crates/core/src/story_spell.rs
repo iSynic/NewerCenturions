@@ -1,4 +1,7 @@
 use crate::{Content, Event, RuleError, Session, combat, feedback::NativeFeedback, story_health};
+use centurions_content::records::{
+    AttackPacket, AttackPacketMut, Condition, DevelopmentField, WarriorRecord, WarriorRecordMut,
+};
 use centurions_content::{span, word};
 
 /// newland 17/18: the existing selection mask is retained by 17 and replaced by 18.
@@ -19,11 +22,11 @@ pub(crate) fn apply(
         )
         .ok_or_else(|| RuleError::Invalid("script spell map missing".into()))?;
     let mut packet = combat::spells::load_packet(&map.combat.as_ref().unwrap().attacks, id)?;
-    packet[8] = packet[8].wrapping_add(word(extra, 4)? as u8);
+    AttackPacketMut(&mut packet).add_save_bonus(word(extra, 4)?);
     if word(extra, 6)? != 0 {
-        packet[9] = 3;
+        AttackPacketMut(&mut packet).set_saving_throw_mode(3);
     }
-    let effect = word(&packet, 40)?.wrapping_abs();
+    let effect = AttackPacket(&packet).effect()?.wrapping_abs();
     // The supplied scripted packet uses condition 23. Other effects retain their explicit adapters.
     if !matches!(effect, 0 | 23 | 57) {
         return Err(RuleError::Unsupported {
@@ -134,26 +137,28 @@ pub(crate) fn resolve_outdoors(
     caster: usize,
     include_allies: bool,
 ) -> Result<Vec<Event>, RuleError> {
-    let effect = word(packet, 40)?.wrapping_abs();
-    if !matches!(effect, 0..=40 | 57 | 64 | 70) && !(packet[1] == 7 && effect == 110) {
+    let effect = AttackPacket(packet).effect()?.wrapping_abs();
+    if !matches!(effect, 0..=40 | 57 | 64 | 70)
+        && !(AttackPacket(packet).targeting_mode() == 7 && effect == 110)
+    {
         return Err(RuleError::Unsupported {
             action: "psi.outdoor",
             dependency: "other outdoor spell effect",
         });
     }
-    let mut duration = state
-        .random
-        .range(i16::from(packet[13] as i8), i16::from(packet[14] as i8));
-    if packet[15] != 0 {
+    let mut duration = state.random.range(
+        AttackPacket(packet).duration_bounds().0,
+        AttackPacket(packet).duration_bounds().1,
+    );
+    if AttackPacket(packet).additional_duration_bounds().0 != 0 {
         for _ in 0..count {
-            duration = duration.wrapping_add(
-                state
-                    .random
-                    .range(i16::from(packet[15] as i8), i16::from(packet[16] as i8)),
-            );
+            duration = duration.wrapping_add(state.random.range(
+                AttackPacket(packet).additional_duration_bounds().0,
+                AttackPacket(packet).additional_duration_bounds().1,
+            ));
         }
     }
-    if packet[1] == 7 {
+    if AttackPacket(packet).targeting_mode() == 7 {
         if effect == 110 {
             combat::party_buffs::extend_scenario_tail(state, duration)?;
         } else {
@@ -170,7 +175,7 @@ pub(crate) fn resolve_outdoors(
         state.health_context.as_ref(),
     );
     state.attack_packet = Some(packet.to_vec());
-    health.effect = packet[18] as i8;
+    health.effect = AttackPacket(packet).health_effect();
     let mut events = Vec::new();
     for member in 0..state.warriors.len() {
         if state.party_mask[member] <= 0 {
@@ -178,10 +183,10 @@ pub(crate) fn resolve_outdoors(
         }
         let w = &mut state.warriors[member].bytes;
         // resist still executes outdoors; its return value does not suppress resolvedamage.
-        let race = word(w, 0x32)?;
-        let excluded = word(packet, 50)? != 0
+        let race = WarriorRecord::from_bytes(w).race()?;
+        let excluded = AttackPacket(packet).race_restriction()? != 0
             && (1..=16).contains(&race)
-            && word(packet, 50)? as u16 & (0x8000 >> (race - 1)) != 0;
+            && AttackPacket(packet).race_restriction()? as u16 & (0x8000 >> (race - 1)) != 0;
         if excluded {
             events.push(Event::Feedback(NativeFeedback::Flash {
                 address: 0x4018b4,
@@ -190,15 +195,23 @@ pub(crate) fn resolve_outdoors(
                 wait: 40,
                 sound: 139,
             }));
-        } else if !matches!(packet[9], 1 | 3..=255) {
+        } else if !matches!(AttackPacket(packet).saving_throw_mode(), 1 | 3..=255) {
             let mut saved = false;
-            if packet[19] == 0 {
-                let threshold = word(w, 0x112)?
+            if AttackPacket(packet).defense_category() == 0 {
+                let threshold = DevelopmentField::Resistance(0)
+                    .read(w)?
                     .wrapping_add(if race == 3 { 1000 } else { 0 })
-                    .wrapping_add(i16::from(packet[8] as i8).wrapping_mul(count));
+                    .wrapping_add(
+                        AttackPacket(packet)
+                            .save_bonus_per_attack()
+                            .wrapping_mul(count),
+                    );
                 saved = state.random.bound(100) <= threshold;
             }
-            if !saved && !(matches!(packet[19], 0 | 5) && word(w, 0x90)? != 0) {
+            if !saved
+                && !(matches!(AttackPacket(packet).defense_category(), 0 | 5)
+                    && WarriorRecord::from_bytes(w).automatic_mode()? != 0)
+            {
                 state.random.bound(100);
             }
         }
@@ -225,17 +238,21 @@ pub(crate) fn resolve_outdoors(
             combat::spell_conditions::add_duration(w, false, effect, duration)?;
         }
         if matches!(effect, 1..=40 | 64 | 70) {
-            follow_up = Some(if word(w, 0x9a)? != 0 && state.random.bound(100) < 34 {
-                caster
-            } else {
-                member
-            });
+            follow_up = Some(
+                if WarriorRecord::from_bytes(w).condition(Condition::ReflectingScans)? != 0
+                    && state.random.bound(100) < 34
+                {
+                    caster
+                } else {
+                    member
+                },
+            );
             if result.total == 0 {
                 events.push(Event::Sound {
-                    resource_id: word(packet, 38)?,
+                    resource_id: AttackPacket(packet).impact_sound()?,
                 });
                 events.push(Event::OutdoorEffect {
-                    effect: i16::from(packet[20] as i8).wrapping_abs(),
+                    effect: AttackPacket(packet).effect_animation().wrapping_abs(),
                     x,
                     y,
                     size: 32,
@@ -247,11 +264,11 @@ pub(crate) fn resolve_outdoors(
             combat::spell_conditions::follow_up(&mut state.warriors[target].bytes, false, effect)?;
         }
         let w = &mut state.warriors[member].bytes;
-        let before = word(w, 0x50)?;
+        let before = WarriorRecord::from_bytes(w).stamina()?;
         let defeated = before > 0 && before.wrapping_sub(result.total) < 1;
         if result.total != 0 && before > -10 {
             events.push(Event::Sound {
-                resource_id: word(packet, 38)?,
+                resource_id: AttackPacket(packet).impact_sound()?,
             });
             if result.total < 0 {
                 let outcome = story_health::heal_outdoors(
@@ -282,7 +299,7 @@ pub(crate) fn resolve_outdoors(
                 state.warriors = outcome.warriors;
                 health = outcome.context;
             } else if before >= 0 {
-                w[0x50..0x52].copy_from_slice(&before.wrapping_sub(result.total).to_be_bytes());
+                WarriorRecordMut::from_bytes(w).set_stamina(before.wrapping_sub(result.total));
                 health.affected[member] = -1;
                 if defeated {
                     // Outdoor killbody increments availability and plays a death sound, without combat record cleanup.
@@ -293,7 +310,7 @@ pub(crate) fn resolve_outdoors(
                     });
                 } else {
                     events.push(Event::OutdoorEffect {
-                        effect: i16::from(packet[20] as i8).wrapping_abs(),
+                        effect: AttackPacket(packet).effect_animation().wrapping_abs(),
                         x,
                         y,
                         size: 32,
@@ -343,13 +360,13 @@ pub(crate) fn resolve_outdoors(
             if (1..=40).contains(&effect) {
                 combat::spell_conditions::apply(ally, true, effect, duration, &mut state.random)?;
                 events.push(Event::Sound {
-                    resource_id: word(packet, 38)?,
+                    resource_id: AttackPacket(packet).impact_sound()?,
                 });
             }
         }
     }
     // heal1287dc writes the effect byte in the retained attack packet itself.
-    state.attack_packet.as_mut().unwrap()[18] = health.effect as u8;
+    AttackPacketMut(state.attack_packet.as_mut().unwrap()).set_health_effect(health.effect as u8);
     state.health_context = Some(health);
     Ok(events)
 }

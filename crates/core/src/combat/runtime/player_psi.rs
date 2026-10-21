@@ -2,7 +2,7 @@
 use super::{begin_learned_heal, finish_player_action, select_medical_target};
 use crate::combat::Combat;
 use crate::{Event, RuleError, Session};
-use centurions_content::{Content, word};
+use centurions_content::Content;
 
 pub fn player_psi(
     state: &mut Session,
@@ -102,16 +102,16 @@ pub(super) fn player_psi_target(
         },
     )?;
     if matches!(
-        word(
+        centurions_content::records::AttackPacket(
             state
                 .combat
                 .as_ref()
                 .unwrap()
                 .attack_packet
                 .as_ref()
-                .unwrap(),
-            40
-        )?,
+                .unwrap()
+        )
+        .effect()?,
         55 | 56
     ) {
         state.bandage_ready = Some(0);

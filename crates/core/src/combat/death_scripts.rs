@@ -1,13 +1,6 @@
 use crate::{RuleError, combat::Combat};
-use centurions_content::Warrior;
+use centurions_content::{Warrior, records::FootprintCell};
 use serde::{Deserialize, Serialize};
-
-fn word(bytes: &[u8], offset: usize) -> i16 {
-    i16::from_be_bytes([bytes[offset], bytes[offset + 1]])
-}
-fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
-    bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
-}
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeathEntry {
@@ -178,8 +171,8 @@ pub fn cleanup_enemy(
     {
         return Err(RuleError::Invalid("invalid death cleanup input".into()));
     }
-    let bytes = &record.bytes;
-    let signed_size = word(bytes, 0x10);
+    let record = record.record();
+    let signed_size = record.size()?;
     let size = signed_size.wrapping_abs();
     if !(0..=3).contains(&size) {
         return Err(RuleError::Unsupported {
@@ -194,23 +187,29 @@ pub fn cleanup_enemy(
         .ok_or_else(|| RuleError::Invalid("enemy position missing".into()))?;
     let x = i32::from(position.0) + i32::from(combat.map.shift.0) + 5;
     let y = i32::from(position.1) + i32::from(combat.map.shift.1) + 5;
-    let entry = (word(bytes, 0x60) != 0).then(|| DeathEntry {
-        monster: i16::from(bytes[0x103] as i8),
-        faction: word(bytes, 0xe),
-        script: word(bytes, 0x60),
+    let script = record.death_script()?;
+    let faction = record.faction()?;
+    let entry = (script != 0).then(|| DeathEntry {
+        monster: i16::from(record.definition_id()),
+        faction,
+        script,
         x,
         y,
     });
-    let increment_kills = word(bytes, 0xe) != 0 && bytes[0xb0] != 255;
-    let mut cells = vec![(x, y, word(bytes, 0x11e))];
+    let increment_kills = faction != 0 && record.mechanical_state() != 255;
+    let mut cells = vec![(x, y, record.footprint_tile(FootprintCell::Anchor)?)];
     if size == 3 {
-        cells.push((x - 1, y - 1, word(bytes, 0x118)));
+        cells.push((
+            x - 1,
+            y - 1,
+            record.footprint_tile(FootprintCell::Northwest)?,
+        ));
     }
     if size > 1 {
-        cells.push((x - 1, y, word(bytes, 0x11a)));
+        cells.push((x - 1, y, record.footprint_tile(FootprintCell::West)?));
     }
     if size == 3 || signed_size == 1 {
-        cells.push((x, y - 1, word(bytes, 0x11c)));
+        cells.push((x, y - 1, record.footprint_tile(FootprintCell::North)?));
     }
     let changes = cells
         .into_iter()
@@ -220,9 +219,12 @@ pub fn cleanup_enemy(
                 .map_err(RuleError::from)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let bytes = &mut combat.enemies.records[index].bytes;
-    bytes[0x106] = 0;
-    bytes[0xb2..0xda].fill(0);
+    combat.enemies.records[index]
+        .record_mut()
+        .set_movement_points(0);
+    combat.enemies.records[index]
+        .record_mut()
+        .clear_conditions();
     for (index, value) in changes {
         combat.map.tiles[index] = value;
     }
@@ -249,13 +251,13 @@ pub fn clear_body_references(
         return Err(RuleError::Invalid("invalid death target input".into()));
     }
     for warrior in warriors {
-        if word(&warrior.bytes, 0x18) == body {
-            put_word(&mut warrior.bytes, 0x18, -1);
+        if warrior.record().target_body()? == body {
+            warrior.record_mut().set_target_body(-1);
         }
     }
     for monster in &mut combat.enemies.records {
-        if word(&monster.bytes, 0x10c) == body {
-            put_word(&mut monster.bytes, 0x10c, -1);
+        if monster.record().target_body()? == body {
+            monster.record_mut().set_target_body(-1);
         }
     }
     Ok(())

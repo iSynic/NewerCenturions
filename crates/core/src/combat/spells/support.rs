@@ -1,11 +1,17 @@
 //! Support for combat/spells.
 use super::{
     AttackResult, DamageFlags, DamagePacket, DirectSpell, RandomState, RestrictionMemoryView,
-    RuleError, SupportSpellResult, monster_race_is_excluded, put_word, race_is_excluded,
+    RuleError, SupportSpellResult, monster_race_is_excluded, race_is_excluded,
     resolve_damage_with_amount, spell_conditions, status_resisted,
 };
 use centurions_content::combat::MonsterRecord;
-use centurions_content::{Warrior, word};
+use centurions_content::{
+    Warrior,
+    records::{
+        AttackPacket, Condition, EnemyRecord, EnemyRecordMut, WarriorRecord, WarriorRecordMut,
+    },
+    word,
+};
 
 pub fn resolve_player_support(
     warriors: &[Warrior],
@@ -70,10 +76,10 @@ pub(crate) fn resolve_support_for_caster(
     {
         return Err(RuleError::Invalid("support spell inputs".into()));
     }
-    let effect = word(packet, 40)?;
+    let effect = AttackPacket(packet).effect()?;
     if !(matches!(effect, 0..=41 | 51 | 57 | 64))
-        || packet[9] > 3
-        || !matches!(packet[19], 7 | 8 | 10)
+        || AttackPacket(packet).saving_throw_mode() > 3
+        || !matches!(AttackPacket(packet).defense_category(), 7 | 8 | 10)
         || (packet[20] as i8) < 0
         || word(packet, 34)? != 0
         || packet[23..30].iter().any(|v| *v != 0)
@@ -88,18 +94,20 @@ pub(crate) fn resolve_support_for_caster(
     }
     let mut next_random = random.clone();
     let mut amount = 0;
-    let mut duration = next_random.range(i16::from(packet[13] as i8), i16::from(packet[14] as i8));
-    if packet[15] != 0 {
+    let (minimum, maximum) = AttackPacket(packet).duration_bounds();
+    let mut duration = next_random.range(minimum, maximum);
+    let (additional_minimum, additional_maximum) =
+        AttackPacket(packet).additional_duration_bounds();
+    if additional_minimum != 0 {
         for _ in 0..count {
-            duration = duration.wrapping_add(
-                next_random.range(i16::from(packet[15] as i8), i16::from(packet[16] as i8)),
-            );
+            duration =
+                duration.wrapping_add(next_random.range(additional_minimum, additional_maximum));
         }
     }
     let mut result = SupportSpellResult {
         warriors: warriors.to_vec(),
         enemies: enemies.to_vec(),
-        sounds: if matches!(packet[1], 9 | 10) {
+        sounds: if matches!(AttackPacket(packet).targeting_mode(), 9 | 10) {
             vec![6001]
         } else {
             vec![]
@@ -143,7 +151,9 @@ pub(crate) fn resolve_support_for_caster(
         let mut follow_up = None;
         // Authored effect0 has no spelllist work; effect41 returns presentation only.
         if matches!(effect, 0 | 41) {
-            if effect == 41 && word(w, 0x9a)? != 0 {
+            if effect == 41
+                && WarriorRecord::from_bytes(w).condition(Condition::ReflectingScans)? != 0
+            {
                 next_random.bound(100);
             }
             result.targets.push((
@@ -153,7 +163,7 @@ pub(crate) fn resolve_support_for_caster(
                     damage: 0,
                     killed: false,
                     sounds: if effect == 41 {
-                        vec![word(packet, 38)?]
+                        vec![AttackPacket(packet).impact_sound()?]
                     } else {
                         vec![]
                     },
@@ -162,7 +172,9 @@ pub(crate) fn resolve_support_for_caster(
             continue;
         }
         if matches!(effect, 51 | 64) {
-            let target = if word(w, 0x9a)? != 0 && next_random.bound(100) < 34 {
+            let target = if WarriorRecord::from_bytes(w).condition(Condition::ReflectingScans)? != 0
+                && next_random.bound(100) < 34
+            {
                 usize::try_from(caster.unwrap_or(member as i16))
                     .map_err(|_| RuleError::Invalid("negative special-effect caster".into()))?
             } else {
@@ -192,7 +204,7 @@ pub(crate) fn resolve_support_for_caster(
                     feedback: None,
                     damage: 0,
                     killed: false,
-                    sounds: vec![word(packet, 38)?],
+                    sounds: vec![AttackPacket(packet).impact_sound()?],
                 },
             ));
             continue;
@@ -200,22 +212,24 @@ pub(crate) fn resolve_support_for_caster(
         let mut healing_death = false;
         if (1..=40).contains(&effect) {
             spell_conditions::add_duration(w, false, effect, duration)?;
-            let reflected = word(w, 0x9a)? != 0 && next_random.bound(100) < 34;
+            let reflected = WarriorRecord::from_bytes(w).condition(Condition::ReflectingScans)?
+                != 0
+                && next_random.bound(100) < 34;
             follow_up = Some(if reflected {
                 caster.unwrap_or(member as i16)
             } else {
                 member as i16
             });
             if damage == 0 {
-                sounds.push(word(packet, 38)?);
+                sounds.push(AttackPacket(packet).impact_sound()?);
             }
         } else {
-            let previous = word(w, 0x50)?;
+            let previous = WarriorRecord::from_bytes(w).stamina()?;
             if damage < 0 && previous > -10 {
                 let after = previous
                     .wrapping_add(damage.wrapping_abs())
                     .max(-10)
-                    .min(word(w, 0x52)?);
+                    .min(WarriorRecord::from_bytes(w).maximum_stamina()?);
                 // heal1287c2 calls killbody after the signed WORD addition wraps.
                 healing_death = previous > 0 && after < 1;
                 if previous <= 0 && after > 0 {
@@ -224,23 +238,26 @@ pub(crate) fn resolve_support_for_caster(
                 if previous <= 0 && after < -9 {
                     sounds.push(next_random.bound(2).wrapping_add(506));
                 }
-                put_word(w, 0x50, after);
-                sounds.insert(0, word(packet, 38)?);
+                WarriorRecordMut::from_bytes(w).set_stamina(after);
+                sounds.insert(0, AttackPacket(packet).impact_sound()?);
                 result.healed = true;
             }
         }
-        let previous = word(w, 0x50)?;
+        let previous = WarriorRecord::from_bytes(w).stamina()?;
         if effect == 28 && damage > 0 && previous >= 0 {
-            put_word(w, 0x50, previous.wrapping_sub(damage));
-            put_word(w, 0x14, 1);
-            sounds.push(word(packet, 38)?);
+            WarriorRecordMut::from_bytes(w).set_stamina(previous.wrapping_sub(damage));
+            WarriorRecordMut::from_bytes(w).mark_damaged();
+            sounds.push(AttackPacket(packet).impact_sound()?);
         }
         result.targets.push((
             member,
             AttackResult {
                 feedback: None,
                 damage,
-                killed: healing_death || (effect == 28 && previous > 0 && word(w, 0x50)? < 1),
+                killed: healing_death
+                    || (effect == 28
+                        && previous > 0
+                        && WarriorRecord::from_bytes(w).stamina()? < 1),
                 sounds,
             },
         ));
@@ -268,7 +285,7 @@ pub(crate) fn resolve_support_for_caster(
             continue;
         }
         if matches!(effect, 0 | 41 | 51)
-            && word(packet, 50)? != 0
+            && AttackPacket(packet).race_restriction()? != 0
             && monster_race_is_excluded(packet, index + 10, memory)?
         {
             result.sounds.push(651);
@@ -304,7 +321,7 @@ pub(crate) fn resolve_support_for_caster(
         };
         if matches!(effect, 0 | 41) {
             if effect == 41 {
-                sounds.push(word(packet, 38)?);
+                sounds.push(AttackPacket(packet).impact_sound()?);
             }
             result.targets.push((
                 index + 10,
@@ -332,7 +349,7 @@ pub(crate) fn resolve_support_for_caster(
                     feedback: None,
                     damage: 0,
                     killed: false,
-                    sounds: vec![word(packet, 38)?],
+                    sounds: vec![AttackPacket(packet).impact_sound()?],
                 },
             ));
             continue;
@@ -346,22 +363,24 @@ pub(crate) fn resolve_support_for_caster(
         if (1..=40).contains(&effect) {
             spell_conditions::apply(m, true, effect, duration, &mut next_random)?;
             if total == 0 {
-                sounds.push(word(packet, 38)?);
+                sounds.push(AttackPacket(packet).impact_sound()?);
             }
         }
-        if damage.total < 0 && word(m, 0x110)? > 0 {
-            let health = word(m, 0x110)?.wrapping_sub(damage.total);
-            put_word(m, 0x110, health);
-            m[0x105] = 1;
-            sounds.push(word(packet, 38)?);
+        if damage.total < 0 && EnemyRecord::from_bytes(m).stamina()? > 0 {
+            let health = EnemyRecord::from_bytes(m)
+                .stamina()?
+                .wrapping_sub(damage.total);
+            EnemyRecordMut::from_bytes(m).set_stamina(health);
+            EnemyRecordMut::from_bytes(m).mark_damaged();
+            sounds.push(AttackPacket(packet).impact_sound()?);
             sounds.push(weapon_sound);
-            sounds.push(word(packet, 38)?);
+            sounds.push(AttackPacket(packet).impact_sound()?);
         }
         if effect == 28 && total != 0 {
-            let health = word(m, 0x110)?.wrapping_sub(total);
-            put_word(m, 0x110, health);
-            m[0x105] = 1;
-            sounds.push(word(packet, 38)?);
+            let health = EnemyRecord::from_bytes(m).stamina()?.wrapping_sub(total);
+            EnemyRecordMut::from_bytes(m).set_stamina(health);
+            EnemyRecordMut::from_bytes(m).mark_damaged();
+            sounds.push(AttackPacket(packet).impact_sound()?);
             if health > 0 {
                 sounds.push(weapon_sound);
             }
@@ -371,7 +390,7 @@ pub(crate) fn resolve_support_for_caster(
             AttackResult {
                 feedback: None,
                 damage: total,
-                killed: effect == 28 && total != 0 && word(m, 0x110)? < 1,
+                killed: effect == 28 && total != 0 && EnemyRecord::from_bytes(m).stamina()? < 1,
                 sounds,
             },
         ));

@@ -1,9 +1,14 @@
 use crate::{RandomState, RuleError, combat, rules};
-use centurions_content::{combat::MonsterRecord, mission::OpeningMission, span, word};
+use centurions_content::{
+    combat::MonsterRecord,
+    mission::OpeningMission,
+    records::{EnemyRecord, EnemyRecordMut, FootprintCell},
+    span,
+};
 
 fn size(monster: &MonsterRecord) -> Result<i16, RuleError> {
     span(&monster.bytes, 0, 288)?;
-    let size = word(&monster.bytes, 0x10)?.wrapping_abs();
+    let size = monster.record().size()?.wrapping_abs();
     if !(0..=3).contains(&size) {
         return Err(RuleError::Unsupported {
             action: "combat.footprint",
@@ -24,10 +29,6 @@ fn index(
         i32::from(position.1) + i32::from(map.shift.1) + 5 + i32::from(dy),
     )
     .map_err(Into::into)
-}
-
-fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
-    bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,18 +56,25 @@ pub fn place(
         monster: monster.clone(),
         position,
     };
-    for (dx, dy, offset, occupied) in [
-        (0, 0, 0x11e, true),
-        (-1, -1, 0x118, size == 3),
-        (0, -1, 0x11c, size == 1 || size == 3),
-        (-1, 0, 0x11a, size > 1),
+    for (dx, dy, part, occupied) in [
+        (0, 0, FootprintCell::Anchor, true),
+        (-1, -1, FootprintCell::Northwest, size == 3),
+        (0, -1, FootprintCell::North, size == 1 || size == 3),
+        (-1, 0, FootprintCell::West, size > 1),
     ] {
         if occupied {
             let cell = index(map, position, dx, dy)?;
-            put_word(&mut result.monster.bytes, offset, result.map.tiles[cell]);
-            result.map.tiles[cell] = if offset == 0x11e { body } else { -body };
+            result
+                .monster
+                .record_mut()
+                .set_footprint_tile(part, result.map.tiles[cell]);
+            result.map.tiles[cell] = if part == FootprintCell::Anchor {
+                body
+            } else {
+                -body
+            };
         } else {
-            put_word(&mut result.monster.bytes, offset, 0);
+            result.monster.record_mut().set_footprint_tile(part, 0);
         }
     }
     Ok(result)
@@ -113,14 +121,14 @@ pub fn restore(
     position: (i16, i16),
 ) -> Result<combat::TacticalMap, RuleError> {
     span(&monster.bytes, 0, 288)?;
-    let signed_size = word(&monster.bytes, 0x10)?;
+    let signed_size = monster.record().size()?;
     let size = signed_size.wrapping_abs();
     let mut result = map.clone();
-    for (dx, dy, offset, occupied) in [
-        (-1, -1, 0x118, size == 3),
-        (-1, 0, 0x11a, size > 1),
-        (0, -1, 0x11c, size == 3 || signed_size == 1),
-        (0, 0, 0x11e, true),
+    for (dx, dy, part, occupied) in [
+        (-1, -1, FootprintCell::Northwest, size == 3),
+        (-1, 0, FootprintCell::West, size > 1),
+        (0, -1, FootprintCell::North, size == 3 || signed_size == 1),
+        (0, 0, FootprintCell::Anchor, true),
     ] {
         if occupied {
             let cell = index(map, position, dx, dy)?;
@@ -128,7 +136,7 @@ pub fn restore(
                 .tiles
                 .get_mut(cell)
                 .ok_or_else(|| RuleError::Invalid("body restoration tile unavailable".into()))? =
-                word(&monster.bytes, offset)?;
+                monster.record().footprint_tile(part)?;
         }
     }
     Ok(result)
@@ -139,16 +147,16 @@ pub(crate) fn placement_passable(
     mission: &OpeningMission,
 ) -> Result<bool, RuleError> {
     let size = size(&body.monster)?;
-    for (offset, occupied, anchor) in [
-        (0x11e, true, true),
-        (0x11c, size == 1 || size == 3, false),
-        (0x118, size == 3, false),
-        (0x11a, size > 1, false),
+    for (part, occupied, anchor) in [
+        (FootprintCell::Anchor, true, true),
+        (FootprintCell::North, size == 1 || size == 3, false),
+        (FootprintCell::Northwest, size == 3, false),
+        (FootprintCell::West, size > 1, false),
     ] {
         if !occupied {
             continue;
         }
-        let tile = word(&body.monster.bytes, offset)?;
+        let tile = body.monster.record().footprint_tile(part)?;
         if tile < 1000 {
             return Ok(false);
         }
@@ -306,8 +314,8 @@ pub(crate) fn move_enemy_before_place(
         .get(enemy_index)
         .ok_or_else(|| RuleError::Invalid("enemy movement record unavailable".into()))?;
     let size = size(monster)?;
-    let fleeing = monster.bytes[0xb2] != 0;
-    let target = word(&monster.bytes, 0x10c)?;
+    let fleeing = monster.record().fleeing_duration() != 0;
+    let target = monster.record().target_body()?;
     // movemonster13e2b6 indexes the native party-coordinate array with -1.
     // 44709a - 4 is retained NPC99 at 446f0a + 99*4, not a zero default.
     let retained_position = if target == -1 {
@@ -344,8 +352,9 @@ pub(crate) fn move_enemy_before_place(
         dx = -dx;
         dy = -dy;
     }
-    result.combat.enemies.records[enemy_index].bytes[0x107] = dx as u8;
-    result.combat.enemies.records[enemy_index].bytes[0x108] = dy as u8;
+    result.combat.enemies.records[enemy_index]
+        .record_mut()
+        .set_movement_direction(dx, dy);
     let mut cost = 0;
     for _ in 0..21 {
         let next = (
@@ -377,7 +386,8 @@ pub(crate) fn move_enemy_before_place(
             }
             let obstruction = mission.tile_word(tile - 1000, 4)?;
             if obstruction != 0
-                && ((size == 0 && monster.bytes[0x7f] == 0) || (tile > 1000 && obstruction > 1))
+                && ((size == 0 && monster.record().flying_flag() == 0)
+                    || (tile > 1000 && obstruction > 1))
             {
                 blocked = true;
                 break;
@@ -387,7 +397,7 @@ pub(crate) fn move_enemy_before_place(
                 dx,
                 dy,
             ));
-            if cost > i16::from(monster.bytes[0x106] as i8) {
+            if cost > i16::from(monster.record().movement_points()) {
                 break;
             }
         }
@@ -401,7 +411,7 @@ pub(crate) fn move_enemy_before_place(
             );
             continue;
         }
-        if cost > i16::from(monster.bytes[0x106] as i8) {
+        if cost > i16::from(monster.record().movement_points()) {
             continue;
         }
         if fleeing {
@@ -422,25 +432,33 @@ pub(crate) fn move_enemy_before_place(
         result.combat.enemies.records[enemy_index] = placed.monster;
         result.combat.enemies.positions[enemy_index] = next;
         let bytes = &mut result.combat.enemies.records[enemy_index].bytes;
-        if i16::from(bytes[0x106] as i8) == word(bytes, 6)? && word(bytes, 0x6c)? != 0 {
-            result.sounds.push(word(bytes, 0x6c)?);
+        if i16::from(EnemyRecord::from_bytes(bytes).movement_points())
+            == EnemyRecord::from_bytes(bytes).movement_per_round()?
+            && EnemyRecord::from_bytes(bytes).movement_sound()? != 0
+        {
+            result
+                .sounds
+                .push(EnemyRecord::from_bytes(bytes).movement_sound()?);
         }
-        bytes[0x106] = (bytes[0x106] as i8).wrapping_sub(cost as i8) as u8;
+        let remaining = EnemyRecord::from_bytes(bytes)
+            .movement_points()
+            .wrapping_sub(cost as i8);
+        EnemyRecordMut::from_bytes(bytes).set_movement_points(remaining);
         result
             .sounds
-            .push(mission.tile_word(word(bytes, 0x11e)? - 1000, 0)?);
+            .push(mission.tile_word(EnemyRecord::from_bytes(bytes).underlying_tile()? - 1000, 0)?);
         let absolute = (
             next.0.wrapping_add(combat.map.shift.0).wrapping_add(5),
             next.1.wrapping_add(combat.map.shift.1).wrapping_add(5),
         );
         if !(2..=87).contains(&absolute.0) || !(2..=87).contains(&absolute.1) {
-            if word(bytes, 0x5a)? == -1 {
-                bytes[0x107] = (dx.wrapping_neg()) as u8;
-                bytes[0x108] = (dy.wrapping_neg()) as u8;
+            if EnemyRecord::from_bytes(bytes).survivor_marker()? == -1 {
+                EnemyRecordMut::from_bytes(bytes)
+                    .set_movement_direction(dx.wrapping_neg(), dy.wrapping_neg());
             } else {
-                bytes[0x104] = 0;
-                bytes[0x106] = 0;
-                put_word(bytes, 0x46, 101);
+                EnemyRecordMut::from_bytes(bytes).set_reaction_ready(false);
+                EnemyRecordMut::from_bytes(bytes).set_movement_points(0);
+                EnemyRecordMut::from_bytes(bytes).set_fleeing_chance(101);
                 result.combat.cursor = result.combat.cursor.saturating_sub(1);
             }
         }
@@ -449,8 +467,8 @@ pub(crate) fn move_enemy_before_place(
         return Ok(result);
     }
     let bytes = &mut result.combat.enemies.records[enemy_index].bytes;
-    put_word(bytes, 0x10c, -1);
-    bytes[0x106] = 0;
+    EnemyRecordMut::from_bytes(bytes).set_target_body(-1);
+    EnemyRecordMut::from_bytes(bytes).set_movement_points(0);
     *random = next_random;
     Ok(result)
 }

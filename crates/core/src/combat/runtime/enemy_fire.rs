@@ -3,9 +3,12 @@ use super::{
     EnemyWork, FireOutcome, alive, enemy_spell_continue, refresh_enemy_item_alias,
     resolve_spell_mask, spell_identity,
 };
-use crate::combat::{Combat, firearm, lifecycle, put_word};
+use crate::combat::{Combat, firearm, lifecycle};
 use crate::{Event, RandomState, RuleError};
-use centurions_content::{Warrior, word};
+use centurions_content::{
+    Warrior,
+    records::{AttackPacket, ItemDefinition},
+};
 
 pub(super) fn enemy_fire(
     c: &mut Combat,
@@ -32,7 +35,7 @@ pub(super) fn enemy_fire(
         .attacks;
     let item_context = match work.item_context {
         Some(context) => context,
-        None if word(&c.enemies.records[e].bytes, 0x4c)? == 0 => 0,
+        None if c.enemies.records[e].record().ammunition()? == 0 => 0,
         None => {
             return Err(RuleError::Unsupported {
                 action: "combat.enemy_firearm",
@@ -51,17 +54,17 @@ pub(super) fn enemy_fire(
             dependency: "unreconstructable retained attack packet",
         })?;
         c.weapon_work.load_pair(weapon, ammo)?;
-        put_word(&mut c.enemies.records[e].bytes, 0x4e, 0);
+        c.enemies.records[e].record_mut().set_selected_item(0);
         firearm::PreparedFirearm {
-            sound: word(&packet, 38)?,
+            sound: AttackPacket(&packet).impact_sound()?,
             packet,
             slot: 0,
-            shots: i16::from(weapon[77] as i8),
-            rounds: word(weapon, 22)?,
+            shots: i16::from(ItemDefinition(weapon).selected_attack_count()),
+            rounds: ItemDefinition(weapon).rounds_per_shot()?,
             weight: 0,
-            armor_filter: word(weapon, 136)? != 0,
+            armor_filter: ItemDefinition(weapon).bypasses_hit_roll()?,
         }
-    } else if matches!(word(weapon, 44)?, 4101 | 4102) {
+    } else if matches!(ItemDefinition(weapon).spell()?, 4101 | 4102) {
         crate::combat::enemy_weapons::prepare(&mut c.enemies.records[e], weapon, ammo, attacks)?
     } else {
         firearm::prepare_enemy(&mut c.enemies.records[e], weapon, attacks)?
@@ -69,7 +72,7 @@ pub(super) fn enemy_fire(
     if weapon_id != 0 {
         c.weapon_work.prepare(weapon, ammo)?;
         c.attack_packet = Some(prepared.packet.clone());
-        c.attack_identity = Some(spell_identity(word(weapon, 44)?));
+        c.attack_identity = Some(spell_identity(ItemDefinition(weapon).spell()?));
         work.attack_count = prepared.shots;
     }
     prepared.armor_filter = c.weapon_work.armor_filter()?;
@@ -104,7 +107,7 @@ pub(super) fn enemy_fire(
     if work.display_writers {
         refresh_enemy_item_alias(c, e, items, work)?;
     }
-    let physical = prepared.packet[19] == 9;
+    let physical = AttackPacket(&prepared.packet).plays_impact_when_wounded();
     work.attack_count = if physical {
         1
     } else {
@@ -118,21 +121,21 @@ pub(super) fn enemy_fire(
         })?;
         (identity[0] + 1) * 1000 + (identity[1] + 1) * 100 + identity[2] + 1
     } else {
-        word(weapon, 44)?
+        ItemDefinition(weapon).spell()?
     };
-    if prepared.packet[7] != 0 {
+    if AttackPacket(&prepared.packet).has_randomized_animation() {
         random.bound(4);
     }
     let mut origin = selection.targets.first().cloned();
     for target in selection.targets {
-        if prepared.packet[1] < 2 {
+        if !AttackPacket(&prepared.packet).requires_area_mask() {
             let target_body = target.first;
             if !alive(c, w, target_body) {
                 continue;
             }
         }
         events.push(Event::Sound {
-            resource_id: word(&prepared.packet, 36)?,
+            resource_id: AttackPacket(&prepared.packet).launch_sound()?,
         });
         let context = crate::combat::spells::SpellContext {
             packet: &prepared.packet,
@@ -171,10 +174,8 @@ pub(super) fn enemy_fire(
             )?);
             continue;
         }
-        random.range(
-            i16::from(prepared.packet[13] as i8),
-            i16::from(prepared.packet[14] as i8),
-        );
+        let (minimum, maximum) = AttackPacket(&prepared.packet).duration_bounds();
+        random.range(minimum, maximum);
         for (target, flag) in mask.mask.iter().enumerate() {
             if *flag <= 0 {
                 continue;
@@ -208,13 +209,16 @@ pub(super) fn enemy_fire(
                     .into_iter()
                     .map(|resource_id| Event::Sound { resource_id }),
             );
-            if result.damage != 0 && !result.killed && prepared.packet[19] == 9 {
+            if result.damage != 0
+                && !result.killed
+                && AttackPacket(&prepared.packet).plays_impact_when_wounded()
+            {
                 events.push(Event::Sound {
                     resource_id: crate::combat::ally_turns::result_audio(
                         &c.enemies.records[e],
                         0,
                         result.damage,
-                        word(&prepared.packet, 38)?,
+                        AttackPacket(&prepared.packet).impact_sound()?,
                     )?,
                 });
             }

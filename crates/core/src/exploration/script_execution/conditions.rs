@@ -376,8 +376,8 @@ pub(super) fn execute(
                 10,
             )?;
             let jump = if operation == Operation::PaymentBranch {
-                let payment = crate::recovered_inventory::takegold(
-                    &crate::recovered_inventory::GoldState {
+                let payment = crate::story_inventory::payment::pay(
+                    &crate::story_inventory::payment::PaymentState {
                         party_gold: state.party_currency,
                         highest_party_index: state.warriors.len() as i8 - 1,
                         warriors: state.warriors.clone(),
@@ -387,13 +387,15 @@ pub(super) fn execute(
                 state.party_currency = payment.state.party_gold;
                 state.warriors = payment.state.warriors;
                 for effect in payment.effects {
-                    if let crate::recovered_inventory::InventoryEffect::Warning(index) = effect {
+                    if let crate::story_inventory::payment::PaymentEffect::InsufficientCredits =
+                        effect
+                    {
                         effects.push(Event::Feedback(crate::feedback::NativeFeedback::Warning {
-                            index,
+                            index: 50,
                         }));
                     }
                 }
-                let paid = payment.native_return != 0;
+                let paid = payment.paid;
                 if !paid && word(extra, 2)? == -1 {
                     script.cursor = 6;
                 }

@@ -1,13 +1,10 @@
 //! Spell results in the original combat execution order.
 use crate::combat::{Combat, lifecycle};
 use crate::{Event, RandomState, RuleError};
-use centurions_content::{Warrior, word};
-
-pub(super) fn increment_stat(bytes: &mut [u8], offset: usize, amount: i32) {
-    let value =
-        i32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()).wrapping_add(amount);
-    bytes[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
-}
+use centurions_content::{
+    Warrior,
+    records::{AttackPacket, AttackPacketMut, EnemyRecord},
+};
 
 pub(crate) fn append_spell_outcomes(
     c: &mut Combat,
@@ -31,8 +28,8 @@ pub(crate) fn append_spell_outcomes(
                 .map(|resource_id| Event::Sound { resource_id }),
         );
         // Native result audio follows surviving party hits at 151bca/1587b8.
-        if identity.2[19] == 8
-            && word(identity.2, 40)? == 0
+        if AttackPacket(identity.2).defense_category() == 8
+            && AttackPacket(identity.2).effect()? == 0
             && target < w.len()
             && identity.3[target] >= 0
             && !outcome.killed
@@ -41,13 +38,13 @@ pub(crate) fn append_spell_outcomes(
             let caster = identity.0.unwrap_or(c.order[c.cursor]);
             let sound = if caster >= 10 {
                 let enemy = &c.enemies.records[(caster - 10) as usize].bytes;
-                if word(enemy, 0x4e)? != 0 {
+                if EnemyRecord::from_bytes(enemy).selected_item()? != 0 {
                     c.weapon_work.sound()?
                 } else {
                     c.weapon_work.natural_result_sound(enemy)?
                 }
             } else {
-                word(identity.2, 38)?
+                AttackPacket(identity.2).impact_sound()?
             };
             events.push(Event::Sound { resource_id: sound });
         }
@@ -62,7 +59,7 @@ pub(crate) fn append_spell_outcomes(
         }
         // resolvespell151a88 presents successful zero-damage spelllist results.
         // showresults clears the interaction gate even when its code has no label.
-        let effect = word(identity.2, 40)?;
+        let effect = AttackPacket(identity.2).effect()?;
         if matches!(effect, 1..=41 | 51 | 64) && outcome.damage == 0 {
             events.push(Event::Feedback(
                 crate::feedback::NativeFeedback::CombatResult {
@@ -134,7 +131,7 @@ pub(crate) fn resolve_spell_mask(
         .map(Warrior::stamina)
         .collect::<Result<Vec<_>, _>>()?;
     // Authored NPC112 uses the same resolvespell healing branch as party casts.
-    if word(packet, 40)? == 57 {
+    if AttackPacket(packet).effect()? == 57 {
         let result = crate::combat::spells::resolve_support_for_caster(
             w,
             &c.enemies.records,
@@ -154,7 +151,7 @@ pub(crate) fn resolve_spell_mask(
         c.enemies.records = result.enemies;
         c.unavailable = c.unavailable.wrapping_sub(result.recovered as i8);
         if result.healed {
-            c.attack_packet.as_mut().unwrap()[18] = 4;
+            AttackPacketMut(c.attack_packet.as_mut().unwrap()).set_health_effect(4);
         }
         if !result.targets.is_empty() {
             c.field_used[0] = 1;

@@ -1,4 +1,4 @@
-use crate::combat::{Combat, lifecycle, put_word, runtime, spells};
+use crate::combat::{Combat, lifecycle, runtime, spells};
 use crate::{Event, RandomState, RuleError, Session};
 
 pub const COMBAT_SPELLS: &[i16] = &[

@@ -91,8 +91,8 @@ pub(crate) fn resume(
             .records
             .get_mut(selected)
             .ok_or("selected NPC missing")?;
-        record.bytes[0x110..0x112].fill(0);
-        record.bytes[0x60..0x62].fill(0);
+        record.record_mut().set_stamina(0);
+        record.record_mut().set_death_script(0);
         // The native killbody argument is the order entry, independently of selected NPC.
         let body = arena
             .active_body()

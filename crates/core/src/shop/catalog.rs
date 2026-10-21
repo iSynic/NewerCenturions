@@ -23,14 +23,7 @@ pub fn price(state: &Session, content: &Content, id: i16, selling: bool) -> Resu
             .checked_div(i32::from(state.difficulty.wrapping_mul(2).wrapping_add(10)))
             .ok_or("native shop division traps")?;
     }
-    Ok(
-        crate::recovered_economy::itemcost(crate::recovered_economy::ItemCostInput {
-            cost,
-            percent: ShopRecord(records(state)?).price_percent()?,
-            mode: i16::from(selling),
-        })?
-        .cost,
-    )
+    super::pricing::percentage_price(cost, ShopRecord(records(state)?).price_percent()?, selling)
 }
 
 /// installitem 0x12c874 fresh-stock branch, without its randomized-loot branch.

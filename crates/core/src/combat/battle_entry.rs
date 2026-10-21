@@ -270,9 +270,9 @@ pub(super) fn begin_battle_with_group(
     )?;
     for (monster, position) in enemies.records.iter_mut().zip(&enemies.positions) {
         if position.0 < squad.positions[0].0 {
-            monster.bytes[0x107] = 1;
+            monster.record_mut().set_horizontal_direction(1);
         } else if position.0 > squad.positions[0].0 {
-            monster.bytes[0x107] = 0xff;
+            monster.record_mut().set_horizontal_direction(-1);
         }
     }
     let enemy_speeds = enemies

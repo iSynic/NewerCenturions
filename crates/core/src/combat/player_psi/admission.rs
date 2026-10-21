@@ -1,7 +1,10 @@
 //! Admission for combat/player_psi.
 use super::{RuleError, spells};
 use centurions_content::mission::OpeningMission;
-use centurions_content::{Warrior, word};
+use centurions_content::{
+    Warrior,
+    records::{AttackPacket, Condition, WarriorRecord},
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct CastRequest {
@@ -37,12 +40,20 @@ pub fn admission(
         .ok_or_else(|| RuleError::Invalid("psi warrior missing".into()))?
         .bytes;
     centurions_content::span(w, 0, 3138)?;
-    result.allowed = [0x98, 0xac, 0x60, 0x68, 0x90, 0x14]
-        .into_iter()
-        .all(|offset| word(w, offset).is_ok_and(|value| value == 0))
-        && word(w, 0x50)? > 0
-        && word(w, 0x58)? > 0
-        && word(w, 0xac8)? < word(w, 0xac6)?;
+    let record = WarriorRecord::from_bytes(w);
+    result.allowed = [
+        record.condition(Condition::Confused),
+        record.condition(Condition::UnlabelledScanBlock),
+        record.condition(Condition::Helpless),
+        record.condition(Condition::ScanBlocked),
+        record.automatic_mode(),
+        record.damage_marker(),
+    ]
+    .into_iter()
+    .all(|value| value.is_ok_and(|value| value == 0))
+        && record.stamina()? > 0
+        && record.psi_points()? > 0
+        && record.scans_used()? < record.scan_capacity()?;
     Ok(result)
 }
 
@@ -52,18 +63,22 @@ pub fn can_cast(warriors: &[Warrior], member: i16, disabled: u8) -> Result<bool,
 
 pub fn cost(packet: &[u8], power: i16) -> Result<i16, RuleError> {
     centurions_content::span(packet, 0, 58)?;
-    Ok(i16::from(packet[30]).wrapping_mul(power).wrapping_abs())
+    Ok(AttackPacket(packet)
+        .psi_cost()
+        .wrapping_mul(power)
+        .wrapping_abs())
 }
 
 pub fn mode_allowed(packet: &[u8], combat: bool) -> Result<bool, RuleError> {
     centurions_content::span(packet, 0, 58)?;
-    Ok(packet[if combat { 21 } else { 22 }] != 0)
+    Ok(AttackPacket(packet).mode_allowed(combat))
 }
 
 pub fn range(packet: &[u8], power: i16) -> Result<i16, RuleError> {
     centurions_content::span(packet, 0, 58)?;
-    Ok(i16::from(packet[2] as i8)
-        .wrapping_add(i16::from(packet[3] as i8).wrapping_mul(power))
+    Ok(AttackPacket(packet)
+        .base_range()
+        .wrapping_add(AttackPacket(packet).range_per_power().wrapping_mul(power))
         .wrapping_abs())
 }
 

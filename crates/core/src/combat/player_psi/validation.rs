@@ -5,7 +5,7 @@ use super::{
     range,
 };
 use centurions_content::mission::OpeningMission;
-use centurions_content::{Warrior, word};
+use centurions_content::{Warrior, records::AttackPacket};
 
 pub fn validate(
     combat: &Combat,
@@ -84,9 +84,9 @@ pub(super) fn validate_target(
     if warriors[actor as usize].psi_points()? < cost(&packet, request.power)? {
         return Err(RuleError::Invalid("insufficient psi".into()));
     }
-    if packet[1] == 7 {
+    if AttackPacket(&packet).targeting_mode() == 7 {
         if range(&packet, request.power)? != 0
-            || !(0..10).contains(&word(&packet, 40)?)
+            || !(0..10).contains(&AttackPacket(&packet).effect()?)
             || request.target.is_some()
         {
             return Err(RuleError::Invalid(
@@ -95,7 +95,7 @@ pub(super) fn validate_target(
         }
         return Ok(());
     }
-    if matches!(packet[1], 9 | 10 | 12) {
+    if matches!(AttackPacket(&packet).targeting_mode(), 9 | 10 | 12) {
         if request.target.is_some() {
             return Err(RuleError::Invalid(
                 "global psi spell does not take a point target".into(),
@@ -122,7 +122,7 @@ pub(super) fn validate_target(
         i32::from(target.0) + i32::from(combat.map.shift.0) + 5,
         i32::from(target.1) + i32::from(combat.map.shift.1) + 5,
     );
-    if i16::from(packet[2] as i8) + i16::from(packet[3] as i8) > 0
+    if AttackPacket(&packet).base_range() + AttackPacket(&packet).range_per_power() > 0
         && !lifecycle::can_see(combat, mission, from, target, 0)?
     {
         return Err(RuleError::Refused {
@@ -131,13 +131,15 @@ pub(super) fn validate_target(
             }],
         });
     }
-    if packet[1] < 2 {
+    if AttackPacket(&packet).targeting_mode() < 2 {
         if let Some(body) = body {
             let warrior = usize::try_from(body)
                 .ok()
                 .and_then(|index| warriors.get(index))
                 .ok_or("Psi warrior target outside party")?;
-            if packet[1] != 1 || warrior.bytes[0x9df] == 0 && word(&packet, 40)? != 64 {
+            if AttackPacket(&packet).targeting_mode() != 1
+                || warrior.record().active_flag() == 0 && AttackPacket(&packet).effect()? != 64
+            {
                 return Err(RuleError::Refused { feedback: vec![] });
             }
         } else {
@@ -145,10 +147,10 @@ pub(super) fn validate_target(
         }
         return Ok(());
     }
-    let shape = match packet[1] {
+    let shape = match AttackPacket(&packet).targeting_mode() {
         3 => {
-            usize::from(packet[31])
-                + if packet[7] != 0 {
+            usize::from(AttackPacket(&packet).area_shape())
+                + if AttackPacket(&packet).has_randomized_animation() {
                     usize::from(request.rotation)
                 } else {
                     0

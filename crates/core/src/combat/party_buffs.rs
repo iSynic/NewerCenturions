@@ -8,6 +8,10 @@ pub(crate) fn validate(buffs: &[u8]) -> Result<(), RuleError> {
     Ok(())
 }
 
+pub(crate) fn mind_shield(buffs: &[u8]) -> Result<bool, RuleError> {
+    Ok(word(buffs, 14)? != 0)
+}
+
 pub fn extend_inertial(buffs: &mut [u8], duration: i16) -> Result<(), RuleError> {
     extend(buffs, 2, duration)
 }

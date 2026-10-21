@@ -1,10 +1,11 @@
 //! Casting for combat/player_psi.
 use super::{
     CastRequest, Combat, Event, RandomState, RuleError, Session, cast_ray, cost, move_caster,
-    packet, put_word, resolve_mask, selected_body, spells, validate_target,
+    packet, resolve_mask, selected_body, spells, validate_target,
 };
+use centurions_content::Warrior;
 use centurions_content::mission::OpeningMission;
-use centurions_content::{Warrior, word};
+use centurions_content::records::{AttackPacket, PsiSelectionMemoryMut};
 
 pub fn cast(
     combat: &mut Combat,
@@ -15,7 +16,7 @@ pub fn cast(
     disabled: u8,
     request: CastRequest,
 ) -> Result<Vec<Event>, RuleError> {
-    if packet(mission, request.spell)?[1] == 7 {
+    if AttackPacket(&packet(mission, request.spell)?).targeting_mode() == 7 {
         return Err(RuleError::Unsupported {
             action: "combat.player_psi",
             dependency: "party duration state required",
@@ -108,11 +109,14 @@ pub(crate) fn cast_prepared_at(
         .ok_or("prepared scan combat missing")?;
     // Admission sees the prepayment credited back; execution uses Prepared and never charges twice.
     let mut admission = state.warriors.clone();
-    let bytes = &mut admission[pending.actor].bytes;
-    let psi = word(bytes, 0x58)?.wrapping_add(cost(&packet, pending.power)?);
-    let casts = word(bytes, 0xac8)?.wrapping_sub(1);
-    put_word(bytes, 0x58, psi);
-    put_word(bytes, 0xac8, casts);
+    let warrior = &mut admission[pending.actor];
+    let psi = warrior
+        .record()
+        .psi_points()?
+        .wrapping_add(cost(&packet, pending.power)?);
+    let casts = warrior.record().scans_used()?.wrapping_sub(1);
+    warrior.record_mut().set_psi_points(psi);
+    warrior.record_mut().set_scans_used(casts);
     validate_target(
         combat,
         &admission,
@@ -140,7 +144,7 @@ pub(crate) fn cast_prepared_at(
         CastPayment::Prepared,
         context,
     )?;
-    if matches!(word(&packet, 40)?, 55 | 56) {
+    if matches!(AttackPacket(&packet).effect()?, 55 | 56) {
         state.bandage_ready = Some(0);
     }
     Ok(events)
@@ -206,37 +210,41 @@ pub(super) fn cast_inner(
     ];
     combat.attack_packet = Some(packet.clone());
     combat.attack_identity = Some(descriptor);
-    let w = &mut warriors[actor].bytes;
+    let warrior = &mut warriors[actor];
     if matches!(payment, CastPayment::Charge) {
-        let remaining = word(w, 0x58)?.wrapping_sub(cost(&packet, request.power)?);
-        put_word(w, 0x58, remaining);
-        let casts = i32::from_be_bytes(w[0xa66..0xa6a].try_into().unwrap()).wrapping_add(1);
-        w[0xa66..0xa6a].copy_from_slice(&casts.to_be_bytes());
-        let count = word(w, 0xac8)?.wrapping_add(1);
-        put_word(w, 0xac8, count);
+        let remaining = warrior
+            .record()
+            .psi_points()?
+            .wrapping_sub(cost(&packet, request.power)?);
+        warrior.record_mut().set_psi_points(remaining);
+        warrior.record_mut().count_scan_cast();
+        let count = warrior.record().scans_used()?.wrapping_add(1);
+        warrior.record_mut().set_scans_used(count);
     }
     if !matches!(payment, CastPayment::AdditionalTarget) {
-        let movement = word(w, 0x3c)?.wrapping_sub(3).max(0);
-        let points = word(w, 0x40)?.wrapping_sub(2);
-        put_word(w, 0x3c, movement);
-        put_word(w, 0x40, points);
+        let movement = warrior.record().movement_points()?.wrapping_sub(3).max(0);
+        let points = warrior.record().action_points()?.wrapping_sub(2);
+        warrior.record_mut().set_movement_points(movement);
+        warrior.record_mut().set_action_points(points);
     }
     let mut events = vec![];
-    if matches!(packet[1], 9 | 10) {
+    if matches!(AttackPacket(&packet).targeting_mode(), 9 | 10) {
         events.push(Event::Feedback(crate::feedback::NativeFeedback::Flash {
-            address: if packet[1] == 9 { 0x401840 } else { 0x401820 },
+            address: if AttackPacket(&packet).targeting_mode() == 9 {
+                0x401840
+            } else {
+                0x401820
+            },
             x: 325,
             y: 322,
             wait: 60,
             sound: 0,
         }));
     }
-    for (index, value) in descriptor.into_iter().chain([request.power]).enumerate() {
-        put_word(memory, actor * 80 + 72 + index * 2, value);
-    }
-    if matches!(word(&packet, 40)?, 55 | 56) {
+    PsiSelectionMemoryMut(memory).remember_cast(actor, descriptor, request.power);
+    if matches!(AttackPacket(&packet).effect()?, 55 | 56) {
         events.push(Event::Sound {
-            resource_id: word(&packet, 36)?,
+            resource_id: AttackPacket(&packet).launch_sound()?,
         });
         events.extend(move_caster(
             combat,
@@ -250,9 +258,9 @@ pub(super) fn cast_inner(
         )?);
         return Ok(events);
     }
-    if packet[1] == 6 {
+    if AttackPacket(&packet).targeting_mode() == 6 {
         events.push(Event::Sound {
-            resource_id: word(&packet, 36)?,
+            resource_id: AttackPacket(&packet).launch_sound()?,
         });
         events.extend(cast_ray(
             combat,
@@ -266,27 +274,31 @@ pub(super) fn cast_inner(
         )?);
         return Ok(events);
     }
-    let mask = if word(&packet, 40)? == 64
+    let mask = if AttackPacket(&packet).effect()? == 64
         && let Some(body) = context.body
     {
         let mut mask = [0; 110];
         mask[body as usize] = 1;
         events.push(Event::Sound {
-            resource_id: word(&packet, 36)?,
+            resource_id: AttackPacket(&packet).launch_sound()?,
         });
         mask
-    } else if matches!(packet[1], 9 | 10 | 12) {
+    } else if matches!(AttackPacket(&packet).targeting_mode(), 9 | 10 | 12) {
         let mut mask = [0; 110];
         for (body, warrior) in warriors.iter().enumerate() {
             if warrior.record().active_flag() != 0
-                && (packet[1] == 12 || (warrior.record().faction()? == 0) == (packet[1] == 9))
+                && (AttackPacket(&packet).targeting_mode() == 12
+                    || (warrior.record().faction()? == 0)
+                        == (AttackPacket(&packet).targeting_mode() == 9))
             {
                 mask[body] = 1;
             }
         }
         for (index, enemy) in combat.enemies.records.iter().enumerate() {
-            if word(&enemy.bytes, 0x110)? > 0
-                && (packet[1] == 12 || (word(&enemy.bytes, 0xe)? == 0) == (packet[1] == 9))
+            if enemy.record().stamina()? > 0
+                && (AttackPacket(&packet).targeting_mode() == 12
+                    || (enemy.record().faction()? == 0)
+                        == (AttackPacket(&packet).targeting_mode() == 9))
             {
                 mask[index + 10] = 1;
             }
@@ -294,7 +306,7 @@ pub(super) fn cast_inner(
         mask
     } else {
         let target = request.target.unwrap_or(combat.squad.positions[actor]);
-        let target = if packet[1] < 2 {
+        let target = if AttackPacket(&packet).targeting_mode() < 2 {
             let body = match context.body {
                 Some(body) => body,
                 None => selected_body(combat, warriors, target)?,
@@ -312,7 +324,7 @@ pub(super) fn cast_inner(
             }
         };
         events.push(Event::Sound {
-            resource_id: word(&packet, 36)?,
+            resource_id: AttackPacket(&packet).launch_sound()?,
         });
         let mask = spells::target_mask_rotated(
             combat,
@@ -334,16 +346,18 @@ pub(super) fn cast_inner(
         combat.spell_fields = mask.fields;
         mask.mask
     };
-    if packet[1] == 7 {
-        let mut duration = random.range(i16::from(packet[13] as i8), i16::from(packet[14] as i8));
-        if packet[15] != 0 {
+    if AttackPacket(&packet).targeting_mode() == 7 {
+        let (minimum, maximum) = AttackPacket(&packet).duration_bounds();
+        let mut duration = random.range(minimum, maximum);
+        let (additional_minimum, additional_maximum) =
+            AttackPacket(&packet).additional_duration_bounds();
+        if additional_minimum != 0 {
             for _ in 0..request.power {
-                duration = duration.wrapping_add(
-                    random.range(i16::from(packet[15] as i8), i16::from(packet[16] as i8)),
-                );
+                duration =
+                    duration.wrapping_add(random.range(additional_minimum, additional_maximum));
             }
         }
-        crate::combat::party_buffs::extend(buffs, word(&packet, 40)?, duration)?;
+        crate::combat::party_buffs::extend(buffs, AttackPacket(&packet).effect()?, duration)?;
         return Ok(events);
     }
     events.extend(resolve_mask(

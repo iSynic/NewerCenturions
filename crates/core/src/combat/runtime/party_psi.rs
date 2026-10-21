@@ -1,6 +1,6 @@
 //! Party psi in the original combat execution order.
 use crate::{Event, Phase, RuleError, Session};
-use centurions_content::{Content, word};
+use centurions_content::Content;
 
 pub fn party_psi(
     state: &mut Session,
@@ -90,7 +90,7 @@ pub fn party_psi(
     }
     if packet[1] == 11 {
         events.push(Event::Sound {
-            resource_id: word(&packet, 38)?,
+            resource_id: centurions_content::records::AttackPacket(&packet).impact_sound()?,
         });
     }
     Ok(events)

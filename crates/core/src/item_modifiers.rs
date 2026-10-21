@@ -1,51 +1,8 @@
-use crate::recovered_feedback::{
-    FeedbackMemory, FeedbackObservation, FeedbackRequest, FeedbackServices,
-};
-use crate::recovered_inventory_rules::{self as inventory, InventoryServices, SaneRequest};
-use crate::recovered_records::{ITEM_TABLE_ADDRESSES, RecordWrite};
-use crate::recovered_rendering::RenderingMemory;
 use crate::{Event, Phase, RuleError, Session, feedback::NativeFeedback};
-use centurions_content::{Content, WARRIOR_BYTES, word};
-
-struct Services;
-
-impl FeedbackServices for Services {
-    fn observe(
-        &self,
-        _: &FeedbackRequest,
-        _: &FeedbackMemory,
-    ) -> Result<FeedbackObservation, RuleError> {
-        Err("unexpected modifier presentation service".into())
-    }
-
-    fn sound_observations(
-        &self,
-        _: i16,
-        _: &crate::recovered_audio::AudioContext,
-        _: &FeedbackMemory,
-    ) -> Result<Vec<crate::recovered_audio::AudioObservation>, RuleError> {
-        Err("unexpected modifier audio service".into())
-    }
-}
-
-impl InventoryServices for Services {
-    fn sane(
-        &self,
-        request: &SaneRequest,
-        memory: &RenderingMemory,
-    ) -> Result<Vec<RecordWrite>, RuleError> {
-        let destination = request.destination.unwrap_or(request.source);
-        Ok(vec![RecordWrite {
-            address: destination,
-            bytes: crate::item_display::finite_arithmetic(
-                memory,
-                request.operation,
-                Some(request.source),
-                destination,
-            )?,
-        }])
-    }
-}
+use centurions_content::records::{
+    EquipmentStat as Stat, InventoryModifier as Modifier, ItemUpgrade,
+};
+use centurions_content::{Content, InventoryRecord, Warrior, word};
 
 /// Items12aae4..12ac10: class27 upgrades the first matching equipped record.
 pub(crate) fn use_item(
@@ -86,49 +43,18 @@ pub(crate) fn use_item(
         ]);
     };
     let sound = word(&definition, 12)?.wrapping_neg();
-    const FRAME: u32 = 0x6ffe00;
-    let address = 0x448aa0 + warrior as u32 * WARRIOR_BYTES as u32;
-    let mut memory = RenderingMemory::default();
-    memory.insert_region(address, &state.warriors[warrior].bytes);
-    memory.insert_region(FRAME - 256, &[0; 512]);
-    memory.insert_region(FRAME + 8, &(warrior as u16).to_be_bytes());
-    memory.insert_region(FRAME + 10, &(target as u16).to_be_bytes());
     let upgrade = word(&definition, 102)?;
     let upgrade_definition = crate::ammunition::definition(content, upgrade)?;
-    memory.insert_region(FRAME + 12, &upgrade.to_be_bytes());
-    memory.insert_region(0x45363c, &definition);
-    memory.insert_region(0x4781ee, &[0; 150]);
-    let comparison = if matches!(upgrade_definition[87], 13 | 14) {
-        word(
-            &state.warriors[warrior].bytes,
-            0xc6 + usize::from(upgrade_definition[87]) * 2,
-        )?
-    } else {
-        0
-    };
-    for id in [upgrade, comparison] {
-        let index = usize::from(id.unsigned_abs());
-        let record = content
-            .items
-            .get(index)
-            .ok_or("modifier definition unavailable")?;
-        let family = *ITEM_TABLE_ADDRESSES
-            .get(index / 200)
-            .ok_or("modifier definition band unavailable")?;
-        memory.insert_region(family + (index % 200 * 150) as u32, record);
-    }
-    let result = inventory::upgrade_rules(&memory, FRAME, &Services)?;
-    state.warriors[warrior].bytes =
-        crate::recovered_equipment::read(&result.memory, address, WARRIOR_BYTES)?;
+    let complete = upgrade_record(
+        &mut state.warriors[warrior],
+        target,
+        &upgrade_definition,
+        content,
+    )?;
     state.load_item_work(content, upgrade)?;
-    if result.native_return == u32::MAX {
+    if !complete {
         let mut feedback = vec![NativeFeedback::Sound { resource_id: sound }];
-        feedback.extend(
-            result
-                .warnings
-                .into_iter()
-                .map(|index| NativeFeedback::Warning { index }),
-        );
+        feedback.push(NativeFeedback::Warning { index: 148 });
         return refusal(feedback);
     }
     let map = crate::exploration::active_map(state, content)?;
@@ -142,4 +68,96 @@ pub(crate) fn use_item(
             slot: target - usize::from(slot < target),
         },
     ])
+}
+
+// upgrade 0x12ad86: each stage commits before the shield-efficiency refusal.
+fn upgrade_record(
+    warrior: &mut Warrior,
+    slot: usize,
+    definition: &[u8],
+    content: &Content,
+) -> Result<bool, RuleError> {
+    let upgrade = ItemUpgrade::read(definition)?;
+    let mut item = warrior.record().inventory_slot(slot);
+    if upgrade.capacity_percent != 0 {
+        let increase = f32::from(upgrade.capacity_percent);
+        let factor = (f64::from((f64::from(increase) + 100.0) as f32) / 100.0) as f32;
+        let previous = item.capacity()?;
+        let value = ((f64::from(previous) * f64::from(factor)) as f32).trunc();
+        // Signed-WORD inputs bound this product well inside LONG range.
+        let value = (value as i32) as i16;
+        item.set_capacity(if value == previous {
+            previous.wrapping_add(1)
+        } else {
+            value
+        });
+        // The battery cache gets the calculated value, before the same-value +1.
+        if item.category_code() == 20 {
+            Stat::ShieldCapacity.write(warrior, value)?;
+        }
+    }
+    for (stat, modifier, amount) in [
+        (
+            Stat::ShieldChance,
+            Modifier::ShieldChance,
+            upgrade.shield_chance,
+        ),
+        (Stat::MissileAccuracy, Modifier::Accuracy, upgrade.accuracy),
+        (
+            Stat::MissileDodge,
+            Modifier::MissileDodge,
+            upgrade.missile_dodge,
+        ),
+    ] {
+        add_modifier(warrior, &mut item, stat, modifier, amount)?;
+    }
+    if matches!(upgrade.equipment_kind, 13 | 14) {
+        Modifier::ShieldCost.add(&mut item, upgrade.shield_cost);
+        let worn = Stat::Equipment(i16::from(upgrade.equipment_kind)).read(warrior)?;
+        let comparison = crate::ammunition::definition(content, worn)?;
+        let cost = i16::from(Modifier::ShieldCost.read(&item)).wrapping_add(
+            centurions_content::records::EquipmentModifiers::read(&comparison)?.shield_cost,
+        );
+        if cost < 1 {
+            Modifier::ShieldCost.add(&mut item, 1);
+            warrior.record_mut().set_inventory_slot(slot, &item);
+            return Ok(false);
+        }
+        Stat::ShieldCost.write(
+            warrior,
+            Stat::ShieldCost
+                .read(warrior)?
+                .wrapping_add(i16::from(upgrade.shield_cost)),
+        )?;
+    }
+    Modifier::Range.add(&mut item, upgrade.range);
+    add_modifier(
+        warrior,
+        &mut item,
+        Stat::MeleeDodge,
+        Modifier::MeleeDodge,
+        upgrade.melee_dodge,
+    )?;
+    Modifier::Damage.add(&mut item, upgrade.damage);
+    add_modifier(
+        warrior,
+        &mut item,
+        Stat::Armor,
+        Modifier::Armor,
+        upgrade.armor,
+    )?;
+    warrior.record_mut().set_inventory_slot(slot, &item);
+    Ok(true)
+}
+
+fn add_modifier(
+    warrior: &mut Warrior,
+    item: &mut InventoryRecord,
+    stat: Stat,
+    modifier: Modifier,
+    amount: i8,
+) -> Result<(), RuleError> {
+    stat.write(warrior, stat.read(warrior)?.wrapping_add(i16::from(amount)))?;
+    modifier.add(item, amount);
+    Ok(())
 }

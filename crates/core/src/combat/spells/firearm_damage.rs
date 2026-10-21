@@ -1,10 +1,9 @@
 //! Firearm damage for combat/spells.
 use super::{
-    AttackResult, DamageFlags, DamagePacket, RandomState, RuleError, firearm, put_word,
-    resolve_damage,
+    AttackResult, DamageFlags, DamagePacket, RandomState, RuleError, firearm, resolve_damage,
 };
 use centurions_content::combat::MonsterRecord;
-use centurions_content::word;
+use centurions_content::records::{AttackPacket, EnemyRecord, EnemyRecordMut};
 
 pub fn resolve_enemy_firearm_body(
     target: &mut MonsterRecord,
@@ -16,7 +15,8 @@ pub fn resolve_enemy_firearm_body(
     let p = &prepared.packet;
     centurions_content::span(p, 0, 58)?;
     let mut next_random = random.clone();
-    next_random.range(i16::from(p[13] as i8), i16::from(p[14] as i8));
+    let (minimum, maximum) = AttackPacket(p).duration_bounds();
+    next_random.range(minimum, maximum);
     let result = resolve_enemy_firearm_body_after_duration(
         target,
         caster,
@@ -38,7 +38,7 @@ pub fn resolve_enemy_firearm_body_after_duration(
     let p = &prepared.packet;
     centurions_content::span(&target.bytes, 0, 288)?;
     centurions_content::span(&caster.bytes, 0, 288)?;
-    if p.len() != 58 || p[19] != 9 || word(p, 40)? != 0 {
+    if p.len() != 58 || AttackPacket(p).defense_category() != 9 || AttackPacket(p).effect()? != 0 {
         return Err(RuleError::Unsupported {
             action: "combat.enemy_firearm",
             dependency: "other ranged body effects",
@@ -47,15 +47,18 @@ pub fn resolve_enemy_firearm_body_after_duration(
     let mut next_random = random.clone();
     let mut next = target.clone();
     let m = &mut next.bytes;
-    if !prepared.armor_filter && m[0xb3] == 0 {
+    if !prepared.armor_filter && EnemyRecord::from_bytes(m).turn_skip_duration() == 0 {
         let mut hit = 33_i16
-            .wrapping_add(word(&caster.bytes, 0)?.wrapping_mul(5))
-            .wrapping_add(word(&caster.bytes, 0x66)?)
-            .wrapping_sub(word(m, 0x62)?)
-            .wrapping_sub(next_random.bound(word(m, 4)? / 3))
-            .wrapping_sub(word(m, 0)?.wrapping_mul(3))
-            .wrapping_sub(i16::from(m[0x104] as i8).wrapping_mul(word(m, 0)?));
-        hit = hit.wrapping_add(match word(m, 0x10)?.wrapping_abs() {
+            .wrapping_add(caster.record().level()?.wrapping_mul(5))
+            .wrapping_add(caster.record().missile_accuracy_bonus()?)
+            .wrapping_sub(EnemyRecord::from_bytes(m).missile_dodge_bonus()?)
+            .wrapping_sub(next_random.bound(EnemyRecord::from_bytes(m).speed()? / 3))
+            .wrapping_sub(EnemyRecord::from_bytes(m).level()?.wrapping_mul(3))
+            .wrapping_sub(
+                i16::from(EnemyRecord::from_bytes(m).guarding())
+                    .wrapping_mul(EnemyRecord::from_bytes(m).level()?),
+            );
+        hit = hit.wrapping_add(match EnemyRecord::from_bytes(m).size()?.wrapping_abs() {
             0 => -5,
             1 | 2 => 5,
             3 => 10,
@@ -93,17 +96,19 @@ pub fn resolve_enemy_firearm_body_after_duration(
         sounds.push(206);
     }
     if damage.total != 0 {
-        let health = word(m, 0x110)?.wrapping_sub(damage.total);
-        put_word(m, 0x110, health);
-        m[0x105] = 1;
-        if word(m, 0x110)? > 0 {
+        let health = EnemyRecord::from_bytes(m)
+            .stamina()?
+            .wrapping_sub(damage.total);
+        EnemyRecordMut::from_bytes(m).set_stamina(health);
+        EnemyRecordMut::from_bytes(m).mark_damaged();
+        if EnemyRecord::from_bytes(m).stamina()? > 0 {
             sounds.push(prepared.sound);
         }
     }
     let result = AttackResult {
         feedback: None,
         damage: damage.total,
-        killed: damage.total != 0 && word(m, 0x110)? < 1,
+        killed: damage.total != 0 && EnemyRecord::from_bytes(m).stamina()? < 1,
         sounds,
     };
     *target = next;

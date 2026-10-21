@@ -1,5 +1,5 @@
 use crate::{Content, Event, Phase, RuleError, Session, combat, story_spell};
-use centurions_content::word;
+use centurions_content::records::{AttackPacket, Condition, ItemDefinition};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -39,7 +39,7 @@ pub(crate) fn begin_item(
         .cloned()
         .ok_or("inventory item missing")?;
     let definition = crate::ammunition::definition(content, selected.id())?;
-    if word(&definition, 26)? != 28 || selected.0[9] != 0 {
+    if ItemDefinition(&definition).category()? != 28 || selected.equipment_flag() != 0 {
         return Err(RuleError::Unsupported {
             action: "item.use",
             dependency: "other outdoor item context",
@@ -53,8 +53,10 @@ pub(crate) fn begin_item(
     if !encounter && !crate::equipment::can_use(&state.warriors[actor], &definition, map)? {
         return Err(RuleError::Refused { feedback: vec![] });
     }
-    let spell = word(&definition, 44)?;
-    let power = word(&definition, 42)?.wrapping_abs();
+    let spell = ItemDefinition(&definition).spell()?;
+    let power = ItemDefinition(&definition)
+        .effect_selector()?
+        .wrapping_abs();
     let packet = combat::spells::load_packet(
         &map.combat
             .as_ref()
@@ -62,8 +64,9 @@ pub(crate) fn begin_item(
             .attacks,
         spell,
     )?;
-    if !(spell == 1401 && packet[1] == 1)
-        && !(packet[1] == 7 && matches!(word(&packet, 40)?, 0..=9 | 110))
+    if !(spell == 1401 && AttackPacket(&packet).targeting_mode() == 1)
+        && !(AttackPacket(&packet).targeting_mode() == 7
+            && matches!(AttackPacket(&packet).effect()?, 0..=9 | 110))
     {
         return Err(RuleError::Unsupported {
             action: "item.use",
@@ -73,7 +76,7 @@ pub(crate) fn begin_item(
     if !encounter && !combat::player_psi::mode_allowed(&packet, false)? {
         return Err(RuleError::Refused { feedback: vec![] });
     }
-    let quantity = word(&selected.0, 2)?;
+    let quantity = selected.quantity()?;
     if quantity <= 0 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
@@ -86,24 +89,25 @@ pub(crate) fn begin_item(
     }
     crate::equipment::calculate_weight(&mut state.warriors[actor], content)?;
     for warrior in &mut state.warriors {
-        warrior.bytes[0x60..0x62].fill(0);
+        warrior.record_mut().set_condition(Condition::Helpless, 0);
     }
     let warrior = &mut state.warriors[actor];
-    warrior.bytes[0x132 + slot * 22 + 2..0x132 + slot * 22 + 4]
-        .copy_from_slice(&quantity.wrapping_sub(1).to_be_bytes());
+    warrior
+        .record_mut()
+        .set_inventory_quantity(slot, quantity.wrapping_sub(1));
     let weight = warrior
         .record()
         .carried_weight()?
-        .wrapping_sub(word(&definition, 36)?);
-    warrior.bytes[0x9d6..0x9d8].copy_from_slice(&weight.to_be_bytes());
+        .wrapping_sub(ItemDefinition(&definition).unit_weight()?);
+    warrior.record_mut().set_carried_weight(weight);
     let mut events = vec![];
-    if quantity == 1 && word(&definition, 38)? != 0 {
+    if quantity == 1 && ItemDefinition(&definition).discarded_when_empty()? != 0 {
         crate::items::remove_inventory_slot(warrior, slot)?;
         events.push(Event::Sound { resource_id: 655 });
     }
     state.selected_warrior = actor;
     state.load_item_work(content, selected.id())?;
-    let global = packet[1] == 7;
+    let global = AttackPacket(&packet).targeting_mode() == 7;
     state.attack_packet = Some(packet);
     state.attack_identity = Some([spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1]);
     state.attack_count = power;
@@ -163,14 +167,18 @@ pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleErr
         || pending.actor >= state.warriors.len()
         || pending.item.is_some_and(|item| {
             !crate::ammunition::definition(content, item).is_ok_and(|definition| {
-                word(&definition, 26).ok() == Some(28)
-                    && word(&definition, 44).ok() == Some(pending.spell)
-                    && word(&definition, 42).map(i16::wrapping_abs).ok() == Some(pending.power)
+                ItemDefinition(&definition).category().ok() == Some(28)
+                    && ItemDefinition(&definition).spell().ok() == Some(pending.spell)
+                    && ItemDefinition(&definition)
+                        .effect_selector()
+                        .map(i16::wrapping_abs)
+                        .ok()
+                        == Some(pending.power)
             })
         })
         || !(1..=7).contains(&pending.power)
         || !combat::player_psi::OUTDOOR_TARGET_SPELLS.contains(&pending.spell)
-        || !matches!(packet[1], 0 | 1)
+        || !matches!(AttackPacket(packet).targeting_mode(), 0 | 1)
         || packet != &original
         || state.attack_count != pending.power
         || state.attack_identity
@@ -184,7 +192,7 @@ pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleErr
             "invalid outdoor Psi continuation".into(),
         ));
     }
-    let limit = if packet[1] == 0 {
+    let limit = if AttackPacket(packet).targeting_mode() == 0 {
         pending.power.min(state.warriors.len() as i16)
     } else {
         1
@@ -279,7 +287,7 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
             memory[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
         }
         events.push(Event::Sound {
-            resource_id: word(&packet, 36)?.wrapping_neg(),
+            resource_id: AttackPacket(&packet).launch_sound()?.wrapping_neg(),
         });
     }
     events.extend(story_spell::resolve_outdoors(

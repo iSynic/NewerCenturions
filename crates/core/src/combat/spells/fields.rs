@@ -1,6 +1,7 @@
 //! Fields for combat/spells.
 use super::{Combat, FieldUsage, RuleError, SpellTarget, load_packet, position};
-use centurions_content::{Warrior, word};
+use centurions_content::Warrior;
+use centurions_content::records::{AttackPacketMut, SpellField, SpellFieldMut};
 
 pub fn tick_fields(fields: &[u8], cursor: i16) -> Result<Vec<u8>, RuleError> {
     if fields.len() != 1200 {
@@ -8,8 +9,9 @@ pub fn tick_fields(fields: &[u8], cursor: i16) -> Result<Vec<u8>, RuleError> {
     }
     let mut result = fields.to_vec();
     for field in result.as_chunks_mut::<20>().0 {
-        if field[15] != 0 && i16::from(field[18] as i8) == cursor {
-            field[15] = field[15].wrapping_sub(1);
+        if SpellField(field).duration() != 0 && SpellField(field).initiative() == cursor {
+            let duration = SpellField(field).duration().wrapping_sub(1);
+            SpellFieldMut(field).set_duration(duration);
         }
     }
     Ok(result)
@@ -48,13 +50,14 @@ pub fn collision_field(
         && warriors
             .get(body)
             .ok_or_else(|| RuleError::Invalid("spell collision warrior".into()))?
-            .bytes[0x9df]
+            .record()
+            .active_flag()
             == 0
     {
         return Ok(None);
     }
-    let field = &fields[usage.slot * 20..usage.slot * 20 + 20];
-    if field[15] == 0 || usage.used[usage.slot] != 0 {
+    let field = SpellField(&fields[usage.slot * 20..usage.slot * 20 + 20]);
+    if field.duration() == 0 || usage.used[usage.slot] != 0 {
         return Ok(None);
     }
     let point = position(combat, body)
@@ -66,16 +69,14 @@ pub fn collision_field(
     let size = if body < 10 {
         0
     } else {
-        word(
-            &combat
-                .enemies
-                .records
-                .get(body - 10)
-                .ok_or_else(|| RuleError::Invalid("spell collision monster".into()))?
-                .bytes,
-            0x10,
-        )?
-        .wrapping_abs()
+        combat
+            .enemies
+            .records
+            .get(body - 10)
+            .ok_or_else(|| RuleError::Invalid("spell collision monster".into()))?
+            .record()
+            .size()?
+            .wrapping_abs()
     };
     if !(0..=3).contains(&size) {
         return Err(RuleError::Unsupported {
@@ -83,12 +84,7 @@ pub fn collision_field(
             dependency: "other monster footprint",
         });
     }
-    let inside = |p: (i16, i16)| -> Result<bool, RuleError> {
-        Ok(p.1 >= word(field, 0)?
-            && p.1 < word(field, 4)?
-            && p.0 >= word(field, 2)?
-            && p.0 < word(field, 6)?)
-    };
+    let inside = |p: (i16, i16)| -> Result<bool, RuleError> { Ok(field.contains(p)?) };
     if !inside(point)?
         && !((size == 1 || size == 3) && inside((point.0, point.1.wrapping_sub(1)))?)
         && !((size == 2 || size == 3) && inside((point.0.wrapping_sub(1), point.1))?)
@@ -96,22 +92,18 @@ pub fn collision_field(
     {
         return Ok(None);
     }
-    let id = word(field, 8)?;
+    let id = field.spell()?;
     let mut packet = load_packet(attacks, id)?;
-    if packet[19] == 9 {
-        packet[19] = 1;
-        packet[20] = 1;
-    }
-    packet[4] = 0;
+    AttackPacketMut(&mut packet).prepare_field_collision();
     Ok(Some(FieldCollision {
-        rotation: field[17],
+        rotation: field.rotation(),
         packet,
         id,
-        count: i16::from(field[16] as i8),
-        level: i16::from(field[19] as i8),
+        count: field.power(),
+        level: field.level(),
         target: SpellTarget {
-            first: i16::from(field[12] as i8).wrapping_add(3),
-            second: i16::from(field[13] as i8).wrapping_add(3),
+            first: field.center().0,
+            second: field.center().1,
             kind: 3,
         },
     }))

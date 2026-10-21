@@ -1,9 +1,10 @@
 //! Masks for combat/spells.
-use super::{
-    Combat, RandomState, RuleError, SpellContext, SpellMask, SpellTarget, position, put_word,
-};
+use super::{Combat, RandomState, RuleError, SpellContext, SpellMask, SpellTarget, position};
+use centurions_content::Warrior;
 use centurions_content::combat::MonsterRecord;
-use centurions_content::{Warrior, word};
+use centurions_content::records::{
+    AttackPacket, AttackPacketMut, Condition, SpellField, SpellFieldMut,
+};
 
 pub struct GlobalSpellTargets {
     pub caster: MonsterRecord,
@@ -17,7 +18,7 @@ pub fn global_targets(
     packet: &[u8],
 ) -> Result<GlobalSpellTargets, RuleError> {
     if packet.len() != 58
-        || !matches!(packet[1], 9 | 10 | 12)
+        || !matches!(AttackPacket(packet).targeting_mode(), 9 | 10 | 12)
         || warriors.len() > 6
         || combat.enemies.records.len() > 100
     {
@@ -28,27 +29,31 @@ pub fn global_targets(
         .records
         .get(caster_index)
         .ok_or_else(|| RuleError::Invalid("global spell caster".into()))?;
-    let side = word(&caster.bytes, 0xe)?;
+    let side = caster.record().faction()?;
     let mut result = GlobalSpellTargets {
         caster: caster.clone(),
         mask: [0; 110],
     };
     for (member, warrior) in warriors.iter().enumerate() {
         if warrior.record().active_flag() != 0
-            && (packet[1] == 12 || (warrior.record().faction()? == side) == (packet[1] == 9))
+            && (AttackPacket(packet).targeting_mode() == 12
+                || (warrior.record().faction()? == side)
+                    == (AttackPacket(packet).targeting_mode() == 9))
         {
             result.mask[member] = 1;
         }
     }
     for (index, enemy) in combat.enemies.records.iter().enumerate() {
-        if word(&enemy.bytes, 0x110)? > 0
-            && (packet[1] == 12 || (word(&enemy.bytes, 0xe)? == side) == (packet[1] == 9))
+        if enemy.record().stamina()? > 0
+            && (AttackPacket(packet).targeting_mode() == 12
+                || (enemy.record().faction()? == side)
+                    == (AttackPacket(packet).targeting_mode() == 9))
         {
             result.mask[index + 10] = 1;
         }
     }
-    if packet[1] != 12 {
-        result.caster.bytes[0x104] = 0;
+    if AttackPacket(packet).targeting_mode() != 12 {
+        result.caster.record_mut().set_reaction_ready(false);
     }
     Ok(result)
 }
@@ -115,10 +120,10 @@ pub(crate) fn target_mask_rotated_with_origin(
     if packet.len() != 58 {
         return Err(RuleError::Invalid("spell packet size".into()));
     }
-    let rotated = packet[7] != 0;
+    let rotated = AttackPacket(&packet).has_randomized_animation();
     if rotated {
-        packet[31] = packet[31]
-            .checked_add(rotation)
+        AttackPacketMut(&mut packet)
+            .rotate_area(rotation)
             .ok_or("spell pattern overflow")?;
     }
     let adjusted = SpellContext {
@@ -128,11 +133,15 @@ pub(crate) fn target_mask_rotated_with_origin(
     let mut result =
         target_mask_with_origin(combat, warriors, areas, targets, &adjusted, fields, random)?;
     if rotated
-        && packet[4] != 0
+        && AttackPacket(&packet).field_kind() != 0
         && !context.collision
-        && let Some(slot) = fields.as_chunks::<20>().0.iter().position(|f| f[15] == 0)
+        && let Some(slot) = fields
+            .as_chunks::<20>()
+            .0
+            .iter()
+            .position(|f| SpellField(f).duration() == 0)
     {
-        result.fields[slot * 20 + 17] = rotation;
+        SpellFieldMut(&mut result.fields[slot * 20..slot * 20 + 20]).set_rotation(rotation);
     }
     Ok(result)
 }
@@ -151,14 +160,14 @@ pub fn target_mask_with_origin(
     if p.len() != 58 || fields.len() != 1200 || !(0..110).contains(&context.caster) {
         return Err(RuleError::Invalid("spell mask inputs".into()));
     }
-    if word(p, 40)? == 58 {
+    if AttackPacket(p).effect()? == 58 {
         return Err(RuleError::Unsupported {
             action: "combat.spell.mask",
             dependency: "rotated shapes or summon targeting",
         });
     }
-    let shape = match p[1] {
-        3 => usize::from(p[31]),
+    let shape = match AttackPacket(p).targeting_mode() {
+        3 => usize::from(AttackPacket(p).area_shape()),
         4 => context.count as usize,
         _ => 1,
     };
@@ -174,35 +183,36 @@ pub fn target_mask_with_origin(
         mask: [0; 110],
         fields: fields.to_vec(),
     };
-    if p[4] != 0
+    if AttackPacket(p).field_kind() != 0
         && !context.collision
-        && let Some(slot) = fields.as_chunks::<20>().0.iter().position(|f| f[15] == 0)
+        && let Some(slot) = fields
+            .as_chunks::<20>()
+            .0
+            .iter()
+            .position(|f| SpellField(f).duration() == 0)
     {
-        let f = &mut result.fields[slot * 20..slot * 20 + 20];
-        f[18] = context.initiative as u8;
-        f[16] = context.count as u8;
-        f[19] = (context.id % 1000 / 100 - 1) as u8;
-        f[17] = 0;
-        f[14] = shape as u8;
-        f[12] = origin.first.wrapping_sub(3) as u8;
-        f[13] = origin.second.wrapping_sub(3) as u8;
-        let left = i16::from(f[12] as i8);
-        let top = i16::from(f[13] as i8);
-        put_word(f, 0, top);
-        put_word(f, 2, left);
-        put_word(f, 4, top.wrapping_add(7));
-        put_word(f, 6, left.wrapping_add(7));
-        put_word(f, 8, context.id);
-        let mut duration = next_random.range(i16::from(p[13] as i8), i16::from(p[14] as i8)) as u8;
+        let mut field = SpellFieldMut(&mut result.fields[slot * 20..slot * 20 + 20]);
+        field.set_initiative(context.initiative);
+        field.set_power(context.count);
+        field.set_level(context.id % 1000 / 100 - 1);
+        field.set_rotation(0);
+        field.set_shape(shape);
+        field.set_center((origin.first, origin.second));
+        field.set_spell(context.id);
+        let mut duration = next_random.range(
+            AttackPacket(p).duration_bounds().0,
+            AttackPacket(p).duration_bounds().1,
+        ) as u8;
         for _ in 0..context.count {
-            duration = duration.wrapping_add(
-                next_random.range(i16::from(p[15] as i8), i16::from(p[16] as i8)) as u8,
-            );
+            duration = duration.wrapping_add(next_random.range(
+                AttackPacket(p).additional_duration_bounds().0,
+                AttackPacket(p).additional_duration_bounds().1,
+            ) as u8);
         }
-        f[15] = duration;
-        put_word(f, 10, i16::from(p[4] as i8));
+        field.set_duration(duration);
+        field.set_kind(AttackPacket(p).field_kind());
     }
-    let center = if p[1] >= 2 && target.kind == 3 {
+    let center = if AttackPacket(p).targeting_mode() >= 2 && target.kind == 3 {
         (target.first, target.second)
     } else {
         let body = usize::try_from(target.first)
@@ -235,22 +245,22 @@ pub fn target_mask_with_origin(
             if context.collision && body != context.caster as usize {
                 continue;
             }
-            let reflected = if p[19] != 9 {
+            let reflected = if AttackPacket(p).defense_category() != 9 {
                 let reflective = if body < 9 {
-                    word(
-                        &warriors
-                            .get(body)
-                            .ok_or_else(|| RuleError::Invalid("spell reflection warrior".into()))?
-                            .bytes,
-                        0x9a,
-                    )? != 0
+                    warriors
+                        .get(body)
+                        .ok_or_else(|| RuleError::Invalid("spell reflection warrior".into()))?
+                        .record()
+                        .condition(Condition::ReflectingScans)?
+                        != 0
                 } else {
                     combat
                         .enemies
                         .records
                         .get(body.wrapping_sub(10))
                         .ok_or_else(|| RuleError::Invalid("spell reflection monster".into()))?
-                        .bytes[0xd0]
+                        .record()
+                        .condition(Condition::ReflectingScans)
                         != 0
                 };
                 reflective && next_random.bound(100) < 34 && !context.collision
@@ -260,15 +270,14 @@ pub fn target_mask_with_origin(
             if reflected {
                 result.mask[context.caster as usize] = 1;
             } else if body < 10
-                || word(
-                    &combat
-                        .enemies
-                        .records
-                        .get(body - 10)
-                        .ok_or_else(|| RuleError::Invalid("spell mask monster".into()))?
-                        .bytes,
-                    0xa,
-                )? < 101
+                || combat
+                    .enemies
+                    .records
+                    .get(body - 10)
+                    .ok_or_else(|| RuleError::Invalid("spell mask monster".into()))?
+                    .record()
+                    .magic_immunity()?
+                    < 101
             {
                 result.mask[body] = 1;
             } else {

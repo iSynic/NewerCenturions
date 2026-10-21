@@ -78,9 +78,14 @@ The following boundaries are intended editing surfaces:
 | Ground/capture/firearm click precedence | combat `interaction::resolve_click` | `CombatBodyId`, `CombatPosition` and record views |
 | Occupied cells and movement | combat `movement`, `occupied_cell` | warrior/enemy views; named terrain properties |
 | Firearm selection, cost and cancellation | combat `shooting`, runtime `shooting` | inventory views and `AttackPacket` |
+| Reload and ammunition selection | `ammunition::refill`, `ammunition::fitting` | retained item/ammo/weapon definitions and inventory views |
+| Firearm packet composition and resolution | combat `firearm::preparation`, `firearm::resolution` | `WeaponAttackParameters` and warrior/enemy views |
+| Damage rolls, shields, armor and resistances | combat `damage` and `damage::defenses` | `DamageDefinition`, `DamageDefenses`, `DamageTargetRecord` |
+| Player melee and reflection | combat `attack::warrior_enemy`, `warrior_attack`, `attack::melee_accuracy` | warrior/enemy conditions, weapon definitions and statistics |
+| Target hit/damage estimates | combat `estimates`, item display `estimate` | read-only game calculations and original panel drawing commands |
 | Actor choice and turn scheduling | runtime `enemy_actions`, `actor_turns`, `turns` | signed actor fields and native turn primitives |
 | Equip/transfer/buy/sell | equipment `transactions`, shop `transactions` | `ItemDefinition`, `ShopRecord`, equipment `record_rules` |
-| Enhanced shop stock | shop `generated_stock` | bounded installitem memory/services adapter |
+| Enhanced shop stock | shop `generated_stock` | named instance modifiers and bounded RNG draws |
 | Script operation and resumption | exploration `script_execution`, `ScriptState::restart_from` | named `Operation`, `StoryRecord`, operation-specific EXTRA views |
 | Upgrade selection and drawing | desktop editor `controls`, warrior upgrade view | original DITL IDs and base/derived/purchase fields |
 | Save acceptance and restoration | persistence `compatibility::restore` | ordered compatibility steps for versions 1-12 |
@@ -108,6 +113,36 @@ occupied-cell reload, reaction processing, terrain cost and the final map update
 Firearm execution owns payment and ordered impacts. Cancellation restores the
 native first inventory work record but deliberately does not refund the separate
 load field. Do not replace that behavior with a seemingly cleaner full rollback.
+
+Reload first refills existing magazines, then considers an empty magazine's
+compatible ammunition. These are separate passes with different exact-stock and
+reserve-debit behavior. `AmmunitionOutcome` names the result used by command and
+occupied-cell callers; the historical integer return remains for reference
+comparisons. Battery re-wearing uses `equipment::retained` and `equipment::modifiers`.
+These operate on named `EquipmentStat` fields and distinguish the selected
+inventory slot from the caller's retained modifiers. Removal is not an inverse
+of wearing: modifier sources, clamps, condition limits and warning order differ.
+The editor uses the same operations while preserving its level-check exception.
+Creation's initial equipment installs only fields written by the original routine.
+`item_modifiers` applies capacity and statistic changes in order, retaining partial
+effects on a shield-efficiency refusal. `shop::generated_stock` owns enhancement
+rolls and preserves the final fresh-install suffix. These paths no longer allocate
+or execute native-address memory images.
+
+Weapon preparation combines weapon and ammunition fields into an existing
+attack template. It preserves byte narrowing, burst multiplication and float
+rounding. Shared damage rules then apply rolls, armor filtering, shields, armor
+and resistance in order. The record codec owns the original byte layout; those
+rules operate on named values. Melee reflection retains caller-specific RNG
+ordering and damage attribution. Do not unify these paths based on similarity.
+
+Attack estimates are a different original algorithm from actual resolution.
+They consume no RNG and change no session state. The desktop receives the same
+visible drawing operations through the existing `DetailPlan` interface; its
+estimate memory contains only compatibility receipts of the three retained
+definitions, encoded after calculation; it is never read to execute rules. The old memory-based estimate is retained
+only in the comparison harness and reference implementation. Passing that
+comparison establishes reconstruction equivalence, not a new native receipt.
 
 For a story, inspect the named operation before its numeric native identity. The
 instruction cursor advances before execution. Branch replacement restarts the
@@ -162,6 +197,62 @@ differences between gestures. Operating-system file panels and audio services
 remain outside rule execution.
 
 ## Code hygiene
+
+### Replacing execution machinery
+
+Ordinary attacks and reloads use game values and record codecs. The primary
+owners are ammunition `selection`, `refill`, `fitting`; firearm `preparation`,
+`resolution`, `reload`; attack `melee_accuracy`, `warrior_enemy`, `natural`;
+enemy-weapons `warrior_melee`, `enemy_melee`; and natural-condition
+`attack_effects`. The allied natural caller shares the accuracy rules while
+retaining its own death, sound and retained-actor ordering.
+
+Equipment `retained` owns replacement and silent wear/removal; `modifiers`
+applies ordered stat changes. Creation, item upgrading and enhanced shop stock
+do not construct emulated memory. Do not merge their instance-copy rules:
+creation deliberately leaves bytes 11/12 intact, and generated shop stock copies
+only the original installitem suffix, not the generated ammunition or quantity.
+
+Character information and inventory row/detail presentation calculate fields
+directly, then emit original text and drawing operations. `DetailPlan` and
+`ItemUiEffect` remain compatibility output types. Their address-labelled numeric
+receipts are not a memory executor. Attack estimates additionally retain three
+definition receipts for existing consumers. Private scratch writes and simulated
+Toolbox observations are not part of the desktop rendering contract.
+
+The expanded translations and recovered execution bodies remain available for
+reference comparisons. Do not make ordinary commands depend on them. Random
+ranges and movement cost live in `rules`; shop price rounding lives in
+`shop/pricing`; ordered credit payment lives in `story_inventory/payment`.
+Historical adapters preserve their reference API and receipt representation.
+
+Creation and promotion use borrowed race/profession profiles and development
+fields. Party filtering and scripted inventory changes share record views with
+ordinary commands while retaining their caller-specific rules. Spell fields
+remain the same saved 20-byte records; `records/spell_field` owns their signed
+coordinates, duration and bounds. `medical/preparation` composes weapon and
+ammunition parameters without CPU registers or a simulated address space.
+
+Use `records/warrior`, `monster`, `development`, `equipment`, `inventory_slots`
+and `attack` for stored fields. Rules own arithmetic, RNG and ordering; views
+only expose the original representation. Do not eagerly decode a whole record
+when a caller's narrow read determines its validation order. For example, story
+selection deliberately reads one slot beyond the inventory count. The fixed
+29-slot drop shift is different from ordinary occupied-slot removal. Outdoor
+and collision spell callers consume duration draws differently. Do not merge
+these distinctions as a cleanup.
+
+A change to combat should start at `combat/interaction` and the command
+transaction, then follow the selected attack/reload owner and its ordered events.
+For a story item, start at `exploration/item_use`, then `story_item_use` or
+`story_inventory`, and follow the existing script continuation. For character
+creation, follow `creation` through the profile views and initial inventory;
+for promotion, follow `story_promotion` and `story_promotion/scans`. Session and
+save types are still the persistence authority; none of these views is serialized.
+
+Source-level completion and comparison evidence are reconciled in
+`evidence/semantic-gameplay.md`. Original unknown fields, the qualified Hive
+policy and live acceptance retain their existing qualifications.
 
 - Give each maintained module one game or presentation responsibility. Review
   orchestration modules approaching 600 physical lines; split by responsibility,

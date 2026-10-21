@@ -12,6 +12,7 @@ pub mod death_scripts;
 pub mod enemy;
 pub mod enemy_weapons;
 pub mod entry_party;
+pub(crate) mod estimates;
 pub mod final_turn_stories;
 pub mod firearm;
 pub mod footprint;

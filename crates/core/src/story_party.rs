@@ -1,4 +1,7 @@
 use crate::{RandomState, RuleError, character, combat, story_variables::StoryContinuation};
+use centurions_content::records::{
+    ATTRIBUTES, DevelopmentField as Field, InventorySlots, WarriorRecord, WarriorRecordMut,
+};
 use centurions_content::{Warrior, mission::OpeningMission, span, word};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -30,30 +33,35 @@ pub fn adjust_statistics(
         if *selected == 0 {
             continue;
         }
-        let (offset, minimum, conditional, current) = match selector {
-            1 => (0x12, 0, false, None),
-            2 => (0xac6, 1, true, None),
-            3 => (0x3e, 3, false, Some(0x3c)),
-            4 => (0x0e, 0, false, None),
-            5 => (0x5a, 0, true, Some(0x58)),
-            6 => (0x0c, 1, true, None),
-            7 => (0x52, 2, false, Some(0x50)),
-            8 => (0x2c, 0, false, None),
-            9 => (0xb5a, 0, false, None),
-            10 => (0xb58, 0, false, None),
-            11 => (0xb60, 0, false, None),
+        let (field, minimum, conditional, current) = match selector {
+            1 => (Field::ActionsPerRound, 0, false, None),
+            2 => (Field::ScanCapacity, 1, true, None),
+            3 => (
+                Field::MovementPerRound,
+                3,
+                false,
+                Some(Field::MovementPoints),
+            ),
+            4 => (Field::BareHandMinimum, 0, false, None),
+            5 => (Field::MaximumPsi, 0, true, Some(Field::Psi)),
+            6 => (Field::BareHandMaximum, 1, true, None),
+            7 => (Field::MaximumStamina, 2, false, Some(Field::Stamina)),
+            8 => (Field::Armor, 0, false, None),
+            9 => (Field::MeleeAccuracyBonus, 0, false, None),
+            10 => (Field::MissileAccuracyBonus, 0, false, None),
+            11 => (Field::PsiResistanceBonus, 0, false, None),
             _ => continue,
         };
-        let previous = word(bytes, offset)?;
+        let previous = field.read(bytes)?;
         if conditional && previous == 0 {
             continue;
         }
         let value = previous.wrapping_add(amount).max(minimum);
-        bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
+        field.write(bytes, value);
         if let Some(current) = current
-            && word(bytes, current)? > value
+            && current.read(bytes)? > value
         {
-            bytes[current..current + 2].copy_from_slice(&value.to_be_bytes());
+            current.write(bytes, value);
         }
     }
     Ok(result)
@@ -89,12 +97,14 @@ pub fn filter_party(
             })?;
             let skill = usize::try_from(selector)
                 .map_err(|_| RuleError::Invalid("negative skill selector".into()))?;
-            let chance = word(&source.bytes, 0xf4 + skill * 2)?
-                .wrapping_add(word(&source.bytes, 0xb62 + skill * 2)?)
+            let chance = source
+                .record()
+                .special_skill(skill)?
+                .wrapping_add(source.record().special_skill_bonus(skill)?)
                 .wrapping_add(word(extra, 2)?);
             random.bound(100) <= chance
         } else if (0..=6).contains(&selector) {
-            word(&warrior.bytes, 0x9e2 + selector as usize * 2)? > word(extra, 8)?
+            Field::Attribute(ATTRIBUTES[selector as usize]).read(&warrior.bytes)? > word(extra, 8)?
         } else {
             false
         };
@@ -127,26 +137,27 @@ pub fn select_party(
     let mut next_random = random.clone();
     for (member, warrior) in warriors.iter().enumerate() {
         let bytes = span(&warrior.bytes, 0, 3138)?;
-        let eligible = eligible_mode == 0 || (eligible_mode == 1 && word(bytes, 0x50)? > 0);
+        let eligible = eligible_mode == 0
+            || (eligible_mode == 1 && WarriorRecord::from_bytes(bytes).stamina()? > 0);
         if !eligible {
             continue;
         }
         let holds_item = || -> Result<bool, RuleError> {
-            let count = word(bytes, 0x1a)?;
+            let count = InventorySlots(bytes).count()?;
             if count > 100 {
                 return Err(RuleError::Invalid(
                     "inventory exceeds original record".into(),
                 ));
             }
             for slot in 0..count.max(0) as usize {
-                if word(bytes, 0x132 + slot * 22)? == value {
+                if InventorySlots(bytes).item_id(slot)? == value {
                     return Ok(true);
                 }
             }
             Ok(false)
         };
         let matched = match kind {
-            0 => word(bytes, 0x3e)? < value,
+            0 => warrior.record().movement_per_round()? < value,
             1 => (member as i16).wrapping_add(1) < value,
             2 => holds_item()?,
             3 => next_random.bound(100) <= value,
@@ -168,7 +179,9 @@ pub fn select_party(
                         bonus = bonus.wrapping_add(50);
                     }
                     next_random.bound(100)
-                        > word(bytes, 0x112 + value as usize * 2)?.wrapping_add(bonus)
+                        > Field::Resistance(value as usize)
+                            .read(bytes)?
+                            .wrapping_add(bonus)
                 }
             }
             6 => {
@@ -181,9 +194,10 @@ pub fn select_party(
             7 => {
                 let mut equipped = false;
                 if holds_item()? {
-                    for slot in 0..=word(bytes, 0x1a)?.max(0) as usize {
-                        let offset = 0x132 + slot * 22;
-                        if word(bytes, offset)? == value && bytes[offset + 9] != 0 {
+                    for slot in 0..=InventorySlots(bytes).count()?.max(0) as usize {
+                        if InventorySlots(bytes).item_id(slot)? == value
+                            && InventorySlots(bytes).equipment_flag(slot) != 0
+                        {
                             equipped = true;
                         }
                     }
@@ -254,8 +268,8 @@ pub fn apply_group_mask(
     for (member, mask_value) in mask.iter().take(warriors.len()).enumerate() {
         let bytes = &mut result.warriors[member].bytes;
         span(bytes, 0, 3138)?;
-        bytes[0x9df] = 1;
-        if word(bytes, 0x50)? > 0 && (!group || *mask_value != 0) {
+        WarriorRecordMut::from_bytes(bytes).set_active_flag(1);
+        if WarriorRecord::from_bytes(bytes).stamina()? > 0 && (!group || *mask_value != 0) {
             continue;
         }
         let position = result.squad.positions[member];
@@ -269,8 +283,8 @@ pub fn apply_group_mask(
             .get_mut(index)
             .ok_or_else(|| RuleError::Invalid("group formation tile unavailable".into()))?;
         *tile = result.squad.under_tiles[member];
-        bytes[0x9df] = 0;
-        let initiative = word(bytes, 0x20)?;
+        WarriorRecordMut::from_bytes(bytes).set_active_flag(0);
+        let initiative = WarriorRecord::from_bytes(bytes).initiative_index()?;
         if initiative != -1 {
             let initiative = usize::try_from(initiative)
                 .map_err(|_| RuleError::Invalid("warrior initiative is negative".into()))?;
@@ -279,7 +293,7 @@ pub fn apply_group_mask(
                 .get_mut(initiative)
                 .ok_or_else(|| RuleError::Invalid("warrior initiative unavailable".into()))? = -1;
         }
-        bytes[0x20..0x22].copy_from_slice(&(-1i16).to_be_bytes());
+        WarriorRecordMut::from_bytes(bytes).set_initiative_index(-1);
         result.squad.positions[member] = (-1, -1);
     }
     Ok(result)
@@ -300,7 +314,7 @@ pub fn group_return(
     let mut warriors = warriors.to_vec();
     for warrior in &mut warriors {
         span(&warrior.bytes, 0, 3138)?;
-        warrior.bytes[0x9df] = 1;
+        warrior.record_mut().set_active_flag(1);
     }
     Ok(GroupReturn {
         warriors,

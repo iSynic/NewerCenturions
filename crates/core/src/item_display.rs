@@ -1,46 +1,21 @@
-//! Narrow adapters for original inventory display routines; no complete registry dependency.
+//! Inventory presentation from named item fields and original text/resources.
 use crate::{
-    RuleError, recovered_drawing::*, recovered_geometry::BodyRect, recovered_item_ui::*,
-    recovered_rendering::RenderingMemory, recovered_text::*,
+    RuleError,
+    recovered_drawing::{BuildingWorld, DrawingEffect, DrawingServices, PictureObservation},
+    recovered_geometry::BodyRect,
+    recovered_item_ui::{ItemUiEffect, ItemUiReply, ItemUiRequest, ItemUiServices},
+    recovered_rendering::RenderingMemory,
+    recovered_text::{NumericServices, PascalString},
 };
-use centurions_content::{Content, InventoryRecord, native_text::NativeText, ui, word};
+use centurions_content::{Content, InventoryRecord, native_text::NativeText, ui};
 use std::collections::BTreeMap;
 mod detail;
-pub(crate) use detail::arithmetic as finite_arithmetic;
-pub use detail::{attack_estimate, detail};
+pub use detail::detail;
+mod estimate;
+pub use estimate::attack_estimate;
 
-pub fn row(
-    content: &Content,
-    item: &InventoryRecord,
-    native: &NativeText,
-    strings: &BTreeMap<i16, Vec<u8>>,
-) -> Result<Vec<ItemUiEffect>, RuleError> {
-    let mut memory = RenderingMemory::default();
-    memory.insert_region(0x400ef8, native.bytes(0x400ef8, 140)?);
-    memory.insert_region(
-        0x45363c,
-        &crate::ammunition::definition(content, item.id())?,
-    );
-    memory.insert_region(0x4536d2, &[0; 150]);
-    memory.insert_region(0x41fc48, &item.0);
-    memory.insert_region(0x4471f2, &[0; 4]);
-    memory.insert_region(0x479ed8, &[0; 256]);
-    memory.insert_region(0x3fe302, &0x700000_u32.to_be_bytes());
-    memory.insert_region(0x700000, &[0; 80]);
-    let ammo = word(&item.0, 4)?;
-    if ammo != 0 {
-        let id = ammo.unsigned_abs() as usize;
-        let definition = content
-            .items
-            .get(id)
-            .ok_or("display ammunition unavailable")?;
-        memory.insert_region(
-            crate::recovered_records::ITEM_TABLE_ADDRESSES[id / 200] + (id % 200 * 150) as u32,
-            definition,
-        );
-    }
-    Ok(show_item_stats(&memory, &mut Services { strings })?.effects)
-}
+mod row;
+pub use row::row;
 
 struct Services<'a> {
     strings: &'a BTreeMap<i16, Vec<u8>>,

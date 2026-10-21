@@ -37,7 +37,7 @@ pub fn fit_ammunition(
         .category()?,
         2 | 15 | 20
     ) {
-        if item.0[10] == 20 && state.phase == Phase::Combat {
+        if item.category_code() == 20 && state.phase == Phase::Combat {
             return Err(RuleError::Refused {
                 feedback: vec![crate::feedback::NativeFeedback::Silent],
             });

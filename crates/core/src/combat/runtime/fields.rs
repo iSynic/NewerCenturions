@@ -1,5 +1,7 @@
 //! Fields in the original combat execution order.
-use super::{append_spell_outcomes, increment_stat, spell_identity};
+use centurions_content::records::{CharacterStatisticsMut, Statistic};
+
+use super::{append_spell_outcomes, spell_identity};
 use crate::combat::Combat;
 use crate::{Event, RandomState, RuleError};
 use centurions_content::Warrior;
@@ -149,12 +151,13 @@ pub(super) fn collide_fields_impl(
                 .ok_or_else(|| RuleError::Invalid("field credit warrior missing".into()))?;
             for (target, outcome) in &result.targets {
                 if *target >= 10 && outcome.damage > 0 {
-                    increment_stat(&mut warrior.bytes, 0xa46, i32::from(outcome.damage));
+                    CharacterStatisticsMut(&mut warrior.bytes)
+                        .add(Statistic::DamageDealt, i32::from(outcome.damage));
                     if collision.packet[19] == 9 {
-                        increment_stat(&mut warrior.bytes, 0xa4a, 1);
+                        CharacterStatisticsMut(&mut warrior.bytes).add(Statistic::Hits, 1);
                     }
                     if outcome.killed {
-                        increment_stat(&mut warrior.bytes, 0xa5a, 1);
+                        CharacterStatisticsMut(&mut warrior.bytes).add(Statistic::Kills, 1);
                     }
                 }
             }

@@ -1,5 +1,9 @@
 use crate::RuleError;
-use centurions_content::{Warrior, span, word};
+use centurions_content::{
+    Warrior,
+    records::{Attribute, DevelopmentField as Field},
+    span, word,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SkillPlan {
@@ -50,18 +54,21 @@ pub fn predicate(
     let success = if word(extra, 4)? == 0 {
         let index = usize::try_from(index)
             .map_err(|_| RuleError::Invalid("negative story skill index".into()))?;
-        word(bytes, 0xf4 + index * 2)?.wrapping_add(word(bytes, 0xb62 + index * 2)?) >= threshold
+        Field::SpecialSkill(index)
+            .read(bytes)?
+            .wrapping_add(Field::SpecialSkillBonus(index).read(bytes)?)
+            >= threshold
     } else {
-        let offset = match index {
-            0 => 0x9e2,
-            1 => 0x9e4,
-            2 => 0x9e6,
-            3 => 0x9e8,
-            4 => 0x9ec,
-            5 => 0x9ee,
+        let attribute = match index {
+            0 => Attribute::Brawn,
+            1 => Attribute::Knowledge,
+            2 => Attribute::Judgement,
+            3 => Attribute::Quickness,
+            4 => Attribute::Vitality,
+            5 => Attribute::Psionics,
             _ => return Ok(SkillPlan::Continue),
         };
-        word(bytes, offset)? > threshold
+        Field::Attribute(attribute).read(bytes)? > threshold
     };
     Ok(SkillPlan::ReplaceScript {
         warrior,

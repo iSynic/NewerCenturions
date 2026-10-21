@@ -1,18 +1,20 @@
-use super::{
-    BTreeMap, BodyRect, Content, InventoryRecord, NativeText, RenderingMemory, RuleError,
-    unavailable, word,
-};
-use crate::recovered_drawing::{BuildingWorld, DrawingServices, PictureObservation};
-use crate::recovered_text::{NumericServices, PascalString};
+//! The quickinfo panel (0x132b0c): direct item calculations and drawing output.
+//! File data is already loaded by content; no emulated I/O, stack or SANE calls.
+use super::{BTreeMap, BodyRect, Content, InventoryRecord, NativeText, RenderingMemory, RuleError};
 use crate::{
-    recovered_detail_ui::{DetailPlan, DetailReply, DetailRequest, DetailServices, quick_info},
-    recovered_files::{FileReply, FileRequest},
-    recovered_records::{ITEM_TABLE_ADDRESSES, RecordWrite},
+    recovered_detail_ui::{DetailEffect, DetailPlan},
+    recovered_drawing::DrawingEffect,
+    recovered_text::PascalString,
 };
-use centurions_content::{mission::OpeningMission, span};
+use centurions_content::{
+    mission::OpeningMission,
+    records::{InventoryModifier as Modifier, ItemDefinition, ItemPanelRecord},
+    span,
+};
 
-/// Original quickinfo with a bounded, read-only description stream and finite
-/// SANE arithmetic. This adapts Toolbox services; it does not execute Apple's ROM.
+mod drawing;
+use drawing::Panel;
+
 pub fn detail(
     content: &Content,
     mission: &OpeningMission,
@@ -21,55 +23,25 @@ pub fn detail(
     native: &NativeText,
     strings: &BTreeMap<i16, Vec<u8>>,
 ) -> Result<DetailPlan, RuleError> {
-    const FRAME: u32 = 0x700200;
-    let mut memory = RenderingMemory::default();
-    for (address, length) in [
-        (0x4358ce, 4),
-        (0x438788, 24),
-        (0x4389a4, 256),
-        (0x439598, 4),
-        (0x44260c, 256),
-        (0x44274c, 8),
-        (0x4434a6, 32),
-        (0x4435c6, 16),
-        (0x44374e, 58),
-        (0x4471e8, 32),
-        (0x45363c, 300),
-        (0x479ed8, 512),
-        (0x700000, 1024),
-    ] {
-        memory.insert_region(address, &vec![0; length]);
+    native.bytes(0x402900, 0x640)?;
+    // Retain the original adapter's admission of all three records before drawing.
+    for id in [0, item.id(), item.ammunition_id()?] {
+        content
+            .items
+            .get(usize::from(id.unsigned_abs()))
+            .ok_or("detail item unavailable")?;
     }
-    memory.insert_region(0x402900, native.bytes(0x402900, 0x640)?);
-    memory.insert_region(FRAME + 8, &(if stock { -1_i16 } else { 0 }).to_be_bytes());
-    memory.insert_region(FRAME + 10, &0_i16.to_be_bytes());
-    memory.insert_region(FRAME + 12, &item.id().to_be_bytes());
-    memory.insert_region(FRAME + 14, &0_i16.to_be_bytes());
-    memory.insert_region(if stock { 0x41fc74 } else { 0x448bd2 }, &item.0);
-    for id in [0, item.id(), word(&item.0, 4)?] {
-        let index = usize::from(id.unsigned_abs());
-        let definition = content.items.get(index).ok_or("detail item unavailable")?;
-        memory.insert_region(
-            ITEM_TABLE_ADDRESSES[index / 200] + (index % 200 * 150) as u32,
-            definition,
-        );
-    }
-    let definition = content
-        .items
-        .get(item.id().unsigned_abs() as usize)
-        .ok_or("detail item unavailable")?;
-    let spell = word(definition, 44)?;
+    let definition = crate::ammunition::definition(content, item.id())?;
+    let base = ItemDefinition(&definition);
+    let original = ItemPanelRecord(&definition);
+    let spell = base.spell()?;
     if (1101..4000).contains(&spell) {
         let attacks = &mission
             .combat
             .as_ref()
             .ok_or("detail spell table unavailable")?
             .attacks;
-        let packet = crate::combat::spells::load_packet(attacks, spell)?;
-        let offset = (spell / 1000 - 1) as usize * 2842
-            + (spell % 1000 / 100 - 1) as usize * 406
-            + (spell % 100 - 1) as usize * 58;
-        memory.insert_region(0x443788 + offset as u32, &packet);
+        crate::combat::spells::load_packet(attacks, spell)?;
     }
     let id = usize::from(item.id().unsigned_abs());
     let description = if id < 800 {
@@ -77,313 +49,243 @@ pub fn detail(
     } else {
         span(&mission.item_descriptions, (id - 800) * 256, 256)?
     };
-    quick_info(
-        &memory,
-        FRAME,
-        0,
-        256,
-        &mut Services {
-            strings,
-            description,
+    let has_ammunition = !stock && item.ammunition_id()? != 0;
+    let ammo_bytes = crate::ammunition::definition(
+        content,
+        if has_ammunition {
+            item.ammunition_id()?
+        } else {
+            0
         },
-    )
-}
-
-/// Read-only projection of updateodds161068. Scratch writes never enter the session.
-pub fn attack_estimate(
-    state: &crate::Session,
-    content: &Content,
-    body: i16,
-    native: &NativeText,
-    strings: &BTreeMap<i16, Vec<u8>>,
-) -> Result<DetailPlan, RuleError> {
-    const FRAME: u32 = 0x700200;
-    let combat = state.combat.as_ref().ok_or("estimate combat missing")?;
-    let actor = combat
-        .active_body()
-        .filter(|body| (0..state.warriors.len() as i16).contains(body))
-        .ok_or("estimate warrior missing")?;
-    let mut memory = RenderingMemory::default();
-    for (address, length) in [
-        (0x41f714, 2),
-        (0x439598, 4),
-        (0x4434b6, 4),
-        (0x45363c, 450),
-        (0x479ed8, 256),
-        (0x700000, 1024),
+    )?;
+    let ammunition = ItemDefinition(&ammo_bytes);
+    let ammo_panel = ItemPanelRecord(&ammo_bytes);
+    let modifier = |field: Modifier| i16::from(field.read(item));
+    let (required_level, armor, shield, quantity, capacity, range, accuracy, melee_accuracy) =
+        if stock {
+            (
+                original.required_level()?,
+                original.armor()?,
+                original.shield_chance()?,
+                base.supplied_quantity()?,
+                base.magazine_capacity()?,
+                original.range()?,
+                base.base_accuracy(),
+                base.base_melee_accuracy(),
+            )
+        } else {
+            (
+                modifier(Modifier::RequiredLevel),
+                original.armor()?.wrapping_add(modifier(Modifier::Armor)),
+                original
+                    .shield_chance()?
+                    .wrapping_add(modifier(Modifier::ShieldChance)),
+                item.quantity()?,
+                item.capacity()?,
+                original.range()?.wrapping_add(
+                    modifier(Modifier::Range)
+                        .wrapping_add(i16::from(ammo_panel.range_modifier()))
+                        .wrapping_add(ammo_panel.range()?),
+                ),
+                (modifier(Modifier::Accuracy).wrapping_add(i16::from(ammunition.base_accuracy())))
+                    as i8,
+                Modifier::MeleeAccuracy.read(item),
+            )
+        };
+    let mut panel = Panel::new(native, strings);
+    panel.start(i16::from_be_bytes(
+        native.bytes(0x402f3c, 2)?.try_into().unwrap(),
+    ));
+    for (vertical, value, plus) in [
+        (479, required_level, false),
+        (498, armor, false),
+        (517, original.durability(), true),
+        (536, shield, false),
+        (555, quantity, false),
+        (574, original.shield_cost()?, false),
     ] {
-        memory.insert_region(address, &vec![0; length]);
+        panel.number_at(450, vertical, value, plus)?;
     }
-    memory.insert_region(0x402f3c, native.bytes(0x402f3c, 2)?);
-    memory.insert_region(0x442576, &combat.difficulty.to_be_bytes());
-    memory.insert_region(0x4435d2, &actor.to_be_bytes());
-    memory.insert_region(
-        FRAME + 8,
-        &(if body >= 10 { body - 10 } else { -1 }).to_be_bytes(),
-    );
-    let warrior = &state.warriors[actor as usize];
-    memory.insert_region(0x448aa0 + actor as u32 * 3138, &warrior.bytes);
-    let equipment = if warrior.bytes[0x9dd] == 0 {
-        0x12e
-    } else {
-        0x12c
-    };
-    let equipped = word(&warrior.bytes, equipment)?;
-    if equipped != 0
-        && !warrior
-            .inventory()?
-            .iter()
-            .any(|item| item.id() == equipped && item.0[9] != 0)
-    {
-        return Err("estimate requires the original equipped-instance multiplier".into());
-    }
-    if warrior.bytes[0x9dd] != 0 && equipped == 0 {
-        return Err("estimate requires the original retained firearm damage context".into());
-    }
-    if body >= 10 {
-        let enemy = combat
-            .enemies
-            .records
-            .get((body - 10) as usize)
-            .ok_or("estimate target missing")?;
-        memory.insert_region(0x439d3c + (body - 10) as u32 * 288, &enemy.bytes);
-    }
-    for id in [
-        warrior.record().equipped_weapon()?,
-        word(&warrior.bytes, 0xca)?,
-        word(&warrior.bytes, 0x12c)?,
-        word(&warrior.bytes, 0x12e)?,
-        word(&warrior.bytes, 0x126)?,
-    ] {
-        let index = id.unsigned_abs() as usize;
-        if index / 200 >= ITEM_TABLE_ADDRESSES.len() {
-            return Err("estimate item family unavailable".into());
-        }
-        let definition = crate::ammunition::definition(content, id)?;
-        memory.insert_region(
-            ITEM_TABLE_ADDRESSES[index / 200] + (index % 200 * 150) as u32,
-            &definition,
+    // quickinfo rounds the factor to Single, then multiplies in extended precision.
+    let factor = (100_i32 + i32::from(item.damage_enhancement())) as f32 / 100.0;
+    let mut damage = base.missile_damage()?.wrapping_add(base.melee_damage()?);
+    if has_ammunition {
+        damage = damage.wrapping_add(
+            ammunition
+                .missile_damage()?
+                .wrapping_add(ammunition.melee_damage()?),
         );
     }
-    for (address, bytes) in [
-        (0x45363c, &state.ammunition_work.item),
-        (0x4536d2, &state.ammunition_work.ammo),
-        (0x453768, &state.ammunition_work.weapon),
+    let rounds = base.rounds_per_shot()?;
+    if rounds != 0 {
+        damage = damage.wrapping_mul(rounds);
+    }
+    for element in 0..7 {
+        damage = damage.wrapping_add(
+            ammunition
+                .elemental_damage(element)?
+                .wrapping_add(base.elemental_damage(element)?)
+                .wrapping_mul(rounds),
+        );
+    }
+    let damage = (f64::from(damage) * f64::from(factor)).trunc() as i32 as i16;
+    panel.draw(DrawingEffect::ForeColor(205));
+    panel.number_at(652, 479, damage.wrapping_mul(base.attack_count()?), false)?;
+    panel.draw(DrawingEffect::ForeColor(69));
+    panel.number_at(580, 479, damage, false)?;
+    for (vertical, value, plus) in [
+        (498, range, true),
+        (517, rounds, false),
+        (536, capacity, false),
+        (555, base.attack_count()?, false),
+        (
+            574,
+            i16::from(melee_accuracy).wrapping_add(i16::from(accuracy)),
+            true,
+        ),
     ] {
-        if let Some(bytes) = bytes {
-            memory.insert_region(address, bytes);
-        }
+        panel.number_at(580, vertical, value, plus)?;
     }
-    crate::recovered_detail_ui::update_odds(
-        &memory,
-        FRAME,
-        crate::recovered_attack::DamageFrame {
-            unmatched_multiplier_single_bits: 1_f32.to_bits(),
+    panel.draw(DrawingEffect::TextSize(10));
+    panel.draw(DrawingEffect::TextFont(10));
+    panel.draw(DrawingEffect::ForeColor(273));
+    special_information(&mut panel, &base, &original)?;
+    panel.draw(DrawingEffect::ForeColor(69));
+    panel.draw(DrawingEffect::BackPixelPattern(0));
+    panel.draw(DrawingEffect::ForeColor(69));
+    let mut bytes = description[1..].to_vec();
+    bytes.push(0);
+    panel.text_box(
+        0x479ed9,
+        bytes,
+        BodyRect {
+            top: 473,
+            left: 13,
+            bottom: 534,
+            right: 350,
         },
-        &mut Services {
-            strings,
-            description: &[],
-        },
-    )
-}
-
-struct Services<'a> {
-    strings: &'a BTreeMap<i16, Vec<u8>>,
-    description: &'a [u8],
-}
-
-impl NumericServices for Services<'_> {
-    fn number_to_string(&mut self, value: i32) -> Result<PascalString, RuleError> {
-        PascalString::from_payload(value.to_string().as_bytes())
-    }
-    fn string_to_number(&mut self, _: &PascalString) -> Result<i32, RuleError> {
-        unavailable()
-    }
-}
-impl DrawingServices for Services<'_> {
-    fn indexed_string(&mut self, resource: i16, index: i16) -> Result<PascalString, RuleError> {
-        super::Services {
-            strings: self.strings,
-        }
-        .indexed_string(resource, index)
-    }
-    fn color_icon(&mut self, id: i16) -> Result<u32, RuleError> {
-        Ok(u32::from(id as u16))
-    }
-    fn picture(&mut self, id: i16) -> Result<PictureObservation, RuleError> {
-        Ok(PictureObservation {
-            handle: u32::from(id as u16),
-            bounds: None,
-        })
-    }
-    fn current_world(&mut self) -> Result<(u32, u32), RuleError> {
-        unavailable()
-    }
-    fn new_world(&mut self, _: i16, _: BodyRect) -> Result<(i16, BuildingWorld), RuleError> {
-        unavailable()
-    }
-}
-impl DetailServices for Services<'_> {
-    fn observe(
-        &mut self,
-        request: &DetailRequest,
-        memory: &RenderingMemory,
-    ) -> Result<DetailReply, RuleError> {
-        let write = |address, bytes| DetailReply::Writes(vec![RecordWrite { address, bytes }]);
-        Ok(match request {
-            DetailRequest::GetPort { destination } => {
-                write(*destination, 0_u32.to_be_bytes().to_vec())
-            }
-            DetailRequest::GetForeColor { destination }
-            | DetailRequest::GetBackColor { destination } => write(*destination, vec![0; 6]),
-            DetailRequest::InsetRect {
-                pointer,
-                horizontal,
-                vertical,
-            } => {
-                let rect = memory.rect(*pointer)?;
-                let bytes = [
-                    rect.top.wrapping_add(*vertical),
-                    rect.left.wrapping_add(*horizontal),
-                    rect.bottom.wrapping_sub(*vertical),
-                    rect.right.wrapping_sub(*horizontal),
-                ]
-                .into_iter()
-                .flat_map(i16::to_be_bytes)
-                .collect();
-                write(*pointer, bytes)
-            }
-            DetailRequest::Sane {
-                opcode,
-                source,
-                destination,
-            } => write(
-                *destination,
-                arithmetic(memory, *opcode, *source, *destination)?,
-            ),
-            DetailRequest::File(FileRequest::Open { .. }) => {
-                DetailReply::File(FileReply::Handle(1))
-            }
-            DetailRequest::File(
-                FileRequest::Seek {
-                    handle: 1,
-                    origin: 0,
-                    ..
-                }
-                | FileRequest::Close(1),
-            ) => DetailReply::File(FileReply::Ignored),
-            DetailRequest::ReadFile {
-                handle: 1,
-                size: 256,
-                count: 1,
-                ..
-            } => DetailReply::File(FileReply::Read {
-                bytes_written: self.description.to_vec(),
-                elements_read: 1,
-            }),
-            _ => return unavailable(),
-        })
-    }
-}
-
-fn extended(memory: &RenderingMemory, pointer: u32) -> Result<f64, RuleError> {
-    let exponent = memory.word(pointer)?;
-    let significand =
-        (u64::from(memory.long(pointer + 2)?) << 32) | u64::from(memory.long(pointer + 6)?);
-    let value = if exponent & 0x7fff == 0 && significand == 0 {
-        0.
-    } else {
-        let fraction = (significand >> 1) as f64 * 2. + (significand & 1) as f64;
-        fraction
-            * 2_f64.powi(i32::from(exponent & 0x7fff) - 16383 - 63)
-            * if exponent & 0x8000 == 0 { 1. } else { -1. }
-    };
-    if !value.is_finite() {
-        return Err("nonfinite item display arithmetic".into());
-    }
-    Ok(value)
-}
-fn encode_extended(value: f64) -> Result<Vec<u8>, RuleError> {
-    if !value.is_finite() {
-        return Err("nonfinite item display arithmetic".into());
-    }
-    if value == 0. {
-        return Ok(vec![0; 10]);
-    }
-    let bits = value.to_bits();
-    let exponent = ((bits >> 52) & 0x7ff) as i32 - 1023;
-    if exponent == -1023 {
-        return Err("subnormal item display arithmetic".into());
-    }
-    let mut bytes = ((if value < 0. { 0x8000 } else { 0 }) | (exponent + 16383) as u16)
-        .to_be_bytes()
-        .to_vec();
-    bytes.extend((((bits & 0x000f_ffff_ffff_ffff) | 0x0010_0000_0000_0000) << 11).to_be_bytes());
-    Ok(bytes)
-}
-pub(crate) fn arithmetic(
-    memory: &RenderingMemory,
-    opcode: u16,
-    source: Option<u32>,
-    destination: u32,
-) -> Result<Vec<u8>, RuleError> {
-    let operation = opcode & 0xff;
-    let format = opcode & 0xff00;
-    if operation == 0x1c && format == 0x1000 {
-        let source = source.ok_or("arithmetic classification operand missing")?;
-        let value = f32::from_bits(memory.long(source)?);
-        if !value.is_finite() {
-            return Err("nonfinite arithmetic classification".into());
-        }
-        // Apple Numerics Manual, MC68000 Table20-2: signed classes4/5/6.
-        let class: i16 = if value == 0. {
-            4
-        } else if value.is_normal() {
-            5
+    );
+    panel.move_to(168, 551);
+    let label = if base.ammunition_caliber()? != 0 {
+        if has_ammunition {
+            panel.literal(0x402976)?;
+            let selection = ammunition.description_id()?;
+            let base = crate::rules::selection_base(selection);
+            panel.indexed(
+                base.wrapping_add(1),
+                selection.wrapping_sub(base).wrapping_add(1),
+            )?
         } else {
-            6
-        };
-        return Ok((if value.is_sign_negative() {
-            -class
-        } else {
-            class
-        })
-        .to_be_bytes()
-        .to_vec());
-    }
-    if operation == 0x16 {
-        return encode_extended(extended(memory, destination)?.trunc());
-    }
-    let source = source.ok_or("item display arithmetic operand missing")?;
-    let value = if operation == 0x10 {
-        extended(memory, source)?
-    } else {
-        match format {
-            0 => extended(memory, source)?,
-            0x1000 => f64::from(f32::from_bits(memory.long(source)?)),
-            0x2000 => f64::from(memory.word(source)? as i16),
-            0x2800 => f64::from(memory.long(source)? as i32),
-            _ => return unavailable(),
+            panel.literal(0x402964)?;
+            panel.indexed(142, base.ammunition_caliber()?)?
         }
+    } else if base.reserve_ammunition_kind()? != 0 {
+        panel.literal(0x40294e)?;
+        panel.indexed(142, base.reserve_ammunition_kind()?)?
+    } else if original.equipment_type() != 0 {
+        panel.literal(0x402938)?;
+        panel.indexed(-11000, i16::from(original.equipment_type()).wrapping_add(1))?
+    } else {
+        panel.literal(0x402922)?;
+        panel.indexed(-11000, base.category()?.wrapping_add(1))?
     };
-    if operation == 0x10 {
-        return match format {
-            0x1000 => Ok((value as f32).to_be_bytes().to_vec()),
-            0x2800 if (i32::MIN as f64..=i32::MAX as f64).contains(&value.round_ties_even()) => {
-                Ok((value.round_ties_even() as i32).to_be_bytes().to_vec())
-            }
-            _ => unavailable(),
-        };
+    panel.move_to(168, 571);
+    panel.draw(DrawingEffect::DrawString(label));
+    panel.icon(base.icon()?, 15);
+    if has_ammunition {
+        panel.icon(ammunition.icon()?, 65);
     }
-    if operation == 0x0e {
-        return encode_extended(value);
+    let mut animation = original.animation()?;
+    if has_ammunition && ammo_panel.animation()? != 0 {
+        animation = ammo_panel.animation()?;
     }
-    let current = extended(memory, destination)?;
-    encode_extended(match operation {
-        0 => current + value,
-        2 => current - value,
-        4 => current * value,
-        6 => current / value,
-        _ => return unavailable(),
-    })
+    if animation == 0 && original.target_mode()? != 0 {
+        animation = 1;
+    }
+    if animation != 0 {
+        panel.icon(animation.wrapping_add(9999), 115);
+    }
+    panel.finish();
+    Ok(panel.plan)
 }
+
+fn special_information(
+    panel: &mut Panel<'_>,
+    item: &ItemDefinition<'_>,
+    values: &ItemPanelRecord<'_>,
+) -> Result<(), RuleError> {
+    // Keep a local encoded text buffer because description_box changes it from
+    // C to Pascal between branches. Unknown subselectors retain those bytes.
+    let mut text = vec![0];
+    let effect = item.effect_selector()?;
+    let amount = item.spell()?;
+    if effect > 19 {
+        text = panel
+            .indexed(136, effect.wrapping_sub(19))?
+            .payload()
+            .to_vec();
+        text.push(0);
+        panel.description(&mut text)?;
+    }
+    if effect == -10 {
+        text = panel.native_c(0x402a3a)?;
+        append(
+            &mut text,
+            panel.indexed(133, amount.wrapping_sub(19))?.payload(),
+        );
+        panel.description(&mut text)?;
+    }
+    if (1101..4000).contains(&amount) {
+        text = panel.native_c(0x402a30)?;
+        let tier = amount % 1000 / 100 - 1;
+        let selection = amount % 100 - 1;
+        append(
+            &mut text,
+            panel
+                .indexed(
+                    (amount / 1000).wrapping_mul(1000).wrapping_add(tier),
+                    selection.wrapping_add(1),
+                )?
+                .payload(),
+        );
+        panel.description(&mut text)?;
+    }
+    if effect == 122 {
+        if let Some(address) = match amount {
+            1 => Some(0x402a12),
+            2 => Some(0x4029f2),
+            3 => Some(0x4029d2),
+            4 => Some(0x4029b2),
+            _ => None,
+        } {
+            text = panel.native_c(address)?;
+        }
+        panel.description(&mut text)?;
+    }
+    let (attributes, adjustment) = values.attribute_changes()?;
+    for attribute in attributes {
+        if (1..16).contains(&attribute) {
+            text = panel.native_c(if adjustment > 0 { 0x4029b0 } else { 0x402d2d })?;
+            let number = panel.convert_number(adjustment)?;
+            append(&mut text, number.payload());
+            append(&mut text, &panel.native_c(0x4029aa)?);
+            append(&mut text, panel.indexed(1201, attribute)?.payload());
+            panel.description(&mut text)?;
+        }
+    }
+    Ok(())
+}
+
+fn append(text: &mut Vec<u8>, suffix: &[u8]) {
+    text.truncate(
+        text.iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(text.len()),
+    );
+    text.extend(suffix.iter().take_while(|byte| **byte != 0));
+    text.push(0);
+}
+
+#[cfg(all(test, feature = "original-fixtures"))]
+#[path = "../../tests/unit/detail_reference.rs"]
+mod reference;

@@ -1,5 +1,12 @@
 use crate::{Content, Event, Presentation, RuleError, Session, story_inventory};
-use centurions_content::{Warrior, mission::long, span, word};
+mod scans;
+use centurions_content::{
+    Warrior,
+    records::{DevelopmentField as Field, LearnedScans, ProfessionProfile, RaceProfile},
+    span,
+};
+use scans::keep_spells;
+pub use scans::{SCAN_COSTS, ScanSelection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,8 +62,8 @@ pub fn editor_level_up(
     random: &mut LibraryRandom,
 ) -> Result<bool, RuleError> {
     let mut candidate = warrior.clone();
-    let level = word(&candidate.bytes, 0x3a)?.wrapping_add(1);
-    put_word(&mut candidate.bytes, 0x3a, level);
+    let level = candidate.record().level()?.wrapping_add(1);
+    Field::Level.write(&mut candidate.bytes, level);
     let bonus = advance_statistics(&mut candidate, races, profiles)?;
     random.next_value();
     *warrior = candidate;
@@ -69,56 +76,50 @@ fn advance_statistics(
     profiles: &[u8],
 ) -> Result<bool, RuleError> {
     let bytes = &mut warrior.bytes;
-    let level = word(bytes, 0x3a)?;
-    let race_index = word(bytes, 0x32)?;
-    let profile_index = word(bytes, 0x34)?;
+    let record = centurions_content::records::WarriorRecord::from_bytes(bytes);
+    let level = record.level()?;
+    let race_index = record.race()?;
+    let profile_index = record.profession()?;
     if race_index < 1 || profile_index < 1 {
         return Err(RuleError::Unsupported {
             action: "story.promotion",
             dependency: "zero profile retains external service context",
         });
     }
-    let race = span(races, (race_index as usize - 1) * 408, 408)?;
-    let profile = span(profiles, (profile_index as usize - 1) * 576, 576)?;
-    let mut points = word(race, 204)?
-        .wrapping_add(word(profile, 266)?)
+    let race = RaceProfile(span(races, (race_index as usize - 1) * 408, 408)?);
+    let profile = ProfessionProfile(span(profiles, (profile_index as usize - 1) * 576, 576)?);
+    let mut points = race
+        .action_points()?
+        .wrapping_add(profile.action_points()?)
         .wrapping_add(2);
     let mut bonus = false;
-    for unlock in &profile[432..442] {
+    for unlock in profile.action_unlock_levels() {
         if *unlock != 0 && i16::from(*unlock as i8) <= level {
             bonus |= i16::from(*unlock as i8) == level;
             points = points.wrapping_add(1);
         }
     }
     for index in 0..40 {
-        if word(profile, 138 + index * 2)? == level {
-            let offset = 0x5e + index * 2;
-            let value = word(bytes, offset)?;
-            put_word(
-                bytes,
-                offset,
-                if value > -1 {
-                    -1
-                } else {
-                    value.wrapping_sub(1)
-                },
-            );
+        if profile.condition_level(index)? == level {
+            let value = centurions_content::records::WarriorRecord::from_bytes(bytes)
+                .condition_duration(index)?;
+            centurions_content::records::WarriorRecordMut::from_bytes(bytes)
+                .set_condition_duration(
+                    index,
+                    if value > -1 {
+                        -1
+                    } else {
+                        value.wrapping_sub(1)
+                    },
+                );
         }
     }
-    let cap = word(race, 206)?.wrapping_mul(2);
+    let cap = race.action_limit()?.wrapping_mul(2);
     if points > cap {
         points = cap;
     }
-    put_word(bytes, 0x12, points);
-    for index in 0..12 {
-        let offset = 0xf4 + index * 2;
-        let value = word(bytes, offset)?.clamp(-99, 999);
-        put_word(bytes, offset, value);
-    }
-    for offset in [4, 6, 8, 10, 0x22, 12, 14] {
-        let value = word(bytes, offset)?.clamp(0, 999);
-        put_word(bytes, offset, value);
-    }
+    Field::ActionsPerRound.write(bytes, points);
+    crate::creation::clamp_development_fields(bytes)?;
     Ok(bonus)
 }
 
@@ -157,7 +158,7 @@ pub fn close(
         keep_spells(&mut warriors[member], attacks)?;
     }
     for warrior in &mut warriors {
-        warrior.bytes[0x9df] = 1;
+        warrior.record_mut().set_active_flag(1);
     }
     *library_random = next_library;
     Ok(Promotion {
@@ -189,24 +190,28 @@ fn promote_member(
         sounds: vec![],
         warnings: vec![],
     };
-    if warrior.stamina()? <= 0 || long(&warrior.bytes, 0x9ce)? >= 0 {
+    if warrior.stamina()? <= 0 || warrior.record().remaining_experience()? >= 0 {
         return Ok(result);
     }
-    let level = word(&warrior.bytes, 0x3a)?;
-    let remaining = long(&warrior.bytes, 0x9ce)?.wrapping_add(experience_threshold(level)?);
-    warrior.bytes[0x9ce..0x9d2].copy_from_slice(&remaining.to_be_bytes());
+    let level = warrior.record().level()?;
+    let remaining = warrior
+        .record()
+        .remaining_experience()?
+        .wrapping_add(experience_threshold(level)?);
+    warrior.record_mut().set_remaining_experience(remaining);
     result.sounds.push(3002);
     if level >= 7 && !registered {
         result.warnings.push(40);
         return Ok(result);
     }
-    put_word(&mut warrior.bytes, 0x3a, level.wrapping_add(1));
+    Field::Level.write(&mut warrior.bytes, level.wrapping_add(1));
     if library.next_value() < 15 && !registered {
         result.warnings.push(452);
     }
     advance_statistics(warrior, races, profiles)?;
     result.promoted = true;
-    result.select_spells = word(&warrior.bytes, 0x5a)? != 0 && word(&warrior.bytes, 0x36)? != 0;
+    result.select_spells =
+        warrior.record().maximum_psi()? != 0 && warrior.record().psi_school()? != 0;
     Ok(result)
 }
 
@@ -320,7 +325,7 @@ fn advance(state: &mut Session, content: &Content, first: usize) -> Result<Vec<E
         if result.promoted {
             events.push(Event::LevelAdvanced {
                 warrior: member,
-                level: word(&state.warriors[member].bytes, 0x3a)?,
+                level: state.warriors[member].record().level()?,
             });
         }
         if result.select_spells {
@@ -340,7 +345,7 @@ fn advance(state: &mut Session, content: &Content, first: usize) -> Result<Vec<E
     state.library_random_seed = library.seed;
     state.library_random_draws = library.draws;
     for warrior in &mut state.warriors {
-        warrior.bytes[0x9df] = 1;
+        warrior.record_mut().set_active_flag(1);
     }
     events.extend(crate::exploration::finish_story_page(state, content)?);
     Ok(events)
@@ -432,163 +437,10 @@ pub(crate) fn cache_scans(
     }
     let record = &state.warriors[member];
     state.psi_memory.as_mut().unwrap()[member * 80..(member + 1) * 80]
-        .copy_from_slice(&record.bytes[0xa76..0xac6]);
-    if let Some(index) = record.bytes[0x9f0..0xa21]
-        .iter()
-        .rposition(|selected| *selected != 0)
-    {
-        let school = word(&record.bytes, 0x36)? as usize - 1;
+        .copy_from_slice(LearnedScans(&record.bytes).shortcuts());
+    if let Some(index) = LearnedScans(&record.bytes).last_selected() {
+        let school = record.record().psi_school()? as usize - 1;
         state.attack_packet = Some(span(attacks, (school * 49 + index) * 58, 58)?.to_vec());
     }
     Ok(())
-}
-
-pub const SCAN_COSTS: [i16; 7] = [5, 7, 10, 15, 25, 40, 60];
-
-/// scanselect 0x15a9cc: normalized selection draft and original signed-WORD costs.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ScanSelection {
-    pub warrior: Warrior,
-    pub tier: usize,
-    pub remaining: i16,
-    highest_tier: i16,
-}
-
-impl ScanSelection {
-    pub fn new(warrior: &Warrior, profiles: &[u8]) -> Result<Self, RuleError> {
-        if word(&warrior.bytes, 0xac6)? == 0 || !(1..=4).contains(&word(&warrior.bytes, 0x36)?) {
-            return Err(RuleError::Unsupported {
-                action: "editor.scans",
-                dependency: "warrior cannot perform scans",
-            });
-        }
-        let profile = warrior.record().profession()?;
-        if profile < 1 {
-            return Err(RuleError::Invalid("scan MOS profile is unavailable".into()));
-        }
-        let profile = span(profiles, (profile as usize - 1) * 576, 576)?;
-        let highest_tier = word(profile, 90)?
-            .wrapping_add(word(profile, 96)?)
-            .wrapping_add(word(profile, 102)?);
-        let mut warrior = warrior.clone();
-        let remaining = normalize_scans(&mut warrior)?;
-        Ok(Self {
-            warrior,
-            tier: 0,
-            remaining,
-            highest_tier,
-        })
-    }
-
-    pub fn select_tier(&mut self, tier: usize) -> Result<(), RuleError> {
-        if tier >= 7 || tier as i16 + 1 > self.highest_tier {
-            return Err(RuleError::Unsupported {
-                action: "editor.scans",
-                dependency: "selected tier exceeds the warrior's MOS scan limit",
-            });
-        }
-        self.tier = tier;
-        Ok(())
-    }
-
-    pub fn toggle(&mut self, column: usize) -> Result<Option<i16>, RuleError> {
-        if column >= 7 {
-            return Err(RuleError::Invalid(
-                "scan column outside original matrix".into(),
-            ));
-        }
-        let cost = SCAN_COSTS[self.tier];
-        let bytes = &mut self.warrior.bytes;
-        let selected = bytes[0x9f0 + self.tier * 7 + column] != 0;
-        if !selected && self.remaining < cost {
-            return Ok(None);
-        }
-        let offset = 0x42 + self.tier * 2;
-        let count = word(bytes, offset)?;
-        bytes[0x9f0 + self.tier * 7 + column] = u8::from(!selected);
-        self.remaining = self
-            .remaining
-            .wrapping_add(if selected { cost } else { -cost });
-        put_word(
-            bytes,
-            offset,
-            count.wrapping_add(if selected { 1 } else { -1 }),
-        );
-        Ok(Some(if selected { 144 } else { 145 }))
-    }
-
-    pub fn finish(mut self, attacks: &[u8]) -> Result<Warrior, RuleError> {
-        finish_scans(&mut self.warrior, attacks)?;
-        Ok(self.warrior)
-    }
-}
-
-fn keep_spells(warrior: &mut Warrior, attacks: &[u8]) -> Result<(), RuleError> {
-    normalize_scans(warrior)?;
-    finish_scans(warrior, attacks)
-}
-
-fn normalize_scans(warrior: &mut Warrior) -> Result<i16, RuleError> {
-    let bytes = &mut warrior.bytes;
-    let level = word(bytes, 0x3a)?;
-    let mut available = level.wrapping_mul(level).wrapping_add(16);
-    for (row, cost) in SCAN_COSTS.into_iter().enumerate() {
-        for column in 0..7 {
-            let index = 0x9f0 + row * 7 + column;
-            if bytes[index] != 0 {
-                let next = available.wrapping_sub(cost);
-                if next > -1 {
-                    available = next;
-                } else {
-                    bytes[index] = 0;
-                }
-            }
-        }
-    }
-    Ok(available)
-}
-
-fn finish_scans(warrior: &mut Warrior, attacks: &[u8]) -> Result<(), RuleError> {
-    let bytes = &mut warrior.bytes;
-    bytes[0x9dc] = 0;
-    let school = word(bytes, 0x36)? - 1;
-    if !(0..4).contains(&school) {
-        return Err(RuleError::Unsupported {
-            action: "story.promotion",
-            dependency: "spell school outside loaded bands",
-        });
-    }
-    for row in 0..7 {
-        for column in 0..7 {
-            if bytes[0x9f0 + row * 7 + column] != 0 {
-                let spell = span(
-                    attacks,
-                    school as usize * 2842 + row * 406 + column * 58,
-                    58,
-                )?;
-                if word(spell, 40)? == 57 {
-                    bytes[0x9dc] = 1;
-                }
-            }
-        }
-    }
-    for index in 0..10 {
-        let offset = 0xa76 + index * 8;
-        let row = word(bytes, offset + 2)?;
-        let column = word(bytes, offset + 4)?;
-        if !(0..7).contains(&row) || !(0..7).contains(&column) {
-            return Err(RuleError::Unsupported {
-                action: "story.promotion",
-                dependency: "spell shortcut outside original selection matrix",
-            });
-        }
-        if bytes[0x9f0 + row as usize * 7 + column as usize] == 0 {
-            bytes[offset..offset + 8].fill(0);
-        }
-    }
-    Ok(())
-}
-
-fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
-    bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
 }

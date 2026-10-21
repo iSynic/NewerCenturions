@@ -1,8 +1,17 @@
-use crate::combat::{Combat, lifecycle, player_psi, put_word, spells, weapon_work};
+use crate::combat::{Combat, lifecycle, player_psi, spells, weapon_work};
 use crate::{Event, Phase, RandomState, RuleError, Session};
 use crate::{MedicalContinuation, MedicalOrigin, MedicalTarget, equipment, items};
 use centurions_content::{Content, mission::OpeningMission};
-use centurions_content::{Warrior, word};
+use centurions_content::{
+    Warrior,
+    records::{
+        AttackPacket, CharacterStatisticsMut, Condition, ItemDefinition, Statistic, WarriorRecord,
+        WarriorRecordMut,
+    },
+};
+
+mod preparation;
+use preparation::{prepared_packet, validate_packet};
 
 pub struct BeginRequest {
     pub warrior: usize,
@@ -36,93 +45,6 @@ fn unsupported(dependency: &'static str) -> RuleError {
         action: "combat.medical",
         dependency,
     }
-}
-
-fn prepared_packet(
-    content: &Content,
-    mission: &OpeningMission,
-    item: i16,
-) -> Result<Vec<u8>, RuleError> {
-    let weapon = content
-        .items
-        .get(item as usize)
-        .ok_or_else(|| RuleError::Invalid("needle definition missing".into()))?;
-    let ammunition = content
-        .items
-        .first()
-        .ok_or_else(|| RuleError::Invalid("empty ammunition definition missing".into()))?;
-    if weapon.len() != 150
-        || ammunition.len() != 150
-        || word(weapon, 26)? != 28
-        || word(weapon, 42)? != 699 - item
-        || word(weapon, 44)? != 1401
-        || word(weapon, 76)? != 1
-        || word(weapon, 36)? != 5
-        || word(weapon, 38)? != 1
-    {
-        return Err(unsupported("other medical item definition"));
-    }
-    let attacks = &mission
-        .combat
-        .as_ref()
-        .ok_or_else(|| RuleError::Invalid("medical attack content missing".into()))?
-        .attacks;
-    let mut packet = spells::load_packet(attacks, 1401)?;
-    packet[0] = weapon[77];
-    packet[17] = weapon[55];
-    packet[18] = weapon[53];
-    packet[2] = packet[2].wrapping_add(word(weapon, 60)?.wrapping_add(word(ammunition, 60)?) as u8);
-    packet[5] = packet[5]
-        .wrapping_add(weapon[81])
-        .wrapping_add(ammunition[81]);
-    put_word(
-        &mut packet,
-        34,
-        word(weapon, 62)?.wrapping_add(word(ammunition, 62)?),
-    );
-    if word(&packet, 34)? != 0 {
-        put_word(&mut packet, 32, 1);
-    }
-    for (destination, source) in [
-        (23, 140),
-        (24, 64),
-        (25, 66),
-        (26, 68),
-        (27, 70),
-        (28, 72),
-        (29, 74),
-    ] {
-        packet[destination] = word(weapon, source)?.wrapping_add(word(ammunition, source)?) as u8;
-    }
-    for (destination, source) in [(36, 12), (38, 14)] {
-        let value = if word(ammunition, source)? != 0 {
-            word(ammunition, source)?
-        } else {
-            word(weapon, source)?
-        };
-        put_word(&mut packet, destination, value);
-    }
-    packet[1] = word(weapon, 56)?.wrapping_add(word(ammunition, 56)?) as u8;
-    if word(ammunition, 56)? != 0 {
-        packet[1] = word(ammunition, 56)? as u8;
-    }
-    packet[31] = weapon[59];
-    if word(ammunition, 58)? != 0 {
-        packet[31] = word(ammunition, 58)? as u8;
-    }
-    validate_packet(&packet)?;
-    Ok(packet)
-}
-
-fn validate_packet(packet: &[u8]) -> Result<(), RuleError> {
-    const PREPARED: [u8; 58] = [
-        1, 1, 4, 0, 0, 0, 0, 0, 0, 3, 0, 8, 16, 0, 0, 0, 0, 15, 6, 8, 8, 1, 1, 0, 0, 0, 0, 0, 0, 0,
-        10, 1, 0, 0, 0, 0, 1, 175, 1, 174, 0, 57, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0,
-    ];
-    if packet != PREPARED {
-        return Err(unsupported("other prepared medical attack"));
-    }
-    Ok(())
 }
 
 pub fn begin(
@@ -160,18 +82,18 @@ pub fn begin(
         .cloned()
         .ok_or_else(|| RuleError::Invalid("medical inventory slot missing".into()))?;
     if !(700..=703).contains(&item.id())
-        || word(&item.0, 4)? != 0
-        || word(&item.0, 6)? != 1
+        || item.ammunition_id()? != 0
+        || item.capacity()? != 1
         || item.0[8] != 0
-        || item.0[9] != 0
-        || !matches!(item.0[10], 24 | 28)
+        || item.equipment_flag() != 0
+        || !matches!(item.category_code(), 24 | 28)
         || item.0[11..13].iter().any(|value| *value != 0)
         || item.0[13] != 1
         || item.0[14..].iter().any(|value| *value != 0)
     {
         return Err(unsupported("other owned medical item"));
     }
-    let quantity = word(&item.0, 2)?;
+    let quantity = item.quantity()?;
     if quantity <= 0 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
@@ -197,13 +119,14 @@ pub fn begin(
         ));
     }
     let mut result = warrior.clone();
-    put_word(
-        &mut result.bytes,
-        0x132 + request.slot * 22 + 2,
-        quantity.wrapping_sub(1),
-    );
-    let weight = word(&result.bytes, 0x9d6)?.wrapping_sub(word(definition, 36)?);
-    put_word(&mut result.bytes, 0x9d6, weight);
+    result
+        .record_mut()
+        .set_inventory_quantity(request.slot, quantity.wrapping_sub(1));
+    let weight = result
+        .record()
+        .carried_weight()?
+        .wrapping_sub(ItemDefinition(definition).unit_weight()?);
+    result.record_mut().set_carried_weight(weight);
     if quantity == 1 {
         items::remove_inventory_slot(&mut result, request.slot)?;
     }
@@ -212,11 +135,11 @@ pub fn begin(
     Ok(BeginResult {
         warrior: result,
         weapon_work: work,
-        loaded_item_field32: word(definition, 32)?,
+        loaded_item_field32: ItemDefinition(definition).retained_field32()?,
         packet,
         identity: [0, 3, 0],
         // Combatchoice1190b8 replaces the outdoor power with the weapon burst count.
-        count: word(definition, 76)?,
+        count: ItemDefinition(definition).attack_count()?,
         events: if quantity == 1 {
             vec![Event::Sound { resource_id: 655 }]
         } else {
@@ -280,13 +203,11 @@ pub fn begin_learned_heal(
     }
     combat.weapon_work.armor_filter()?;
     let mut result = warrior.clone();
-    let w = &mut result.bytes;
-    let remaining = word(w, 0x58)?.wrapping_sub(cost);
-    put_word(w, 0x58, remaining);
-    let casts = i32::from_be_bytes(w[0xa66..0xa6a].try_into().unwrap()).wrapping_add(1);
-    w[0xa66..0xa6a].copy_from_slice(&casts.to_be_bytes());
-    let counter = word(w, 0xac8)?.wrapping_add(1);
-    put_word(w, 0xac8, counter);
+    let remaining = result.record().psi_points()?.wrapping_sub(cost);
+    result.record_mut().set_psi_points(remaining);
+    CharacterStatisticsMut(&mut result.bytes).add(Statistic::ScansCast, 1);
+    let counter = result.record().scans_used()?.wrapping_add(1);
+    result.record_mut().set_scans_used(counter);
     let mut events = vec![
         Event::Sound { resource_id: 141 },
         Event::Sound { resource_id: 20002 },
@@ -315,7 +236,7 @@ fn learned_packet(mission: &OpeningMission, spell: i16) -> Result<Vec<u8>, RuleE
         .ok_or("learned healing content missing")?
         .attacks;
     let packet = spells::load_packet(attacks, spell)?;
-    if packet[1] != 1 || word(&packet, 40)? != 57 {
+    if AttackPacket(&packet).targeting_mode() != 1 || AttackPacket(&packet).effect()? != 57 {
         return Err(unsupported("scan has no original portrait healing handler"));
     }
     Ok(packet)
@@ -403,14 +324,19 @@ fn resolve_inner(
     let (member, portrait, mut events) = match *target {
         MedicalTarget::ConfirmedCancel => {
             let w = &mut warriors[pending.actor].bytes;
-            let movement = word(w, 0x3c)?.wrapping_sub(3).max(0);
-            put_word(w, 0x3c, movement);
+            let movement = WarriorRecord::from_bytes(w)
+                .movement_points()?
+                .wrapping_sub(3)
+                .max(0);
+            WarriorRecordMut::from_bytes(w).set_movement_points(movement);
             if pending.origin == MedicalOrigin::LearnedHeal {
                 let refund = pending.power.wrapping_mul(4).wrapping_sub(1);
-                let points = word(w, 0x58)?.wrapping_add(refund);
-                let counter = word(w, 0xac8)?.wrapping_sub(1);
-                put_word(w, 0x58, points);
-                put_word(w, 0xac8, counter);
+                let points = WarriorRecord::from_bytes(w)
+                    .psi_points()?
+                    .wrapping_add(refund);
+                let counter = WarriorRecord::from_bytes(w).scans_used()?.wrapping_sub(1);
+                WarriorRecordMut::from_bytes(w).set_psi_points(points);
+                WarriorRecordMut::from_bytes(w).set_scans_used(counter);
             }
             return Ok(MedicalResolution {
                 events: vec![
@@ -425,7 +351,7 @@ fn resolve_inner(
                 .get(warrior)
                 .ok_or_else(|| RuleError::Invalid("medical portrait outside party".into()))?
                 .bytes;
-            if !(-9..=0).contains(&word(w, 0x50)?) {
+            if !(-9..=0).contains(&WarriorRecord::from_bytes(w).stamina()?) {
                 return Err(RuleError::Refused {
                     feedback: vec![crate::feedback::NativeFeedback::Sound { resource_id: 143 }],
                 });
@@ -467,10 +393,15 @@ fn resolve_inner(
                 ));
             }
             let w = &mut warriors[pending.actor].bytes;
-            let movement = word(w, 0x3c)?.wrapping_sub(3).max(0);
-            let ap = word(w, 0x40)?.wrapping_sub(2);
-            put_word(w, 0x3c, movement);
-            put_word(w, 0x40, ap);
+            let movement = WarriorRecord::from_bytes(w)
+                .movement_points()?
+                .wrapping_sub(3)
+                .max(0);
+            let ap = WarriorRecord::from_bytes(w)
+                .action_points()?
+                .wrapping_sub(2);
+            WarriorRecordMut::from_bytes(w).set_movement_points(movement);
+            WarriorRecordMut::from_bytes(w).set_action_points(ap);
             (
                 body as usize,
                 false,
@@ -595,17 +526,17 @@ fn restore_portrait(
     combat.map.tiles[cell] = member as i16;
     combat.order[initiative] = member as i16;
     let w = &mut warriors[member].bytes;
-    if word(w, 0x6a)? >= 0 {
-        put_word(w, 0x6a, 3);
+    if WarriorRecord::from_bytes(w).condition(Condition::MovingSlowly)? >= 0 {
+        WarriorRecordMut::from_bytes(w).set_condition(Condition::MovingSlowly, 3);
     }
-    w[0x9de] = 0;
-    put_word(w, 0x10, 0);
-    put_word(w, 0x18, -1);
-    w[0x9df] = 1;
-    put_word(w, 0x14, 1);
-    if word(w, 0x68)? >= 0 {
-        put_word(w, 0x68, 2);
+    WarriorRecordMut::from_bytes(w).set_bleeding_flag(0);
+    WarriorRecordMut::from_bytes(w).set_faction(0);
+    WarriorRecordMut::from_bytes(w).set_target_body(-1);
+    WarriorRecordMut::from_bytes(w).set_active_flag(1);
+    WarriorRecordMut::from_bytes(w).set_damage_marker(1);
+    if WarriorRecord::from_bytes(w).condition(Condition::ScanBlocked)? >= 0 {
+        WarriorRecordMut::from_bytes(w).set_condition(Condition::ScanBlocked, 2);
     }
-    put_word(w, 0x20, initiative as i16);
+    WarriorRecordMut::from_bytes(w).set_defeated_marker(initiative as i16);
     Ok(())
 }

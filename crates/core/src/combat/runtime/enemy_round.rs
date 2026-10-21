@@ -1,7 +1,7 @@
 //! Enemy round in the original combat execution order.
 use super::death::enemy_death_feedback;
 use super::{FieldActor, collide_fields_impl};
-use crate::combat::{Combat, lifecycle, put_word};
+use crate::combat::{Combat, lifecycle};
 use crate::{Event, RandomState, RuleError};
 use centurions_content::Warrior;
 
@@ -80,24 +80,24 @@ pub(super) fn reduce_enemy_round_impl(
     let mut events = Vec::new();
     let mut last_defeated_body = None;
     for index in 0..c.enemies.records.len() {
-        let m = &mut c.enemies.records[index];
-        for o in 0xb2..0xda {
-            if (m.bytes[o] as i8) > 0 {
-                m.bytes[o] -= 1;
-            }
-        }
-        c.enemies.records[index].bytes[0x105] = 0;
+        let enemy = &mut c.enemies.records[index];
+        enemy.record_mut().decrement_temporary_conditions();
+        enemy.record_mut().clear_damage_marker();
         if let Some(heal) =
             crate::combat::natural_conditions::enemy_poison_heal(&c.enemies.records[index])?
         {
-            put_word(&mut c.enemies.records[index].bytes, 0x110, heal.health);
-            c.enemies.records[index].bytes[0x105] = 1;
+            c.enemies.records[index]
+                .record_mut()
+                .set_stamina(heal.health);
+            c.enemies.records[index].record_mut().mark_damaged();
             events.push(Event::Sound { resource_id: 624 });
         }
         if let Some(tick) =
             crate::combat::natural_conditions::enemy_drain_tick(&c.enemies.records[index].bytes)?
         {
-            put_word(&mut c.enemies.records[index].bytes, 0x110, tick.health);
+            c.enemies.records[index]
+                .record_mut()
+                .set_stamina(tick.health);
             events.push(Event::Sound { resource_id: 107 });
             if tick.killed {
                 let feedback = enemy_death_feedback(&c.enemies.records[index], index as i16 + 10)?;
@@ -109,8 +109,10 @@ pub(super) fn reduce_enemy_round_impl(
         if let Some(tick) =
             crate::combat::natural_conditions::enemy_poison_tick(&c.enemies.records[index])?
         {
-            put_word(&mut c.enemies.records[index].bytes, 0x110, tick.health);
-            c.enemies.records[index].bytes[0x105] = 1;
+            c.enemies.records[index]
+                .record_mut()
+                .set_stamina(tick.health);
+            c.enemies.records[index].record_mut().mark_damaged();
             events.push(Event::Sound { resource_id: 104 });
             if tick.killed {
                 let feedback = enemy_death_feedback(&c.enemies.records[index], index as i16 + 10)?;
@@ -150,7 +152,7 @@ pub(super) fn reduce_enemy_round_impl(
                 });
             }
         }
-        c.enemies.records[index].bytes[0x105] = 0;
+        c.enemies.records[index].record_mut().clear_damage_marker();
     }
     // The native loop also visits the known zero records after the represented bodies.
     if c.enemies.records.len() < 100 {

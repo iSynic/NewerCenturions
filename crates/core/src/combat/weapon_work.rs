@@ -1,5 +1,5 @@
 use crate::RuleError;
-use centurions_content::word;
+use centurions_content::records::ItemDefinition;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,8 +24,8 @@ impl WeaponWork {
 
     pub fn load_weapon(&mut self, weapon: &[u8]) -> Result<(), RuleError> {
         validate_record(weapon)?;
-        let sound = word(weapon, 0x0e)?;
-        let armor_filter = word(weapon, 0x88)?;
+        let sound = ItemDefinition(weapon).impact_sound()?;
+        let armor_filter = ItemDefinition(weapon).hit_roll_filter()?;
         self.sound = Some(sound);
         self.weapon_armor_filter = Some(armor_filter);
         Ok(())
@@ -33,7 +33,7 @@ impl WeaponWork {
 
     pub fn load_ammunition(&mut self, ammunition: &[u8]) -> Result<(), RuleError> {
         validate_record(ammunition)?;
-        self.ammunition_armor_filter = Some(word(ammunition, 0x88)?);
+        self.ammunition_armor_filter = Some(ItemDefinition(ammunition).hit_roll_filter()?);
         Ok(())
     }
 
@@ -48,7 +48,7 @@ impl WeaponWork {
     pub fn prepare(&mut self, weapon: &[u8], ammunition: &[u8]) -> Result<(), RuleError> {
         let mut next = *self;
         next.load_pair(weapon, ammunition)?;
-        let sound = word(ammunition, 0x0e)?;
+        let sound = ItemDefinition(ammunition).impact_sound()?;
         if sound != 0 {
             next.sound = Some(sound);
         }

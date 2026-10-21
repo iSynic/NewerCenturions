@@ -1,5 +1,5 @@
 use crate::{RandomState, RuleError};
-use centurions_content::{Warrior, span, word};
+use centurions_content::{Warrior, span};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartyOrder {
@@ -27,10 +27,10 @@ pub fn initiative(
     let mut marked = 0_i8;
     for (index, warrior) in warriors.iter().enumerate() {
         span(&warrior.bytes, 0, 3138)?;
-        speeds.push(word(&warrior.bytes, 0x9e8)?);
+        speeds.push(warrior.record().quickness()?);
         if warrior.stamina()? > 0 {
             living.push(index as i16);
-            marked += i8::from(word(&warrior.bytes, 0x90)? != 0);
+            marked += i8::from(warrior.record().automatic_mode()? != 0);
         }
     }
     let bound = warriors.len() as i16 - i16::from(unavailable)
@@ -113,8 +113,9 @@ pub fn initiative(
     let mut next_warriors = warriors.to_vec();
     for (slot, body) in order.iter().enumerate().skip(1) {
         if (0..6).contains(body) {
-            next_warriors[*body as usize].bytes[0x20..0x22]
-                .copy_from_slice(&(slot as i16).to_be_bytes());
+            next_warriors[*body as usize]
+                .record_mut()
+                .set_defeated_marker(slot as i16);
         }
     }
     *random = next_random;

@@ -212,15 +212,6 @@ pub fn upgrade(
     upgrade_inner(memory, frame, maximum_polls, services, false)
 }
 
-/// The shared command boundary presents warnings after the native record effects.
-pub(crate) fn upgrade_rules(
-    memory: &RenderingMemory,
-    frame: u32,
-    services: &(impl InventoryServices + ?Sized),
-) -> Result<InventoryPlan, RuleError> {
-    upgrade_inner(memory, frame, 0, services, true)
-}
-
 fn upgrade_inner(
     memory: &RenderingMemory,
     frame: u32,

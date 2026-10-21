@@ -1,5 +1,4 @@
 use crate::{Content, Event, Phase, RuleError, Session, combat, story_health, story_inventory};
-use centurions_content::word;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Stage {
@@ -29,12 +28,12 @@ pub(crate) fn begin(
         .warriors
         .iter()
         .filter(|warrior| {
-            warrior.stamina().unwrap_or(0) < 1 || word(&warrior.bytes, 0x90).unwrap_or(0) < 0
+            warrior.stamina().unwrap_or(0) < 1 || warrior.record().automatic_mode().unwrap_or(0) < 0
         })
         .count() as i8;
     state.warriors = story_inventory::normalize_story_loot(&state.warriors)?;
     for warrior in &mut state.warriors {
-        warrior.bytes[0x9df] = 1;
+        warrior.record_mut().set_active_flag(1);
     }
     let mut health = story_health::context(
         &state.warriors,
@@ -46,8 +45,8 @@ pub(crate) fn begin(
     let arena = state.combat.as_mut().ok_or("cleanup combat missing")?;
     arena.unavailable = unavailable;
     for record in &mut arena.enemies.records {
-        if word(&record.bytes, 0x5a)? != -1 {
-            record.bytes[0x110..0x112].fill(0);
+        if record.record().survivor_marker()? != -1 {
+            record.record_mut().set_stamina(0);
         }
     }
     state
@@ -103,9 +102,9 @@ pub(crate) fn confirm(state: &mut Session, content: &Content) -> Result<Vec<Even
         .iter_mut()
         .take(state.ally_count)
     {
-        if word(record, 0x26)? < 200 {
-            let weapon = [record[0x26], record[0x27]];
-            record[0x4e..0x50].copy_from_slice(&weapon);
+        if EnemyRecord::from_bytes(record).primary_weapon()? < 200 {
+            let weapon = EnemyRecord::from_bytes(record).primary_weapon()?;
+            EnemyRecordMut::from_bytes(record).set_selected_item(weapon);
         }
     }
     state.retain_npcs();
@@ -149,3 +148,4 @@ pub(crate) fn validate(state: &Session) -> Result<(), RuleError> {
         _ => Ok(()),
     }
 }
+use centurions_content::records::{EnemyRecord, EnemyRecordMut};

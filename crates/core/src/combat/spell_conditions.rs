@@ -1,5 +1,10 @@
 use crate::{RandomState, RuleError};
-use centurions_content::{Warrior, combat::MonsterRecord, span, word};
+use centurions_content::{
+    Warrior,
+    combat::MonsterRecord,
+    records::{Condition, EnemyRecord, EnemyRecordMut, WarriorRecord, WarriorRecordMut},
+    span, word,
+};
 
 /// Recovered conditions retain signed additions at their original record widths.
 pub fn apply(
@@ -19,7 +24,7 @@ pub fn apply(
         });
     }
     add_duration(target, monster, effect, duration)?;
-    if !monster && word(target, 0x9a)? != 0 {
+    if !monster && WarriorRecord::from_bytes(target).condition(Condition::ReflectingScans)? != 0 {
         random.bound(100);
     }
     follow_up(target, monster, effect)
@@ -35,18 +40,18 @@ pub(crate) fn add_duration(
         return Err(RuleError::Invalid("condition duration input".into()));
     }
     if monster {
-        let offset = 0xb2 + (effect as usize - 1);
-        let previous = i16::from(target[offset] as i8);
+        let index = effect as usize - 1;
+        let previous = EnemyRecord::from_bytes(target).condition_duration(index);
         let total = previous.wrapping_add(duration);
         if total.wrapping_abs() < 125 && previous >= 0 {
-            target[offset] = (previous as u8).wrapping_add(duration as u8);
+            EnemyRecordMut::from_bytes(target).set_condition_duration(index, total);
         }
     } else {
-        let offset = 0x5e + (effect as usize - 1) * 2;
-        let previous = word(target, offset)?;
+        let index = effect as usize - 1;
+        let previous = WarriorRecord::from_bytes(target).condition_duration(index)?;
         let total = previous.wrapping_add(duration);
         if total < 100 && previous >= 0 {
-            target[offset..offset + 2].copy_from_slice(&total.to_be_bytes());
+            WarriorRecordMut::from_bytes(target).set_condition_duration(index, total);
         }
     }
     Ok(())
@@ -57,36 +62,42 @@ pub(crate) fn follow_up(target: &mut [u8], monster: bool, effect: i16) -> Result
     match effect {
         2 => {
             if monster {
-                target[0x106] = 0;
+                EnemyRecordMut::from_bytes(target).set_movement_points(0);
             } else {
-                target[0x3c..0x3e].fill(0);
+                WarriorRecordMut::from_bytes(target).set_movement_points(0);
             }
         }
         3 | 7 => {
             if monster {
-                target[0x106] = ((target[0x106] as i8) / 2) as u8;
+                let movement = EnemyRecord::from_bytes(target).movement_points() / 2;
+                EnemyRecordMut::from_bytes(target).set_movement_points(movement);
             } else {
-                let movement = word(target, 0x3c)? / 2;
-                target[0x3c..0x3e].copy_from_slice(&movement.to_be_bytes());
+                let movement = WarriorRecord::from_bytes(target).movement_points()? / 2;
+                WarriorRecordMut::from_bytes(target).set_movement_points(movement);
             }
         }
         10 => {
             if monster {
-                if (target[0x90] as i8) > 100 || target[0xcb] != 0 {
-                    target[0xb5] = 0;
+                if EnemyRecord::from_bytes(target).saving_throw(5) > 100
+                    || EnemyRecord::from_bytes(target).condition(Condition::ComputerControl) != 0
+                {
+                    EnemyRecordMut::from_bytes(target).set_condition(Condition::Poisoned, 0);
                 }
-            } else if word(target, 0x90)? < 0 {
-                target[0x64..0x66].fill(0);
+            } else if WarriorRecord::from_bytes(target).automatic_mode()? < 0 {
+                WarriorRecordMut::from_bytes(target).set_condition(Condition::Poisoned, 0);
             }
         }
-        26 if !monster && word(target, 0x50)? < -9 => {
-            target[0x90..0x92].copy_from_slice(&(-1_i16).to_be_bytes());
-            let health = word(target, 0x52)? / 4;
-            target[0x50..0x52].copy_from_slice(&health.to_be_bytes());
+        26 if !monster && WarriorRecord::from_bytes(target).stamina()? < -9 => {
+            WarriorRecordMut::from_bytes(target).set_automatic_mode(-1);
+            let health = WarriorRecord::from_bytes(target).maximum_stamina()? / 4;
+            WarriorRecordMut::from_bytes(target).set_stamina(health);
         }
-        64 if !monster && (word(target, 0x50)? < -9 || word(target, 0x90)? != 0) => {
-            target[0x90..0x92].fill(0);
-            target[0x50..0x52].copy_from_slice(&(-9_i16).to_be_bytes());
+        64 if !monster
+            && (WarriorRecord::from_bytes(target).stamina()? < -9
+                || WarriorRecord::from_bytes(target).automatic_mode()? != 0) =>
+        {
+            WarriorRecordMut::from_bytes(target).set_automatic_mode(0);
+            WarriorRecordMut::from_bytes(target).set_stamina(-9);
         }
         _ => {}
     }
@@ -102,41 +113,38 @@ pub(crate) fn change_allegiance(
     caster: usize,
 ) -> Result<i8, RuleError> {
     let side = if caster < 10 {
-        word(
-            &warriors.get(caster).ok_or("charm caster missing")?.bytes,
-            0x10,
-        )?
+        warriors
+            .get(caster)
+            .ok_or("charm caster missing")?
+            .record()
+            .faction()?
     } else {
-        word(
-            &enemies
-                .get(caster - 10)
-                .ok_or("charm caster missing")?
-                .bytes,
-            0xe,
-        )?
+        enemies
+            .get(caster - 10)
+            .ok_or("charm caster missing")?
+            .record()
+            .faction()?
     };
     let monster = target >= 10;
-    let bytes = if monster {
-        &mut enemies
-            .get_mut(target - 10)
-            .ok_or("charm target missing")?
-            .bytes
-    } else {
-        &mut warriors
-            .get_mut(target)
-            .ok_or("charm target missing")?
-            .bytes
-    };
-    let offset = if monster { 0xe } else { 0x10 };
-    let previous = word(bytes, offset)?;
-    if side != 0 || previous != 0 {
-        if monster {
-            bytes[0x10c..0x10e].copy_from_slice(&(-1_i16).to_be_bytes());
-        } else if side != 0 && previous != side {
-            bytes[0x18..0x1a].copy_from_slice(&(-1_i16).to_be_bytes());
+    let previous = if monster {
+        let enemy = enemies.get_mut(target - 10).ok_or("charm target missing")?;
+        let previous = enemy.record().faction()?;
+        if side != 0 || previous != 0 {
+            enemy.record_mut().set_target_body(-1);
+            enemy.record_mut().set_faction(side);
         }
-        bytes[offset..offset + 2].copy_from_slice(&side.to_be_bytes());
-    }
+        previous
+    } else {
+        let warrior = warriors.get_mut(target).ok_or("charm target missing")?;
+        let previous = warrior.record().faction()?;
+        if side != 0 || previous != 0 {
+            if side != 0 && previous != side {
+                warrior.record_mut().set_target_body(-1);
+            }
+            warrior.record_mut().set_faction(side);
+        }
+        previous
+    };
     Ok(if monster {
         0
     } else {

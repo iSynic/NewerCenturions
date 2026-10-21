@@ -1,6 +1,9 @@
 use crate::RuleError;
-use crate::combat::{Combat, put_word};
-use centurions_content::{Warrior, word};
+use crate::combat::Combat;
+use centurions_content::{
+    Warrior,
+    records::{CharacterStatisticsMut, Statistic},
+};
 
 pub fn kill_body(
     combat: &mut Combat,
@@ -9,28 +12,21 @@ pub fn kill_body(
 ) -> Result<(), RuleError> {
     combat.pending_last_defeated = Some(body);
     let (position, under) = if (0..6).contains(&body) {
-        let w = &mut warriors[body as usize].bytes;
-        if word(w, 0x10)? == 0 && word(w, 0x90)? < 1 {
+        let warrior = &mut warriors[body as usize];
+        if warrior.record().faction()? == 0 && warrior.record().automatic_mode()? < 1 {
             combat.unavailable = combat.unavailable.wrapping_add(1);
         }
-        w[0x9df] = 0;
-        let (offset, bleeding) = if word(w, 0x50)? < -9 {
-            (0xa5e, false)
+        warrior.record_mut().set_active_flag(0);
+        let statistic = if warrior.record().stamina()? < -9 {
+            Statistic::Deaths
         } else {
-            (0xa62, true)
+            warrior.record_mut().set_bleeding_flag(1);
+            Statistic::Knockouts
         };
-        if bleeding {
-            w[0x9de] = 1;
-        }
-        let value = i32::from_be_bytes(w[offset..offset + 4].try_into().unwrap()).wrapping_add(1);
-        w[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
-        put_word(w, 0x20, -1);
-        put_word(w, 0x90, 0);
-        for offset in (0x5e..0xae).step_by(2) {
-            if word(w, offset)? > 0 {
-                put_word(w, offset, 0);
-            }
-        }
+        CharacterStatisticsMut(&mut warrior.bytes).add(statistic, 1);
+        warrior.record_mut().set_defeated_marker(-1);
+        warrior.record_mut().set_automatic_mode(0);
+        warrior.record_mut().clear_temporary_conditions()?;
         (
             combat.squad.positions[body as usize],
             combat.squad.under_tiles[body as usize],
@@ -70,13 +66,13 @@ pub fn kill_body(
         combat.turn_origin = None;
     }
     for warrior in warriors {
-        if word(&warrior.bytes, 0x18)? == body {
-            put_word(&mut warrior.bytes, 0x18, -1);
+        if warrior.record().target_body()? == body {
+            warrior.record_mut().set_target_body(-1);
         }
     }
     for monster in &mut combat.enemies.records {
-        if word(&monster.bytes, 0x10c)? == body {
-            put_word(&mut monster.bytes, 0x10c, -1);
+        if monster.record().target_body()? == body {
+            monster.record_mut().set_target_body(-1);
         }
     }
     Ok(())
@@ -133,11 +129,11 @@ pub fn destroy_enemy(c: &mut Combat, index: usize) -> Result<(), RuleError> {
     }
     // destroymonster calls bodyfield for every supported footprint, including signed sizes.
     let restored = super::footprint::restore(&c.map, monster, p)?;
-    let m = &mut c.enemies.records[index].bytes;
-    put_word(m, 0x110, 0);
-    put_word(m, 0xe, 0);
-    m[0x106] = 0;
-    m[0xb2..0xda].fill(0);
+    let mut enemy = c.enemies.records[index].record_mut();
+    enemy.set_stamina(0);
+    enemy.set_faction(0);
+    enemy.set_movement_points(0);
+    enemy.clear_conditions();
     c.map = restored;
     for entry in c.order.iter_mut().skip(1) {
         if *entry == index as i16 + 10 {
@@ -145,8 +141,8 @@ pub fn destroy_enemy(c: &mut Combat, index: usize) -> Result<(), RuleError> {
         }
     }
     for m in &mut c.enemies.records {
-        if word(&m.bytes, 0x10c)? == index as i16 {
-            put_word(&mut m.bytes, 0x10c, -1);
+        if m.record().target_body()? == index as i16 {
+            m.record_mut().set_target_body(-1);
         }
     }
     Ok(())

@@ -1,7 +1,10 @@
 use crate::combat::{player_psi, runtime, spells};
 use crate::{Event, Phase, PsiMenuChoice, RuleError, Session};
 use centurions_content::mission::OpeningMission;
-use centurions_content::{Content, word};
+use centurions_content::{
+    Content,
+    records::{AttackPacket, CharacterStatisticsMut, Statistic},
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -10,16 +13,6 @@ pub struct Selection {
     pub spell: i16,
     pub power: i16,
     pub targets: Vec<i16>,
-}
-
-fn put(bytes: &mut [u8], offset: usize, value: i16) {
-    bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
-}
-
-fn add(bytes: &mut [u8], offset: usize, delta: i16) -> Result<(), RuleError> {
-    let value = word(bytes, offset)?.wrapping_add(delta);
-    put(bytes, offset, value);
-    Ok(())
 }
 
 impl Selection {
@@ -40,7 +33,9 @@ impl Selection {
                     self.spell % 100 - 1,
                 ])
             || combat.attack_packet.as_ref().is_none_or(|packet| {
-                packet.len() != 58 || packet[1] > 6 || packet[1] != 0 && !self.targets.is_empty()
+                packet.len() != 58
+                    || AttackPacket(packet).targeting_mode() > 6
+                    || AttackPacket(packet).targeting_mode() != 0 && !self.targets.is_empty()
             })
             || self.targets.iter().any(|body| {
                 *body < 0
@@ -93,7 +88,7 @@ pub(crate) fn begin(
         &map.combat.as_ref().ok_or("Psi content missing")?.attacks,
         spell,
     )?;
-    if packet[1] != 0 {
+    if AttackPacket(&packet).targeting_mode() != 0 {
         return Err("Psi selection requires a multi-body spell".into());
     }
     begin_targeting(state, content, spell, power)
@@ -151,7 +146,7 @@ pub(crate) fn fire_warrior(
     let combat = state.combat.as_ref().unwrap();
     let packet = combat.attack_packet.as_ref().unwrap();
     // combatchoice119dd2 accepts the healing effect57, not revival effect64.
-    if packet[1] != 1 || word(packet, 40)? != 57 {
+    if AttackPacket(packet).targeting_mode() != 1 || AttackPacket(packet).effect()? != 57 {
         return Err(RuleError::Refused {
             feedback: vec![crate::feedback::NativeFeedback::Sound { resource_id: 143 }],
         });
@@ -164,7 +159,7 @@ pub(crate) fn fire_warrior(
         state.health_context.as_ref(),
     );
     health.affected[pending.actor] = 1;
-    health.effect = packet[18] as i8;
+    health.effect = AttackPacket(packet).health_effect();
     state.health_context = Some(health);
     state.medical_continuation = Some(crate::MedicalContinuation {
         origin: crate::MedicalOrigin::LearnedHeal,
@@ -221,15 +216,19 @@ pub(crate) fn begin_targeting(
         &map.combat.as_ref().ok_or("Psi content missing")?.attacks,
         spell,
     )?;
-    if packet[1] > 6 {
+    if AttackPacket(&packet).targeting_mode() > 6 {
         return Err("scan has no point-target continuation".into());
     }
     combat.weapon_work.armor_filter()?;
-    let w = &mut state.warriors[actor].bytes;
-    add(w, 0x58, player_psi::cost(&packet, power)?.wrapping_neg())?;
-    add(w, 0xac8, 1)?;
-    let casts = i32::from_be_bytes(w[0xa66..0xa6a].try_into().unwrap()).wrapping_add(1);
-    w[0xa66..0xa6a].copy_from_slice(&casts.to_be_bytes());
+    let w = &mut state.warriors[actor];
+    let points = w
+        .record()
+        .psi_points()?
+        .wrapping_add(player_psi::cost(&packet, power)?.wrapping_neg());
+    w.record_mut().set_psi_points(points);
+    let count = w.record().scans_used()?.wrapping_add(1);
+    w.record_mut().set_scans_used(count);
+    CharacterStatisticsMut(&mut w.bytes).add(Statistic::ScansCast, 1);
     let identity = [spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1];
     let combat = state.combat.as_mut().unwrap();
     combat.attack_packet = Some(packet);
@@ -272,13 +271,18 @@ pub fn admit_target(
     }
     let combat = state.combat.as_ref().unwrap();
     let packet = combat.attack_packet.as_ref().unwrap();
-    if packet[1] != 0 {
+    if AttackPacket(packet).targeting_mode() != 0 {
         return Err("point scan requires a point-target command".into());
     }
     let mut admission = state.warriors.clone();
-    let w = &mut admission[pending.actor].bytes;
-    add(w, 0x58, player_psi::cost(packet, pending.power)?)?;
-    add(w, 0xac8, -1)?;
+    let w = &mut admission[pending.actor];
+    let points = w
+        .record()
+        .psi_points()?
+        .wrapping_add(player_psi::cost(packet, pending.power)?);
+    w.record_mut().set_psi_points(points);
+    let count = w.record().scans_used()?.wrapping_add(-1);
+    w.record_mut().set_scans_used(count);
     player_psi::validate(
         combat,
         &admission,
@@ -356,11 +360,13 @@ pub(crate) fn cancel(state: &mut Session, content: &Content) -> Result<Vec<Event
         .as_ref()
         .unwrap();
     let refund = i32::from(player_psi::cost(packet, pending.power)?) * 66 / 100;
-    let w = &mut state.warriors[actor].bytes;
-    add(w, 0x58, refund as i16)?;
-    add(w, 0xac8, -1)?;
-    let movement = word(w, 0x3c)?.wrapping_sub(3).max(0);
-    put(w, 0x3c, movement);
+    let w = &mut state.warriors[actor];
+    let points = w.record().psi_points()?.wrapping_add(refund as i16);
+    w.record_mut().set_psi_points(points);
+    let count = w.record().scans_used()?.wrapping_add(-1);
+    w.record_mut().set_scans_used(count);
+    let movement = w.record().movement_points()?.wrapping_sub(3).max(0);
+    w.record_mut().set_movement_points(movement);
     state.psi_selection = None;
     runtime::refresh_active_item_context(state, content)?;
     Ok(vec![

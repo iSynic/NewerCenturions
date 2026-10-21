@@ -1,5 +1,11 @@
+pub mod payment;
 use crate::{Event, RandomState, RuleError, combat, items};
-use centurions_content::{Content, InventoryRecord, Warrior, mission::long, span, word};
+use centurions_content::{
+    Content, InventoryRecord, Warrior,
+    mission::long,
+    records::{InventorySlotsMut, ItemDefinition},
+    span, word,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartyItem {
@@ -81,7 +87,7 @@ pub fn consume_party_items_retained(
             }
             if mode == 3 {
                 result.definition = Some(crate::ammunition::definition(content, word(extra, 8)?)?);
-                if item.0[9] != 0 {
+                if item.equipment_flag() != 0 {
                     let record = result.record.as_ref().ok_or(RuleError::Unsupported {
                         action: "story.consume_item",
                         dependency: "equipped replacement retained inventory context",
@@ -100,11 +106,13 @@ pub fn consume_party_items_retained(
                 }
                 let replacement = word(extra, 8)?;
                 let definition = result.definition.as_ref().unwrap();
-                let offset = 0x132 + slot * 22;
-                warrior.bytes[offset..offset + 2].copy_from_slice(&replacement.to_be_bytes());
-                warrior.bytes[offset + 2..offset + 4]
-                    .copy_from_slice(&word(definition, 20)?.to_be_bytes());
-                if item.0[9] != 0 {
+                let mut replacement_item = warrior.record().inventory_slot(slot);
+                replacement_item.0[..2].copy_from_slice(&replacement.to_be_bytes());
+                replacement_item.set_quantity(ItemDefinition(definition).supplied_quantity()?);
+                warrior
+                    .record_mut()
+                    .set_inventory_slot(slot, &replacement_item);
+                if item.equipment_flag() != 0 {
                     let worn = crate::editor_items::retained_equipment(
                         warrior,
                         content,
@@ -126,16 +134,17 @@ pub fn consume_party_items_retained(
                 slot += 1;
                 continue;
             } else if mode == 2 {
-                let quantity =
-                    word(&warrior.bytes, 0x134 + slot * 22)?.wrapping_add(word(extra, 6)?);
-                warrior.bytes[0x134 + slot * 22..0x136 + slot * 22]
-                    .copy_from_slice(&quantity.to_be_bytes());
+                let quantity = warrior
+                    .record()
+                    .inventory_quantity(slot)?
+                    .wrapping_add(word(extra, 6)?);
+                warrior.record_mut().set_inventory_quantity(slot, quantity);
                 result.definition = Some(crate::ammunition::definition(content, id)?);
                 let definition = content
                     .items
                     .get(id.unsigned_abs() as usize)
                     .ok_or("altered item definition unavailable")?;
-                if quantity > 0 || word(definition, 0x26)? == 0 {
+                if quantity > 0 || ItemDefinition(definition).discarded_when_empty()? == 0 {
                     result.consumed += 1;
                     slot += 1;
                     continue;
@@ -153,9 +162,9 @@ pub fn consume_party_items_retained(
                     RuleError::Invalid("consumed item definition is unavailable".into())
                 })?;
             result.definition = Some(crate::ammunition::definition(content, id)?);
-            if item.0[9] != 0 {
-                if word(&warrior.bytes, 0x134 + slot * 22)? == -1 {
-                    let class = word(definition, 26)?.wrapping_abs();
+            if item.equipment_flag() != 0 {
+                if warrior.record().inventory_quantity(slot)? == -1 {
+                    let class = ItemDefinition(definition).category()?.wrapping_abs();
                     let offset =
                         0xc6 + usize::try_from(class).map_err(|_| "invalid removed class")? * 2;
                     warrior
@@ -163,7 +172,7 @@ pub fn consume_party_items_retained(
                         .get_mut(offset..offset + 2)
                         .ok_or("removed class outside warrior")?
                         .fill(0);
-                    warrior.bytes[0x13b + slot * 22] = 0;
+                    warrior.record_mut().set_inventory_equipment_flag(slot, 0);
                 } else if crate::equipment::removal_blocked(warrior, slot, definition)? {
                     result.events.extend([
                         Event::Sound { resource_id: 655 },
@@ -191,19 +200,14 @@ pub fn consume_party_items_retained(
                 }
             }
             let count = warrior.inventory()?.len();
-            let weight = word(definition, 0x10)?.wrapping_add(
-                word(definition, 0x24)?.wrapping_mul(word(&warrior.bytes, 0x134 + slot * 22)?),
+            let weight = ItemDefinition(definition).base_weight()?.wrapping_add(
+                ItemDefinition(definition)
+                    .unit_weight()?
+                    .wrapping_mul(warrior.record().inventory_quantity(slot)?),
             );
             let carried = warrior.record().carried_weight()?.wrapping_sub(weight);
-            warrior.bytes[0x9d6..0x9d8].copy_from_slice(&carried.to_be_bytes());
-            for destination in slot..29 {
-                let start = 0x132 + (destination + 1) * 22;
-                warrior
-                    .bytes
-                    .copy_within(start..start + 22, 0x132 + destination * 22);
-            }
-            warrior.bytes[0x1a..0x1c].copy_from_slice(&((count - 1) as i16).to_be_bytes());
-            warrior.bytes[0x132 + (count - 1) * 22..0x132 + 100 * 22].fill(0);
+            warrior.record_mut().set_carried_weight(carried);
+            InventorySlotsMut(&mut warrior.bytes).remove_dropped_slot(slot, (count - 1) as i16);
             let race = warrior.record().race()?.wrapping_sub(1);
             let movement = race_movements.get(race as usize).ok_or_else(|| {
                 RuleError::Invalid("consumed item race movement is unavailable".into())
@@ -224,19 +228,31 @@ pub fn normalize_story_loot(warriors: &[Warrior]) -> Result<Vec<Warrior>, RuleEr
     let mut result = warriors.to_vec();
     for warrior in &mut result {
         span(&warrior.bytes, 0, 3138)?;
-        warrior.bytes[0x10..0x12].fill(0);
-        warrior.bytes[0x9de] = 0;
-        warrior.bytes[0x60..0x62].fill(0);
-        for offset in (0x5e..0x66).step_by(2) {
-            if word(&warrior.bytes, offset)? > 0 {
-                warrior.bytes[offset..offset + 2].fill(0);
-            }
-        }
-        if word(&warrior.bytes, 0x90)? > 0 {
-            warrior.bytes[0x90..0x92].fill(0);
-        }
+        normalize_warrior_after_battle(warrior)?;
     }
     Ok(result)
+}
+
+/// booty and retreat share this cleanup, but decide active status separately.
+pub(crate) fn normalize_warrior_after_battle(warrior: &mut Warrior) -> Result<(), RuleError> {
+    use centurions_content::records::Condition;
+    warrior.record_mut().set_faction(0);
+    warrior.record_mut().set_bleeding_flag(0);
+    warrior.record_mut().set_turn_skip_duration(0);
+    for condition in [
+        Condition::Retreating,
+        Condition::Helpless,
+        Condition::Entangled,
+        Condition::Poisoned,
+    ] {
+        if warrior.record().condition(condition)? > 0 {
+            warrior.record_mut().set_condition(condition, 0);
+        }
+    }
+    if warrior.record().automatic_mode()? > 0 {
+        warrior.record_mut().set_automatic_mode(0);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -251,12 +267,13 @@ pub fn award_story_experience(
 ) -> Result<ExperienceAward, RuleError> {
     let mut result = normalize_story_loot(warriors)?;
     for warrior in &mut result {
-        warrior.bytes[0x9df] = 1;
+        warrior.record_mut().set_active_flag(1);
     }
     let eligible = result
         .iter()
         .filter(|warrior| {
-            warrior.stamina().unwrap_or(0) > 0 && word(&warrior.bytes, 0x90).unwrap_or(-1) >= 0
+            warrior.stamina().unwrap_or(0) > 0
+                && warrior.record().automatic_mode().unwrap_or(-1) >= 0
         })
         .count() as i32;
     let rounded = amount as f32;
@@ -272,7 +289,7 @@ pub fn award_story_experience(
         (rounded as i32 / eligible).wrapping_abs()
     };
     for warrior in &mut result {
-        if warrior.stamina()? <= 0 || word(&warrior.bytes, 0x90)? < 0 {
+        if warrior.stamina()? <= 0 || warrior.record().automatic_mode()? < 0 {
             continue;
         }
         let experience =
@@ -287,15 +304,16 @@ pub fn award_story_experience(
         } else {
             experience
         };
-        let remaining =
-            long(&warrior.bytes, 0x9ce)?
-                .checked_sub(share)
-                .ok_or(RuleError::Unsupported {
-                    action: "story.experience",
-                    dependency: "SANE experience balance overflow",
-                })?;
-        warrior.bytes[0x9d2..0x9d6].copy_from_slice(&experience.to_be_bytes());
-        warrior.bytes[0x9ce..0x9d2].copy_from_slice(&remaining.to_be_bytes());
+        let remaining = warrior
+            .record()
+            .remaining_experience()?
+            .checked_sub(share)
+            .ok_or(RuleError::Unsupported {
+                action: "story.experience",
+                dependency: "SANE experience balance overflow",
+            })?;
+        warrior.record_mut().set_upgrade_points(experience);
+        warrior.record_mut().set_remaining_experience(remaining);
     }
     Ok(ExperienceAward {
         warriors: result,

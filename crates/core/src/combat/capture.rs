@@ -1,10 +1,13 @@
 //! Mechanical disable/capture: updatecontrols16043e, entercapturemode136928,
 //! combatchoice11c15a and attack100af0..1010e2.
-use crate::combat::{put_word, runtime};
+use crate::combat::runtime;
 use crate::feedback::NativeFeedback;
 use crate::{Event, Phase, RandomState, RuleError, Session};
 use centurions_content::combat::MonsterRecord;
-use centurions_content::{Content, Warrior, word};
+use centurions_content::{
+    Content, Warrior,
+    records::{CharacterStatisticsMut, Condition, Statistic},
+};
 
 fn silent() -> RuleError {
     RuleError::Refused { feedback: vec![] }
@@ -22,7 +25,7 @@ pub(crate) fn validate_selection(state: &Session) -> Result<(), RuleError> {
         .and_then(|i| state.warriors.get(i));
     if state.phase != Phase::Combat
         || combat.active_body() != Some(actor)
-        || member.is_none_or(|w| w.stamina().unwrap_or(0) <= 0 || w.bytes[0x9df] == 0)
+        || member.is_none_or(|w| w.stamina().unwrap_or(0) <= 0 || w.record().active_flag() == 0)
         || combat.selection_pending
         || combat.firearm_selection.is_some()
         || state.psi_selection.is_some()
@@ -54,7 +57,7 @@ pub fn available(state: &Session) -> bool {
     else {
         return false;
     };
-    let warrior = &state.warriors[actor as usize].bytes;
+    let warrior = state.warriors[actor as usize].record();
     if state.phase != Phase::Combat
         || state
             .exploration
@@ -64,8 +67,8 @@ pub fn available(state: &Session) -> bool {
         || state.medical_continuation.is_some()
         || combat.firearm_selection.is_some()
         || runtime::controlled_warrior(state).is_some()
-        || word(warrior, 0xf4).unwrap_or(0) <= 0
-        || word(warrior, 0x40).unwrap_or(0) <= 1
+        || warrior.special_skill(0).unwrap_or(0) <= 0
+        || warrior.action_points().unwrap_or(0) <= 1
     {
         return false;
     }
@@ -85,10 +88,11 @@ pub fn available(state: &Session) -> bool {
             else {
                 return false;
             };
-            word(&enemy.bytes, 0xe).ok() != word(warrior, 0x10).ok()
+            enemy.record().faction().ok() != warrior.faction().ok()
                 && enemy.stamina().unwrap_or(0) > 0
-                && (enemy.bytes[0xb0] == 1
-                    || word(warrior, 0xf6).unwrap_or(0) != 0 && enemy.bytes[0xb1] != 0)
+                && (enemy.record().mechanical_state() == 1
+                    || warrior.special_skill(1).unwrap_or(0) != 0
+                        && enemy.record().capture_flag() != 0)
         })
     })
 }
@@ -178,23 +182,23 @@ pub fn resolve(
     enemy: &mut MonsterRecord,
     random: &mut RandomState,
 ) -> Result<Vec<Event>, RuleError> {
-    let w = &mut warrior.bytes;
-    let m = &mut enemy.bytes;
-    if word(w, 0xacc)? >= word(w, 0xaca)? {
+    if warrior.record().attacks_used()? >= warrior.record().attack_limit()? {
         return Ok(vec![Event::Feedback(NativeFeedback::Warning { index: 45 })]);
     }
-    let attacks = word(w, 0xacc)?.wrapping_add(1);
-    put_word(w, 0xacc, attacks);
+    let attacks = warrior.record().attacks_used()?.wrapping_add(1);
+    warrior.record_mut().set_attacks_used(attacks);
     let mut events = vec![flash(0x40250d, -1, 0)];
-    if m[0xb0] == 0 {
+    if enemy.record().mechanical_state() == 0 {
         events.push(Event::Feedback(NativeFeedback::Warning { index: 16 }));
         return Ok(events);
     }
-    let capture = m[0xb0] == 255;
-    let offset = if capture { 0xf6 } else { 0xf4 };
-    let bonus = if capture { 0xb64 } else { 0xb62 };
-    let level = word(m, 0)?;
-    let skill = word(w, offset)?.wrapping_add(word(w, bonus)?);
+    let capture = enemy.record().mechanical_state() == 255;
+    let skill_index = usize::from(capture);
+    let level = enemy.record().level()?;
+    let skill = warrior
+        .record()
+        .special_skill(skill_index)?
+        .wrapping_add(warrior.record().special_skill_bonus(skill_index)?);
     let chance = crate::rules::pin(
         skill.wrapping_sub(
             level
@@ -204,27 +208,37 @@ pub fn resolve(
         if capture { 3 } else { 5 },
         if capture { 90 } else { 95 },
     );
-    let ap = word(w, 0x40)?.wrapping_sub(2);
-    put_word(w, 0x40, ap);
-    if random.bound(100) > chance || capture && word(m, 0xe)? == word(w, 0x10)? {
+    let ap = warrior.record().action_points()?.wrapping_sub(2);
+    warrior.record_mut().set_action_points(ap);
+    if random.bound(100) > chance
+        || capture && enemy.record().faction()? == warrior.record().faction()?
+    {
         events.push(flash(0x404088, 60, 6000));
         return Ok(events);
     }
-    let reward = word(m, 0x112)?
+    let reward = enemy
+        .record()
+        .maximum_stamina()?
         .wrapping_mul(if capture { 3 } else { 2 })
         .wrapping_add(level.wrapping_mul(if capture { 15 } else { 10 }));
-    for (offset, delta) in [(0x9ce, -i32::from(reward)), (0x9d2, i32::from(reward))] {
-        let current = i32::from_be_bytes(w[offset..offset + 4].try_into().unwrap());
-        w[offset..offset + 4].copy_from_slice(&current.wrapping_add(delta).to_be_bytes());
-    }
+    warrior
+        .record_mut()
+        .add_remaining_experience(-i32::from(reward));
+    let points = warrior
+        .record()
+        .upgrade_points()
+        .wrapping_add(i32::from(reward));
+    warrior.record_mut().set_upgrade_points(points);
     for resource_id in if capture { [-209, 208] } else { [-206, 205] } {
         events.push(Event::Sound { resource_id });
     }
-    m[0xb0] = if capture { 1 } else { 255 };
+    enemy
+        .record_mut()
+        .set_mechanical_state(if capture { 1 } else { 255 });
     if !capture {
-        m[0xb3] = 255;
+        enemy.record_mut().set_condition(Condition::Helpless, -1);
     }
-    if !capture || word(w, 0x10)? == 0 {
+    if !capture || warrior.record().faction()? == 0 {
         let bound = crate::rules::pin(
             (if capture { 5000_i16 } else { 10000_i16 })
                 .wrapping_sub(level.wrapping_mul(if capture { 50 } else { 75 })),
@@ -232,21 +246,28 @@ pub fn resolve(
             if capture { 1950 } else { 2925 },
         );
         if random.bound(bound) <= level && skill < 95 {
-            let improved = word(w, offset)?.wrapping_add(1);
-            put_word(w, offset, improved);
+            let improved = warrior.record().special_skill(skill_index)?.wrapping_add(1);
+            warrior
+                .record_mut()
+                .set_special_skill(skill_index, improved);
             events.push(Event::Feedback(NativeFeedback::Warning {
                 index: if capture { 143 } else { 142 },
             }));
         }
-        let stat = if capture { 0xa6e } else { 0xa6a };
-        let current = i32::from_be_bytes(w[stat..stat + 4].try_into().unwrap());
-        w[stat..stat + 4].copy_from_slice(&current.wrapping_add(1).to_be_bytes());
+        CharacterStatisticsMut(&mut warrior.bytes).add(
+            if capture {
+                Statistic::VehiclesCaptured
+            } else {
+                Statistic::VehiclesDisabled
+            },
+            1,
+        );
         if capture {
-            m[0xb3] = 0;
-            put_word(m, 0xe, 0);
+            enemy.record_mut().set_condition(Condition::Helpless, 0);
+            enemy.record_mut().set_faction(0);
         }
     } else {
-        put_word(m, 0xe, word(w, 0x10)?);
+        enemy.record_mut().set_faction(warrior.record().faction()?);
     }
     Ok(events)
 }

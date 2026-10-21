@@ -3,9 +3,9 @@ use super::{
     EnemyRoundOutcome, FieldActor, collide_fields_impl, record_spell_deaths,
     reduce_enemy_round_impl,
 };
-use crate::combat::{Combat, lifecycle, put_word};
+use crate::combat::{Combat, lifecycle};
 use crate::{Event, RandomState, RuleError};
-use centurions_content::{Warrior, word};
+use centurions_content::{Warrior, records::Condition};
 
 pub fn reduce_round(
     c: &mut Combat,
@@ -46,31 +46,39 @@ pub(super) fn reduce_round_with_fields(
     let mut events = vec![];
     let mut last_defeated_body = None;
     for member in 0..w.len() {
-        let b = &mut w[member].bytes;
-        let health = word(b, 0x50)?;
-        if word(b, 0x66)? != 0 && health > 0 && health < word(b, 0x52)? && word(b, 0x90)? == 0 {
+        let warrior = &mut w[member];
+        let health = warrior.record().stamina()?;
+        let regeneration = warrior.record().condition(Condition::Regenerating)?;
+        if regeneration != 0
+            && health > 0
+            && health < warrior.record().maximum_stamina()?
+            && warrior.record().automatic_mode()? == 0
+        {
             let healed = health
-                .wrapping_add(word(b, 0x66)?.wrapping_abs())
-                .min(word(b, 0x52)?);
-            put_word(b, 0x50, healed);
-            if context.audio && healed != health && b[0x9df] != 0 {
+                .wrapping_add(regeneration.wrapping_abs())
+                .min(warrior.record().maximum_stamina()?);
+            warrior.record_mut().set_stamina(healed);
+            if context.audio && healed != health && warrior.record().active_flag() != 0 {
                 events.push(Event::Sound { resource_id: 624 });
             }
         }
         if let Some(tick) = crate::combat::natural_conditions::disease_tick(&w[member].bytes)? {
-            put_word(&mut w[member].bytes, 0x50, tick.health);
+            w[member].record_mut().set_stamina(tick.health);
             if tick.killed {
                 lifecycle::kill_body(c, w, member as i16)?;
                 last_defeated_body = Some(member as i16);
             }
         }
-        for (offset, amount, address) in [(0x8a, None, 0x401948), (0x8c, Some(2), 0x40193a)] {
+        for (condition, amount, address) in [
+            (Condition::SeventhLevelProtection, None, 0x401948),
+            (Condition::Speedy, Some(2), 0x40193a),
+        ] {
             let before = w[member].record().stamina()?;
-            let condition = word(&w[member].bytes, offset)?;
+            let condition = w[member].record().condition(condition)?;
             if condition != 0 && before > 0 {
                 let amount = amount.unwrap_or(condition.wrapping_abs());
                 let health = before.wrapping_sub(amount);
-                put_word(&mut w[member].bytes, 0x50, health);
+                w[member].record_mut().set_stamina(health);
                 if health < 1 {
                     lifecycle::kill_body(c, w, member as i16)?;
                     last_defeated_body = Some(member as i16);
@@ -85,24 +93,19 @@ pub(super) fn reduce_round_with_fields(
             }
         }
         if let Some(tick) = crate::combat::natural_conditions::poison_tick(&w[member].bytes)? {
-            put_word(&mut w[member].bytes, 0x50, tick.health);
+            w[member].record_mut().set_stamina(tick.health);
             if tick.killed {
                 lifecycle::kill_body(c, w, member as i16)?;
                 last_defeated_body = Some(member as i16);
             }
         }
-        let b = &mut w[member].bytes;
-        crate::story_reduce::energy(b, context.energy_recovery_disabled)?;
-        if word(b, 0x98)? != 0 && word(b, 0x10)? != 0 {
-            put_word(b, 0x10, 0);
+        let warrior = &mut w[member];
+        crate::story_reduce::energy(&mut warrior.bytes, context.energy_recovery_disabled)?;
+        if warrior.record().confusion_duration()? != 0 && warrior.record().faction()? != 0 {
+            warrior.record_mut().set_faction(0);
             c.unavailable = c.unavailable.wrapping_sub(1);
         }
-        for offset in (0x5e..0xae).step_by(2) {
-            let value = word(b, offset)?;
-            if value > 0 {
-                put_word(b, offset, value - 1);
-            }
-        }
+        warrior.record_mut().decrement_temporary_conditions()?;
     }
     for member in 0..w.len() {
         c.field_used = crate::combat::spells::reset_used(&c.field_used)?;
@@ -135,18 +138,14 @@ pub(super) fn reduce_round_with_fields(
                 });
             }
         }
-        let b = &mut w[member].bytes;
-        put_word(b, 0x14, 0);
-        if b[0x9de] != 0 && word(b, 0x50)? > -10 {
-            let health = word(b, 0x50)?.wrapping_sub(1);
-            put_word(b, 0x50, health);
+        let warrior = &mut w[member];
+        warrior.record_mut().clear_damage_marker();
+        if warrior.record().bleeding_flag() != 0 && warrior.record().stamina()? > -10 {
+            let health = warrior.record().stamina()?.wrapping_sub(1);
+            warrior.record_mut().set_stamina(health);
             if health < -9 {
-                b[0x9de] = 0;
-                for (offset, delta) in [(0xa62, -1_i32), (0xa5e, 1)] {
-                    let value = i32::from_be_bytes(b[offset..offset + 4].try_into().unwrap())
-                        .wrapping_add(delta);
-                    b[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
-                }
+                warrior.record_mut().set_bleeding_flag(0);
+                warrior.record_mut().record_bleeding_death();
                 events.push(Event::Sound {
                     resource_id: random.bound(2).wrapping_add(506),
                 });

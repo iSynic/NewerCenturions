@@ -3,7 +3,13 @@ use crate::story_collection::Collection;
 use crate::{RuleError, combat};
 use centurions_content::mission::OpeningMission;
 use centurions_content::span;
-use centurions_content::{Content, InventoryRecord, Warrior, word};
+use centurions_content::{
+    Content, InventoryRecord, Warrior,
+    records::{
+        EquipmentEligibility, InventorySlots, InventorySlotsMut, ItemDefinition,
+        ProfessionEquipment, RaceEquipment,
+    },
+};
 
 pub struct EquipmentResult {
     pub warrior: Warrior,
@@ -34,9 +40,9 @@ pub(crate) fn removal_blocked(
     slot: usize,
     definition: &[u8],
 ) -> Result<bool, RuleError> {
-    Ok(word(definition, 26)?.wrapping_abs() == 20
-        && word(&warrior.bytes, 0x134 + slot * 22)? != -1
-        && (word(&warrior.bytes, 0xe0)? != 0 || word(&warrior.bytes, 0xe2)? != 0))
+    Ok(ItemDefinition(definition).category()?.wrapping_abs() == 20
+        && warrior.record().inventory_quantity(slot)? != -1
+        && InventorySlots(&warrior.bytes).battery_has_dependents()?)
 }
 
 pub(crate) fn calculate_weight(warrior: &mut Warrior, content: &Content) -> Result<(), RuleError> {
@@ -44,15 +50,15 @@ pub(crate) fn calculate_weight(warrior: &mut Warrior, content: &Content) -> Resu
     for record in warrior.inventory()? {
         let definition = item_definition(content, record.id())?;
         weight = weight
-            .wrapping_add(word(definition, 36)?.wrapping_mul(word(&record.0, 2)?))
-            .wrapping_add(word(definition, 16)?);
+            .wrapping_add(
+                ItemDefinition(definition)
+                    .unit_weight()?
+                    .wrapping_mul(record.quantity()?),
+            )
+            .wrapping_add(ItemDefinition(definition).base_weight()?);
     }
-    put_word(&mut warrior.bytes, 0x9d6, weight);
+    warrior.record_mut().set_carried_weight(weight);
     Ok(())
-}
-
-pub(super) fn bit(bytes: &[u8], offset: usize, index: usize) -> Result<bool, RuleError> {
-    Ok(span(bytes, offset + index / 8, 1)?[0] & (0x80 >> (index % 8)) != 0)
 }
 
 pub fn can_use(
@@ -66,37 +72,39 @@ pub fn can_use(
     if race_id <= 0 || mos_id <= 0 {
         return Err(unsupported("unset Race or MOS profile"));
     }
-    let race = span(&mission.races, (race_id as usize - 1) * 408, 408)?;
-    let mos = span(&mission.profiles, (mos_id as usize - 1) * 576, 576)?;
-    if (word(definition, 108)? != 0 && word(definition, 108)? != race_id)
-        || (word(definition, 110)? != 0 && word(definition, 110)? != mos_id)
+    let race = RaceEquipment(span(&mission.races, (race_id as usize - 1) * 408, 408)?);
+    let mos = ProfessionEquipment(span(&mission.profiles, (mos_id as usize - 1) * 576, 576)?);
+    let eligibility = EquipmentEligibility(definition);
+    if (eligibility.required_race()? != 0 && eligibility.required_race()? != race_id)
+        || (eligibility.required_profession()? != 0 && eligibility.required_profession()? != mos_id)
     {
         return Ok(false);
     }
     let mut ability = 0;
-    while ability < 58 && !bit(definition, 128, ability)? {
+    while ability < 58 && !eligibility.ability(ability)? {
         ability += 1;
     }
-    if !bit(mos, 442, ability)? || !bit(race, 336, ability)? {
+    if !mos.permits_ability(ability)? || !race.permits_ability(ability)? {
         return Ok(false);
     }
     for index in 0..9 {
-        let race_trait = bit(race, 344, index)?;
-        if (bit(definition, 104, index)? && race_trait)
-            || (bit(definition, 112, index)? && !race_trait)
+        let race_trait = race.has_trait(index)?;
+        if (eligibility.forbids_trait(index)? && race_trait)
+            || (eligibility.requires_trait(index)? && !race_trait)
         {
             return Ok(false);
         }
     }
-    let school = word(mos, 254)?;
+    let school = mos.psi_school()?;
     if (0..7).contains(&school.wrapping_sub(1)) {
         let index = (school - 1) as usize;
-        if bit(definition, 106, index)?
-            || (word(definition, 114)? != 0 && !bit(definition, 114, index)?)
+        if eligibility.forbids_school(index)?
+            || (eligibility.has_required_schools()?
+                && !eligibility.permits_required_school(index)?)
         {
             return Ok(false);
         }
-    } else if word(definition, 114)? != 0 {
+    } else if eligibility.has_required_schools()? {
         return Ok(false);
     }
     Ok(true)
@@ -130,7 +138,7 @@ pub fn collect_item(
         warrior: warrior.clone(),
         item: item.clone(),
         collected: false,
-        sounds: vec![word(definition, 12)?],
+        sounds: vec![ItemDefinition(definition).pickup_sound()?],
         warnings: vec![],
     };
     let count = warrior.inventory()?.len();
@@ -144,12 +152,22 @@ pub fn collect_item(
     };
     if let Some(slot) = stacked {
         // Native stacking writes quantity and weight before the rejection gates.
-        let offset = 0x132 + slot * 22 + 2;
-        let quantity = word(&item.0, 2)?;
-        let total = word(&result.warrior.bytes, offset)?.wrapping_add(quantity);
-        put_word(&mut result.warrior.bytes, offset, total);
-        let weight = word(&result.warrior.bytes, 0x9d6)?.wrapping_add(quantity);
-        put_word(&mut result.warrior.bytes, 0x9d6, weight);
+        let quantity = item.quantity()?;
+        let total = result
+            .warrior
+            .record()
+            .inventory_quantity(slot)?
+            .wrapping_add(quantity);
+        result
+            .warrior
+            .record_mut()
+            .set_inventory_quantity(slot, total);
+        let weight = result
+            .warrior
+            .record()
+            .carried_weight()?
+            .wrapping_add(quantity);
+        result.warrior.record_mut().set_carried_weight(weight);
     }
     if count >= 99 {
         if earned_unloaded_firearm(item) {
@@ -158,10 +176,11 @@ pub fn collect_item(
         result.warnings.push(147);
         return Ok(result);
     }
-    let needed = word(definition, 20)?
-        .wrapping_mul(word(definition, 36)?)
-        .wrapping_add(word(&result.warrior.bytes, 0x9d6)?)
-        .wrapping_add(word(definition, 16)?) as u16;
+    let needed = ItemDefinition(definition)
+        .supplied_quantity()?
+        .wrapping_mul(ItemDefinition(definition).unit_weight()?)
+        .wrapping_add(result.warrior.record().carried_weight()?)
+        .wrapping_add(ItemDefinition(definition).base_weight()?) as u16;
     if needed > warrior.record().weight_capacity()? as u16 {
         if earned_unloaded_firearm(item) {
             result.sounds.push(6000);
@@ -171,27 +190,20 @@ pub fn collect_item(
     }
     if stacked.is_some() {
         combat::calculate_movement(&mut result.warrior, race_movement(warrior, mission)?)?;
-        result.item.0[..2].fill(0);
+        result.item.clear_id();
         result.collected = true;
         return Ok(result);
     }
-    let destination = &mut result.warrior.bytes[0x132 + count * 22..0x132 + (count + 1) * 22];
-    destination[..8].copy_from_slice(&item.0[..8]);
-    destination[..2].copy_from_slice(&word(definition, 102)?.to_be_bytes());
-    destination[8] = word(definition, 34)? as u8;
-    destination[9] = 0;
-    destination[10] = word(definition, 26)? as u8;
-    destination[13..].copy_from_slice(&item.0[13..]);
-    put_word(&mut result.warrior.bytes, 0x1a, (count + 1) as i16);
+    InventorySlotsMut(&mut result.warrior.bytes).append_collected(
+        count,
+        item,
+        ItemDefinition(definition),
+    )?;
     calculate_weight(&mut result.warrior, content)?;
     combat::calculate_movement(&mut result.warrior, race_movement(warrior, mission)?)?;
-    result.item.0[..2].fill(0);
+    result.item.clear_id();
     result.collected = true;
     Ok(result)
-}
-
-pub(super) fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
-    bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
 }
 
 pub(crate) fn remove_inner(
@@ -200,7 +212,7 @@ pub(crate) fn remove_inner(
     content: &Content,
     mission: &OpeningMission,
 ) -> Result<(), RuleError> {
-    let shortcut = word(&warrior.bytes, 0x134 + slot * 22)? == -1;
+    let shortcut = warrior.record().inventory_quantity(slot)? == -1;
     *warrior = crate::editor_items::equipment_record(warrior, content, slot, false)?.0;
     if !shortcut {
         combat::calculate_movement(warrior, race_movement(warrior, mission)?)?;
@@ -229,11 +241,7 @@ pub(crate) fn force_drop(
     content: &Content,
     mission: &OpeningMission,
 ) -> Result<(), RuleError> {
-    let item = InventoryRecord(
-        span(&warrior.bytes, 0x132 + slot * 22, 22)?
-            .try_into()
-            .unwrap(),
-    );
+    let item = InventorySlots(&warrior.bytes).slot(slot)?;
     drop_record(warrior, slot, &item, content, mission, true)
 }
 
@@ -245,7 +253,7 @@ pub(super) fn drop_record(
     mission: &OpeningMission,
     forced: bool,
 ) -> Result<(), RuleError> {
-    if item.0[9] != 0 {
+    if item.equipment_flag() != 0 {
         if forced {
             *warrior = crate::editor_items::equipment_record_forced(warrior, content, slot)?.0;
         } else {
@@ -253,24 +261,14 @@ pub(super) fn drop_record(
         }
     }
     let definition = item_definition(content, item.id())?;
-    let weight = word(definition, 36)?
-        .wrapping_mul(word(&item.0, 2)?)
-        .wrapping_add(word(definition, 16)?);
-    let remaining = word(&warrior.bytes, 0x1a)?.wrapping_sub(1);
+    let weight = ItemDefinition(definition)
+        .unit_weight()?
+        .wrapping_mul(item.quantity()?)
+        .wrapping_add(ItemDefinition(definition).base_weight()?);
+    let remaining = InventorySlots(&warrior.bytes).count()?.wrapping_sub(1);
     let total = warrior.record().carried_weight()?.wrapping_sub(weight);
-    for index in slot..29 {
-        warrior.bytes.copy_within(
-            0x132 + (index + 1) * 22..0x132 + (index + 2) * 22,
-            0x132 + index * 22,
-        );
-    }
-    // Original DATA at 0x41fc32 is the 22-byte zero record.
-    let empty = &[0; 22];
-    for index in remaining as usize..100 {
-        warrior.bytes[0x132 + index * 22..0x132 + (index + 1) * 22].copy_from_slice(empty);
-    }
-    put_word(&mut warrior.bytes, 0x1a, remaining);
-    put_word(&mut warrior.bytes, 0x9d6, total);
+    InventorySlotsMut(&mut warrior.bytes).remove_dropped_slot(slot, remaining);
+    warrior.record_mut().set_carried_weight(total);
     combat::calculate_movement(warrior, race_movement(warrior, mission)?)
 }
 
@@ -297,7 +295,7 @@ pub(super) fn wear_retained(
         .get(slot)
         .cloned()
         .ok_or_else(|| RuleError::Invalid("equipment slot missing".into()))?;
-    if item.0[9] != 0 {
+    if item.equipment_flag() != 0 {
         return Ok(EquipmentResult {
             warrior: warrior.clone(),
             changed: false,
@@ -319,7 +317,7 @@ pub(super) fn wear_retained(
         result.sounds.push(6000);
         return Ok(result);
     }
-    if word(&warrior.bytes, 0x3a)? < i16::from(item.0[13] as i8) {
+    if warrior.record().level()? < i16::from(item.required_level()) {
         result.sounds.push(6000);
         return Ok(result);
     }
@@ -334,16 +332,18 @@ pub(super) fn wear_retained(
     result.warrior = worn.warrior;
     result.warnings = worn.warnings;
     result.record = retained.map(|_| worn.record);
-    if result.warrior.bytes[0x132 + slot * 22 + 9] == 0 {
+    if InventorySlots(&result.warrior.bytes).equipment_flag(slot) == 0 {
         result.changed = result.warrior != *warrior;
         return Ok(result);
     }
     if in_combat {
-        let ap = word(&result.warrior.bytes, 0x40)?.wrapping_sub(1);
-        put_word(&mut result.warrior.bytes, 0x40, ap);
+        let ap = result.warrior.record().action_points()?.wrapping_sub(1);
+        result.warrior.record_mut().set_action_points(ap);
     }
     result.changed = true;
-    result.sounds.push(word(definition, 12)?);
+    result
+        .sounds
+        .push(ItemDefinition(definition).pickup_sound()?);
     Ok(result)
 }
 
@@ -368,7 +368,7 @@ pub(super) fn remove_retained(
         .get(slot)
         .cloned()
         .ok_or_else(|| RuleError::Invalid("equipment slot missing".into()))?;
-    if item.0[9] == 0 {
+    if item.equipment_flag() == 0 {
         return Err(unsupported("unequipped selection"));
     }
     if removal_blocked(warrior, slot, item_definition(content, item.id())?)? {
@@ -383,7 +383,7 @@ pub(super) fn remove_retained(
     let mut result = EquipmentResult {
         warrior: warrior.clone(),
         changed: true,
-        sounds: vec![word(item_definition(content, item.id())?, 12)?],
+        sounds: vec![ItemDefinition(item_definition(content, item.id())?).pickup_sound()?],
         warnings: vec![],
         record: retained.cloned(),
     };

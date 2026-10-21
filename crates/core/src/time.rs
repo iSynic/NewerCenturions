@@ -2,6 +2,9 @@
 use crate::*;
 use crate::{Event, Phase, RuleError, ScriptState, Session, TimeContinuation, story_allies};
 use centurions_content::Content;
+use centurions_content::records::{
+    Condition, EnemyRecord, EnemyRecordMut, ItemDefinition, WarriorRecord, WarriorRecordMut,
+};
 use centurions_content::word;
 
 fn put(bytes: &mut [u8], offset: usize, value: i16) {
@@ -64,20 +67,17 @@ pub(crate) fn advance(
         position.fatigue = position.fatigue.saturating_add(1).clamp(4, 135);
         for warrior in &mut state.warriors {
             let bytes = &mut warrior.bytes;
-            let energy = word(bytes, 0x58)?;
-            let maximum = word(bytes, 0x5a)?;
+            let energy = WarriorRecord::from_bytes(bytes).psi_points()?;
+            let maximum = WarriorRecord::from_bytes(bytes).maximum_psi()?;
             if state.energy_recovery_disabled == 0
                 && energy < maximum
-                && word(bytes, 0x50)? > 0
-                && word(bytes, 0x90)? == 0
+                && WarriorRecord::from_bytes(bytes).stamina()? > 0
+                && WarriorRecord::from_bytes(bytes).automatic_mode()? == 0
             {
-                let level = word(bytes, 0x3a)?;
+                let level = WarriorRecord::from_bytes(bytes).level()?;
                 let amount = (level.wrapping_add((level as u16 >> 15) as i16) >> 1) as i8;
-                put(
-                    bytes,
-                    0x58,
-                    energy.wrapping_add(i16::from(amount.max(1))).min(maximum),
-                );
+                WarriorRecordMut::from_bytes(bytes)
+                    .set_psi_points(energy.wrapping_add(i16::from(amount.max(1))).min(maximum));
             }
         }
         if state.energy_recovery_disabled == 0 {
@@ -85,16 +85,13 @@ pub(crate) fn advance(
                 .as_chunks_mut::<{ story_allies::ALLY_BYTES }>()
                 .0
             {
-                let energy = word(bytes, 0x10e)?;
-                let maximum = word(bytes, 0x52)?;
+                let energy = EnemyRecord::from_bytes(bytes).psi_points()?;
+                let maximum = EnemyRecord::from_bytes(bytes).maximum_psi()?;
                 if energy < maximum {
-                    let level = word(bytes, 0)?;
+                    let level = EnemyRecord::from_bytes(bytes).level()?;
                     let amount = (level.wrapping_add((level as u16 >> 15) as i16) >> 1) as i8;
-                    put(
-                        bytes,
-                        0x10e,
-                        energy.wrapping_add(i16::from(amount.max(1))).min(maximum),
-                    );
+                    EnemyRecordMut::from_bytes(bytes)
+                        .set_psi_points(energy.wrapping_add(i16::from(amount.max(1))).min(maximum));
                 }
             }
         }
@@ -207,13 +204,13 @@ pub(crate) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event
 fn recover(state: &mut Session, content: &Content) -> Result<(), RuleError> {
     for index in 0..state.warriors.len() {
         let bytes = &state.warriors[index].bytes;
-        let stamina = word(bytes, 0x50)?;
-        let maximum = word(bytes, 0x52)?;
+        let stamina = WarriorRecord::from_bytes(bytes).stamina()?;
+        let maximum = WarriorRecord::from_bytes(bytes).maximum_stamina()?;
         if stamina <= -10 || stamina >= maximum {
             continue;
         }
-        let level = word(bytes, 0x3a)?;
-        let mut amount = if word(bytes, 0x32)? == 3 {
+        let level = WarriorRecord::from_bytes(bytes).level()?;
+        let mut amount = if WarriorRecord::from_bytes(bytes).race()? == 3 {
             level
         } else {
             level / 4
@@ -221,8 +218,11 @@ fn recover(state: &mut Session, content: &Content) -> Result<(), RuleError> {
         if !consume_food(state, content)? {
             amount /= 2;
         }
-        let healing =
-            i16::from(amount.max(1)).wrapping_add(word(&state.warriors[index].bytes, 0x66)?);
+        let healing = i16::from(amount.max(1)).wrapping_add(
+            state.warriors[index]
+                .record()
+                .condition(Condition::Regenerating)?,
+        );
         let context = crate::story_health::context(
             &state.warriors,
             state.selected_warrior,
@@ -254,7 +254,7 @@ fn consume_food(state: &mut Session, content: &Content) -> Result<bool, RuleErro
             if item.id() != 800 {
                 continue;
             }
-            let quantity = word(&item.0, 2)?;
+            let quantity = item.quantity()?;
             if quantity <= 0 {
                 return Ok(false);
             }
@@ -262,11 +262,13 @@ fn consume_food(state: &mut Session, content: &Content) -> Result<bool, RuleErro
                 .items
                 .get(800)
                 .ok_or_else(|| RuleError::Invalid("food definition unavailable".into()))?;
-            let weight = word(definition, 0x24)?;
+            let weight = ItemDefinition(definition).unit_weight()?;
             let carried = warrior.record().carried_weight()?.wrapping_sub(weight);
-            put(&mut warrior.bytes, 0x9d6, carried);
-            put(&mut warrior.bytes, 0x132 + slot * 22 + 2, quantity - 1);
-            if quantity == 1 && word(definition, 0x26)? != 0 {
+            warrior.record_mut().set_carried_weight(carried);
+            warrior
+                .record_mut()
+                .set_inventory_quantity(slot, quantity - 1);
+            if quantity == 1 && ItemDefinition(definition).discarded_when_empty()? != 0 {
                 super::items::remove_inventory_slot(warrior, slot)?;
             }
             state.load_item_work(content, 800)?;

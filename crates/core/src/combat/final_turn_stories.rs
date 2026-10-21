@@ -1,6 +1,12 @@
 use crate::combat::{Combat, death_scripts, footprint};
 use crate::{RandomState, RuleError};
-use centurions_content::{Warrior, combat::MonsterRecord, mission::OpeningMission, span, word};
+use centurions_content::{
+    Warrior,
+    combat::MonsterRecord,
+    mission::OpeningMission,
+    records::{EnemyRecord, EnemyRecordMut, FootprintCell, StoryRecord},
+    span, word,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TurnEffect {
@@ -16,10 +22,6 @@ pub struct FinalTurn {
     pub hostile_additions: i16,
     pub increment_kills: bool,
     pub skipped_turn: bool,
-}
-
-fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
-    bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
 }
 
 fn unsupported(dependency: &'static str) -> RuleError {
@@ -38,10 +40,12 @@ fn build_monster(
     random: &mut RandomState,
 ) -> Result<MonsterRecord, RuleError> {
     let mut monster = MonsterRecord::read(definitions, id)?;
-    put_word(&mut monster.bytes, 0x10c, -1);
+    monster.record_mut().set_target_body(-1);
     let mut monster = super::monster::summon(monster, faction, difficulty, random)?;
-    let chance = word(&monster.bytes, 0x5c)?;
-    put_word(&mut monster.bytes, 0x5c, chance.wrapping_neg());
+    let chance = monster.record().turn_script_chance()?;
+    monster
+        .record_mut()
+        .set_turn_script_chance(chance.wrapping_neg());
     Ok(monster)
 }
 
@@ -53,15 +57,13 @@ pub fn replace_body(
     active: usize,
     random: &mut RandomState,
 ) -> Result<bool, RuleError> {
-    let faction = word(
-        &combat
-            .enemies
-            .records
-            .get(active)
-            .ok_or("replacement actor missing")?
-            .bytes,
-        14,
-    )?;
+    let faction = combat
+        .enemies
+        .records
+        .get(active)
+        .ok_or("replacement actor missing")?
+        .record()
+        .faction()?;
     let mut transformed = super::monster::summon(
         MonsterRecord::read(definitions, replacement)?,
         faction,
@@ -69,12 +71,19 @@ pub fn replace_body(
         random,
     )?;
     let old = &mut combat.enemies.records[active].bytes;
-    let chance = word(old, 0x5c)?;
-    put_word(old, 0x5c, chance.wrapping_neg());
-    for offset in [0x118, 0x11a, 0x11c, 0x11e] {
-        transformed.bytes[offset..offset + 2].copy_from_slice(&old[offset..offset + 2]);
+    let chance = EnemyRecord::from_bytes(old).turn_script_chance()?;
+    EnemyRecordMut::from_bytes(old).set_turn_script_chance(chance.wrapping_neg());
+    for cell in [
+        FootprintCell::Northwest,
+        FootprintCell::West,
+        FootprintCell::North,
+        FootprintCell::Anchor,
+    ] {
+        transformed
+            .record_mut()
+            .set_footprint_tile(cell, EnemyRecord::from_bytes(old).footprint_tile(cell)?);
     }
-    if word(&transformed.bytes, 0x10)? != word(old, 0x10)? {
+    if transformed.record().size()? != EnemyRecord::from_bytes(old).size()? {
         return Ok(true);
     }
     combat.enemies.records[active] = transformed;
@@ -82,18 +91,18 @@ pub fn replace_body(
 }
 
 fn passable(body: &footprint::PlacedBody, mission: &OpeningMission) -> Result<bool, RuleError> {
-    let signed_size = word(&body.monster.bytes, 0x10)?;
+    let signed_size = body.monster.record().size()?;
     let size = signed_size.wrapping_abs();
-    for (offset, occupied, anchor) in [
-        (0x11e, true, true),
-        (0x11c, size == 1 || size == 3, false),
-        (0x118, size == 3, false),
-        (0x11a, size >= 2, false),
+    for (part, occupied, anchor) in [
+        (FootprintCell::Anchor, true, true),
+        (FootprintCell::North, size == 1 || size == 3, false),
+        (FootprintCell::Northwest, size == 3, false),
+        (FootprintCell::West, size >= 2, false),
     ] {
         if !occupied {
             continue;
         }
-        let tile = word(&body.monster.bytes, offset)?;
+        let tile = body.monster.record().footprint_tile(part)?;
         if tile <= 999 {
             return Ok(false);
         }
@@ -172,7 +181,7 @@ fn spawn(
         let body = combat.enemies.records.len() as i16 + 10;
         let placed = place_spawn(combat, mission, &monster, active, body)?;
         combat.map = placed.map;
-        if word(&placed.monster.bytes, 0xe)? != 0 {
+        if placed.monster.record().faction()? != 0 {
             result.hostile_additions = result.hostile_additions.wrapping_add(1);
         }
         combat.enemies.records.push(placed.monster);
@@ -220,8 +229,10 @@ pub fn initialize(
         .filter(|i| *i < combat.enemies.records.len())
         .ok_or_else(|| RuleError::Invalid("turn story body outside roster".into()))?;
     let bytes = &combat.enemies.records[active].bytes;
-    let script_id = word(bytes, 0x5e)?;
-    if bytes[0xb3] != 0 || word(bytes, 0x110)? <= 0 {
+    let script_id = EnemyRecord::from_bytes(bytes).final_turn_mode()?;
+    if EnemyRecord::from_bytes(bytes).turn_skip_duration() != 0
+        || EnemyRecord::from_bytes(bytes).stamina()? <= 0
+    {
         return Err(unsupported("inactive enemy turn"));
     }
     let mut next = combat.clone();
@@ -229,13 +240,12 @@ pub fn initialize(
     let mut next_warriors = warriors.to_vec();
     let mut next_random = random.clone();
     let mut result = FinalTurn::default();
-    let chance = word(bytes, 0x5c)?;
+    let chance = EnemyRecord::from_bytes(bytes).turn_script_chance()?;
     if next_random.bound(100) <= chance {
         next.script_enemy = active;
         let script = span(&mission.door_scripts, script_id as usize * 42, 42)?;
         for i in 0..8 {
-            let opcode = word(script, 8 + i * 2)?;
-            let value = word(script, 24 + i * 2)?;
+            let (opcode, value) = StoryRecord(script).instruction(i)?;
             match opcode {
                 0 => {}
                 9 => result.effects.push(TurnEffect::Sound(value)),
@@ -260,8 +270,8 @@ pub fn initialize(
                         let replacement = word(extra, 0)?;
                         if replacement == -1 {
                             let bytes = &mut next.enemies.records[active].bytes;
-                            put_word(bytes, 0x110, 0);
-                            put_word(bytes, 0x60, 0);
+                            EnemyRecordMut::from_bytes(bytes).set_stamina(0);
+                            EnemyRecordMut::from_bytes(bytes).set_death_script(0);
                             let cleanup =
                                 death_scripts::cleanup_enemy(&mut next, &mut next_warriors, body)?;
                             result.increment_kills = cleanup.increment_kills;

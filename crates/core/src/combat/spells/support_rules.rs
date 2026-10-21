@@ -1,11 +1,16 @@
 //! Support rules for combat/spells.
 use super::{
     AttackResult, BodySpellResult, DamageFlags, DamagePacket, DirectSpell, RandomState,
-    RestrictionMemoryView, RuleError, monster_race_is_excluded, put_word, race_is_excluded,
+    RestrictionMemoryView, RuleError, monster_race_is_excluded, race_is_excluded,
     resolve_damage_with_amount,
 };
 use centurions_content::combat::MonsterRecord;
-use centurions_content::{Warrior, word};
+use centurions_content::{
+    Warrior,
+    records::{
+        AttackPacket, Condition, EnemyRecord, EnemyRecordMut, WarriorRecord, WarriorRecordMut,
+    },
+};
 
 /// resist150588..150742 for nonphysical status categories7,8,10.
 pub(super) fn status_resisted(
@@ -14,33 +19,47 @@ pub(super) fn status_resisted(
     context: &DirectSpell<'_>,
     random: &mut RandomState,
 ) -> Result<bool, RuleError> {
-    if context.armor_filter || !matches!(context.packet[9], 0 | 2) {
+    if context.armor_filter || !matches!(AttackPacket(context.packet).saving_throw_mode(), 0 | 2) {
         return Ok(false);
     }
-    if context.packet[19] <= 6
+    if AttackPacket(context.packet).defense_category() <= 6
         && monster
-        && (target[0x8b + usize::from(context.packet[19])] as i8 > 100 || word(target, 0xa)? > 100)
+        && (EnemyRecord::from_bytes(target)
+            .saving_throw(usize::from(AttackPacket(context.packet).defense_category()))
+            > 100
+            || EnemyRecord::from_bytes(target).magic_immunity()? > 100)
     {
         return Ok(true);
     }
-    if context.packet[19] == 5
+    if AttackPacket(context.packet).defense_category() == 5
         && if monster {
-            target[0xcb] != 0
+            EnemyRecord::from_bytes(target).condition(Condition::ComputerControl) != 0
         } else {
-            word(target, 0x90)? != 0
+            WarriorRecord::from_bytes(target).automatic_mode()? != 0
         }
     {
         return Ok(true);
     }
     let immune = (context.level..7).any(|level| {
         if monster {
-            target[0xc2 + level as usize] != 0
+            EnemyRecord::from_bytes(target).level_protection(level as usize) != 0
         } else {
-            word(target, 0x7e + level as usize * 2).unwrap_or(1) != 0
+            WarriorRecord::from_bytes(target)
+                .level_protection(level as usize)
+                .unwrap_or(1)
+                != 0
         }
     });
-    let threshold = word(target, if monster { 0xa } else { 0x22 })?
-        .wrapping_add(i16::from(context.packet[10] as i8).wrapping_mul(context.count));
+    let resistance = if monster {
+        EnemyRecord::from_bytes(target).magic_immunity()?
+    } else {
+        WarriorRecord::from_bytes(target).base_psionic_resistance()?
+    };
+    let threshold = resistance.wrapping_add(
+        AttackPacket(context.packet)
+            .resistance_bonus_per_attack()
+            .wrapping_mul(context.count),
+    );
     let roll = random.bound(100);
     Ok(if monster {
         roll <= threshold || immune
@@ -72,8 +91,8 @@ pub(crate) fn resolve_psi_drain(
     {
         return Err(RuleError::Invalid("Psi drain inputs".into()));
     }
-    let effect = word(packet, 40)?;
-    if !matches!(effect, 60 | 61) || packet[19] != 5 {
+    let effect = AttackPacket(packet).effect()?;
+    if !matches!(effect, 60 | 61) || AttackPacket(packet).defense_category() != 5 {
         return Err(RuleError::Unsupported {
             action: "combat.spell.drain",
             dependency: "other Psi-drain packet category",
@@ -97,10 +116,13 @@ pub(crate) fn resolve_psi_drain(
         targets: vec![],
         race_excluded: vec![],
     };
-    next_random.range(i16::from(packet[13] as i8), i16::from(packet[14] as i8));
-    if packet[15] != 0 {
+    let (minimum, maximum) = AttackPacket(packet).duration_bounds();
+    next_random.range(minimum, maximum);
+    let (additional_minimum, additional_maximum) =
+        AttackPacket(packet).additional_duration_bounds();
+    if additional_minimum != 0 {
         for _ in 0..context.count {
-            next_random.range(i16::from(packet[15] as i8), i16::from(packet[16] as i8));
+            next_random.range(additional_minimum, additional_maximum);
         }
     }
     for body in (0..warriors.len()).chain(10..10 + enemies.len()) {
@@ -109,7 +131,8 @@ pub(crate) fn resolve_psi_drain(
         }
         let monster = body >= 10;
         let excluded = if monster {
-            word(packet, 50)? != 0 && monster_race_is_excluded(packet, body, Some(memory))?
+            AttackPacket(packet).race_restriction()? != 0
+                && monster_race_is_excluded(packet, body, Some(memory))?
         } else {
             race_is_excluded(packet, &result.warriors[body].bytes, "combat.spell.drain")?
         };
@@ -137,21 +160,23 @@ pub(crate) fn resolve_psi_drain(
             0,
             &mut next_random,
         )?;
-        let reflected = !monster && word(target, 0x9a)? != 0 && next_random.bound(100) < 34;
+        let reflected = !monster
+            && WarriorRecord::from_bytes(target).condition(Condition::ReflectingScans)? != 0
+            && next_random.bound(100) < 34;
         let actual = if reflected { caster } else { body };
         let target = spell_body(&mut result.warriors, &mut result.enemies, actual)?;
-        let offset = if actual < 10 { 0x58 } else { 0x10e };
         let amount = damage.total.wrapping_neg();
-        let mut points = word(target, offset)?.wrapping_add(amount).max(0);
+        let mut points = psi_points(target, actual >= 10)?
+            .wrapping_add(amount)
+            .max(0);
         if actual < 10 {
-            points = points.min(word(target, 0x5a)?);
+            points = points.min(WarriorRecord::from_bytes(target).maximum_psi()?);
         }
-        put_word(target, offset, points);
+        set_psi_points(target, actual >= 10, points);
         if effect == 61 && actual >= 10 {
             let target = spell_body(&mut result.warriors, &mut result.enemies, caster)?;
-            let offset = if caster < 10 { 0x58 } else { 0x10e };
-            let points = word(target, offset)?.wrapping_add(amount / 2);
-            put_word(target, offset, points);
+            let points = psi_points(target, caster >= 10)?.wrapping_add(amount / 2);
+            set_psi_points(target, caster >= 10, points);
         }
         result.targets.push((
             body,
@@ -186,5 +211,21 @@ pub(super) fn spell_body<'a>(
             .get_mut(body - 10)
             .ok_or("Psi enemy body missing")?
             .bytes)
+    }
+}
+
+fn psi_points(target: &[u8], enemy: bool) -> Result<i16, RuleError> {
+    Ok(if enemy {
+        EnemyRecord::from_bytes(target).psi_points()?
+    } else {
+        WarriorRecord::from_bytes(target).psi_points()?
+    })
+}
+
+fn set_psi_points(target: &mut [u8], enemy: bool, points: i16) {
+    if enemy {
+        EnemyRecordMut::from_bytes(target).set_psi_points(points);
+    } else {
+        WarriorRecordMut::from_bytes(target).set_psi_points(points);
     }
 }

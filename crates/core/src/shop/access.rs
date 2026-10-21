@@ -1,6 +1,7 @@
 //! Access for shop.
 use super::RECORD;
 use crate::{Command, Event, Phase, Presentation, RuleError, Session};
+use centurions_content::records::{ShopRecord, ShopRecordMut};
 use centurions_content::span;
 use centurions_content::{Content, word};
 use serde::{Deserialize, Serialize};
@@ -30,7 +31,9 @@ pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleErr
         }
         for shop in records.as_chunks::<RECORD>().0 {
             for slot in 0..1000 {
-                if shop[2000 + slot] != 0 && !(0..1000).contains(&word(shop, slot * 2)?) {
+                if ShopRecord(shop).quantity(slot) != 0
+                    && !(0..1000).contains(&ShopRecord(shop).item(slot)?)
+                {
                     return Err("invalid shop item identifier".into());
                 }
             }
@@ -79,17 +82,15 @@ pub(crate) fn visit(
     for family in 0..5 {
         let mut next = family * 200;
         for slot in family * 200..(family + 1) * 200 {
-            if shop[2000 + slot] != 0 {
-                let item = word(shop, slot * 2)?;
-                let count = shop[2000 + slot];
-                shop[next * 2..next * 2 + 2].copy_from_slice(&item.to_be_bytes());
-                shop[2000 + next] = count;
+            if ShopRecord(shop).quantity(slot) != 0 {
+                let item = ShopRecord(shop).item(slot)?;
+                let count = ShopRecord(shop).quantity(slot);
+                ShopRecordMut(shop).set_stock(next, item, count);
                 next += 1;
             }
         }
         for slot in next..(family + 1) * 200 {
-            shop[slot * 2..slot * 2 + 2].fill(0);
-            shop[2000 + slot] = 0;
+            ShopRecordMut(shop).set_stock(slot, 0, 0);
         }
     }
     state.shop_access = Some(Access {

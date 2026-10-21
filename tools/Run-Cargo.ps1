@@ -9,6 +9,7 @@ param(
     [string]$ManifestPath,
     [string]$TargetDirectory,
     [switch]$Library,
+    [switch]$DocTests,
     [switch]$Ignored,
     [switch]$AllTargets,
     [switch]$Release,
@@ -28,6 +29,7 @@ $ErrorActionPreference = 'Stop'
 if ($Action -eq 'Run' -and ($Package -ne 'centurions-core' -or !$Binary)) { throw 'Run requires the headless core recorder.' }
 if ($Binary -and $Action -ne 'Run') { throw 'The recorder binary requires Run.' }
 if ($CompilerPhaseDiagnostics -and $Action -ne 'Rustc') { throw 'Compiler phase diagnostics require -Action Rustc.' }
+if ($DocTests -and ($Action -ne 'Test' -or $Library -or $TestTarget -or $AllTargets)) { throw 'DocTests requires Test without another target selector.' }
 if ($Filter -and $Action -ne 'Test') { throw 'A test filter requires -Action Test.' }
 if ($TestTarget -and ($Action -ne 'Test' -or $Library)) { throw 'A named test target requires -Action Test without -Library.' }
 $taskRoot = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
@@ -66,6 +68,7 @@ if ($OriginalFixtures) {
     $startInfo.ArgumentList.Add('original-fixtures')
 }
 if ($Library) { $startInfo.ArgumentList.Add('--lib') }
+if ($DocTests) { $startInfo.ArgumentList.Add('--doc') }
 if ($TestTarget) {
     $startInfo.ArgumentList.Add('--test')
     $startInfo.ArgumentList.Add($TestTarget)

@@ -1,8 +1,11 @@
 //! Party for combat/player_psi.
-use super::{Event, RandomState, RuleError, cost, mode_allowed, packet, put_word};
+use super::{Event, RandomState, RuleError, cost, mode_allowed, packet};
 use super::{OUTDOOR_PARTY_SPELLS, OUTDOOR_TARGET_SPELLS, PARTY_SPELLS};
 use centurions_content::mission::OpeningMission;
-use centurions_content::{Warrior, word};
+use centurions_content::{
+    Warrior,
+    records::{AttackPacket, Condition, PsiSelectionMemoryMut},
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct PartyCastRequest {
@@ -51,31 +54,31 @@ pub fn cast_party(
         count: request.power,
         scenario_duration: None,
         events: vec![Event::Sound {
-            resource_id: word(&packet, 36)?.wrapping_neg(),
+            resource_id: AttackPacket(&packet).launch_sound()?.wrapping_neg(),
         }],
     };
     let remaining = actor.psi_points()?.wrapping_sub(charge);
-    put_word(&mut result.warriors[request.warrior].bytes, 0x58, remaining);
-    for (index, value) in identity.into_iter().chain([request.power]).enumerate() {
-        put_word(
-            &mut result.memory,
-            request.warrior * 80 + 72 + index * 2,
-            value,
-        );
-    }
-    if packet[1] != 7 {
+    result.warriors[request.warrior]
+        .record_mut()
+        .set_psi_points(remaining);
+    PsiSelectionMemoryMut(&mut result.memory).remember_cast(
+        request.warrior,
+        identity,
+        request.power,
+    );
+    if AttackPacket(&packet).targeting_mode() != 7 {
         return Ok(result);
     }
     let mut next_random = random.clone();
-    let mut duration = next_random.range(i16::from(packet[13] as i8), i16::from(packet[14] as i8));
-    if packet[15] != 0 {
+    let (minimum, maximum) = AttackPacket(&packet).duration_bounds();
+    let mut duration = next_random.range(minimum, maximum);
+    let (minimum, maximum) = AttackPacket(&packet).additional_duration_bounds();
+    if minimum != 0 {
         for _ in 0..request.power {
-            duration = duration.wrapping_add(
-                next_random.range(i16::from(packet[15] as i8), i16::from(packet[16] as i8)),
-            );
+            duration = duration.wrapping_add(next_random.range(minimum, maximum));
         }
     }
-    let effect = word(&packet, 40)?;
+    let effect = AttackPacket(&packet).effect()?;
     if effect == 110 {
         result.scenario_duration = Some(duration);
     } else {
@@ -111,11 +114,17 @@ pub fn validate_party(
         centurions_content::span(&warrior.bytes, 0, 3138)?;
     }
     if disabled != 0
-        || [0x60, 0x68, 0x90, 0x98, 0xac]
-            .into_iter()
-            .any(|offset| word(&actor.bytes, offset).unwrap_or(1) != 0)
-        || word(&actor.bytes, 0x50)? <= 0
-        || word(&actor.bytes, 0x58)? <= 0
+        || [
+            actor.record().condition(Condition::Helpless),
+            actor.record().condition(Condition::ScanBlocked),
+            actor.record().automatic_mode(),
+            actor.record().condition(Condition::Confused),
+            actor.record().condition(Condition::UnlabelledScanBlock),
+        ]
+        .into_iter()
+        .any(|value| value.unwrap_or(1) != 0)
+        || actor.record().stamina()? <= 0
+        || actor.record().psi_points()? <= 0
     {
         return Err(RuleError::Invalid("warrior cannot cast outdoor psi".into()));
     }
@@ -130,10 +139,12 @@ pub fn validate_party(
             feedback: vec![crate::feedback::NativeFeedback::Warning { index: 22 }],
         });
     }
-    if !((packet[1] == 7 && matches!(word(&packet, 40)?, 0..=9 | 110))
-        || (packet[1] == 11 && matches!(word(&packet, 40)?, 0 | 70))
-        || (matches!(packet[1], 0 | 1 | 3 | 4 | 9)
-            && (matches!(word(&packet, 40)?, 1..=40 | 57 | 64))))
+    if !((AttackPacket(&packet).targeting_mode() == 7
+        && matches!(AttackPacket(&packet).effect()?, 0..=9 | 110))
+        || (AttackPacket(&packet).targeting_mode() == 11
+            && matches!(AttackPacket(&packet).effect()?, 0 | 70))
+        || (matches!(AttackPacket(&packet).targeting_mode(), 0 | 1 | 3 | 4 | 9)
+            && (matches!(AttackPacket(&packet).effect()?, 1..=40 | 57 | 64))))
     {
         return Err(RuleError::Invalid("psi unavailable outdoors".into()));
     }

@@ -1,13 +1,10 @@
-//! Host dialog fields supplied by the recovered ShowStats instruction sequence.
-use crate::{
-    RuleError, Session,
-    recovered_character_ui::{
-        self, CharacterUiObservation, CharacterUiRequest, CharacterUiServices, CharacterUiState,
-    },
-    recovered_files::{FileContext, FileObservation},
-    recovered_rendering::RenderingMemory,
+//! Character dialog fields, calculated directly from saved records. Original
+//! control IDs and font-size transitions follow ShowStats (0x159a96).
+use crate::{RuleError, Session};
+use centurions_content::{
+    native_text::NativeText,
+    records::{CharacterInformation, CharacterStatistics, Statistic},
 };
-use centurions_content::{native_text::NativeText, ui};
 use std::collections::BTreeMap;
 
 pub type Fields = BTreeMap<i16, (String, u16)>;
@@ -19,48 +16,50 @@ pub fn statistics(state: &Session, member: usize) -> Result<Fields, RuleError> {
         .get(member)
         .ok_or_else(|| RuleError::Invalid("statistics warrior is outside the squad".into()))?;
     let mut fields = Fields::new();
-    let value = |offset| -> Result<i32, centurions_content::ContentError> {
-        Ok(i32::from_be_bytes(
-            centurions_content::span(&warrior.bytes, offset, 4)?
-                .try_into()
-                .unwrap(),
-        ))
-    };
-    let mut score = value(0xa46)?.wrapping_sub(value(0xa42)?) / 20;
-    for (offset, multiplier) in [
-        (0xa4a, 1_i32),
-        (0xa4e, -2),
-        (0xa52, -2),
-        (0xa56, 1),
-        (0xa5a, 3),
-        (0xa5e, -75),
-        (0xa62, -35),
-        (0xa66, -3),
-        (0xa6a, 4),
-        (0xa6e, 6),
-        (0xa72, -1),
+    let statistics = CharacterStatistics(&warrior.bytes);
+    let value = |statistic| statistics.value(statistic);
+    let mut score =
+        value(Statistic::DamageDealt)?.wrapping_sub(value(Statistic::DamageReceived)?) / 20;
+    for (statistic, multiplier) in [
+        (Statistic::Hits, 1_i32),
+        (Statistic::HitsReceived, -2),
+        (Statistic::Misses, -2),
+        (Statistic::AttacksAvoided, 1),
+        (Statistic::Kills, 3),
+        (Statistic::Deaths, -75),
+        (Statistic::Knockouts, -35),
+        (Statistic::ScansCast, -3),
+        (Statistic::VehiclesDisabled, 4),
+        (Statistic::VehiclesCaptured, 6),
+        (Statistic::ScorePenalty, -1),
     ] {
-        score = score.wrapping_add(value(offset)?.wrapping_mul(multiplier));
+        score = score.wrapping_add(value(statistic)?.wrapping_mul(multiplier));
     }
     fields.insert(6, (score.to_string(), 12));
     fields.insert(37, (warrior.name.clone(), 12));
-    for (item, offset) in [
-        (26, 0xa46),
-        (27, 0xa4a),
-        (42, 0xa56),
-        (28, 0xa5a),
-        (30, 0xa6a),
-        (35, 0xa6e),
-        (33, 0xa66),
-        (31, 0xa42),
-        (32, 0xa4e),
-        (43, 0xa52),
-        (29, 0xa62),
-        (34, 0xa5e),
+    for (item, statistic) in [
+        (26, Statistic::DamageDealt),
+        (27, Statistic::Hits),
+        (42, Statistic::AttacksAvoided),
+        (28, Statistic::Kills),
+        (30, Statistic::VehiclesDisabled),
+        (35, Statistic::VehiclesCaptured),
+        (33, Statistic::ScansCast),
+        (31, Statistic::DamageReceived),
+        (32, Statistic::HitsReceived),
+        (43, Statistic::Misses),
+        (29, Statistic::Knockouts),
+        (34, Statistic::Deaths),
     ] {
-        fields.insert(item, (value(offset)?.to_string(), 12));
+        fields.insert(item, (value(statistic)?.to_string(), 12));
     }
-    fields.insert(71, (value(0xa72)?.wrapping_neg().to_string(), 12));
+    fields.insert(
+        71,
+        (
+            value(Statistic::ScorePenalty)?.wrapping_neg().to_string(),
+            12,
+        ),
+    );
     Ok(fields)
 }
 
@@ -70,192 +69,189 @@ pub fn information(
     native: &NativeText,
     strings: &BTreeMap<i16, Vec<u8>>,
 ) -> Result<Fields, RuleError> {
-    let record = state
+    let warrior = state
         .warriors
         .get(member)
         .ok_or_else(|| RuleError::Invalid("information warrior is outside the squad".into()))?;
-    let mut memory = RenderingMemory::default();
-    for (address, length) in [
-        (0x4394b8, 8),
-        (0x4358ce, 4),
-        (0x443000, 0x1000),
-        (0x442700, 0x100),
-        (0x479ed8, 256),
-        (0x700f00, 0x200),
-    ] {
-        memory.insert_region(address, &vec![0; length]);
+    // Retain the previous adapter's required original-data ranges.
+    native.bytes(0x400af0, 0x50)?;
+    native.bytes(0x402f3c, 10)?;
+    let record = warrior.record();
+    let profile = CharacterInformation(&warrior.bytes);
+    let mut fields = Fields::new();
+    let stats = statistics(state, member)?;
+    for (item, source) in [(103, 28), (104, 26), (101, 6)] {
+        fields.insert(item, stats[&source].clone());
     }
-    for (address, length) in [(0x400af0, 0x50), (0x402f3c, 10)] {
-        memory.insert_region(address, native.bytes(address, length)?);
+    for (index, item) in [19, 20, 21, 22, 23, 24, 52].into_iter().enumerate() {
+        number(&mut fields, item, profile.attribute(index)?, 12);
     }
-    memory.insert_region(0x44721c, &record.bytes);
-    for (index, record) in state.warriors.iter().enumerate() {
-        memory.insert_region(0x448aa0 + index as u32 * 3138, &record.bytes);
+    number(&mut fields, 71, profile.age_days()? / 365, 12);
+    let mut credits = state.party_currency;
+    // ShowStats uses a signed-byte last-member bound, even for malformed parties.
+    let last = state.warriors.len().saturating_sub(1) as u8 as i8;
+    for index in 0..=i16::from(last) {
+        let carried =
+            CharacterInformation(&state.warriors[index as usize].bytes).carried_credits()?;
+        credits = credits.wrapping_add(i32::from(carried));
     }
-    memory.insert_region(0x44273a, &[state.warriors.len().saturating_sub(1) as u8]);
-    memory.insert_region(0x442788, &state.party_currency.to_be_bytes());
-    memory.insert_region(0x701008, &1_i16.to_be_bytes());
-    let mut services = DialogServices {
-        strings,
-        fields: Fields::new(),
-        size: 12,
+    number(
+        &mut fields,
+        64,
+        credits,
+        if credits > 9_999_999 { 10 } else { 12 },
+    );
+    fields.insert(
+        45,
+        (decode(indexed(strings, 131, record.profession()?)?), 12),
+    );
+    fields.insert(46, (decode(indexed(strings, 129, record.race()?)?), 12));
+    let gender_text = match profile.gender()? {
+        1 => 0x400b12,
+        2 => 0x400b0a,
+        _ => 0x400b04,
     };
-    recovered_character_ui::show_stats(
-        &CharacterUiState {
-            memory,
-            files: FileContext::default(),
-        },
-        1,
-        0x701000,
-        &mut services,
-    )?;
-    Ok(services.fields)
-}
-
-struct DialogServices<'a> {
-    strings: &'a BTreeMap<i16, Vec<u8>>,
-    fields: Fields,
-    size: u16,
-}
-
-fn read(memory: &RenderingMemory, address: u32, length: usize) -> Result<Vec<u8>, RuleError> {
-    (0..length)
-        .map(|i| memory.byte(address + i as u32))
-        .collect()
-}
-fn cstring(memory: &RenderingMemory, address: u32) -> Result<Vec<u8>, RuleError> {
-    let mut bytes = Vec::new();
-    for offset in 0..255 {
-        let byte = memory.byte(address + offset)?;
-        if byte == 0 {
-            return Ok(bytes);
-        }
-        bytes.push(byte);
+    fields.insert(47, (native.text(gender_text, true)?, 12));
+    for (item, value) in [
+        (48, record.actions_per_round()?),
+        (49, record.attack_limit()?),
+        (25, record.scan_capacity()?),
+        (113, record.shield_points()?),
+        // Native TextSize(10) is immediately reset to 12 for shield capacity.
+        (106, profile.shield_capacity()?),
+    ] {
+        number(&mut fields, item, value, 12);
     }
-    Err(RuleError::Invalid(
-        "unterminated character dialog text".into(),
-    ))
-}
-fn pascal(memory: &RenderingMemory, address: u32) -> Result<Vec<u8>, RuleError> {
-    read(memory, address, usize::from(memory.byte(address)?) + 1)
-}
-impl CharacterUiServices for DialogServices<'_> {
-    fn observe(
-        &mut self,
-        request: &CharacterUiRequest,
-        source: &RenderingMemory,
-    ) -> Result<CharacterUiObservation, RuleError> {
-        let mut memory = source.clone();
-        match *request {
-            CharacterUiRequest::GetDialogItem {
-                item,
-                type_address,
-                handle_address,
-                rect_address,
-                ..
-            } => {
-                memory.insert_region(type_address, &8_i16.to_be_bytes());
-                memory.insert_region(handle_address, &(item as u32).to_be_bytes());
-                memory.insert_region(rect_address, &[0; 8]);
-            }
-            CharacterUiRequest::TextSize(size) => self.size = size as u16,
-            CharacterUiRequest::NumberToString { value, destination } => {
-                let text = value.to_string();
-                let mut raw = vec![text.len() as u8];
-                raw.extend_from_slice(text.as_bytes());
-                memory.insert_region(destination, &raw);
-            }
-            CharacterUiRequest::GetIndexedString {
-                destination,
-                resource,
-                index,
-            } => {
-                let table = self.strings.get(&resource).ok_or_else(|| {
-                    RuleError::Invalid(format!("character STR# {resource} missing"))
-                })?;
-                if index < 1 || centurions_content::word(table, 0)? < index {
-                    return Err(RuleError::Invalid(
-                        "character string index outside resource".into(),
-                    ));
-                }
-                let mut offset = 2;
-                for _ in 1..index {
-                    offset += 1 + usize::from(centurions_content::span(table, offset, 1)?[0]);
-                }
-                let length = usize::from(centurions_content::span(table, offset, 1)?[0]);
-                memory.insert_region(
-                    destination,
-                    centurions_content::span(table, offset, length + 1)?,
-                );
-            }
-            CharacterUiRequest::SetDialogItemText {
-                handle,
-                text_address,
-            } => {
-                let mut raw = vec![0, 1];
-                raw.extend(pascal(&memory, text_address)?);
-                self.fields
-                    .insert(handle as i16, (ui::string_list(&raw)?.remove(0), self.size));
-            }
-            CharacterUiRequest::CopyCString {
-                destination,
-                source,
-            } => {
-                let mut bytes = cstring(&memory, source)?;
-                bytes.push(0);
-                memory.insert_region(destination, &bytes);
-            }
-            CharacterUiRequest::AppendCString {
-                destination,
-                source,
-                count,
-            } => {
-                let mut bytes = cstring(&memory, destination)?;
-                bytes.extend(
-                    cstring(&memory, source)?
-                        .into_iter()
-                        .take(usize::from(count)),
-                );
-                if bytes.len() > 255 {
-                    return Err(RuleError::Invalid("character text overflow".into()));
-                }
-                bytes.push(0);
-                memory.insert_region(destination, &bytes);
-            }
-            CharacterUiRequest::CToPascal(address) => {
-                let bytes = cstring(&memory, address)?;
-                let mut raw = vec![bytes.len() as u8];
-                raw.extend(bytes);
-                memory.insert_region(address, &raw);
-            }
-            CharacterUiRequest::PascalToC(address) => {
-                let mut bytes = pascal(&memory, address)?[1..].to_vec();
-                bytes.push(0);
-                memory.insert_region(address, &bytes);
-            }
-            CharacterUiRequest::SetPort(_)
-            | CharacterUiRequest::BackPixPat(_)
-            | CharacterUiRequest::ForeColor(_)
-            | CharacterUiRequest::TextFont(_)
-            | CharacterUiRequest::RgbForeColor(_) => {}
-            _ => {
-                return Err(RuleError::Unsupported {
-                    action: "character_information",
-                    dependency: "unexpected dialog service",
-                });
+    number(&mut fields, 81, profile.experience()?, 12);
+    number(&mut fields, 83, profile.upgrade_points()?, 12);
+    for (item, value) in [
+        (34, record.shield_chance()?),
+        (35, profile.shield_cost()?),
+        (36, record.armor()?),
+        (32, record.level()?),
+        (50, record.carried_weight()?),
+        (51, record.weight_capacity()?),
+    ] {
+        number(&mut fields, item, value, 12);
+    }
+    if record.maximum_psi()? != 0 {
+        number(
+            &mut fields,
+            33,
+            crate::rules::spell_count(record.level()?) as i16,
+            12,
+        );
+    } else {
+        fields.insert(33, (native.text(0x400afe, true)?, 12));
+    }
+    fields.insert(67, (decode(profile.name_bytes()?), 12));
+    for (item, value) in [
+        (108, profile.displayed_damage_minimum()?),
+        (
+            109,
+            record
+                .bare_hand_damage()?
+                .wrapping_add(record.bare_hand_bonus()?),
+        ),
+        (110, record.missile_accuracy()?),
+        (111, record.melee_accuracy()?),
+        (54, record.missile_dodge()?),
+        (55, record.melee_dodge()?),
+    ] {
+        number(&mut fields, item, value, 12);
+    }
+    if record.psi_school()? != 0 && record.maximum_psi()? != 0 {
+        let size = if record.maximum_psi()? > 999 { 10 } else { 12 };
+        number(&mut fields, 112, record.psi_points()?, size);
+        number(&mut fields, 58, record.maximum_psi()?, size);
+    } else {
+        for item in [112, 58] {
+            fields.insert(item, (native.text(0x400afc, true)?, 12));
+        }
+    }
+    let size = if record.maximum_stamina()? > 999 {
+        10
+    } else {
+        12
+    };
+    for (item, value) in [
+        (56, record.stamina()?),
+        (57, record.maximum_stamina()?),
+        (59, profile.psionic_resistance()?),
+        (26, profile.movement_rate()?),
+    ] {
+        number(&mut fields, item, value, size);
+    }
+    for index in 0..8 {
+        number(
+            &mut fields,
+            37 + index as i16,
+            profile.damage_resistance(index)?,
+            12,
+        );
+    }
+    for item in 60..64 {
+        fields.insert(item, (native.text(0x400afc, true)?, 12));
+    }
+    let mut shown = 0;
+    for index in 0..12 {
+        let bonus = record.creature_category_bonus(index)?;
+        if bonus == 0 {
+            continue;
+        }
+        let sign = native.text(if bonus > 0 { 0x400afa } else { 0x400af9 }, false)?;
+        let mut label = sign.into_bytes();
+        label.extend(bonus.to_string().bytes().take(3));
+        label.extend(indexed(strings, 132, index as i16 + 1)?.iter().take(45));
+        if shown < 4 {
+            fields.insert(60 + shown, (decode(&label), 12));
+            shown += 1;
+        }
+    }
+    for item in 27..32 {
+        fields.insert(item, (native.text(0x400afc, true)?, 12));
+    }
+    let mut shown = 0;
+    for index in 0..40 {
+        if record.condition_duration(index)? != 0 {
+            fields.insert(
+                27 + shown,
+                (decode(indexed(strings, 133, index as i16 + 1)?), 12),
+            );
+            shown += 1;
+            if shown == 5 {
+                break;
             }
         }
-        Ok(CharacterUiObservation { value: 0, memory })
     }
-    fn profile_observations(
-        &mut self,
-        _: i16,
-        _: i16,
-        _: &FileContext,
-    ) -> Result<Vec<FileObservation>, RuleError> {
-        Err(RuleError::Unsupported {
-            action: "character_information",
-            dependency: "unexpected profile service",
-        })
+    Ok(fields)
+}
+
+fn number(fields: &mut Fields, item: i16, value: impl ToString, size: u16) {
+    fields.insert(item, (value.to_string(), size));
+}
+
+fn decode(bytes: &[u8]) -> String {
+    encoding_rs::MACINTOSH.decode(bytes).0.into_owned()
+}
+
+fn indexed(
+    strings: &BTreeMap<i16, Vec<u8>>,
+    resource: i16,
+    index: i16,
+) -> Result<&[u8], RuleError> {
+    let table = strings
+        .get(&resource)
+        .ok_or_else(|| RuleError::Invalid(format!("character STR# {resource} missing")))?;
+    if index < 1 || centurions_content::word(table, 0)? < index {
+        return Err(RuleError::Invalid(
+            "character string index outside resource".into(),
+        ));
     }
+    let mut offset = 2;
+    for _ in 1..index {
+        offset += 1 + usize::from(centurions_content::span(table, offset, 1)?[0]);
+    }
+    let length = usize::from(centurions_content::span(table, offset, 1)?[0]);
+    Ok(centurions_content::span(table, offset + 1, length)?)
 }

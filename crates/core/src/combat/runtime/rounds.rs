@@ -4,7 +4,7 @@ use super::{
     select_turn_bounded,
 };
 use crate::{Event, Presentation, RuleError, ScriptState, Session};
-use centurions_content::{Content, word};
+use centurions_content::Content;
 
 pub(super) fn advance_round(
     state: &mut Session,
@@ -221,7 +221,7 @@ pub(super) fn reduce_and_resume_round(
     if state
         .warriors
         .iter()
-        .any(|warrior| warrior.bytes[0x9de] != 0)
+        .any(|warrior| warrior.record().bleeding_flag() != 0)
     {
         events.push(Event::Sound { resource_id: 10122 });
     }
@@ -237,7 +237,7 @@ pub(super) fn reduce_and_resume_round(
         || c.enemies
             .records
             .iter()
-            .all(|m| m.stamina().unwrap_or(0) <= 0 || word(&m.bytes, 14).unwrap_or(1) == 0)
+            .all(|m| m.stamina().unwrap_or(0) <= 0 || m.record().faction().unwrap_or(1) == 0)
     {
         events.extend(finish_action(
             state,

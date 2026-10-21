@@ -1,4 +1,4 @@
-use crate::combat::{Combat, attack, damage, firearm, lifecycle, put_word, spell_conditions};
+use crate::combat::{Combat, attack, damage, firearm, lifecycle, spell_conditions};
 use crate::{RandomState, RuleError};
 use attack::AttackResult;
 use damage::{DamageFlags, DamagePacket, resolve_damage, resolve_damage_with_amount};

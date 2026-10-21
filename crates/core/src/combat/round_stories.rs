@@ -1,6 +1,9 @@
-use crate::combat::{Combat, footprint};
+use crate::combat::Combat;
+mod spawning;
 use crate::{RandomState, RuleError};
-use centurions_content::{combat::MonsterRecord, mission::OpeningMission, span, word};
+use centurions_content::{mission::OpeningMission, records::StoryRecord, span, word};
+use spawning::spawn;
+pub(crate) use spawning::spawn_at;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RoundEffect {
@@ -23,163 +26,11 @@ pub struct RoundOutcome {
     pub hostile_additions: i16,
 }
 
-fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
-    bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
-}
-
 fn unsupported(dependency: &'static str) -> RuleError {
     RuleError::Unsupported {
         action: "combat.round_story",
         dependency,
     }
-}
-
-/// Preserve the authored summon-ID boundary before invoking buildmonster.
-fn build_monster(
-    definitions: &[u8],
-    id: i16,
-    faction: i16,
-    difficulty: i16,
-    random: &mut RandomState,
-) -> Result<MonsterRecord, RuleError> {
-    let mut monster = MonsterRecord::read(definitions, id)?;
-    put_word(&mut monster.bytes, 0x10c, -1);
-    let mut monster = super::monster::summon(monster, faction, difficulty, random)?;
-    let chance = word(&monster.bytes, 0x5c)?;
-    put_word(&mut monster.bytes, 0x5c, chance.wrapping_neg());
-    Ok(monster)
-}
-
-fn passable(body: &footprint::PlacedBody, mission: &OpeningMission) -> Result<bool, RuleError> {
-    let signed_size = word(&body.monster.bytes, 0x10)?;
-    let size = signed_size.wrapping_abs();
-    for (offset, occupied, anchor) in [
-        (0x11e, true, true),
-        (0x11c, size == 1 || size == 3, false),
-        (0x118, size == 3, false),
-        (0x11a, size >= 2, false),
-    ] {
-        if !occupied {
-            continue;
-        }
-        let tile = word(&body.monster.bytes, offset)?;
-        if tile <= 999 {
-            return Ok(false);
-        }
-        let obstruction = mission.tile_word(tile - 1000, 4)?;
-        if anchor {
-            if obstruction == 2 || (signed_size == 0 && obstruction != 0) {
-                return Ok(false);
-            }
-        } else if obstruction >= 2 {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-/// Opcode124 searches full expanding squares without combatsetup's size-zero jitter.
-fn place_spawn(
-    combat: &Combat,
-    mission: &OpeningMission,
-    monster: &MonsterRecord,
-    center: (i16, i16),
-    body: i16,
-) -> Result<footprint::PlacedBody, RuleError> {
-    let mut map = combat.map.clone();
-    for ring in 1..=180_i16 {
-        for dy in -ring..ring {
-            for dx in -ring..ring {
-                let position = (center.0.wrapping_add(dx), center.1.wrapping_add(dy));
-                let absolute = (
-                    position.0.wrapping_add(map.shift.0).wrapping_add(5),
-                    position.1.wrapping_add(map.shift.1).wrapping_add(5),
-                );
-                if !(7..83).contains(&absolute.0) || !(7..83).contains(&absolute.1) {
-                    continue;
-                }
-                let candidate = footprint::place(&map, monster, position, body)?;
-                if passable(&candidate, mission)? {
-                    return Ok(candidate);
-                }
-                map = footprint::restore(&candidate.map, &candidate.monster, position)?;
-            }
-        }
-    }
-    Err(unsupported("summoning placement budget exhausted"))
-}
-
-fn spawn(
-    combat: &mut Combat,
-    mission: &OpeningMission,
-    definitions: &[u8],
-    extra: &[u8],
-    active: usize,
-    random: &mut RandomState,
-    result: &mut RoundOutcome,
-) -> Result<(), RuleError> {
-    let center = combat.story_position(active)?;
-    spawn_at(
-        combat,
-        mission,
-        definitions,
-        extra,
-        center,
-        -1,
-        random,
-        result,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn spawn_at(
-    combat: &mut Combat,
-    mission: &OpeningMission,
-    definitions: &[u8],
-    extra: &[u8],
-    center: (i16, i16),
-    faction: i16,
-    random: &mut RandomState,
-    result: &mut RoundOutcome,
-) -> Result<(), RuleError> {
-    // The original checks capacity before it draws a negative count.
-    if combat.enemies.records.len() >= 100 {
-        return Ok(());
-    }
-    let id = word(extra, 2)?;
-    let count = word(extra, 4)?;
-    let count = if count < 0 {
-        random.bound(count.wrapping_abs())
-    } else {
-        count
-    };
-    if count < 0 || combat.enemies.records.len() + count as usize > 100 {
-        return Err(unsupported(
-            "summon count exceeds the native roster capacity",
-        ));
-    }
-    for _ in 0..count {
-        let monster = build_monster(definitions, id, faction, combat.difficulty, random)?;
-        let body = combat.enemies.records.len() as i16 + 10;
-        let placed = place_spawn(combat, mission, &monster, center, body)?;
-        combat.map = placed.map;
-        if word(&placed.monster.bytes, 0xe)? != 0 {
-            result.hostile_additions = result.hostile_additions.wrapping_add(1);
-        }
-        combat.enemies.records.push(placed.monster);
-        combat.enemies.positions.push(placed.position);
-        if let Some(slot) = combat.order[1..].iter_mut().rev().find(|id| **id == -1) {
-            *slot = body;
-        }
-        let sound = word(extra, 6)?;
-        if sound != 0 {
-            result.effects.push(RoundEffect::Sound(sound));
-        }
-        result
-            .effects
-            .push(RoundEffect::Spawn { body, monster: id });
-    }
-    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -412,10 +263,10 @@ pub(crate) fn neutralize(combat: &mut Combat, extra: &[u8]) -> Result<(), RuleEr
         return Err(unsupported("native reverse-mode victory-counter context"));
     }
     for record in &mut combat.enemies.records {
-        if i16::from(record.bytes[0x103] as i8) == word(extra, 0)?
-            && word(&record.bytes, 0x110)? > 0
+        if i16::from(record.record().definition_id()) == word(extra, 0)?
+            && record.record().stamina()? > 0
         {
-            record.bytes[14..16].fill(0);
+            record.record_mut().set_faction(0);
         }
     }
     Ok(())
@@ -456,7 +307,7 @@ pub(crate) fn destroy_class(
         let mut nearest = None;
         let mut distance = radius;
         for (index, record) in combat.enemies.records.iter().enumerate() {
-            if record.stamina()? <= 0 || i16::from(record.bytes[0x103] as i8) != class {
+            if record.stamina()? <= 0 || i16::from(record.record().definition_id()) != class {
                 continue;
             }
             let point = combat.enemies.positions[index];
@@ -553,8 +404,7 @@ pub fn advance(
         }
         let record = mission.script(program.script.unwrap())?;
         let cursor = usize::from(program.cursor);
-        let opcode = word(&record, 8 + cursor * 2)?;
-        let value = word(&record, 24 + cursor * 2)?;
+        let (opcode, value) = StoryRecord(&record).instruction(cursor)?;
         program.cursor += 1;
         match opcode {
             0 => {}

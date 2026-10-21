@@ -112,7 +112,7 @@ pub(super) fn reload_at_occupied_cell(
         &mut state.random,
         state.inventory_record.as_ref(),
     )?;
-    let completed = refit.native_return != 0;
+    let completed = refit.completed_refit();
     effects.extend(crate::ammunition::commit_result(state, actor, refit)?);
     if !completed {
         state.warriors[actor].record_mut().set_automatic_mode(0);

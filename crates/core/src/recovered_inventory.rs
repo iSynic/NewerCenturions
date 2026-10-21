@@ -289,12 +289,7 @@ pub fn calcw(
     Ok(result)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GoldState {
-    pub party_gold: i32,
-    pub highest_party_index: i8,
-    pub warriors: Vec<Warrior>,
-}
+pub use crate::story_inventory::payment::PaymentState as GoldState;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TakenGold {
@@ -303,86 +298,30 @@ pub struct TakenGold {
     pub native_return: i32,
 }
 
-/// takegold reads a signed WORD cost and uses the native doubled WORD token check.
+/// Reference adapter: game payment produces typed effects; this facade encodes
+/// the original write addresses for historical reference callers only.
 pub fn takegold(state: &GoldState, amount: i16) -> Result<TakenGold, RuleError> {
-    let mut result = TakenGold {
-        state: state.clone(),
-        effects: Vec::new(),
-        native_return: 1,
-    };
-    if i32::from(amount) < state.party_gold {
-        result.state.party_gold = state.party_gold.wrapping_sub(i32::from(amount));
-        effect_write(
-            &mut result.effects,
-            0x442788,
-            &result.state.party_gold.to_be_bytes(),
-        );
-        return Ok(result);
-    }
-    let mut total = 0_u16;
-    for member in 0..=i16::from(state.highest_party_index) {
-        let warrior = gold_warrior(state, member as usize)?;
-        let tokens = word(&warrior.bytes, 0x9da)? as u16;
-        total = total.wrapping_add(tokens).wrapping_add(tokens);
-    }
-    let available = state.party_gold.wrapping_add(i32::from(total));
-    if available < i32::from(amount) {
-        result.effects.push(InventoryEffect::Warning(50));
-        result.native_return = 0;
-        return Ok(result);
-    }
-    let mut remaining = amount.wrapping_sub(state.party_gold as i16);
-    result.state.party_gold = 0;
-    effect_write(&mut result.effects, 0x442788, &[0; 4]);
-    let mut member = 0_i8;
-    let mut decremented_this_cycle = false;
-    loop {
-        let index = usize::try_from(member).map_err(|_| {
-            unavailable(
-                "inventory.gold",
-                "round-robin BYTE addressed before party table",
-            )
-        })?;
-        let warrior = gold_warrior(&result.state, index)?;
-        let tokens = word(&warrior.bytes, 0x9da)?;
-        if tokens != 0 {
-            remaining = remaining.wrapping_sub(1);
-            let bytes = tokens.wrapping_sub(1).to_be_bytes();
-            write_warrior(
-                &mut result.state.warriors[index],
-                &mut result.effects,
-                PARTY_BASE + index as u32 * WARRIOR_BYTES as u32,
-                0x9da,
-                &bytes,
-            );
-            decremented_this_cycle = true;
-        }
-        member = member.wrapping_add(1);
-        if member > state.highest_party_index {
-            member = 0;
-            if remaining != 0 && !decremented_this_cycle {
-                return Err(unavailable(
-                    "inventory.gold",
-                    "native token loop cannot finish after token exhaustion",
-                ));
+    use crate::story_inventory::payment::{PaymentEffect, pay};
+    let payment = pay(state, amount)?;
+    let mut effects = Vec::new();
+    for effect in payment.effects {
+        match effect {
+            PaymentEffect::PartyCredits(value) => {
+                effect_write(&mut effects, 0x442788, &value.to_be_bytes())
             }
-            decremented_this_cycle = false;
-        }
-        // This is a do-while: an initially zero remainder still visits member zero once.
-        if remaining == 0 {
-            break;
+            PaymentEffect::WarriorCredits { index, credits } => effect_write(
+                &mut effects,
+                PARTY_BASE + index as u32 * WARRIOR_BYTES as u32 + 0x9da,
+                &credits.to_be_bytes(),
+            ),
+            PaymentEffect::InsufficientCredits => effects.push(InventoryEffect::Warning(50)),
         }
     }
-    Ok(result)
-}
-
-fn gold_warrior(state: &GoldState, member: usize) -> Result<&Warrior, RuleError> {
-    let warrior = state
-        .warriors
-        .get(member)
-        .ok_or_else(|| unavailable("inventory.gold", "party record outside supplied table"))?;
-    require_warrior(warrior)?;
-    Ok(warrior)
+    Ok(TakenGold {
+        state: payment.state,
+        effects,
+        native_return: i32::from(payment.paid),
+    })
 }
 
 fn require_warrior(warrior: &Warrior) -> Result<(), RuleError> {

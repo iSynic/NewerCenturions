@@ -1,4 +1,5 @@
 use crate::{Phase, RuleError, Session, atomic_write};
+use centurions_content::records::{CharacterIdentityMut, ItemDefinition, LearnedScansMut};
 use centurions_content::{Content, Warrior};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -96,23 +97,15 @@ pub fn mission_records(state: &Session, content: &Content) -> Result<Vec<Warrior
                 .items
                 .get(usize::from(id.unsigned_abs()))
                 .ok_or("roster item definition missing")?;
-            let kind = centurions_content::word(definition, 26)?;
+            let kind = ItemDefinition(definition).category()?;
             if kind < 0 || matches!(kind, 23..=25) {
                 crate::equipment::drop(warrior, slot, content, mission)?;
             }
         }
-        for (destination, fields) in [
-            (2, &[0x3a, 0x52, 0x1e][..]),
-            (0x124, &[6, 0x5a, 0x9e4, 0x9e6][..]),
-            (0xa40, &[0xa, 0x52, 0x9e8, 0x52, 0x22][..]),
-        ] {
-            let value = fields.iter().try_fold(0_i16, |sum, offset| {
-                centurions_content::word(&warrior.bytes, *offset).map(|n| sum.wrapping_add(n))
-            })?;
-            warrior.bytes[destination..destination + 2].copy_from_slice(&value.to_be_bytes());
-        }
+        CharacterIdentityMut(&mut warrior.bytes).refresh_save_checksums()?;
         if let Some(psi) = &state.psi_memory {
-            warrior.bytes[0xa76..0xac6].copy_from_slice(&psi[member * 80..(member + 1) * 80]);
+            LearnedScansMut(&mut warrior.bytes)
+                .restore_selection_memory(&psi[member * 80..(member + 1) * 80]);
         }
     }
     Ok(records)

@@ -25,7 +25,6 @@ pub use enemy_actions::{
     EnemyWork, enemy_action, enemy_action_with_work, enemy_action_with_work_and_buffs,
 };
 mod spell_results;
-use spell_results::increment_stat;
 pub(crate) use spell_results::{append_spell_outcomes, resolve_spell_mask};
 mod enemy_spells;
 use enemy_spells::{enemy_spell, enemy_spell_continue, refresh_enemy_item_alias};

@@ -110,25 +110,25 @@ jobs:
               packages[0].rename(root / f'NewerCenturions-{tag}-{platform}{suffix}.zip')
           PY
           cat > release-notes.md <<'NOTES'
-          This beta records the accepted Hive Leader compatibility policy and its new original-code verification. Gameplay behavior is unchanged from beta 8.
+          This beta replaces more of the active CPU-state machinery with named game logic. Attacks, reloads, Psi, equipment, shops, character development and story effects now have clearer rules and record views. The translated engine remains available as a reference; this is not a claim that every translated routine has been rewritten or every original behavior verified.
 
-          ### Hive qualification
-
-          The original shape-zero targeting lookup reads outside guest RAM/ROM. Bounded execution of the original Centurions code showed that readable host memory can change the result; two unreadable-memory controls agree with the reconstruction's deterministic empty-mask/zero-fill handling. That compatibility policy is accepted, and checklist item T-V06 is closed with qualification. Original-Mac whole-turn fidelity remains unverified. This is not a claim of complete original-game parity.
-
-          ### Validation and saves
-
-          Local validation passed 316 original-data workspace tests, five default-feature tests, 15 Python checks, formatting, Clippy and release compilation. All 682 protected original/reference files remain unchanged. Test code is 24.89% of maintained production code. The extended campaign replay was not rerun for this policy-only change; earlier assisted campaign evidence retains its original scope.
+          ### Compatibility and verification
 
           Save schema 13 and readers for versions 1-12 are unchanged. Keep backups when switching builds. Compatibility with populated original Mac saves remains unverified.
 
+          Local verification passed 318 executable Rust cases, 15 Python checks and six assisted campaign routes with unchanged state, events and save/resume results. The combined local test commands reached their overall time limit; documentation checks and branch receipts completed separately. Formatting, Clippy and release compilation passed. All 293 original files and 390 native fixtures remain unchanged. Test code is 24.52% of maintained production code.
+
+          ### Hive qualification
+
+          The accepted Hive Leader empty-mask/zero-fill compatibility policy is unchanged. The original shape-zero lookup can read outside guest RAM/ROM, and bounded original-code execution showed that readable host memory can affect its result. Original-Mac whole-turn fidelity remains unverified. The qualified policy does not establish complete original-game parity.
+
           ### Remaining live acceptance
 
-          Current-build user-operated checks remain open for named Save/Open and cancellation; fullscreen/window recovery; held movement, targeting and modal scheduling; inventory, trade and shops; sound/music and preferences; original visuals/help/text placement; and sustained desktop CPU, memory and responsiveness. Headless checks and the accepted Hive policy do not close these seven live-acceptance groups.
+          Current-build user-operated checks remain open for named Save/Open and cancellation; fullscreen/window recovery; held movement, targeting and modal scheduling; inventory, trade and shops; sound/music and preferences; original visuals/help/text placement; and sustained desktop CPU, memory and responsiveness. Headless checks and assisted campaign replays do not close these live-acceptance groups.
 
           ### Downloads and installation
 
-          Windows x86_64, Linux x86_64, macOS Apple Silicon and macOS Intel packages are included. Linux and macOS remain experimental; native CI checks are separate from live platform acceptance. macOS bundles use ad hoc signatures and are not Developer ID signed or notarized.
+          Windows x86_64, Linux x86_64, macOS Apple Silicon and macOS Intel packages are included. Linux and macOS remain experimental; native CI validation is separate from live platform acceptance. macOS bundles use ad hoc signatures and are not Developer ID signed or notarized.
 
           Extract beside your existing New Centurions installation. Original game files and preserved resource forks are required and are not bundled. SHA256SUMS.txt records the verified archive hashes.
           NOTES

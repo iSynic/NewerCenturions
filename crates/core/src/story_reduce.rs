@@ -1,5 +1,9 @@
 use crate::{RandomState, RuleError, story_health};
-use centurions_content::{Warrior, span, word};
+use centurions_content::{
+    Warrior,
+    records::{Condition, WarriorRecord, WarriorRecordMut},
+    span,
+};
 
 pub fn reduce_outdoors(
     warriors: &[Warrior],
@@ -23,13 +27,13 @@ pub fn reduce_outdoors(
     };
     let mut next_random = random.clone();
     for member in 0..outcome.warriors.len() {
-        let bytes = &outcome.warriors[member].bytes;
-        let stamina = word(bytes, 0x50)?;
-        let regeneration = word(bytes, 0x66)?;
+        let warrior = outcome.warriors[member].record();
+        let stamina = warrior.stamina()?;
+        let regeneration = warrior.condition(Condition::Regenerating)?;
         if regeneration != 0
             && stamina > -10
-            && stamina < word(bytes, 0x52)?
-            && word(bytes, 0x90)? == 0
+            && stamina < warrior.maximum_stamina()?
+            && warrior.automatic_mode()? == 0
         {
             let healed = story_health::heal_outdoors(
                 &outcome.warriors,
@@ -54,13 +58,18 @@ pub fn reduce_outdoors(
         outcome.context = disease.context;
         outcome.events.extend(disease.events);
         outcome.amounts.extend(disease.amounts);
-        for (offset, amount, address) in [(0x8a, None, 0x401948), (0x8c, Some(2), 0x40193a)] {
-            let bytes = &mut outcome.warriors[member].bytes;
-            let before = word(bytes, 0x50)?;
-            let condition = word(bytes, offset)?;
+        for (condition, amount, address) in [
+            (Condition::SeventhLevelProtection, None, 0x401948),
+            (Condition::Speedy, Some(2), 0x40193a),
+        ] {
+            let warrior = &mut outcome.warriors[member];
+            let before = warrior.record().stamina()?;
+            let condition = warrior.record().condition(condition)?;
             if condition != 0 && before > 0 {
                 let amount = amount.unwrap_or(condition.wrapping_abs());
-                bytes[0x50..0x52].copy_from_slice(&before.wrapping_sub(amount).to_be_bytes());
+                warrior
+                    .record_mut()
+                    .set_stamina(before.wrapping_sub(amount));
                 outcome.context.effect = 7;
                 if before.wrapping_sub(amount) < 1 {
                     outcome.context.unavailable = outcome.context.unavailable.wrapping_add(1);
@@ -88,36 +97,39 @@ pub fn reduce_outdoors(
         outcome.context = poison.context;
         outcome.events.extend(poison.events);
         outcome.amounts.extend(poison.amounts);
-        let bytes = &mut outcome.warriors[member].bytes;
-        energy(bytes, energy_recovery_disabled)?;
-        if word(bytes, 0x98)? != 0 && word(bytes, 0x10)? != 0 {
-            bytes[0x10..0x12].fill(0);
+        let warrior = &mut outcome.warriors[member];
+        energy(&mut warrior.bytes, energy_recovery_disabled)?;
+        if warrior.record().confusion_duration()? != 0 && warrior.record().faction()? != 0 {
+            warrior.record_mut().set_faction(0);
             outcome.context.unavailable = outcome.context.unavailable.wrapping_sub(1);
         }
-        for offset in (0x5e..0xae).step_by(2) {
-            let duration = word(bytes, offset)?;
-            if duration > 0 {
-                bytes[offset..offset + 2].copy_from_slice(&(duration - 1).to_be_bytes());
-            }
-        }
+        warrior.record_mut().decrement_temporary_conditions()?;
     }
     *random = next_random;
     Ok(outcome)
 }
 
+/// reduce drains energy before regeneration, while an unconscious warrior does neither.
 pub(crate) fn energy(bytes: &mut [u8], recovery_disabled: u8) -> Result<(), RuleError> {
-    if word(bytes, 0x50)? > 0 {
-        let drain = word(bytes, 0xa2)?.wrapping_abs();
+    if WarriorRecord::from_bytes(bytes).stamina()? > 0 {
+        let drain = WarriorRecord::from_bytes(bytes)
+            .condition(Condition::DrainPsi)?
+            .wrapping_abs();
         if drain != 0 {
-            let points = word(bytes, 0x58)?.wrapping_sub(drain).max(0);
-            bytes[0x58..0x5a].copy_from_slice(&points.to_be_bytes());
+            let points = WarriorRecord::from_bytes(bytes)
+                .psi_points()?
+                .wrapping_sub(drain)
+                .max(0);
+            WarriorRecordMut::from_bytes(bytes).set_psi_points(points);
         }
-        let regeneration = word(bytes, 0xa0)?.wrapping_abs();
-        if recovery_disabled == 0 && regeneration != 0 && word(bytes, 0x5a)? != 0 {
-            let points = word(bytes, 0x58)?
+        let warrior = WarriorRecord::from_bytes(bytes);
+        let regeneration = warrior.condition(Condition::RechargePsi)?.wrapping_abs();
+        if recovery_disabled == 0 && regeneration != 0 && warrior.maximum_psi()? != 0 {
+            let points = warrior
+                .psi_points()?
                 .wrapping_add(regeneration)
-                .min(word(bytes, 0x5a)?);
-            bytes[0x58..0x5a].copy_from_slice(&points.to_be_bytes());
+                .min(warrior.maximum_psi()?);
+            WarriorRecordMut::from_bytes(bytes).set_psi_points(points);
         }
     }
     Ok(())

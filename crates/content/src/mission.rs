@@ -351,6 +351,20 @@ impl OpeningMission {
         self.tile_word(tile, 4)
     }
 
+    /// getmovecost 0x153de6 uses unsigned WORD addressing after stripping the
+    /// tactical terrain marker. Preserve this caller's bounds/error behavior.
+    pub fn tactical_movement_property(&self, tile: i16) -> Result<i16, ContentError> {
+        let normalized = if tile > 999 {
+            tile.wrapping_sub(1000)
+        } else {
+            tile
+        };
+        word(
+            &self.tile_properties,
+            usize::from(normalized as u16) * 40 + 2,
+        )
+    }
+
     pub fn movement_sound(&self, tile: i16) -> Result<i16, ContentError> {
         self.tile_word(tile, 0)
     }

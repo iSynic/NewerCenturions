@@ -1,5 +1,6 @@
 use crate::{RandomState, RuleError};
-use centurions_content::{span, word};
+use centurions_content::records::{EnemyRecord, EnemyRecordMut};
+use centurions_content::span;
 
 pub const ALLY_BYTES: usize = 288;
 pub const ALLY_CAPACITY: usize = 20;
@@ -28,7 +29,7 @@ pub fn add_ally(
         });
     }
     let definition = span(definition, 0, ALLY_BYTES)?;
-    if word(definition, 0x4e)? < 0 {
+    if EnemyRecord::from_bytes(definition).selected_item()? < 0 {
         return Err(RuleError::Unsupported {
             action: "story.add_ally",
             dependency: "random NPC weapon initialization",
@@ -36,29 +37,30 @@ pub fn add_ally(
     }
     let record = &mut records[count * ALLY_BYTES..(count + 1) * ALLY_BYTES];
     record.copy_from_slice(definition);
-    let mut stamina = word(record, 2)?;
-    for _ in 0..word(record, 0)?.max(0) {
+    let mut stamina = EnemyRecord::from_bytes(record).base_stamina()?;
+    for _ in 0..EnemyRecord::from_bytes(record).level()?.max(0) {
         stamina = stamina.wrapping_add(random.bound(8));
     }
-    for offset in [0x110, 0x112] {
-        record[offset..offset + 2].copy_from_slice(&stamina.to_be_bytes());
-    }
-    record[0xe..0x10].fill(0);
-    record[0x107] = 0;
-    record[0x108] = 0;
-    let speed = word(record, 0x10e)?;
-    record[0x52..0x54].copy_from_slice(&speed.to_be_bytes());
-    for (offset, addition) in [
-        (0xa, difficulty.wrapping_mul(3)),
-        (8, difficulty.wrapping_mul(-2)),
-        (4, difficulty),
-    ] {
-        let value = word(record, offset)?.wrapping_add(addition);
-        record[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
-    }
-    for byte in &mut record[0x8b..0x91] {
-        *byte = byte.wrapping_add(difficulty.wrapping_mul(7) as u8);
-    }
+    EnemyRecordMut::from_bytes(record).set_stamina(stamina);
+    EnemyRecordMut::from_bytes(record).set_maximum_stamina(stamina);
+    EnemyRecordMut::from_bytes(record).set_faction(0);
+    EnemyRecordMut::from_bytes(record).set_movement_direction(0, 0);
+    let psi = EnemyRecord::from_bytes(record).psi_points()?;
+    EnemyRecordMut::from_bytes(record).set_maximum_psi(psi);
+    // The ally caller does not apply the battle initializer's immunity cap.
+    let immunity = EnemyRecord::from_bytes(record)
+        .magic_immunity()?
+        .wrapping_add(difficulty.wrapping_mul(3));
+    EnemyRecordMut::from_bytes(record).set_magic_immunity(immunity);
+    let armor = EnemyRecord::from_bytes(record)
+        .armor()?
+        .wrapping_add(difficulty.wrapping_mul(-2));
+    EnemyRecordMut::from_bytes(record).set_armor(armor);
+    let speed = EnemyRecord::from_bytes(record)
+        .speed()?
+        .wrapping_add(difficulty);
+    EnemyRecordMut::from_bytes(record).set_speed(speed);
+    EnemyRecordMut::from_bytes(record).adjust_elemental_saves(difficulty.wrapping_mul(7));
     normalize_menu(&mut records, count + 1);
     Ok(AllyAddition {
         records,
@@ -70,7 +72,7 @@ pub fn add_ally(
 pub fn clear_stage_allies(records: &[u8]) -> Result<Vec<u8>, RuleError> {
     let mut records = span(records, 0, ALLY_BYTES * ALLY_CAPACITY)?.to_vec();
     for index in 0..ALLY_CAPACITY {
-        records[index * ALLY_BYTES + 0x103] = 0;
+        EnemyRecordMut::from_bytes(&mut records[index * ALLY_BYTES..]).clear_definition_id();
     }
     Ok(records)
 }
@@ -82,7 +84,7 @@ fn normalize_menu(records: &mut [u8], count: usize) {
         .iter_mut()
         .take(count)
     {
-        record[0x10c..0x10e].fill(0);
-        record[0x105] = 0;
+        EnemyRecordMut::from_bytes(record).set_target_body(0);
+        EnemyRecordMut::from_bytes(record).clear_damage_marker();
     }
 }
