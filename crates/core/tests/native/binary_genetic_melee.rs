@@ -1,10 +1,10 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
-use crate::support::items;
+use support::items;
 
 #[test]
 fn genetic_loaded_melee178_matches_native_records_saves_and_both_attack_indices() {
-    let fixture = crate::support::fixture("genetic-melee.json");
+    let fixture = support::fixture("genetic-melee.json");
     let items = items();
     let cases = fixture.array("melee_cases");
 
@@ -28,11 +28,10 @@ fn genetic_loaded_melee178_matches_native_records_saves_and_both_attack_indices(
         )
         .unwrap();
         party[member * 3138..(member + 1) * 3138].copy_from_slice(&warrior.bytes);
-        crate::support::native_expect! {
-        bytes party => &case["warriors_after"], &format!("case{index} party");
-        bytes enemy.bytes => &case["enemy_after"], &format!("case{index} attacker");
-        scalar random.seed => &case["seed_after"], "binary_genetic_melee";
-        scalar random.draws => &case["rng_draws"], "binary_genetic_melee";
+        support::native_expect! {
+            bytes party => &case["warriors_after"], &format!("case{index} party");
+            bytes enemy.bytes => &case["enemy_after"], &format!("case{index} attacker");
+            rng random => (&case["seed_after"], &case["rng_draws"]), "binary_genetic_melee";
         }
         assert_eq!(
             case.n::<Vec<i16>>("sounds"),
@@ -49,41 +48,14 @@ fn genetic_loaded_melee178_matches_native_records_saves_and_both_attack_indices(
 
 #[test]
 fn genetic_adjacent_melee178_caller_matches_native_action_count_and_cost() {
-    let fixture = crate::support::fixture("genetic-melee.json");
+    let fixture = support::fixture("genetic-melee.json");
     let items = items();
     let cases = fixture.array("caller_cases");
 
     for (index, case) in cases.iter().enumerate() {
         let raw = case.bytes("warriors_before");
-        let mut warriors: Vec<_> = crate::support::warriors(&raw);
-        let mut combat = Combat {
-            battle: 117,
-            map: TacticalMap {
-                tiles: case.words("map_before"),
-                shift: (0, 0),
-                edge_word: 0,
-            },
-            squad: SquadPlacement {
-                positions: (0..6)
-                    .map(|member| {
-                        if member == case.n::<i16>("member") {
-                            (21, 20)
-                        } else {
-                            (40 + member, 40)
-                        }
-                    })
-                    .collect(),
-                under_tiles: vec![1155; 6],
-            },
-            enemies: EnemySetup {
-                records: vec![MonsterRecord {
-                    bytes: case.bytes("enemy_before"),
-                }],
-                positions: vec![(20, 20)],
-            },
-            order: case.words("order_before"),
-            ..crate::support::battle()
-        };
+        let mut warriors: Vec<_> = support::warriors(&raw);
+        let mut combat = native_common::neighbor_combat(case, case.n("member"));
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let events = runtime::check_neighbors_with_definitions(
             &mut combat,
@@ -93,17 +65,16 @@ fn genetic_adjacent_melee178_caller_matches_native_action_count_and_cost() {
             &items,
         )
         .unwrap();
-        let actual: Vec<_> = crate::support::record_bytes(&warriors);
-        crate::support::native_expect! {
-        bytes actual => &case["warriors_after"], &format!("case{index} party");
-        bytes combat.enemies.records[0].bytes => &case["enemy_after"], &format!("case{index} attacker");
+        let actual: Vec<_> = support::record_bytes(&warriors);
+        support::native_expect! {
+            bytes actual => &case["warriors_after"], &format!("case{index} party");
+            bytes combat.enemies.records[0].bytes => &case["enemy_after"], &format!("case{index} attacker");
         }
         assert_eq!(combat.map.tiles, case.words("map_after"), "case{index} map");
         assert_eq!(combat.order, case.words("order_after"), "case{index} order");
-        crate::support::native_expect! {
-        scalar random.seed => &case["seed_after"], "binary_genetic_melee";
-        scalar random.draws => &case["rng_draws"], "binary_genetic_melee";
-        scalar (crate::support::event_sounds(&events)) => &case["sounds"], "binary_genetic_melee";
+        support::native_expect! {
+            rng random => (&case["seed_after"], &case["rng_draws"]), "binary_genetic_melee";
+            scalar (support::event_sounds(&events)) => &case["sounds"], "binary_genetic_melee";
         }
         let resolved: Vec<_> = events
             .iter()
@@ -116,13 +87,7 @@ fn genetic_adjacent_melee178_caller_matches_native_action_count_and_cost() {
             .collect();
         assert_eq!(
             resolved,
-            case.array("calls")
-                .iter()
-                .map(|call| (
-                    call[0].as_i64().unwrap() as i16,
-                    call[1].as_i64().unwrap() as i16
-                ))
-                .collect::<Vec<_>>(),
+            support::attack_calls(&case["calls"]),
             "case{index} ordered attack calls"
         );
     }

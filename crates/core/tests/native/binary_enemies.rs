@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_content::combat::BattleRecord;
 
@@ -11,11 +11,11 @@ fn enemy_setup_matches_whole_records_positions_map_and_randomness() {
         "enemies-opening.json",
         "difficulty-enemies.json",
     ] {
-        let fixture = crate::support::fixture(name);
-        let map_fixture: serde_json::Value = crate::support::fixture("combat-map.json");
+        let fixture = support::fixture(name);
+        let map_fixture: serde_json::Value = support::fixture("combat-map.json");
         let mission = OpeningMission {
             default_tile: 0,
-            ..crate::support::terrain_mission(&map_fixture)
+            ..support::terrain_mission(&map_fixture)
         };
         let battle = BattleRecord::read(&fixture.bytes("battle"), 0).unwrap();
         for case in fixture.array("cases") {
@@ -37,17 +37,13 @@ fn enemy_setup_matches_whole_records_positions_map_and_randomness() {
                     .map_or(0, |value| value.as_i64().unwrap() as i16),
             )
             .unwrap();
-            crate::support::native_expect! {
-            scalar result.records.len() => &case["count"], "enemy setup count";
-            bytes crate::support::record_bytes(&result.records) => &case["records"], "enemy setup records";
-            words map.tiles => &case["tiles"], "enemy setup map";
-            scalar random.seed => &case["after_seed"], "enemy setup seed";
-            scalar random.draws => &case["draws"], "enemy setup draws";
-            }
-            assert_eq!(
-                result.positions,
-                crate::support::positions(&case.bytes("positions"))
-            );
+            support::native_expect! {
+                scalar result.records.len() => &case["count"], "enemy setup count";
+                records &result.records => &case["records"], "enemy setup records";
+                words map.tiles => &case["tiles"], "enemy setup map";
+                rng random => (&case["after_seed"], &case["draws"]), "enemy setup seed";
+                positions result.positions => &case.bytes("positions"), "native positions";
+            };
         }
     }
 }

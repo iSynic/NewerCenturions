@@ -1,14 +1,14 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::MapState;
 
 #[test]
 fn authored_terminal_choice_matches_native_records_and_resumes() {
-    let fixture: Value = crate::support::fixture("terminal-stage.json");
+    let fixture: Value = support::fixture("terminal-stage.json");
 
-    let content = crate::support::content();
-    let mut state = crate::support::mission_session(&content);
-    state.warriors = crate::support::warriors(&fixture["warriors_before"]);
+    let content = support::content();
+    let mut state = support::mission_session(&content);
+    state.warriors = support::warriors(&fixture["warriors_before"]);
     state.flags = fixture.bytes("flags_before");
     state.mission_stage = 5;
     state.mission_score = 17;
@@ -27,7 +27,7 @@ fn authored_terminal_choice_matches_native_records_and_resumes() {
     );
     position.x = 40;
     position.y = 80;
-    position.script = Some(crate::support::script_state(fixture.bytes("script"), 0));
+    position.script = Some(support::script_state(fixture.bytes("script"), 0));
     position.presentation = Some(Presentation::Dialogue {
         id: 0,
         text: String::new(),
@@ -65,14 +65,14 @@ fn authored_terminal_choice_matches_native_records_and_resumes() {
     assert_eq!(state.mission_stage, 0);
     assert_eq!(state.mission_score, 17);
     assert_eq!(state.random, random);
-    crate::support::native_expect! {
-    bytes state.flags => &fixture["flags_after"], "binary_terminal_stage";
-    bytes state.allies => &fixture["menu_after"], "binary_terminal_stage";
+    support::native_expect! {
+        bytes state.flags => &fixture["flags_after"], "binary_terminal_stage";
+        bytes state.allies => &fixture["menu_after"], "binary_terminal_stage";
     }
     assert_eq!(state.ally_count, 0);
     assert_eq!(state.health_context.as_ref().unwrap().unavailable, 1);
     assert_eq!(
-        crate::support::record_bytes(&state.warriors),
+        support::record_bytes(&state.warriors),
         fixture.bytes("warriors_after")
     );
     let position = state.exploration.as_ref().unwrap();
@@ -81,9 +81,9 @@ fn authored_terminal_choice_matches_native_records_and_resumes() {
         position.presentation,
         Some(Presentation::Prologue { resource_id: 1000 })
     );
-    crate::support::native_expect! {
-    bytes position.map_state().native_bytes().unwrap() => &fixture["map_after"], "binary_terminal_stage";
-    bytes state.visited_maps[&9].native_bytes().unwrap() => &fixture["saved_origin"], "binary_terminal_stage";
+    support::native_expect! {
+        bytes position.map_state().native_bytes().unwrap() => &fixture["map_after"], "binary_terminal_stage";
+        bytes state.visited_maps[&9].native_bytes().unwrap() => &fixture["saved_origin"], "binary_terminal_stage";
     }
     std::fs::remove_file(checkpoint).unwrap();
 }

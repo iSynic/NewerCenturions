@@ -59,6 +59,10 @@ impl EnemyRecord<'_> {
     pub fn target_body(&self) -> Result<i16, ContentError> {
         word(self.0, 0x10c)
     }
+    /// combat1153c0 excludes this byte only while scanning a new opponent.
+    pub fn excluded_from_target_scan(&self) -> bool {
+        self.0[0x82] != 0
+    }
     pub fn primary_weapon(&self) -> Result<i16, ContentError> {
         word(self.0, 0x26)
     }

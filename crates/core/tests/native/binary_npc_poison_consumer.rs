@@ -1,20 +1,20 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, snapshots, support};
 
-use crate::support::buffer as bytes;
+use support::buffer as bytes;
 
-use crate::native_common::buffer_words as words;
+use native_common::buffer_words as words;
 
 fn positions(f: &Value, snapshot: &Value, key: &str) -> Vec<(i16, i16)> {
-    crate::snapshots::shifted_positions(
+    snapshots::shifted_positions(
         &|key| bytes(f, &snapshot[key]),
         key,
-        crate::snapshots::viewport_delta(snapshot, &f["earned_native_caller"]["before"]),
+        snapshots::viewport_delta(snapshot, &f["earned_native_caller"]["before"]),
     )
 }
 
 fn project(state: &mut Session, f: &Value, snapshot: &Value) {
     assert_eq!(bytes(f, &snapshot["party"]).len(), 18_828);
-    crate::snapshots::npc_projection(state, f, snapshot, &f["earned_native_caller"]["before"]);
+    snapshots::npc_projection(state, f, snapshot, &f["earned_native_caller"]["before"]);
     state.combat.as_mut().unwrap().round_scripts.counter = snapshot.n("round_script_counter");
     let exploration = state.exploration.as_mut().unwrap();
     exploration.event_headers = bytes(f, &snapshot["event_headers"]);
@@ -26,9 +26,9 @@ fn initial(f: &Value, case: &Value, content: &Content) -> Session {
     project(&mut state, f, &f["earned_native_caller"]["after"]);
     project(&mut state, f, &case["before"]);
     state.validate(content).unwrap();
-    assert_eq!(state.combat.as_ref().unwrap().active_body(), Some(3));
+    assert_eq!(current_combat(&state).active_body(), Some(3));
     assert_eq!(state.selected_warrior, 3);
-    assert_eq!(state.combat.as_ref().unwrap().map.shift, (0, -36));
+    assert_eq!(current_combat(&state).map.shift, (0, -36));
     state
 }
 
@@ -104,8 +104,8 @@ fn consume(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleErr
 
 #[test]
 fn npc_poison_slice_matches_complete_native_records_fields_work_and_rng_for_21_cases() {
-    let content = crate::support::content();
-    let f: Value = crate::support::fixture("npc-poison-consumer.json");
+    let content = support::content();
+    let f: Value = support::fixture("npc-poison-consumer.json");
     let cases = f.array("cases");
 
     for (index, case) in cases.iter().enumerate() {
@@ -120,9 +120,9 @@ fn npc_poison_slice_matches_complete_native_records_fields_work_and_rng_for_21_c
         );
         assert_eq!(actual, expected, "complete Session projection case {index}");
         let mut receipt = before.random.clone();
-        crate::support::replay_rng(&mut receipt, case.array("rng"));
+        support::replay_rng(&mut receipt, case.array("rng"));
         assert_eq!(receipt, expected.random, "RNG case {index}");
-        let combat = actual.combat.as_ref().unwrap();
+        let combat = current_combat(&actual);
         assert!(word(&combat.enemies.records[10].bytes, 0x110).unwrap() < 1);
         assert!(!combat.order.contains(&20));
         assert_eq!(actual.health_context.as_ref().unwrap().last_body, 20);

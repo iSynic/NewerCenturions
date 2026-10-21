@@ -1,22 +1,22 @@
-use crate::native_common::decoded_positions as positions;
-use crate::prelude::*;
-use crate::support::{checkpoint, same_session};
+use crate::{native_common, prelude::*, snapshots, support};
+use native_common::decoded_positions as positions;
+use support::{checkpoint, same_session};
 
 fn outdoor(content: &Content, case: &Value) -> Session {
-    let mut state = crate::support::mission_session(content);
+    let mut state = support::mission_session(content);
     if let Some(encounter) = case.get("encounter") {
         let mut record = vec![0; 42];
         record[8..10].copy_from_slice(&5_i16.to_be_bytes());
         record[24..26].copy_from_slice(&(encounter.as_i64().unwrap() as i16).to_be_bytes());
         let position = state.exploration.as_mut().unwrap();
-        position.script = Some(crate::support::script_state(record, 0));
+        position.script = Some(support::script_state(record, 0));
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
             text: String::new(),
         });
         apply(Command::Continue, &mut state, content).unwrap();
     }
-    state.warriors = crate::support::warriors(&case["before"]["party"]);
+    state.warriors = support::warriors(&case["before"]["party"]);
     if let Some(count) = case.get("party_count") {
         state.warriors.truncate(count.as_u64().unwrap() as usize);
         state.allies = case["before"].bytes("allies");
@@ -25,7 +25,7 @@ fn outdoor(content: &Content, case: &Value) -> Session {
     state.psi_memory = Some(case["before"].bytes("memory"));
     state.party_buffs = case["before"].bytes("party_buffs");
     if let Some(directory) = case["before"].get("scenario_directory") {
-        state.scenario_duration_tail = Some(word(&crate::support::bytes(directory), 50).unwrap());
+        state.scenario_duration_tail = Some(word(&support::bytes(directory), 50).unwrap());
     }
     if let Some(tail) = case["before"].get("scenario_duration_tail") {
         state.scenario_duration_tail = Some(tail.as_i64().unwrap() as i16);
@@ -52,9 +52,9 @@ fn outdoor(content: &Content, case: &Value) -> Session {
 #[test]
 fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reload() {
     let content = content();
-    let fixture = crate::support::fixture("player-support-psi.json");
-    let outdoors = crate::support::fixture("outdoor-psi.json");
-    let indexed = crate::support::fixture("outdoor-indexed-psi.json");
+    let fixture = support::fixture("player-support-psi.json");
+    let outdoors = support::fixture("outdoor-psi.json");
+    let indexed = support::fixture("outdoor-indexed-psi.json");
     for case in fixture
         .array("cases")
         .iter()
@@ -73,12 +73,12 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
         let events = replay_command(command, &mut state, &mut resumed, &content);
         let expected = &case["after"];
         let mut expected_session = before;
-        crate::snapshots::captured_party(&mut expected_session, case, expected);
+        snapshots::captured_party(&mut expected_session, case, expected);
         expected_session.psi_memory = Some(expected.bytes("memory"));
         expected_session.party_buffs = expected.bytes("party_buffs");
         if let Some(directory) = expected.get("scenario_directory") {
             expected_session.scenario_duration_tail =
-                Some(word(&crate::support::bytes(directory), 50).unwrap());
+                Some(word(&support::bytes(directory), 50).unwrap());
         }
         expected_session.attack_packet = Some(expected.bytes("packet"));
         let identity = expected.bytes("identity");
@@ -94,48 +94,37 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
         });
         expected_session.random.seed = expected.n::<u32>("seed");
         expected_session.random.draws = expected.n::<u64>("draws");
-        same_session(&state, &expected_session);
-        let native_events: Vec<_> = case
-            .array("sounds")
-            .iter()
-            .map(|sound| Event::Sound {
-                resource_id: sound.as_i64().unwrap() as i16,
-            })
-            .collect();
+        support::same_captured_session(&state, &expected_session);
+        let native_events: Vec<_> = support::sound_events(case.n::<Vec<i16>>("sounds"));
         assert_eq!(events, native_events);
         checkpoint(&state, &content, "support-shield-after");
         if case["spell_id"] == 1105 {
             let path = std::env::temp_dir()
                 .join(format!("centurions-indexed-{}.json", std::process::id()));
             let mut legacy = serde_json::json!({"schema_version": 5, "session": &state});
-            legacy["session"]
-                .as_object_mut()
-                .unwrap()
-                .remove("inventory_record");
+            support::legacy_save(&mut legacy);
+            support::remove_field(&mut legacy["session"], "inventory_record");
             std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
             assert!(load(&path, &content).is_err());
-            legacy["session"]
-                .as_object_mut()
-                .unwrap()
-                .remove("scenario_duration_tail");
+            support::remove_field(&mut legacy["session"], "scenario_duration_tail");
             std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
             let mut expected = state.clone();
             expected.scenario_duration_tail = None;
             expected.inventory_record = None;
             expected.npc_backing = Default::default();
-            same_session(&load(&path, &content).unwrap(), &expected);
+            support::same_captured_session(&load(&path, &content).unwrap(), &expected);
             std::fs::remove_file(path).unwrap();
         }
     }
-    let damage = crate::support::fixture("outdoor-party-psi.json");
-    let targeted = crate::support::fixture("outdoor-targets.json");
-    let small = crate::support::fixture("outdoor-small-party.json");
-    let items = crate::support::fixture("outdoor-medical.json");
-    let encounter_items = crate::support::fixture("encounter-medical.json");
-    let indexed_items = crate::support::fixture("outdoor-indexed-items.json");
-    let revival = crate::support::fixture("outdoor-revival.json");
-    let areas = crate::support::fixture("outdoor-area-party.json");
-    let restore_life = crate::support::fixture("outdoor-restore-life.json");
+    let damage = support::fixture("outdoor-party-psi.json");
+    let targeted = support::fixture("outdoor-targets.json");
+    let small = support::fixture("outdoor-small-party.json");
+    let items = support::fixture("outdoor-medical.json");
+    let encounter_items = support::fixture("encounter-medical.json");
+    let indexed_items = support::fixture("outdoor-indexed-items.json");
+    let revival = support::fixture("outdoor-revival.json");
+    let areas = support::fixture("outdoor-area-party.json");
+    let restore_life = support::fixture("outdoor-restore-life.json");
     for case in damage
         .array("cases")
         .iter()
@@ -186,7 +175,7 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
         let expected = &case["after"];
         if case["global"] == true {
             let mut complete = before;
-            crate::snapshots::captured_party(&mut complete, case, expected);
+            snapshots::captured_party(&mut complete, case, expected);
             complete.selected_warrior = case.n("actor");
             complete.ammunition_work.item = Some(expected.bytes("item_work"));
             complete.loaded_item_field32 = Some(word(&expected.bytes("item_work"), 32).unwrap());
@@ -197,12 +186,12 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
                 .party_mask
                 .copy_from_slice(&expected.words("mask")[..6]);
             complete.scenario_duration_tail = Some(expected.n("scenario_duration_tail"));
-            complete.random = crate::native_common::random_state(expected);
+            complete.random = native_common::random_state(expected);
             same_session(&state, &complete);
         }
-        crate::support::compare_record_bytes(
+        support::compare_record_bytes(
             &state.warriors,
-            &crate::support::warriors(&expected["party"])[..state.warriors.len()],
+            &support::warriors(&expected["party"])[..state.warriors.len()],
         );
         if expected.get("allies").is_some() {
             let original = expected.bytes("allies");
@@ -251,25 +240,20 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
         assert_eq!(state.random.seed, expected.n::<u32>("seed"));
         assert_eq!(state.random.draws, expected.n::<u64>("draws"));
         assert_eq!(state.party_mask.as_slice(), &expected.words("mask")[..6]);
-        crate::support::native_expect! {
+        support::native_expect! {
             bytes state.attack_packet.as_ref().unwrap() => &expected["packet"], "outdoor packet";
             words state.attack_identity.as_ref().unwrap() => &expected["identity"], "outdoor identity";
             scalar state.attack_count => &expected["count"], "outdoor count";
         }
         if case.get("item").is_some() {
-            crate::support::assert_bytes(
-                state.ammunition_work.item.as_ref().unwrap(),
-                &expected.bytes("item_work"),
-                "outdoor item work",
-            );
+            support::native_expect! {
+                bytes state.ammunition_work.item.as_ref().unwrap() => &expected.bytes("item_work"), "outdoor item work";
+            };
         }
-        assert_eq!(
-            crate::support::event_sounds(&events),
-            case.n::<Vec<i16>>("sounds")
-        );
+        assert_eq!(support::event_sounds(&events), case.n::<Vec<i16>>("sounds"));
         checkpoint(&state, &content, "support-outdoor-after");
     }
-    for (case_index, case) in crate::support::fixture("encounter-spells.json")
+    for (case_index, case) in support::fixture("encounter-spells.json")
         .array("cases")
         .iter()
         .enumerate()
@@ -282,41 +266,36 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
         script[8..10].copy_from_slice(&5_i16.to_be_bytes());
         script[24..26].copy_from_slice(&10_i16.to_be_bytes());
         let position = state.exploration.as_mut().unwrap();
-        position.script = Some(crate::support::script_state(script, 0));
+        position.script = Some(support::script_state(script, 0));
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
             text: String::new(),
         });
         apply(Command::Continue, &mut state, &content).unwrap();
         if case_index == 0 {
-            for native in crate::support::fixture("encounter-detox.json").array("cases") {
+            for native in support::fixture("encounter-detox.json").array("cases") {
                 let mut indexed = state.clone();
-                indexed.warriors = crate::support::warriors(&native["warriors_before"]);
+                indexed.warriors = support::warriors(&native["warriors_before"]);
                 indexed.psi_memory = Some(vec![0; 480]);
                 indexed.scenario_duration_tail = Some(-1);
                 indexed.random = RandomState::new(12);
-                let mut resumed = checkpoint(&indexed, &content, "encounter-indexed-duration");
-                let events = replay_command(
+                let events = support::saved_command(
                     Command::CastEncounterPsi {
                         warrior: 1,
                         spell: native.n("spell"),
                         power: 1,
                     },
                     &mut indexed,
-                    &mut resumed,
                     &content,
                 );
-                crate::support::native_expect! {
-                    bytes crate::support::record_bytes(&indexed.warriors) => &native["warriors_after"], "encounter Detox party";
+                support::native_expect! {
+                    records &indexed.warriors => &native["warriors_after"], "encounter Detox party";
                     bytes indexed.psi_memory.as_ref().unwrap() => &native["memory_after"], "encounter Detox memory";
                     scalar indexed.scenario_duration_tail.unwrap() => &native["scenario_duration_after"], "encounter Detox alias";
                     scalar indexed.random.seed => &native["seed_after"], "encounter Detox seed";
                     scalar indexed.random.draws => &native["draws"], "encounter Detox draws";
                 }
-                crate::support::expect_array(
-                    &crate::support::event_sounds(&events),
-                    &native["sounds"],
-                );
+                support::expect_array(&support::event_sounds(&events), &native["sounds"]);
                 assert!(matches!(
                     indexed.exploration.as_ref().unwrap().presentation,
                     Some(Presentation::Typed { id: 10, .. })
@@ -324,23 +303,19 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
                 checkpoint(&indexed, &content, "encounter-indexed-after");
             }
         }
-        let mut resumed = checkpoint(&state, &content, "encounter-spell-before");
-        let events = replay_command(
+        let events = support::saved_command(
             Command::CastEncounterPsi {
                 warrior: case.n("caster"),
                 spell: case.n("spell_id"),
                 power: case.n("power"),
             },
             &mut state,
-            &mut resumed,
             &content,
         );
         let expected = &case["after"];
-        crate::support::assert_bytes(
-            &crate::support::record_bytes(&state.warriors),
-            &expected.bytes("party"),
-            "encounter spell party",
-        );
+        support::native_expect! {
+            bytes &support::record_bytes(&state.warriors) => &expected.bytes("party"), "encounter spell party";
+        };
         assert_eq!(
             state.psi_memory.as_ref().unwrap(),
             &expected.bytes("memory")
@@ -356,7 +331,7 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
             expected.words("identity")
         );
         assert_eq!(state.attack_count, expected.n::<i16>("count"));
-        assert_eq!(state.random, crate::native_common::random_state(expected));
+        assert_eq!(state.random, native_common::random_state(expected));
         let mut sounds = case.n::<Vec<i16>>("sounds");
         let branch = case.n::<usize>("selector") - 1;
         for slot in 0..8 {
@@ -368,7 +343,7 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
                 sounds.push(word(&record, 32 + branch * 16 + slot * 2).unwrap());
             }
         }
-        assert_eq!(crate::support::event_sounds(&events), sounds);
+        assert_eq!(support::event_sounds(&events), sounds);
         let position = state.exploration.as_ref().unwrap();
         if case.n::<i8>("selector") == 1 {
             assert!(matches!(
@@ -394,31 +369,29 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
         }
         checkpoint(&state, &content, "encounter-spell-after");
     }
-    for case in crate::support::fixture("outdoor-type11.json").array("cases") {
-        let mut state = crate::support::mission_session(&content);
-        state.warriors = crate::support::warriors(&case["warriors_before"]);
+    for case in support::fixture("outdoor-type11.json").array("cases") {
+        let mut state = support::mission_session(&content);
+        state.warriors = support::warriors(&case["warriors_before"]);
         state.psi_memory = Some(vec![0; 480]);
         state.random = RandomState::new(12);
         let position = state.exploration.clone();
-        let mut resumed = checkpoint(&state, &content, "outdoor-type11");
-        let events = replay_command(
+        let events = support::saved_command(
             Command::CastPartyPsi {
                 warrior: 1,
                 spell: case.n("spell"),
                 power: 1,
             },
             &mut state,
-            &mut resumed,
             &content,
         );
         assert_eq!(state.exploration, position);
-        crate::support::native_expect! {
-            bytes crate::support::record_bytes(&state.warriors) => &case["warriors_after"], "type11 party";
+        support::native_expect! {
+            records &state.warriors => &case["warriors_after"], "type11 party";
             bytes state.psi_memory.as_ref().unwrap() => &case["memory_after"], "type11 learned memory";
             scalar state.random.draws => &case["draws"], "type11 RNG";
         }
         assert_eq!(state.party_mask.as_slice(), &case.words("mask_after")[..6]);
-        crate::support::expect_array(&crate::support::event_sounds(&events), &case["sounds"]);
+        support::expect_array(&support::event_sounds(&events), &case["sounds"]);
         checkpoint(&state, &content, "outdoor-type11-after");
     }
 }
@@ -426,7 +399,7 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
 #[test]
 fn outdoor_invalid_cost_conditions_and_pending_story_roll_back_the_whole_session() {
     let content = content();
-    let fixture = crate::support::fixture("player-support-psi.json");
+    let fixture = support::fixture("player-support-psi.json");
     let case = fixture
         .array("cases")
         .iter()
@@ -468,14 +441,14 @@ fn outdoor_invalid_cost_conditions_and_pending_story_roll_back_the_whole_session
 
 pub(crate) fn combat_state(content: &Content, case: &Value) -> Session {
     let mut state = outdoor(content, case);
-    let foundation: Value = crate::support::fixture("player-psi.json");
+    let foundation: Value = support::fixture("player-psi.json");
     let mut combat: centurions_core::combat::Combat =
         serde_json::from_value(foundation["route_foundation"]["combat"].clone()).unwrap();
     combat.map.shift = (0, 0);
     combat.map.tiles = case["before"].words("map");
     combat.squad.positions = positions(&case["before"]["party_positions"]);
     combat.squad.under_tiles = vec![1155; 6];
-    combat.enemies.records = crate::support::monsters(&case["before"].bytes("records"));
+    combat.enemies.records = support::monsters(&case["before"].bytes("records"));
     combat.enemies.positions = positions(&case["before"]["monster_positions"]);
     combat.order = case["before"].words("order");
     combat.cursor = case["before"].n::<usize>("cursor");
@@ -506,20 +479,20 @@ pub(crate) fn combat_state(content: &Content, case: &Value) -> Session {
 #[test]
 fn combat_support_and_automatic_initiative_match_complete_native_suffix_and_resume() {
     let content = content();
-    let fixture: Value = crate::support::fixture("support-psi-advance.json");
-    let npcs = crate::support::fixture("support-npc.json");
-    let armor = crate::support::fixture("armor-support.json");
-    let advanced = crate::support::fixture("advanced-psi-advance.json");
-    let wards = crate::support::fixture("ward-psi.json");
-    let healing = crate::support::fixture("npc-healing.json");
-    let conditions = crate::support::fixture("condition-psi.json");
-    let additional = crate::support::fixture("additional-condition-psi.json");
-    let superior = crate::support::fixture("healing-psi.json");
-    let learned_heal = crate::support::fixture("learned-healing-psi.json");
-    let learned_damage = crate::support::fixture("learned-damage-psi.json");
-    let unresisted = crate::support::fixture("unresisted-psi.json");
-    let resisted = crate::support::fixture("resisted-conditions.json");
-    let multiple = crate::support::fixture("multi-psi.json");
+    let fixture: Value = support::fixture("support-psi-advance.json");
+    let npcs = support::fixture("support-npc.json");
+    let armor = support::fixture("armor-support.json");
+    let advanced = support::fixture("advanced-psi-advance.json");
+    let wards = support::fixture("ward-psi.json");
+    let healing = support::fixture("npc-healing.json");
+    let conditions = support::fixture("condition-psi.json");
+    let additional = support::fixture("additional-condition-psi.json");
+    let superior = support::fixture("healing-psi.json");
+    let learned_heal = support::fixture("learned-healing-psi.json");
+    let learned_damage = support::fixture("learned-damage-psi.json");
+    let unresisted = support::fixture("unresisted-psi.json");
+    let resisted = support::fixture("resisted-conditions.json");
+    let multiple = support::fixture("multi-psi.json");
     for case in fixture
         .array("cases")
         .iter()
@@ -558,7 +531,7 @@ fn combat_support_and_automatic_initiative_match_complete_native_suffix_and_resu
             .and_then(|gates| gates.iter().find(|g| g["spell_id"] == spell))
         {
             assert!(!gate.n::<bool>("mode_allowed"));
-            crate::support::reject_command(&state, &content, command);
+            support::reject_command(&state, &content, command);
             continue;
         }
         let events = if let Some(bodies) = case.get("selected_bodies") {
@@ -568,8 +541,7 @@ fn combat_support_and_automatic_initiative_match_complete_native_suffix_and_resu
                 power: case.n("power"),
             }];
             for body in bodies.as_array().unwrap() {
-                let point =
-                    state.combat.as_ref().unwrap().squad.positions[body.as_u64().unwrap() as usize];
+                let point = current_combat(&state).squad.positions[body.as_u64().unwrap() as usize];
                 commands.push(Command::SelectPsiTarget {
                     x: point.0,
                     y: point.1,
@@ -591,10 +563,10 @@ fn combat_support_and_automatic_initiative_match_complete_native_suffix_and_resu
                 &content,
             )
             .unwrap();
-            crate::support::reject_command(&cancelled, &content, Command::FirePsiSelection);
+            support::reject_command(&cancelled, &content, Command::FirePsiSelection);
             apply(Command::CancelPsiSelection, &mut cancelled, &content).unwrap();
             assert_eq!(
-                digest(&crate::support::record_bytes(&cancelled.warriors)),
+                digest(&support::record_bytes(&cancelled.warriors)),
                 digest(&case.bytes("cancelled_party"))
             );
             assert_eq!(cancelled.random, before.random);
@@ -609,9 +581,9 @@ fn combat_support_and_automatic_initiative_match_complete_native_suffix_and_resu
         assert!(state == resumed, "save/resume state differs");
         let expected = &case["after"];
         let mut expected_session = before;
-        crate::snapshots::captured_party(&mut expected_session, case, expected);
+        snapshots::captured_party(&mut expected_session, case, expected);
         let arena = expected_session.combat.as_mut().unwrap();
-        crate::snapshots::records(arena, &|key| expected.bytes(key));
+        snapshots::records(arena, &|key| expected.bytes(key));
         arena.map.tiles = expected.words("map");
         arena.squad.positions = positions(&expected["party_positions"]);
         arena.enemies.positions = positions(&expected["monster_positions"]);
@@ -647,9 +619,9 @@ fn combat_support_and_automatic_initiative_match_complete_native_suffix_and_resu
         expected_session.bandage_ready = Some(1);
         expected_session.random.seed = expected.n::<u32>("seed");
         expected_session.random.draws = expected.n::<u64>("draws");
-        same_session(&state, &expected_session);
-        let sounds: Vec<_> = crate::support::event_sounds(&events);
-        crate::support::expect_array(&(sounds), &case["sounds"]);
+        support::same_captured_session(&state, &expected_session);
+        let sounds: Vec<_> = support::event_sounds(&events);
+        support::expect_array(&(sounds), &case["sounds"]);
         assert!(matches!(
             events.last(),
             Some(Event::TurnStarted { body: 10, round: 1 })

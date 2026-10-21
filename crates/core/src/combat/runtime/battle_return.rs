@@ -157,7 +157,7 @@ pub(crate) fn refit_after_combat(
     let mut events = vec![];
     if state.command_preferences.auto_refit {
         for member in 0..state.warriors.len() {
-            let result = crate::ammunition::refit(
+            let result = crate::ammunition::refit_with_record(
                 &state.warriors[member],
                 &state.ammunition,
                 content,
@@ -169,6 +169,7 @@ pub(crate) fn refit_after_combat(
                 },
                 &state.ammunition_work,
                 &mut state.random,
+                state.inventory_record.as_ref(),
             )?;
             events.extend(crate::ammunition::commit_result(state, member, result)?);
         }

@@ -1,9 +1,9 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, snapshots, support};
 
-use crate::native_common::foundation_session as input;
+use native_common::foundation_session as input;
 fn project(state: &mut Session, snapshot: &Value, baseline: &Value, prepared_pair: bool) {
     let retained_body = state.health_context.as_ref().unwrap().last_body;
-    crate::snapshots::earned_projection(state, snapshot, baseline);
+    snapshots::earned_projection(state, snapshot, baseline);
     // Frozen probes start with old body0; an unchanged native field retains the earned origin.
     if snapshot["health_last_body"] == baseline["health_last_body"] {
         state.health_context.as_mut().unwrap().last_body = retained_body;
@@ -19,7 +19,7 @@ fn source_prefix_pair(state: &mut Session, content: &Content, index: usize) {
     // Seed1's last writer is owned needle700/0 at command40. Old neutral
     // tails do not capture these complete reached original loader outputs.
     let (weapon, ammo) = if index == 0 {
-        let record = &state.combat.as_ref().unwrap().enemies.records[0].bytes;
+        let record = &current_combat(state).enemies.records[0].bytes;
         let weapon = word(record, 0x26).unwrap();
         let ammo = word(record, 0x4c).unwrap();
         (weapon as usize, ammo as usize)
@@ -58,17 +58,16 @@ fn source_prefix_pair(state: &mut Session, content: &Content, index: usize) {
     state.ammunition_work.weapon = Some(weapon);
     state.ammunition_work.ammo = Some(ammo);
 }
-use crate::native_common::refresh_item_work as source_item_refresh;
+use native_common::refresh_item_work as source_item_refresh;
 
-use crate::support::reject_command as atomic;
-use crate::support::same_session as same;
+use support::reject_command as atomic;
 
-use crate::support::checkpoint;
-use crate::support::event_sounds as sounds;
+use support::checkpoint;
+use support::event_sounds as sounds;
 
 fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
     let index = case.n::<usize>("foundation");
-    let receipt = crate::native_common::earned_receipt("earned-loaded-shot-replay", index);
+    let receipt = native_common::earned_receipt("earned-loaded-shot-replay", index);
     let commands = receipt.array("commands");
     let ordered_events = receipt.array("ordered_events");
     assert_eq!(ordered_events.len(), commands.len());
@@ -81,7 +80,9 @@ fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
             Command::BeginMedicalItem { warrior, slot } => Command::UseItem { warrior, slot },
             other => other,
         };
-        let expected = crate::native_common::shield_result_events(
+        let expected = native_common::prefix_result_events(
+            &state,
+            &command,
             serde_json::from_value(recorded.clone()).unwrap(),
         );
         let events = apply(command.clone(), &mut state, content).unwrap();
@@ -110,23 +111,17 @@ fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
         .unwrap() as usize
         - 10;
     expected_input.combat.as_mut().unwrap().selected_enemy = last_npc;
-    crate::snapshots::actor_work(&mut expected_input, &case["before"]);
+    snapshots::actor_work(&mut expected_input, &case["before"]);
     source_item_refresh(&mut expected_input, content);
     source_prefix_pair(&mut expected_input, content, index);
-    expected_input.inventory_record = crate::native_common::earned_inventory_work(index);
+    expected_input.inventory_record = native_common::earned_inventory_work(index);
     expected_input.combat.as_mut().unwrap().turn_origin =
-        crate::snapshots::recorded_turn_origin(&receipt, expected_input.combat.as_ref().unwrap());
-    same(&state, &expected_input);
+        snapshots::recorded_turn_origin(&receipt, current_combat(&expected_input));
+    support::same_captured_session(&state, &expected_input);
     let effect = state.health_context.as_ref().unwrap().effect;
     assert_eq!(state.attack_packet.as_ref().unwrap()[18] as i8, effect);
     assert_eq!(
-        state
-            .combat
-            .as_ref()
-            .unwrap()
-            .attack_packet
-            .as_ref()
-            .unwrap()[18] as i8,
+        current_combat(&state).attack_packet.as_ref().unwrap()[18] as i8,
         effect
     );
     state
@@ -188,10 +183,10 @@ fn native_events(initial: &Session, expected: &Session, case: &Value) -> Vec<Eve
             }
         }
     }
-    if expected.combat.as_ref().unwrap().round != initial.combat.as_ref().unwrap().round {
+    if current_combat(expected).round != current_combat(initial).round {
         events.push(Event::TurnStarted {
-            body: expected.combat.as_ref().unwrap().active_body().unwrap(),
-            round: expected.combat.as_ref().unwrap().round,
+            body: current_combat(expected).active_body().unwrap(),
+            round: current_combat(expected).round,
         });
     }
     events
@@ -199,8 +194,8 @@ fn native_events(initial: &Session, expected: &Session, case: &Value) -> Vec<Eve
 
 #[test]
 fn party_range_membership_retains_the_original_truncated_boundary() {
-    let content = crate::support::content();
-    let receipt = crate::native_common::earned_receipt("earned-loaded-shot-replay", 1);
+    let content = support::content();
+    let receipt = native_common::earned_receipt("earned-loaded-shot-replay", 1);
     let mut state: Session = serde_json::from_value(receipt["starting_session"].clone()).unwrap();
     for (step, (command, recorded)) in receipt
         .array("commands")
@@ -282,8 +277,8 @@ fn party_range_membership_retains_the_original_truncated_boundary() {
 
 #[test]
 fn coherent_earned_prefixes_and_shots_match_complete_native_state_and_resume() {
-    let content = crate::support::content();
-    let fixture: Value = crate::support::fixture("earned-loaded-shot-replay.json");
+    let content = support::content();
+    let fixture: Value = support::fixture("earned-loaded-shot-replay.json");
 
     for (index, case) in fixture.array("cases").iter().enumerate() {
         let mut state = replay(&fixture, case, &content);
@@ -296,7 +291,7 @@ fn coherent_earned_prefixes_and_shots_match_complete_native_state_and_resume() {
             false,
         );
         source_item_refresh(&mut projected_before, &content);
-        same(&initial, &projected_before);
+        support::same_captured_session(&initial, &projected_before);
         let mut resumed = checkpoint(&state, &content, &format!("shot-before-{index}"));
         let command = Command::ShootEnemy {
             body: case.n::<i16>("target"),
@@ -306,15 +301,15 @@ fn coherent_earned_prefixes_and_shots_match_complete_native_state_and_resume() {
         project(&mut expected, &case["after"], &case["before"], true);
         expected.combat.as_mut().unwrap().inactive_rounds = case["after"].n("inactivity_counter");
         source_item_refresh(&mut expected, &content);
-        same(&state, &expected);
+        support::same_captured_session(&state, &expected);
         assert_eq!(
             events,
             native_events(&initial, &expected, case),
             "ordered native effects case {index}"
         );
-        crate::support::expect_array(&(sounds(&events)), &case["sounds"]);
+        support::expect_array(&(sounds(&events)), &case["sounds"]);
         let mut native_random = initial.random.clone();
-        crate::support::replay_rng(&mut native_random, case.array("rng"));
+        support::replay_rng(&mut native_random, case.array("rng"));
         assert_eq!(state.random, native_random);
         let loaded = state.warriors[4]
             .inventory()
@@ -324,12 +319,8 @@ fn coherent_earned_prefixes_and_shots_match_complete_native_state_and_resume() {
             .unwrap();
         assert_eq!(word(&loaded.0, 2).unwrap(), 0);
         assert_eq!(state.ammunition, initial.ammunition);
-        if state.combat.as_ref().unwrap().enemies.records[0]
-            .stamina()
-            .unwrap()
-            > 0
-        {
-            crate::support::refuse_command(
+        if current_combat(&state).enemies.records[0].stamina().unwrap() > 0 {
+            support::refuse_command(
                 &state,
                 &content,
                 command,
@@ -349,12 +340,93 @@ fn coherent_earned_prefixes_and_shots_match_complete_native_state_and_resume() {
         atomic(&initial, &content, Command::ShootEnemy { body: 109 });
         let mut invalid = initial.clone();
         invalid.warriors[4].bytes[0x40..0x42].copy_from_slice(&1_i16.to_be_bytes());
-        crate::support::refuse_command(
+        support::refuse_command(
             &invalid,
             &content,
             Command::ShootEnemy { body: 10 },
             vec![centurions_core::feedback::NativeFeedback::Silent],
         );
         checkpoint(&state, &content, &format!("shot-after-{index}"));
+    }
+}
+
+#[test]
+fn ordinary_firearm_kills_keep_native_death_feedback_and_saved_return() {
+    let content = support::content();
+    let foundation = support::fixture("earned-loaded-shot-replay.json");
+    let native = support::fixture("death-feedback.json");
+    let refresh = support::fixture("combat-item-refresh.json");
+    for case in native.array("cases") {
+        let weapon = case.n::<i16>("weapon");
+        let ammo: i16 = match weapon {
+            2 => 201,
+            38 => 203,
+            _ => 280,
+        };
+        let mut state = input(&foundation, &foundation.array("cases")[1]);
+        let actor = current_combat(&state).active_body().unwrap() as usize;
+        let mut item = centurions_content::records::ItemDefinition(&content.items[weapon as usize])
+            .fresh_stock()
+            .unwrap();
+        // Assisted loaded ammunition and range isolate the death-feedback caller.
+        item.0[9] = 1;
+        item.0[20] = 30;
+        item.0[2..4].copy_from_slice(&2_i16.to_be_bytes());
+        item.0[4..6].copy_from_slice(&ammo.to_be_bytes());
+        state.warriors[actor].bytes[0x132..0x148].copy_from_slice(&item.0);
+        state.warriors[actor].bytes[0xe4..0xe6].copy_from_slice(&weapon.to_be_bytes());
+        state.warriors[actor].bytes[0x126..0x128].copy_from_slice(&ammo.to_be_bytes());
+        source_item_refresh(&mut state, &content);
+        let target = state.combat.as_mut().unwrap();
+        // Assisted initiative isolates the next warrior's original item loader.
+        for body in &mut target.order {
+            if *body == 0 {
+                *body = -1;
+            }
+        }
+        target.order[target.cursor + 1] = 0;
+        target.enemies.records[0].bytes[0x110..0x112].copy_from_slice(&1_i16.to_be_bytes());
+        target.enemies.records[0].bytes[0xb3] = 1;
+        target.enemies.records[0].bytes[0x6a..0x6c]
+            .copy_from_slice(&case.n::<i16>("record_sound").to_be_bytes());
+        let events = support::saved_command(Command::ShootEnemy { body: 10 }, &mut state, &content);
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                Event::AttackResolved {
+                    target: 10,
+                    defeated: true,
+                    ..
+                }
+            )),
+            "weapon {weapon}: {events:?}"
+        );
+        let cue = case.array("sounds")[0].as_i64().unwrap() as i16;
+        assert_eq!(
+            sounds(&events)
+                .iter()
+                .filter(|sound| **sound == cue)
+                .count(),
+            1,
+            "original showresults death cue for weapon {weapon}"
+        );
+        let next = refresh
+            .array("cases")
+            .iter()
+            .find(|case| case["preceding_weapon"] == weapon)
+            .unwrap();
+        assert_eq!(
+            current_combat(&state).active_body(),
+            Some(next.n("next_body"))
+        );
+        let mut expected = content.items[next.n::<usize>("selected_item")].clone();
+        let category = word(&expected, 26).unwrap().wrapping_abs();
+        expected[26..28].copy_from_slice(&category.to_be_bytes());
+        assert_eq!(
+            state.ammunition_work.item.as_ref(),
+            Some(&expected),
+            "next native item after weapon {weapon}"
+        );
+        checkpoint(&state, &content, "assisted-firearm-after");
     }
 }

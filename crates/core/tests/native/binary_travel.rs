@@ -1,10 +1,10 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::travel::*;
 
 #[test]
 fn scripted_map_mutations_match_original_complete_map_layers() {
-    for case in crate::support::fixture("map-actions.json")["cases"]
+    for case in support::fixture("map-actions.json")["cases"]
         .as_array()
         .unwrap()
     {
@@ -38,17 +38,17 @@ fn scripted_map_mutations_match_original_complete_map_layers() {
                     opcode => panic!("unexpected fixture opcode {opcode}"),
                 }
             }
-            crate::support::native_expect! {
-            words &(floor) => &after["floor"], "binary_travel";
-            words &(objects) => &after["objects"], "binary_travel";
-            bytes headers => &after["headers"], "binary_travel";
+            support::native_expect! {
+                words &(floor) => &after["floor"], "binary_travel";
+                words &(objects) => &after["objects"], "binary_travel";
+                bytes headers => &after["headers"], "binary_travel";
             }
         }
     }
     // Opcode8 reads the mutable map header; opcode39 instead loads Data ED3.
-    let captured = crate::support::fixture("header-dispatch.json");
+    let captured = support::fixture("header-dispatch.json");
     let content = content();
-    let mut state = crate::support::mission_session(&content);
+    let mut state = support::mission_session(&content);
     let position = state.exploration.as_mut().unwrap();
     position.x = 30;
     position.y = 78;
@@ -56,8 +56,8 @@ fn scripted_map_mutations_match_original_complete_map_layers() {
     position.region_state.fill(0);
     position.presentation = None;
     position.event_headers = captured.bytes("headers");
-    let mut restored = crate::support::checkpoint(&state, &content, "header-alias");
-    crate::support::replay_command(
+    let mut restored = support::checkpoint(&state, &content, "header-alias");
+    support::replay_command(
         Command::Move { dx: 0, dy: 1 },
         &mut state,
         &mut restored,
@@ -77,7 +77,7 @@ fn scripted_map_mutations_match_original_complete_map_layers() {
 #[test]
 fn normal_secret_search_matches_original_full_map_and_rng() {
     let content = content();
-    for case in crate::support::fixture("map-actions.json")["secret_cases"]
+    for case in support::fixture("map-actions.json")["secret_cases"]
         .as_array()
         .unwrap()
     {
@@ -91,7 +91,7 @@ fn normal_secret_search_matches_original_full_map_and_rng() {
         )
         .unwrap();
         if case["forced_skill"].as_bool() == Some(false) {
-            let mut state = crate::support::mission_session(&content);
+            let mut state = support::mission_session(&content);
             let records = case.bytes("warriors");
             state.warriors.truncate(records.len() / 3138);
             for (warrior, record) in state.warriors.iter_mut().zip(records.as_chunks::<3138>().0) {
@@ -132,12 +132,11 @@ fn normal_secret_search_matches_original_full_map_and_rng() {
                 result.discoveries.len()
             );
         }
-        crate::support::native_expect! {
-        words &(result.floor) => &case["after"], "binary_travel";
-        scalar random.seed => &case["seed_after"], "binary_travel";
-        scalar random.draws => &case["rng_draws"], "binary_travel";
-        scalar result.center_revealed => &case["center_revealed"], "binary_travel";
-        scalar result.discoveries.len() => &case["flashes"], "binary_travel";
+        support::native_expect! {
+            words &(result.floor) => &case["after"], "binary_travel";
+            rng random => (&case["seed_after"], &case["rng_draws"]), "binary_travel";
+            scalar result.center_revealed => &case["center_revealed"], "binary_travel";
+            scalar result.discoveries.len() => &case["flashes"], "binary_travel";
         }
     }
 }

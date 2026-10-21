@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::walking_header::lookup;
 
@@ -21,7 +21,7 @@ fn current_position(snapshot: &Value) -> (i32, i32, i32) {
 
 #[test]
 fn original_caller_captures_current_coordinates_and_skips_header_on_exit() {
-    let fixture = crate::support::fixture("regional-move-continuation.json");
+    let fixture = support::fixture("regional-move-continuation.json");
 
     for case in fixture.array("cases") {
         let (_, x, y) = current_position(&case["before"]);
@@ -36,7 +36,7 @@ fn original_caller_captures_current_coordinates_and_skips_header_on_exit() {
 
 #[test]
 fn walking_header_lookup_matches_continuous_original_prefix_and_full_buffers() {
-    for case in crate::support::fixture("regional-move-continuation.json")["cases"]
+    for case in support::fixture("regional-move-continuation.json")["cases"]
         .as_array()
         .unwrap()
     {
@@ -54,19 +54,16 @@ fn walking_header_lookup_matches_continuous_original_prefix_and_full_buffers() {
         };
         let mut receipt = random.clone();
         for draw in case.array("rng") {
-            crate::support::native_expect! {
-            scalar receipt.seed => &draw["seed_before"], "binary_regional_move_continuation";
-            scalar receipt.bound(draw.n::<i16>("bound")) => &draw["value"], "binary_regional_move_continuation";
-            scalar receipt.seed => &draw["seed_after"], "binary_regional_move_continuation";
+            support::native_expect! {
+                scalar receipt.seed => &draw["seed_before"], "binary_regional_move_continuation";
+                scalar receipt.bound(draw.n::<i16>("bound")) => &draw["value"], "binary_regional_move_continuation";
+                scalar receipt.seed => &draw["seed_after"], "binary_regional_move_continuation";
             }
         }
         let selected = lookup(&headers, map, x, y, &mut random).unwrap();
         assert_eq!(headers, original_headers);
         assert_eq!(random, receipt);
-        crate::support::native_expect! {
-        scalar random.seed => &after["seed"], "binary_regional_move_continuation";
-        scalar random.draws => &after["draws"], "binary_regional_move_continuation";
-        }
+        support::assert_rng(&random, &after["seed"], &after["draws"]);
         assert_eq!(after["header_key"], 307);
         assert_eq!(after["current_header"], 7);
         let native_record = after.bytes("working_header");

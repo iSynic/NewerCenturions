@@ -1,9 +1,9 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 #[test]
 fn storage_matches_independent_68k_execution() {
-    let fixture = crate::support::fixture("storage.json");
-    let content = crate::support::fixture_content("fixture");
+    let fixture = support::fixture("storage.json");
+    let content = support::fixture_content("fixture");
     let mut item = InventoryRecord([0; 22]);
     for (index, byte) in item.0.iter_mut().enumerate().skip(2) {
         *byte = index as u8;

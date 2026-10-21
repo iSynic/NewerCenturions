@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 use centurions_core::{
     combat::click_command,
     feedback::{CombatRefusal, NativeFeedback},
@@ -8,13 +8,13 @@ use centurions_core::{
 #[test]
 fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
     let content = content();
-    let fixture = crate::support::fixture("combat-refusals.json");
+    let fixture = support::fixture("combat-refusals.json");
     for (case, refusal) in fixture.array("cases").iter().zip([
         CombatRefusal::OutOfRange,
         CombatRefusal::Blocked,
         CombatRefusal::NotEnoughAmmo,
     ]) {
-        let mut state = crate::support::mission_session(&content);
+        let mut state = support::mission_session(&content);
         state.phase = Phase::Combat;
         state.warriors = vec![Warrior::read(&case.bytes("before")).unwrap(); 6];
         let mut enemy =
@@ -28,7 +28,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         enemy[0x110..0x112].copy_from_slice(&100_i16.to_be_bytes());
         enemy[0xb0] = 0;
         let target = (case.n::<i16>("target_x"), 20);
-        let mut combat = crate::support::battle();
+        let mut combat = support::battle();
         combat.map.tiles = case.words("map_before");
         combat.squad.positions = vec![(20, 20); 6];
         combat.enemies.records = vec![MonsterRecord { bytes: enemy }];
@@ -63,20 +63,17 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         expected.push(Event::Feedback(NativeFeedback::Combat { kind: refusal }));
         assert_eq!(events, expected, "{}", case.text("case"));
         assert_eq!(state.warriors[0].bytes, case.bytes("after"));
-        assert_eq!(
-            state.combat.as_ref().unwrap().map.tiles,
-            case.words("map_after")
-        );
-        assert_eq!(state.combat.as_ref().unwrap().cursor, 1);
+        assert_eq!(current_combat(&state).map.tiles, case.words("map_after"));
+        assert_eq!(current_combat(&state).cursor, 1);
         assert_eq!(state.random, random);
     }
     // Protects native burst and area shots, ammunition costs and party damage.
-    let multishot = crate::support::fixture("multishot.json");
+    let multishot = support::fixture("multishot.json");
     for case in multishot.array("cases") {
-        let mut state = crate::support::mission_session(&content);
+        let mut state = support::mission_session(&content);
         state.phase = Phase::Combat;
-        state.warriors = crate::support::warriors(&case.bytes("before"));
-        let mut arena = crate::support::battle();
+        state.warriors = support::warriors(&case.bytes("before"));
+        let mut arena = support::battle();
         arena.order[1] = 0;
         arena.squad.positions.fill((20, 20));
         arena.squad.positions[1] = (21, 20);
@@ -93,7 +90,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         arena.enemies.positions.push((40, 40));
         state.combat = Some(arena);
         let targets = case.n::<Vec<i16>>("targets");
-        let mut expected = crate::support::warriors(&case.bytes("after"));
+        let mut expected = support::warriors(&case.bytes("after"));
         let weapon = &content.items[case.n::<usize>("weapon")];
         for (offset, cost) in [
             (0x40, 2),
@@ -129,31 +126,18 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
             }
         }
         assert_eq!(
-            state
-                .combat
-                .as_ref()
-                .unwrap()
-                .attack_packet
-                .as_ref()
-                .unwrap(),
+            current_combat(&state).attack_packet.as_ref().unwrap(),
             &case.bytes("packet")
         );
-        for (actual, expected) in state.warriors.iter().zip(&expected) {
-            assert_eq!(
-                actual.bytes,
-                expected.bytes,
-                "weapon {}",
-                case.n::<i16>("weapon")
-            );
-        }
+        support::compare_record_bytes(&state.warriors, &expected);
         assert_eq!(state.random.seed, case.n::<u32>("seed"));
         assert_eq!(state.random.draws, case.n::<u64>("draws"));
     }
     // Native confirmed exchanges protect both party and monster terrain ownership.
-    let friendly = crate::support::fixture("friendly-attack.json");
-    let melee = crate::support::fixture("warrior-melee.json");
-    let firearms = crate::support::fixture("friendly-fire.json");
-    let refusals = crate::support::fixture("melee-refusals.json");
+    let friendly = support::fixture("friendly-attack.json");
+    let melee = support::fixture("warrior-melee.json");
+    let firearms = support::fixture("friendly-fire.json");
+    let refusals = support::fixture("melee-refusals.json");
     for case in friendly
         .array("cases")
         .iter()
@@ -161,14 +145,14 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         .chain(firearms.array("cases").iter())
         .chain(refusals.array("cases").iter())
     {
-        let mut state = crate::support::mission_session(&content);
+        let mut state = support::mission_session(&content);
         state.phase = Phase::Combat;
-        state.warriors = crate::support::warriors(&case.bytes("before"));
+        state.warriors = support::warriors(&case.bytes("before"));
         // Leave another action available so this comparison isolates the captured attack.
         let actor = case.get("actor").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         state.warriors[actor].bytes[0x40..0x42].copy_from_slice(&5_i16.to_be_bytes());
         state.random = RandomState::new(case.n("seed_before"));
-        let mut battle = crate::support::battle();
+        let mut battle = support::battle();
         battle.order[1] = actor as i16;
         battle.squad.positions[0] = (20, 20);
         battle.squad.positions[1] = (21, 20);
@@ -225,14 +209,11 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
                 .wrapping_sub(rounds * word(&content.items[weapon as usize], 36).unwrap());
             expected[offset..offset + 2].copy_from_slice(&weight.to_be_bytes());
         }
-        assert_eq!(crate::support::record_bytes(&state.warriors), expected);
-        assert_eq!(
-            (state.random.seed, state.random.draws),
-            (case.n::<u32>("seed"), case.n::<u64>("draws"))
-        );
+        assert_eq!(support::record_bytes(&state.warriors), expected);
+        support::assert_rng(&state.random, &case["seed"], &case["draws"]);
         if target >= 10 {
             assert_eq!(
-                state.combat.as_ref().unwrap().enemies.records[0].bytes,
+                current_combat(&state).enemies.records[0].bytes,
                 case.bytes("enemy_after")
             );
         }
@@ -242,19 +223,19 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
                 .any(|event| matches!(event, Event::AttackResolved { attacker, .. } if *attacker == actor as i16))
         );
     }
-    let receipt = crate::support::fixture("combat-exchange.json");
+    let receipt = support::fixture("combat-exchange.json");
     // Controlled and fleeing warriors commit the original automatic step, without manual input.
-    for case in crate::support::fixture("controlled-move.json").array("cases") {
-        let mut state = crate::support::mission_session(&content);
+    for case in support::fixture("controlled-move.json").array("cases") {
+        let mut state = support::mission_session(&content);
         state.phase = Phase::Combat;
         state.random = RandomState::new(12);
-        state.warriors = crate::support::warriors(&case.bytes("before"));
-        let mut combat = crate::support::battle();
+        state.warriors = support::warriors(&case.bytes("before"));
+        let mut combat = support::battle();
         combat.map.tiles = case.words("map_before");
         combat.squad.positions = (0..6)
             .map(|i| if i == 0 { (20, 20) } else { (40 + i, 40) })
             .collect();
-        combat.enemies.records = crate::support::monsters(&case.bytes("enemy"));
+        combat.enemies.records = support::monsters(&case.bytes("enemy"));
         combat.enemies.positions = vec![(30, 20)];
         combat.order[1] = 0;
         state.combat = Some(combat);
@@ -262,36 +243,25 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         assert!(apply(Command::Move { dx: 1, dy: 0 }, &mut state, &content).is_err());
         assert_eq!(state, before);
         apply(Command::RunControlledTurn, &mut state, &content).unwrap();
+        assert_eq!(support::record_bytes(&state.warriors), case.bytes("after"));
+        assert_eq!(current_combat(&state).map.tiles, case.words("map_after"));
         assert_eq!(
-            crate::support::record_bytes(&state.warriors),
-            case.bytes("after")
+            current_combat(&state).squad.positions[0],
+            support::positions(&case.bytes("position"))[0]
         );
-        assert_eq!(
-            state.combat.as_ref().unwrap().map.tiles,
-            case.words("map_after")
-        );
-        assert_eq!(
-            state.combat.as_ref().unwrap().squad.positions[0],
-            crate::support::positions(&case.bytes("position"))[0]
-        );
-        assert_eq!(
-            (state.random.seed, state.random.draws),
-            (case.n::<u32>("seed"), case.n::<u64>("draws"))
-        );
+        support::assert_rng(&state.random, &case["seed"], &case["draws"]);
     }
-    for case in crate::support::fixture("fleeing-edges.json").array("cases") {
+    for case in support::fixture("fleeing-edges.json").array("cases") {
         let mut state = crate::command_support_psi::combat_state(&content, case);
         let events = apply(Command::RunControlledTurn, &mut state, &content).unwrap();
         assert_eq!(
-            crate::support::record_bytes(&state.warriors),
+            support::record_bytes(&state.warriors),
             case["after"].bytes("party")
         );
-        assert_eq!(
-            (state.random.seed, state.random.draws),
-            (
-                case["after"].n::<u32>("seed"),
-                case["after"].n::<u64>("draws")
-            )
+        support::assert_rng(
+            &state.random,
+            &case["after"]["seed"],
+            &case["after"]["draws"],
         );
         assert!(matches!(
             events.first(),
@@ -308,12 +278,11 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
             assert_eq!(state.phase, Phase::Exploration);
             assert!(events.contains(&Event::BattleEnded { victory: false }));
         } else {
-            let c = state.combat.as_ref().unwrap();
+            let c = current_combat(&state);
             assert_eq!(c.map.tiles, case["after"].words("map"));
-            assert_eq!(
-                c.squad.positions,
-                crate::support::positions(&case["after"].bytes("party_positions"))
-            );
+            support::native_expect! {
+                positions c.squad.positions => &case["after"].bytes("party_positions"), "native positions";
+            };
             assert_eq!(c.order, case["after"].words("order"));
             assert_eq!(c.cursor, case["after"].n::<usize>("cursor"));
         }
@@ -323,7 +292,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         assert_eq!(load(&path, &content).unwrap(), state);
         std::fs::remove_file(path).unwrap();
     }
-    let edges = crate::support::fixture("fleeing-edges.json");
+    let edges = support::fixture("fleeing-edges.json");
     for kind in 0..3 {
         let mut state = crate::command_support_psi::combat_state(
             &content,
@@ -333,7 +302,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         position.x = 10;
         position.y = 10;
         position.last_move = [1, 0];
-        position.script = Some(crate::support::script_state(
+        position.script = Some(support::script_state(
             content.map(0).unwrap().script(0).unwrap().to_vec(),
             0,
         ));
@@ -361,11 +330,11 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         );
     }
     for case in receipt.array("cases") {
-        let mut state = crate::support::mission_session(&content);
+        let mut state = support::mission_session(&content);
         state.phase = Phase::Combat;
-        state.warriors = crate::support::warriors(&case.bytes("party_before"));
-        let positions = |key: &str| crate::support::positions(&case[key]);
-        let mut combat = crate::support::battle();
+        state.warriors = support::warriors(&case.bytes("party_before"));
+        let positions = |key: &str| support::positions(&case[key]);
+        let mut combat = support::battle();
         combat.map.tiles = case.words("tiles_before");
         combat.squad.positions = positions("positions_before");
         combat.squad.under_tiles = case.words("terrain_before");
@@ -384,10 +353,10 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         )
         .unwrap();
         assert_eq!(
-            crate::support::record_bytes(&state.warriors),
+            support::record_bytes(&state.warriors),
             case.bytes("party_after")
         );
-        let combat = state.combat.as_ref().unwrap();
+        let combat = current_combat(&state);
         assert_eq!(combat.map.tiles, case.words("tiles_after"));
         assert_eq!(combat.squad.positions, positions("positions_after"));
         assert_eq!(combat.squad.under_tiles, case.words("terrain_after"));
@@ -398,8 +367,8 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         );
         assert_eq!(combat.cursor, 1);
         assert_eq!(state.random, before);
-        let sounds = crate::support::event_sounds(&events);
-        crate::support::expect_array(&sounds, &case["sounds"]);
+        let sounds = support::event_sounds(&events);
+        support::expect_array(&sounds, &case["sounds"]);
         assert!(
             matches!(events.as_slice(), [Event::Sound { .. }, Event::TacticalMoved { body: 0, .. }, Event::TacticalMoved { body, .. }] if *body == target)
         );

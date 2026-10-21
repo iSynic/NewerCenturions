@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::story_variables::{
     StoryContinuation, party_item_condition, update_variable, variable_predicate,
@@ -20,23 +20,23 @@ fn continuation(case: &serde_json::Value) -> StoryContinuation {
 
 #[test]
 fn party_item_conditions_match_original_complete_warriors_and_continuations() {
-    let fixture: serde_json::Value = crate::support::fixture("item-condition.json");
+    let fixture: serde_json::Value = support::fixture("item-condition.json");
     for case in fixture.array("cases") {
         let before = case.bytes("before");
-        let warriors = crate::support::warriors(&before);
+        let warriors = support::warriors(&before);
         let extra = case.bytes("extra");
         assert_eq!(
             party_item_condition(&warriors, &extra).unwrap(),
             continuation(case),
             "{extra:?}"
         );
-        assert_eq!(crate::support::record_bytes(&warriors), case.bytes("after"));
+        assert_eq!(support::record_bytes(&warriors), case.bytes("after"));
     }
 }
 
 #[test]
 fn variable_updates_match_original_complete_bytes_and_continuations() {
-    let fixture = crate::support::fixture("story-variables.json");
+    let fixture = support::fixture("story-variables.json");
 
     for case in fixture.array("update_cases") {
         let before = case.bytes("before");
@@ -58,7 +58,7 @@ fn variable_updates_match_original_complete_bytes_and_continuations() {
 
 #[test]
 fn variable_predicates_match_original_signed_comparisons_and_targets() {
-    let fixture = crate::support::fixture("story-variables.json");
+    let fixture = support::fixture("story-variables.json");
 
     for case in fixture.array("predicate_cases") {
         let before = case.bytes("before");

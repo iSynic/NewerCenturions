@@ -1,6 +1,6 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
-use crate::support::bytes as hex;
+use support::bytes as hex;
 
 use centurions_core::items;
 
@@ -16,7 +16,7 @@ fn starter_ammunition_matches_original_initialization() {
 
 #[test]
 fn authored_supply_items_match_original_initialization() {
-    let fixture: serde_json::Value = crate::support::fixture("supply-init.json");
+    let fixture: serde_json::Value = support::fixture("supply-init.json");
     let mut definitions = vec![vec![0; 150]; 1000];
     for (index, definition) in hex(fixture.text("ammunition_table"))
         .as_chunks::<150>()
@@ -31,16 +31,16 @@ fn authored_supply_items_match_original_initialization() {
     }
     let content = Content {
         items: definitions,
-        ..crate::support::fixture_content("fixture")
+        ..support::fixture_content("fixture")
     };
     for case in fixture.array("cases") {
         let id = case.n::<i16>("item_id");
         let seed = case.n::<u32>("seed");
         let mut random = RandomState::new(seed);
         let actual = items::initialize_plain(id, &content, &mut random).unwrap();
-        crate::support::native_expect! {
-        bytes &(actual.0.to_vec()) => &case["record"], "binary_loot";
-        scalar random.seed => &case["after_seed"], "binary_loot";
+        support::native_expect! {
+            bytes &(actual.0.to_vec()) => &case["record"], "binary_loot";
+            scalar random.seed => &case["after_seed"], "binary_loot";
         }
         assert_eq!(
             random.draws,
@@ -51,12 +51,12 @@ fn authored_supply_items_match_original_initialization() {
 }
 
 fn verify(name: &str) {
-    let fixture = crate::support::fixture(name);
+    let fixture = support::fixture(name);
     let mut definitions = vec![vec![0; 150]; 1000];
     definitions[fixture.n::<usize>("item_id")] = fixture.bytes("definition");
     let content = Content {
         items: definitions,
-        ..crate::support::fixture_content("fixture")
+        ..support::fixture_content("fixture")
     };
     for case in fixture.array("cases") {
         let mut random = RandomState::new(case.n("seed"));

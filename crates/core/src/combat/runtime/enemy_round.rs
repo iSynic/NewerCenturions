@@ -1,5 +1,6 @@
 //! Enemy round in the original combat execution order.
-use super::{FieldActor, collide_fields_impl, enemy_death_sound};
+use super::death::enemy_death_feedback;
+use super::{FieldActor, collide_fields_impl};
 use crate::combat::{Combat, lifecycle, put_word};
 use crate::{Event, RandomState, RuleError};
 use centurions_content::Warrior;
@@ -99,10 +100,10 @@ pub(super) fn reduce_enemy_round_impl(
             put_word(&mut c.enemies.records[index].bytes, 0x110, tick.health);
             events.push(Event::Sound { resource_id: 107 });
             if tick.killed {
-                let sound = enemy_death_sound(&c.enemies.records[index])?;
+                let feedback = enemy_death_feedback(&c.enemies.records[index], index as i16 + 10)?;
                 lifecycle::kill_body(c, w, index as i16 + 10)?;
                 last_defeated_body = Some(index as i16 + 10);
-                events.push(Event::Sound { resource_id: sound });
+                events.extend(feedback);
             }
         }
         if let Some(tick) =
@@ -112,10 +113,10 @@ pub(super) fn reduce_enemy_round_impl(
             c.enemies.records[index].bytes[0x105] = 1;
             events.push(Event::Sound { resource_id: 104 });
             if tick.killed {
-                let sound = enemy_death_sound(&c.enemies.records[index])?;
+                let feedback = enemy_death_feedback(&c.enemies.records[index], index as i16 + 10)?;
                 lifecycle::kill_body(c, w, index as i16 + 10)?;
                 last_defeated_body = Some(index as i16 + 10);
-                events.push(Event::Sound { resource_id: sound });
+                events.extend(feedback);
             }
         }
         crate::combat::natural_conditions::reduce_enemy_psi(&mut c.enemies.records[index].bytes)?;

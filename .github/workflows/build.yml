@@ -110,7 +110,11 @@ jobs:
               packages[0].rename(root / f'NewerCenturions-{tag}-{platform}{suffix}.zip')
           PY
           cat > release-notes.md <<'NOTES'
-          Maintained runtime and desktop refactor: named combat interactions and native record views, focused subsystem owners, and a maintainer guide. Existing gameplay behavior, commands and save compatibility are preserved.
+          Thunder combat and inventory corrections: rifle targeting and reload work, enemy healing and death handling, paid portrait-healing selection, battery refits and owned-item inspection. Held mouse movement is restored. Native effect order and RNG behavior are preserved where independently compared.
+
+          Local validation passed 316 original-data workspace tests and three repeated six-route assisted campaign checks, including save/reload suffixes. All 639 protected original/reference files remain unchanged. Test code is 24.96% of maintained production code. Clean local release compilation took 7m11s; the representative runtime rebuild took 60s. New saves use schema 13; readers for versions 1-12 remain available.
+
+          Known limitations: the Hive Leader path still depends on an explicit zero-fill policy for memory absent from the mapped original. Bounded comparisons establish that policy, not whole-turn parity with a live original Mac game. Current-build live acceptance remains open for file dialogs, window recovery, held movement/targeting, inventory/shop interactions, audio, visual/help placement and sustained desktop performance. Assisted headless replays do not close those gates.
 
           Windows x86_64, Linux x86_64, macOS Apple Silicon and macOS Intel packages are included. Linux and macOS remain experimental; live platform acceptance is incomplete. macOS applications use an ad hoc signature; they are not Developer ID signed or notarized.
 

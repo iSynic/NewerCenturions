@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::combat::place_squad;
 
@@ -8,11 +8,11 @@ fn formation_matches_whole_warriors_and_tactical_map() {
         ("formation.json", (17, 13)),
         ("formation-opening.json", (14, 14)),
     ] {
-        let fixture = crate::support::fixture(name);
-        let map_fixture: serde_json::Value = crate::support::fixture("combat-map.json");
+        let fixture = support::fixture(name);
+        let map_fixture: serde_json::Value = support::fixture("combat-map.json");
         let mission = OpeningMission {
             default_tile: 0,
-            ..crate::support::terrain_mission(&map_fixture)
+            ..support::terrain_mission(&map_fixture)
         };
         let content = Content {
             items: fixture
@@ -22,10 +22,10 @@ fn formation_matches_whole_warriors_and_tactical_map() {
                 .iter()
                 .map(|v| v.to_vec())
                 .collect(),
-            ..crate::support::fixture_content("fixture")
+            ..support::fixture_content("fixture")
         };
         for case in fixture.array("cases") {
-            let mut warriors = crate::support::warriors(&fixture["input"]);
+            let mut warriors = support::warriors(&fixture["input"]);
             let mut map = TacticalMap {
                 tiles: fixture.words("map"),
                 shift: (-39, -15),
@@ -41,15 +41,12 @@ fn formation_matches_whole_warriors_and_tactical_map() {
                 &[12, 14, 12, 14, 10, 12, 10, 10, 14, 16, 0, 12],
             )
             .unwrap();
-            crate::support::native_expect! {
-            bytes crate::support::record_bytes(&warriors) => &case["warriors"], format!("direction{}", case["direction"]);
-            words map.tiles => &case["tiles"], "formation map";
-            words actual.under_tiles => &case["under"], "formation under-tiles";
-            }
-            assert_eq!(
-                actual.positions,
-                crate::support::positions(&case.bytes("positions"))
-            );
+            support::native_expect! {
+                records &warriors => &case["warriors"], format!("direction{}", case["direction"]);
+                words map.tiles => &case["tiles"], "formation map";
+                words actual.under_tiles => &case["under"], "formation under-tiles";
+                positions actual.positions => &case.bytes("positions"), "native positions";
+            };
         }
     }
 }

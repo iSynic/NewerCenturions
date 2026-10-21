@@ -181,7 +181,9 @@ fn complete_campaign_replays() {
             route.events_sha256
         );
         assert_eq!(
-            digest(&serde_json::to_vec(&state).unwrap()),
+            // The accepted baseline hashes predate schema13; full current state
+            // and saved suffixes are compared above without this projection.
+            digest(&serde_json::to_vec(&crate::support::captured_session(&state)).unwrap()),
             route.session_sha256
         );
     }

@@ -1,8 +1,8 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 #[test]
 fn native_tick_delay_uses_zero_default_strict_unsigned_elapsed_and_wrapping_ticks() {
-    let fixture: serde_json::Value = crate::support::fixture("story-delay.json");
+    let fixture: serde_json::Value = support::fixture("story-delay.json");
     let expected = [
         (1, 7, 0, 3, true),
         (75, 7, 0, 77, true),

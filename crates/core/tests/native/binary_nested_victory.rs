@@ -1,6 +1,6 @@
-use crate::prelude::*;
-use crate::support::{checkpoint, record_bytes, replay_command};
+use crate::{prelude::*, support};
 use centurions_core::combat;
+use support::{checkpoint, record_bytes, replay_command};
 
 // The receipt acknowledges combat setup/turns, but executes original child generation.
 fn controlled_battle(
@@ -87,13 +87,13 @@ fn body(state: &Session, content: &Content) -> Vec<u8> {
 
 #[test]
 fn nested_battle_rewards_consume_count_once_and_preserve_backing_records() {
-    let nested = crate::support::fixture("nested-victory.json");
-    let caller = crate::support::fixture("nested-caller.json");
+    let nested = support::fixture("nested-victory.json");
+    let caller = support::fixture("nested-caller.json");
     let content = content();
     for (case, original) in caller.array("cases").iter().zip(nested.array("cases")) {
         assert_eq!(case["seed"], original["seed"]);
-        let mut state = crate::support::mission_session(&content);
-        state.warriors = crate::support::warriors(&original["calls"][0]["party_before"]);
+        let mut state = support::mission_session(&content);
+        state.warriors = support::warriors(&original["calls"][0]["party_before"]);
         state.allies.fill(0);
         state.ally_count = 0;
         state.random = RandomState::new(case.n("seed"));
@@ -104,7 +104,7 @@ fn nested_battle_rewards_consume_count_once_and_preserve_backing_records() {
         );
         position.x = 77;
         position.y = 9;
-        position.script = Some(crate::support::script_state(caller.bytes("script55"), 0));
+        position.script = Some(support::script_state(caller.bytes("script55"), 0));
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
             text: String::new(),
@@ -122,7 +122,7 @@ fn nested_battle_rewards_consume_count_once_and_preserve_backing_records() {
                 Command::Continue
             };
             let events = replay_command(command, &mut state, &mut resumed, &content);
-            sounds.extend(crate::support::event_sounds(&events));
+            sounds.extend(support::event_sounds(&events));
             if events
                 .iter()
                 .any(|event| matches!(event, Event::CombatStarted { .. }))
@@ -132,9 +132,10 @@ fn nested_battle_rewards_consume_count_once_and_preserve_backing_records() {
                     controlled_battle(&mut state, &content, before.warriors, before.random);
                 if battles == 2 {
                     assert_eq!(generated, original.bytes("generated"));
-                    assert_eq!(
-                        (state.random.seed, state.random.draws),
-                        (original.n("setup_seed_after"), original.n("setup_draws")),
+                    support::assert_rng(
+                        &state.random,
+                        &original["setup_seed_after"],
+                        &original["setup_draws"],
                     );
                 }
                 resumed = checkpoint(&state, &content, "native-nested-controlled-battle");
@@ -148,10 +149,7 @@ fn nested_battle_rewards_consume_count_once_and_preserve_backing_records() {
                 let expected = &case["rewards"][rewards];
                 assert_eq!(body(&state, &content), expected.bytes("body"));
                 assert_eq!(record_bytes(&state.warriors), expected.bytes("warriors"));
-                assert_eq!(
-                    (state.random.seed, state.random.draws),
-                    (expected.n("seed"), expected.n("draws_total")),
-                );
+                support::assert_rng(&state.random, &expected["seed"], &expected["draws_total"]);
                 if rewards < 2 {
                     let old = &original["calls"][rewards];
                     assert_eq!(state.party_currency, old.n::<i32>("currency"));
@@ -204,10 +202,7 @@ fn nested_battle_rewards_consume_count_once_and_preserve_backing_records() {
         // The receipt stops before replacement script56; exercise the handoff separately.
         replay_command(Command::Continue, &mut state, &mut resumed, &content);
         assert_eq!(record_bytes(&state.warriors), case.bytes("warriors_after"));
-        assert_eq!(
-            (state.random.seed, state.random.draws),
-            (case.n("seed_after"), case.n("rng_draws"))
-        );
+        support::assert_rng(&state.random, &case["seed_after"], &case["rng_draws"]);
         let native = |kind| {
             case.array("events")
                 .iter()

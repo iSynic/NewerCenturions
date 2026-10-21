@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 #[test]
 fn poison_natural_attack_matches_original_complete_records_and_random_consumption() {
     for name in [
@@ -9,7 +9,7 @@ fn poison_natural_attack_matches_original_complete_records_and_random_consumptio
         "natural-unloaded-charm.json",
     ] {
         compare_poison_natural_attack_matches_original_complete_records_and_random_consumption(
-            crate::support::fixture(name),
+            support::fixture(name),
         );
     }
 }
@@ -21,7 +21,7 @@ pub(super) fn compare_poison_natural_attack_matches_original_complete_records_an
         .array("cases")
         .iter()
         .any(|case| word(&case.bytes("target"), 0x28).unwrap() > 0)
-        .then(crate::support::content);
+        .then(support::content);
     for (index, case) in fixture.array("cases").iter().enumerate() {
         let mut warrior = Warrior::read(&case.bytes("input")).unwrap();
         let mut target = MonsterRecord {
@@ -29,7 +29,7 @@ pub(super) fn compare_poison_natural_attack_matches_original_complete_records_an
         };
         let mut random = RandomState::new(case.n::<u32>("initial_seed"));
         let result = if let Some(content) = &content {
-            let mut combat = crate::support::battle();
+            let mut combat = support::battle();
             combat.enemies.records = vec![target];
             combat.enemies.positions = vec![(0, 0)];
             combat.squad.positions = vec![(0, 0)];
@@ -58,12 +58,11 @@ pub(super) fn compare_poison_natural_attack_matches_original_complete_records_an
             )
         }
         .unwrap();
-        crate::support::native_expect! {
-        bytes warrior.bytes => &case["after"], &format!("warrior case {index}");
-        bytes target.bytes => &case["after_target"], &format!("enemy case {index}");
-        scalar random.seed => &case["seed"], "binary_natural_poison";
-        scalar random.draws => &case["draws"], "binary_natural_poison";
-        scalar (result.sounds) => &case["sounds"], "binary_natural_poison";
+        support::native_expect! {
+            bytes warrior.bytes => &case["after"], &format!("warrior case {index}");
+            bytes target.bytes => &case["after_target"], &format!("enemy case {index}");
+            rng random => (&case["seed"], &case["draws"]), "binary_natural_poison";
+            scalar (result.sounds) => &case["sounds"], "binary_natural_poison";
         }
     }
 }

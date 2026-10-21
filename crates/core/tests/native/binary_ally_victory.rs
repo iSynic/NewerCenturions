@@ -1,16 +1,16 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::combat::allies::synchronize;
 use centurions_core::combat::runtime::victory_loot;
 
 #[test]
 fn survivor_cleanup_and_rewards_match_original_composite_execution() {
-    let content = crate::support::content();
-    let fixture: serde_json::Value = crate::support::fixture("ally-victory.json");
+    let content = support::content();
+    let fixture: serde_json::Value = support::fixture("ally-victory.json");
     for case in fixture.array("cases") {
-        let mut warriors: Vec<_> = crate::support::warriors(&case["warriors_before"]);
+        let mut warriors: Vec<_> = support::warriors(&case["warriors_before"]);
         let count = case.n::<usize>("count");
-        let mut enemies: Vec<_> = crate::support::monsters(&case.bytes("enemies_before"))
+        let mut enemies: Vec<_> = support::monsters(&case.bytes("enemies_before"))
             .into_iter()
             .take(count)
             .collect();
@@ -22,43 +22,40 @@ fn survivor_cleanup_and_rewards_match_original_composite_execution() {
             &mut random,
         )
         .unwrap();
-        crate::support::native_expect! {
-        bytes result.menu => &case["menu_after"], "binary_ally_victory";
-        scalar result.count => &case["ally_count_after"], "binary_ally_victory";
+        support::native_expect! {
+            bytes result.menu => &case["menu_after"], "binary_ally_victory";
+            scalar result.count => &case["ally_count_after"], "binary_ally_victory";
         }
         let (share, loot) =
             victory_loot(&mut warriors, &mut enemies, &mut random, Some(&content)).unwrap();
-        crate::support::native_expect! {
-        scalar share => &case["share"], "binary_ally_victory";
-        bytes crate::support::record_bytes(&warriors) => &case["warriors_after"], "binary_ally_victory";
+        support::native_expect! {
+            scalar share => &case["share"], "binary_ally_victory";
+            records &warriors => &case["warriors_after"], "binary_ally_victory";
         }
         assert_eq!(
-            crate::support::record_bytes(&enemies),
+            support::record_bytes(&enemies),
             case.bytes("enemies_after")[..count * 288]
         );
         assert_eq!(
             loot.iter().flat_map(|i| i.0).collect::<Vec<_>>(),
             case.bytes("loot_after")[..loot.len() * 22]
         );
-        crate::support::native_expect! {
-        scalar random.seed => &case["seed_after"], "binary_ally_victory";
-        scalar random.draws => &case["rng_draws"], "binary_ally_victory";
-        }
+        support::assert_rng(&random, &case["seed_after"], &case["rng_draws"]);
     }
 }
 
 #[test]
 fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands() {
     let content = content();
-    for case in crate::support::fixture("survivor-selection.json").array("cases") {
-        let mut state = crate::support::mission_session(&content);
+    for case in support::fixture("survivor-selection.json").array("cases") {
+        let mut state = support::mission_session(&content);
         state.phase = Phase::Combat;
         state.random = RandomState::new(12);
         for warrior in &mut state.warriors {
             warrior.bytes[0x9df] = 1;
         }
-        let mut arena = crate::support::battle();
-        arena.enemies.records = crate::support::monsters(&case.bytes("records_before"));
+        let mut arena = support::battle();
+        arena.enemies.records = support::monsters(&case.bytes("records_before"));
         arena.enemies.positions = (0..7).map(|i| (40 + i, 40)).collect();
         arena.squad.positions = (0..6).map(|i| (20 + i, 20)).collect();
         arena.order[1] = 0;
@@ -67,7 +64,7 @@ fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands(
         position.presentation = None;
         position.script = None;
         let mut events = apply(Command::EndTurn, &mut state, &content).unwrap();
-        let mut resumed = crate::support::checkpoint(&state, &content, "survivors");
+        let mut resumed = support::checkpoint(&state, &content, "survivors");
         for step in case.array("steps") {
             let selection = state.survivors.as_ref().unwrap();
             let native = words(&step.bytes("rows"));
@@ -85,10 +82,7 @@ fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands(
                 .collect();
             assert_eq!(rows, native[..rows.len()]);
             assert_eq!(selection.limit, step.n::<usize>("limit"));
-            assert_eq!(
-                (state.random.seed, state.random.draws),
-                (step.n("seed"), step.n("draws"))
-            );
+            support::assert_rng(&state.random, &step["seed"], &step["draws"]);
             let control = step.n::<usize>("control");
             if control == 2 {
                 break;
@@ -96,7 +90,7 @@ fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands(
             let command = Command::SelectSurvivor { row: control - 3 };
             let changed = replay_command(command, &mut state, &mut resumed, &content);
             events.extend(changed);
-            resumed = crate::support::checkpoint(&state, &content, "survivors");
+            resumed = support::checkpoint(&state, &content, "survivors");
         }
         let observed: Vec<Value> = events
             .iter()
@@ -118,7 +112,7 @@ fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands(
             .cloned()
             .collect();
         assert_eq!(observed, expected);
-        let mut records = state.combat.as_ref().unwrap().enemies.records.clone();
+        let mut records = current_combat(&state).enemies.records.clone();
         let copied = centurions_core::combat::allies::commit_survivors(
             &state.allies,
             state.ally_count,
@@ -126,10 +120,7 @@ fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands(
             state.survivors.as_ref(),
         )
         .unwrap();
-        assert_eq!(
-            crate::support::record_bytes(&records),
-            case.bytes("records_after")
-        );
+        assert_eq!(support::record_bytes(&records), case.bytes("records_after"));
         assert_eq!(copied.menu, case.bytes("menu_after"));
         replay_command(Command::Continue, &mut state, &mut resumed, &content);
         assert_eq!(state.allies, copied.menu);

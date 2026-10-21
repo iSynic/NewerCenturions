@@ -1,14 +1,14 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::combat::*;
 
 fn session(content: &Content) -> Session {
-    let mut state = crate::support::mission_session(content);
+    let mut state = support::mission_session(content);
     state.random = centurions_core::RandomState::new(12);
     let p = state.exploration.as_mut().unwrap();
     p.x = 43;
     p.y = 84;
-    p.script = Some(crate::support::script_state(
+    p.script = Some(support::script_state(
         content.map(0).unwrap().script(6).unwrap().to_vec(),
         0,
     ));
@@ -18,7 +18,7 @@ fn session(content: &Content) -> Session {
 #[test]
 fn leader_death_stories_match_original_complete_enemy_map_and_order_records() {
     let content = content();
-    for case in crate::support::fixture("opening-stories.json")["cases"]
+    for case in support::fixture("opening-stories.json")["cases"]
         .as_array()
         .unwrap()
         .iter()
@@ -27,36 +27,26 @@ fn leader_death_stories_match_original_complete_enemy_map_and_order_records() {
         let mut state = session(&content);
         state.phase = Phase::Combat;
         state.warriors[0].bytes[0x40..0x42].copy_from_slice(&4_i16.to_be_bytes());
-        let positions = crate::support::positions(case.text("positions"));
+        let positions = support::positions(case.text("positions"));
         let mut health = centurions_core::story_health::context(&state.warriors, 0, None);
         health.last_body = 10; // VerifyOpeningStories sets native DAT408574 to body10.
         state.health_context = Some(health);
-        state.combat = Some(Combat {
-            battle: 1,
-            map: TacticalMap {
-                tiles: words(case.text("map_before")),
-                shift: (0, 0),
-                edge_word: 0,
-            },
-            squad: SquadPlacement {
-                positions: vec![(1, 1); 6],
-                under_tiles: vec![1155; 6],
-            },
-            enemies: EnemySetup {
-                records: crate::support::monsters(&case["enemies"]),
-                positions,
-            },
-            order: words(case.text("order_before")),
-            ..crate::support::battle()
-        });
+        let mut combat = support::battle();
+        combat.battle = 1;
+        combat.map.tiles = words(case.text("map_before"));
+        combat.squad.positions.fill((1, 1));
+        combat.enemies.records = support::monsters(&case["enemies"]);
+        combat.enemies.positions = positions;
+        combat.order = words(case.text("order_before"));
+        state.combat = Some(combat);
         state.combat_story = Some(runtime::DeathStory {
             body: 0,
             script: case.n::<i16>("script"),
             cursor: 0,
             actor: 0,
             entry: centurions_core::combat::death_scripts::DeathEntry {
-                x: i32::from(state.combat.as_ref().unwrap().enemies.positions[0].0) + 5,
-                y: i32::from(state.combat.as_ref().unwrap().enemies.positions[0].1) + 5,
+                x: i32::from(current_combat(&state).enemies.positions[0].0) + 5,
+                y: i32::from(current_combat(&state).enemies.positions[0].1) + 5,
                 ..Default::default()
             },
             ..Default::default()
@@ -82,15 +72,12 @@ fn leader_death_stories_match_original_complete_enemy_map_and_order_records() {
             events
         );
         assert_eq!(state, restored);
-        assert_eq!(
-            crate::support::event_sounds(&events),
-            case.n::<Vec<i16>>("sounds")
-        );
-        let c = state.combat.as_ref().unwrap();
-        crate::support::native_expect! {
-        bytes crate::support::record_bytes(&c.enemies.records) => &case["after_enemies"], format!("script {} variant {}",case["script"],case["variant"]);
-        words &(c.map.tiles) => &case["map"], "binary_opening_stories";
-        words &(c.order) => &case["order"], "binary_opening_stories";
+        assert_eq!(support::event_sounds(&events), case.n::<Vec<i16>>("sounds"));
+        let c = current_combat(&state);
+        support::native_expect! {
+            records &c.enemies.records => &case["after_enemies"], format!("script {} variant {}",case["script"],case["variant"]);
+            words &(c.map.tiles) => &case["map"], "binary_opening_stories";
+            words &(c.order) => &case["order"], "binary_opening_stories";
         }
         assert_eq!(state.random.seed, 12);
         assert_eq!(state.random.draws, 0);
@@ -112,7 +99,7 @@ fn leader_death_stories_match_original_complete_enemy_map_and_order_records() {
 #[test]
 fn peaceful_camp_choice_teleport_and_cancel_match_original_newland() {
     let content = content();
-    let fixture = crate::support::fixture("opening-stories.json");
+    let fixture = support::fixture("opening-stories.json");
     let case = fixture
         .array("cases")
         .iter()

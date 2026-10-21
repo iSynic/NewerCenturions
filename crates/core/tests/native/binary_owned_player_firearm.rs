@@ -1,24 +1,25 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
 use centurions_core::items;
 
-use crate::native_common::snapshot_party as party;
+use native_common::snapshot_party as party;
 
-use crate::native_common::snapshot_ammunition as stock;
+use native_common::snapshot_ammunition as stock;
 
-use crate::native_common::snapshot_rng as random;
+use native_common::snapshot_rng as random;
 
-use crate::native_common::scalar_words as numbers;
+use native_common::scalar_words as numbers;
 
 fn added_sounds(before: &Value, after: &Value) -> Vec<i16> {
     numbers(&after["sounds"])[before.array("sounds").len()..].to_vec()
 }
-use crate::support::compare_party as assert_party;
+use support::compare_party as assert_party;
 
 fn work(snapshot: &Value) -> WeaponWork {
     let weapon = snapshot.bytes("weapon");
     let ammo = snapshot.bytes("ammo");
     WeaponWork {
+        natural_attack_index: None,
         sound: Some(word(&weapon, 14).unwrap()),
         weapon_armor_filter: Some(word(&weapon, 136).unwrap()),
         ammunition_armor_filter: Some(word(&ammo, 136).unwrap()),
@@ -32,7 +33,7 @@ fn state(fixture: &Value, snapshot: &Value) -> Session {
     for (warrior, record) in state.warriors.iter_mut().zip(records) {
         warrior.bytes = record.bytes;
     }
-    state.crate_items = crate::support::inventory(&snapshot.bytes("crate"));
+    state.crate_items = support::inventory(&snapshot.bytes("crate"));
     state.ammunition = stock(snapshot);
     state.random = random(snapshot);
     state.weapon_work = work(snapshot);
@@ -42,13 +43,13 @@ fn state(fixture: &Value, snapshot: &Value) -> Session {
 fn compare_receipts(initial: &RandomState, after: &Value, before: &Value) {
     let mut expected = initial.clone();
     let draws = after.array("draws");
-    crate::support::replay_rng(&mut expected, &draws[before.array("draws").len()..]);
+    support::replay_rng(&mut expected, &draws[before.array("draws").len()..]);
     assert_eq!(expected, random(after));
 }
 
 #[test]
 fn earned_pair_profiles_and_serial_collection_wear_fit_match_complete_native_records() {
-    let f = crate::support::fixture("owned-player-firearm.json");
+    let f = support::fixture("owned-player-firearm.json");
     let content = content();
     let mission = content.map(3).unwrap();
     for case in f.array("gate_cases") {
@@ -73,21 +74,12 @@ fn earned_pair_profiles_and_serial_collection_wear_fit_match_complete_native_rec
         let events = equipment::take_crate(&mut state, &content, crate_slot, member).unwrap();
         assert_eq!(
             events,
-            added_sounds(&stage["before"], &stage["picked"])
-                .into_iter()
-                .map(|resource_id| Event::Sound { resource_id })
-                .collect::<Vec<_>>()
+            support::sound_events(added_sounds(&stage["before"], &stage["picked"]))
         );
         assert_party(&state.warriors, &stage["picked"]);
-        crate::support::assert_bytes(
-            &state
-                .crate_items
-                .iter()
-                .flat_map(|item| item.0)
-                .collect::<Vec<_>>(),
-            &stage["worn"].bytes("crate"),
-            "owned firearm crate",
-        );
+        support::native_expect! {
+            bytes &support::record_bytes(&state.crate_items) => &stage["worn"].bytes("crate"), "owned firearm crate";
+        };
         let slot = state.warriors[member].inventory().unwrap().len() - 1;
         let worn =
             equipment::wear(&state.warriors[member], &content, mission, slot, false).unwrap();
@@ -123,7 +115,10 @@ fn earned_pair_profiles_and_serial_collection_wear_fit_match_complete_native_rec
         assert_party(&state.warriors, &stage["fitted"]);
         assert_eq!(state.ammunition, stock(&stage["fitted"]));
         assert_eq!(state.random, random(&stage["fitted"]));
-        assert_eq!(state.weapon_work, work(&stage["fitted"]));
+        assert_eq!(
+            support::psi_frame::captured_work(state.weapon_work),
+            work(&stage["fitted"])
+        );
         compare_receipts(&initial, &stage["fitted"], &stage["compacted"]);
     }
     assert_party(&state.warriors, &case["after"]);
@@ -132,7 +127,7 @@ fn earned_pair_profiles_and_serial_collection_wear_fit_match_complete_native_rec
 
 #[test]
 fn complete_preparation_and_four_controlled_resolutions_match_native_packet_records_and_rng() {
-    let f = crate::support::fixture("owned-player-firearm.json");
+    let f = support::fixture("owned-player-firearm.json");
     let content = content();
     let attacks = &content.map(3).unwrap().combat.as_ref().unwrap().attacks;
     assert_eq!(word(&content.items[201], 60).unwrap(), -1);
@@ -194,7 +189,7 @@ fn complete_preparation_and_four_controlled_resolutions_match_native_packet_reco
 
 #[test]
 fn manual_full_partial_cancel_and_combat_fills_match_complete_native_records() {
-    let f = crate::support::fixture("owned-player-firearm.json");
+    let f = support::fixture("owned-player-firearm.json");
     let content = content();
     for case in f.array("ammunition_cases") {
         let kind = case.text("kind");
@@ -230,7 +225,7 @@ fn manual_full_partial_cancel_and_combat_fills_match_complete_native_records() {
 
 #[test]
 fn independent_silent_reload_full_partial_and_wrong_caliber_match_native_records() {
-    let f = crate::support::fixture("owned-player-firearm.json");
+    let f = support::fixture("owned-player-firearm.json");
     let mut compared = 0;
     for case in f.array("ammunition_cases") {
         let kind = case.text("kind");
@@ -263,7 +258,7 @@ fn independent_silent_reload_full_partial_and_wrong_caliber_match_native_records
 
 #[test]
 fn native_pickup_rejections_and_empty_preparation_are_atomic() {
-    let f = crate::support::fixture("owned-player-firearm.json");
+    let f = support::fixture("owned-player-firearm.json");
     let content = content();
     let mission = content.map(3).unwrap();
     for case in f

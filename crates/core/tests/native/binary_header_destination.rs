@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::story_destination::{
     Location, destination, disable_on_exhaustion, persistent_record,
@@ -6,7 +6,7 @@ use centurions_core::story_destination::{
 
 #[test]
 fn door_destinations_and_suppression_match_original_finish() {
-    let fixture: serde_json::Value = crate::support::fixture("header-destination.json");
+    let fixture: serde_json::Value = support::fixture("header-destination.json");
     for case in fixture.array("cases") {
         let input: Vec<i32> = case
             .array("input")

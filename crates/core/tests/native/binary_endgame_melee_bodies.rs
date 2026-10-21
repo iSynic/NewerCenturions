@@ -1,10 +1,10 @@
-use crate::native_common::original_file as data;
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
+use native_common::original_file as data;
 
-use crate::native_common::melee_combat as combat;
+use native_common::melee_combat as combat;
 #[test]
 fn endgame_default194_melee_matches_native_full_records_packet_and_randomness() {
-    let fixture = crate::support::fixture("endgame-melee-bodies.json");
+    let fixture = support::fixture("endgame-melee-bodies.json");
 
     crate::binary_endgame_melee_bodies::compare_endgame_default194_melee_matches_native_full_records_packet_and_randomness(fixture);
 }
@@ -32,12 +32,11 @@ pub(super) fn compare_endgame_default194_melee_matches_native_full_records_packe
         );
         let (result, packet) =
             result.unwrap_or_else(|error| panic!("case{index} weapon{id}: {error:?}"));
-        let actual: Vec<_> = crate::support::record_bytes(&combat.enemies.records);
-        crate::support::native_expect! {
-        bytes actual => &case["records_after"], &format!("case{index} records");
-        bytes packet => &case["packet_after"], &format!("case{index} packet");
-        scalar random.seed => &case["seed_after"], "binary_endgame_melee_bodies";
-        scalar random.draws => &case["rng_draws"], "binary_endgame_melee_bodies";
+        let actual: Vec<_> = support::record_bytes(&combat.enemies.records);
+        support::native_expect! {
+            bytes actual => &case["records_after"], &format!("case{index} records");
+            bytes packet => &case["packet_after"], &format!("case{index} packet");
+            rng random => (&case["seed_after"], &case["rng_draws"]), "binary_endgame_melee_bodies";
         }
         let sound = if result.damage == 0 {
             650

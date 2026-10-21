@@ -45,6 +45,7 @@ pub fn enemy_turn(state: &mut Session, content: &Content) -> Result<Vec<Event>, 
             context,
             &state.party_buffs,
             &mut state.ammunition_work,
+            &mut state.attack_count,
         )?
     } else {
         let mut work = EnemyWork {

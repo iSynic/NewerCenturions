@@ -158,7 +158,12 @@ pub fn select_targets(
                 dependency: "other spell condition packet",
             });
         }
-    } else {
+    } else if !(word(packet, 40)? == 57
+        && packet[9] == 3
+        && packet[19] == 8
+        && packet[20] == 8
+        && packet[4] == 0)
+    {
         validate_direct(packet)?;
     }
     select_targets_impl(

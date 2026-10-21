@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
 use centurions_core::typed_encounter::{
     PasswordSelection, QuestionPlan, TypedContinuation, continuation, finish_attempt,
@@ -6,21 +6,21 @@ use centurions_core::typed_encounter::{
 };
 
 fn item_state(state: &mut Session, case: &Value) {
-    crate::native_common::restore_party(state, &serde_json::json!({"party": case["after"]}));
+    native_common::restore_party(state, &serde_json::json!({"party": case["after"]}));
     state.ammunition_work.item = Some(case.bytes("item_work"));
     state.loaded_item_field32 = Some(word(&case.bytes("item_work"), 32).unwrap());
 }
 
 #[test]
 fn password_prefix_and_case_selection_match_original_comparison() {
-    let fixture = crate::support::fixture("typed-encounter.json");
+    let fixture = support::fixture("typed-encounter.json");
     let native =
         centurions_content::native_text::NativeText::load(&content(), std::path::Path::new("."))
             .unwrap();
     let lowercase = native.bytes(0x3ffc50, 256).unwrap();
     assert_eq!(
         lowercase,
-        crate::support::fixture("case-fold.json").bytes("lowercase256")
+        support::fixture("case-fold.json").bytes("lowercase256")
     );
     for case in fixture.array("password_cases") {
         let record = case.bytes("record");
@@ -39,23 +39,21 @@ fn password_prefix_and_case_selection_match_original_comparison() {
     let mut record = fixture.array("password_cases")[0].bytes("record");
     record[476..480].copy_from_slice(&[2, 0x8a, b'x', 0]);
     let content = content();
-    let mut state = crate::support::mission_session(&content);
+    let mut state = support::mission_session(&content);
     state.typed_encounters = content.map(0).unwrap().typed_encounters.clone();
     state.typed_encounters[..record.len()].copy_from_slice(&record);
     let mut script = vec![0; 42];
     script[8..10].copy_from_slice(&5_i16.to_be_bytes());
     let position = state.exploration.as_mut().unwrap();
-    position.script = Some(crate::support::script_state(script, 0));
+    position.script = Some(support::script_state(script, 0));
     position.presentation = Some(Presentation::Dialogue {
         id: 0,
         text: String::new(),
     });
     apply(Command::Continue, &mut state, &content).unwrap();
-    let mut resumed = crate::support::checkpoint(&state, &content, "macroman-password");
-    replay_command(
+    support::saved_command(
         Command::SubmitText { text: "ÄX".into() },
         &mut state,
-        &mut resumed,
         &content,
     );
     assert!(matches!(
@@ -66,7 +64,7 @@ fn password_prefix_and_case_selection_match_original_comparison() {
 
 #[test]
 fn typed_branch_and_last_attempt_match_complete_original_script() {
-    let fixture = crate::support::fixture("typed-encounter.json");
+    let fixture = support::fixture("typed-encounter.json");
     for case in fixture.array("dispatch_cases") {
         let record = case.bytes("record");
         let before = case.bytes("before");
@@ -80,7 +78,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
         let TypedContinuation::Branch { selector, body } = plan else {
             panic!("Expected authored branch");
         };
-        crate::support::expect(i64::from(selector), &case["effective_selector"]);
+        support::expect(i64::from(selector), &case["effective_selector"]);
         assert_eq!(&after[8..40], body);
         assert_eq!(&after[..8], &before[..8]);
         assert_eq!(&after[40..], &before[40..]);
@@ -92,13 +90,13 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
         );
     }
     let content = content();
-    let items = crate::support::fixture("encounter-items.json");
-    let inert = crate::support::fixture("encounter-inert-items.json");
-    let scripted = crate::support::fixture("encounter-script-items.json");
-    let modifiers = crate::support::fixture("item-modifiers.json");
-    let walking_items = crate::support::fixture("walking-encounter-item.json");
-    let calendar_items = crate::support::fixture("calendar-encounter-item.json");
-    let regional_return = crate::support::fixture("regional-item-return.json");
+    let items = support::fixture("encounter-items.json");
+    let inert = support::fixture("encounter-inert-items.json");
+    let scripted = support::fixture("encounter-script-items.json");
+    let modifiers = support::fixture("item-modifiers.json");
+    let walking_items = support::fixture("walking-encounter-item.json");
+    let calendar_items = support::fixture("calendar-encounter-item.json");
+    let regional_return = support::fixture("regional-item-return.json");
     for (case, regional, returned) in items
         .array("cases")
         .iter()
@@ -125,10 +123,10 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
         if case.get("definition").is_some() {
             content.items[case.n::<usize>("item")] = case.bytes("definition");
         }
-        let mut state = crate::support::mission_session(&content);
-        state.warriors = crate::support::warriors(&case["before"]);
+        let mut state = support::mission_session(&content);
+        state.warriors = support::warriors(&case["before"]);
         if case.get("mask_before").is_some() && case.get("warning").is_none() && !returning {
-            let manual = crate::support::fixture("manual-encounter.json");
+            let manual = support::fixture("manual-encounter.json");
             let selected = manual
                 .array("cases")
                 .iter()
@@ -195,7 +193,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             script[8..10].copy_from_slice(&5_i16.to_be_bytes());
             script[24..26].copy_from_slice(&case.n::<i16>("encounter").to_be_bytes());
             let position = state.exploration.as_mut().unwrap();
-            let mut script = crate::support::script_state(script, 0);
+            let mut script = support::script_state(script, 0);
             script.item_return = case.get("mask_before").is_some() && !returning;
             if walking {
                 script.scheduled = false;
@@ -249,7 +247,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
         }
         if let Some(warning) = case.get("warning") {
             if case.get("active_body").is_some() {
-                let mut combat = crate::support::battle();
+                let mut combat = support::battle();
                 combat.order[1] = case.n("active_body");
                 state.combat = Some(combat);
                 state.phase = Phase::Combat;
@@ -297,44 +295,37 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                     .map(|index| centurions_core::feedback::NativeFeedback::Warning { index }),
             );
             assert_eq!(feedback, expected_feedback);
-            crate::support::same_session(&state, &before);
-            crate::support::checkpoint(&state, &content, "encounter-item-refusal");
-            crate::support::assert_bytes(
-                &crate::support::record_bytes(&state.warriors),
-                &case.bytes("after"),
-                "refused encounter item",
-            );
+            support::same_session(&state, &before);
+            support::checkpoint(&state, &content, "encounter-item-refusal");
+            support::native_expect! {
+                bytes &support::record_bytes(&state.warriors) => &case.bytes("after"), "refused encounter item";
+            };
             continue;
         }
         if case.get("dialog_open").is_some() {
             let mut expected = state.clone();
             item_state(&mut expected, case);
-            let mut resumed = crate::support::checkpoint(&state, &content, "modifier-before");
-            let events = replay_command(
+            let events = support::saved_command(
                 Command::UseItem {
                     warrior: case.n("member"),
                     slot: case.n("slot"),
                 },
                 &mut state,
-                &mut resumed,
                 &content,
             );
-            crate::support::same_session(&state, &expected);
-            assert_eq!(
-                crate::support::event_sounds(&events),
-                case.n::<Vec<i16>>("sounds")
-            );
+            support::same_captured_session(&state, &expected);
+            assert_eq!(support::event_sounds(&events), case.n::<Vec<i16>>("sounds"));
             assert!(
                 events
                     .iter()
                     .any(|event| matches!(event, Event::ItemUpgraded { .. }))
             );
-            crate::support::checkpoint(&state, &content, "modifier-after");
+            support::checkpoint(&state, &content, "modifier-after");
             continue;
         }
         let selector = case.n::<i8>("selector");
         let before = state.clone();
-        let mut resumed = crate::support::checkpoint(&state, &content, "encounter-item-before");
+        let mut resumed = support::checkpoint(&state, &content, "encounter-item-before");
         if regional {
             let mut cancelled = resumed.clone();
             apply(Command::CancelMenu, &mut cancelled, &content).unwrap();
@@ -355,16 +346,14 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             let mut legacy: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             legacy["schema_version"] = 5.into();
-            legacy["session"]
-                .as_object_mut()
-                .unwrap()
-                .remove("inventory_record");
+            support::legacy_save(&mut legacy);
+            support::remove_field(&mut legacy["session"], "inventory_record");
             std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
             assert!(load(&path, &content).is_err());
-            legacy["session"]["exploration"]["script"]
-                .as_object_mut()
-                .unwrap()
-                .remove("item_return");
+            support::remove_field(
+                &mut legacy["session"]["exploration"]["script"],
+                "item_return",
+            );
             std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
             let mut expected = state.clone();
             expected.inventory_record = None;
@@ -377,7 +366,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                 .as_mut()
                 .unwrap()
                 .item_return = false;
-            assert_eq!(load(&path, &content).unwrap(), expected);
+            support::same_captured_session(&load(&path, &content).unwrap(), &expected);
             std::fs::remove_file(path).unwrap();
         }
         let mut events = replay_command(
@@ -397,11 +386,9 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                 &content,
             ));
         }
-        crate::support::assert_bytes(
-            &crate::support::record_bytes(&state.warriors),
-            &case.bytes("after"),
-            "encounter item party",
-        );
+        support::native_expect! {
+            bytes &support::record_bytes(&state.warriors) => &case.bytes("after"), "encounter item party";
+        };
         assert_eq!(state.random, before.random);
         assert_eq!(state.party_mask.as_slice(), case.words("mask"));
         assert_eq!(
@@ -439,14 +426,14 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                     minute: 0
                 }));
             }
-            crate::support::same_session(&state, &expected);
+            support::same_captured_session(&state, &expected);
             let mut sounds = case.n::<Vec<i16>>("sounds");
             if returned == 1 {
                 sounds.push(20);
             }
-            assert_eq!(crate::support::event_sounds(&events), sounds);
+            assert_eq!(support::event_sounds(&events), sounds);
             assert!(!events.contains(&Event::StoryPresented));
-            crate::support::checkpoint(&state, &content, "walking-item-after");
+            support::checkpoint(&state, &content, "walking-item-after");
             continue;
         }
         let id = if selector == -1 {
@@ -457,7 +444,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             let mut sounds = case.n::<Vec<i16>>("sounds");
             // The capture stops before newland; authored script216 starts with sound406.
             sounds.push(406);
-            assert_eq!(crate::support::event_sounds(&events), sounds);
+            assert_eq!(support::event_sounds(&events), sounds);
             assert!(
                 !state
                     .exploration
@@ -479,15 +466,15 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             matches!(state.exploration.as_ref().unwrap().presentation, Some(Presentation::Dialogue { id: actual, .. }) if actual == id)
         );
         assert!(events.contains(&Event::StoryPresented));
-        crate::support::checkpoint(&state, &content, "encounter-item-after");
+        support::checkpoint(&state, &content, "encounter-item-after");
     }
-    for case in crate::support::fixture("encounter-actions.json").array("cases") {
-        let mut state = crate::support::mission_session(&content);
+    for case in support::fixture("encounter-actions.json").array("cases") {
+        let mut state = support::mission_session(&content);
         let mut script = vec![0; 42];
         script[8..10].copy_from_slice(&5_i16.to_be_bytes());
         script[24..26].copy_from_slice(&case.n::<i16>("encounter").to_be_bytes());
         let position = state.exploration.as_mut().unwrap();
-        position.script = Some(crate::support::script_state(script, 0));
+        position.script = Some(support::script_state(script, 0));
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
             text: String::new(),
@@ -501,7 +488,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
         );
         let pending = state.clone();
         assert!(apply(Command::Continue, &mut state, &content).is_err());
-        crate::support::same_session(&state, &pending);
+        support::same_session(&state, &pending);
         let file = std::env::temp_dir().join(format!(
             "centurions-encounter-action-migration-{}.json",
             std::process::id()
@@ -510,12 +497,12 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
         let mut legacy: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
         legacy["schema_version"] = 5.into();
+        support::legacy_save(&mut legacy);
         std::fs::write(&file, serde_json::to_vec(&legacy).unwrap()).unwrap();
         assert!(load(&file, &content).is_err());
         std::fs::remove_file(file).unwrap();
         for step in case.array("steps") {
-            let mut resumed =
-                crate::support::checkpoint(&state, &content, "encounter-action-pending");
+            let mut resumed = support::checkpoint(&state, &content, "encounter-action-pending");
             let command = Command::EncounterActionControl {
                 item: step.n("control"),
             };
@@ -539,8 +526,8 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                     if feedback == vec![centurions_core::feedback::NativeFeedback::Warning { index: 58 }])
                 );
                 assert!(apply(command, &mut resumed, &content).is_err());
-                crate::support::same_session(&state, &prior);
-                crate::support::same_session(&resumed, &prior);
+                support::same_session(&state, &prior);
+                support::same_session(&resumed, &prior);
             } else {
                 let events = replay_command(command, &mut state, &mut resumed, &content);
                 if !step.n::<bool>("closed") || !step.n::<bool>("accepted") {
@@ -559,7 +546,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             } else {
                 assert!(state.encounter_actions.is_none());
                 if !step.n::<bool>("accepted") {
-                    crate::support::same_session(&state, &before);
+                    support::same_session(&state, &before);
                 } else if step.n::<i8>("selector") == 1 {
                     let position = state.exploration.as_ref().unwrap();
                     let TypedContinuation::Branch { body, .. } =
@@ -592,13 +579,13 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                 }
             }
         }
-        crate::support::checkpoint(&state, &content, "encounter-action-after");
+        support::checkpoint(&state, &content, "encounter-action-after");
     }
 }
 
 #[test]
 fn question_condition_and_continuation_match_original_blocks() {
-    let fixture = crate::support::fixture("typed-encounter.json");
+    let fixture = support::fixture("typed-encounter.json");
     for case in fixture.array("question_cases") {
         let extra = case.bytes("extra");
         let plan = question_plan(&extra, case.n::<bool>("answer")).unwrap();
@@ -607,9 +594,7 @@ fn question_condition_and_continuation_match_original_blocks() {
         match plan {
             QuestionPlan::Continue => {}
             QuestionPlan::MoveAway => {}
-            QuestionPlan::ReplaceScript(id) => {
-                crate::support::expect(i64::from(id), &case["loaded"])
-            }
+            QuestionPlan::ReplaceScript(id) => support::expect(i64::from(id), &case["loaded"]),
             QuestionPlan::MenuBranch(branch) | QuestionPlan::TypedBranch(branch) => {
                 let record = case.bytes("branch_record");
                 let expected =
@@ -625,7 +610,7 @@ fn question_condition_and_continuation_match_original_blocks() {
 
 #[test]
 fn typed_cancel_and_header_persistence_preserve_original_boundaries() {
-    let fixture = crate::support::fixture("typed-encounter.json");
+    let fixture = support::fixture("typed-encounter.json");
     let record = bytes(fixture["password_cases"][0]["record"].as_str().unwrap());
     assert_eq!(
         continuation(&record, 0, 2).unwrap(),
@@ -637,8 +622,8 @@ fn typed_cancel_and_header_persistence_preserve_original_boundaries() {
     );
     assert!(continuation(&record, -4, 2).is_err());
     let cancel = &fixture["cancel_case"];
-    let menus = crate::support::fixture("encounter-choice.json");
-    let movement = &crate::support::fixture("move-away.json")["cases"][0];
+    let menus = support::fixture("encounter-choice.json");
+    let movement = &support::fixture("move-away.json")["cases"][0];
     let content = content();
     for (typed, scheduled, manual, native) in [
         (true, false, false, cancel),
@@ -658,12 +643,12 @@ fn typed_cancel_and_header_persistence_preserve_original_boundaries() {
         } else {
             native.n("save_menu")
         };
-        let mut state = crate::support::mission_session(&content);
+        let mut state = support::mission_session(&content);
         let position = state.exploration.as_mut().unwrap();
         position.x = movement.n("x");
         position.y = movement.n("y");
         position.last_move = [movement.n("dx"), movement.n("dy")];
-        let mut script = crate::support::script_state(read("working"), 0);
+        let mut script = support::script_state(read("working"), 0);
         script.scheduled = scheduled;
         script.item_return = manual;
         script.map_slot = 2;
@@ -699,9 +684,8 @@ fn typed_cancel_and_header_persistence_preserve_original_boundaries() {
         if !scheduled {
             position.event_headers[84..126].copy_from_slice(&read("persisted"));
         }
-        let mut resumed = crate::support::checkpoint(&state, &content, "typed-cancel-pending");
-        let events = replay_command(Command::CancelMenu, &mut state, &mut resumed, &content);
-        crate::support::same_session(&state, &expected);
+        let events = support::saved_command(Command::CancelMenu, &mut state, &content);
+        support::same_captured_session(&state, &expected);
         assert_eq!(
             events,
             if backstep {
@@ -713,6 +697,6 @@ fn typed_cancel_and_header_persistence_preserve_original_boundaries() {
                 vec![]
             }
         );
-        crate::support::checkpoint(&state, &content, "typed-cancel-after");
+        support::checkpoint(&state, &content, "typed-cancel-after");
     }
 }

@@ -1,8 +1,8 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 #[test]
 fn weapon_zero_uses_retained_packet_and_global_spell_identity() {
-    let f: serde_json::Value = crate::support::fixture("enemy-weapon-zero-caller.json");
+    let f: serde_json::Value = support::fixture("enemy-weapon-zero-caller.json");
 
     compare_cases(f.array("cases"));
 }

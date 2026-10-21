@@ -1,9 +1,9 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 use centurions_core::{Event, feedback::NativeFeedback};
 
 #[test]
 fn mechanical_transactions_match_original_records_random_and_ordered_feedback() {
-    let fixture = crate::support::fixture("mechanical-capture.json");
+    let fixture = support::fixture("mechanical-capture.json");
     for case in fixture.array("cases") {
         let mut warrior = Warrior {
             name: "Native reference".into(),

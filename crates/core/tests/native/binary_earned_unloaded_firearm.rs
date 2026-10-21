@@ -1,15 +1,15 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::items;
 
-use crate::support::buffer as bytes;
+use support::buffer as bytes;
 
 fn party(f: &Value, snapshot: &Value) -> Vec<Warrior> {
-    crate::support::warriors(&bytes(f, &snapshot["party"]))
+    support::warriors(&bytes(f, &snapshot["party"]))
 }
 
 fn records(f: &Value, snapshot: &Value, key: &str) -> Vec<InventoryRecord> {
-    crate::support::inventory(&bytes(f, &snapshot[key]))
+    support::inventory(&bytes(f, &snapshot[key]))
 }
 
 fn sounds(case: &Value, before: &Value, after: &Value) -> Vec<i16> {
@@ -20,16 +20,13 @@ fn sounds(case: &Value, before: &Value, after: &Value) -> Vec<i16> {
 }
 
 fn assert_party(actual: &[Warrior], f: &Value, native: &Value) {
-    assert_eq!(
-        crate::support::record_bytes(actual),
-        bytes(f, &native["party"])
-    );
+    assert_eq!(support::record_bytes(actual), bytes(f, &native["party"]));
 }
 
 #[test]
 fn earned_unloaded_collection_matches_all_five_native_party_and_crate_cases() {
-    let content = crate::support::content();
-    let f: Value = crate::support::fixture("earned-unloaded-firearm.json");
+    let content = support::content();
+    let f: Value = support::fixture("earned-unloaded-firearm.json");
 
     for case in f.array("cases") {
         let before = party(&f, &case["before"]);
@@ -62,8 +59,8 @@ fn earned_unloaded_collection_matches_all_five_native_party_and_crate_cases() {
 
 #[test]
 fn full_outdoor_wear_and_compaction_preserve_empty_ammunition_and_native_level_denial() {
-    let content = crate::support::content();
-    let f: Value = crate::support::fixture("earned-unloaded-firearm.json");
+    let content = support::content();
+    let f: Value = support::fixture("earned-unloaded-firearm.json");
     for case in f
         .array("cases")
         .iter()

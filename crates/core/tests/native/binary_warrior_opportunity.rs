@@ -1,13 +1,12 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
-use crate::support::assert_bytes;
 use centurions_core::combat::move_warrior;
 
 #[test]
 fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
-    let fixture: serde_json::Value = crate::support::fixture("warrior-opportunity.json");
+    let fixture: serde_json::Value = support::fixture("warrior-opportunity.json");
 
-    let mut content = crate::support::content();
+    let mut content = support::content();
     content.scenario.as_mut().unwrap().maps[0].tile_properties =
         fixture.bytes("properties")[64..12064].to_vec();
     for case in fixture.array("cases") {
@@ -17,7 +16,7 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
         let context = format!("layout{} seed{}", case["layout"], case["seed_before"]);
         let mut state = Session::new(&content);
         state.random = RandomState::new(case.n::<u32>("seed_before"));
-        state.warriors = crate::support::warriors(&case["warriors_before"]);
+        state.warriors = support::warriors(&case["warriors_before"]);
         let mut order = vec![-1; 110];
         order[1] = 0;
         state.combat = Some(Combat {
@@ -40,7 +39,7 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
                 under_tiles: vec![1155; 6],
             },
             enemies: EnemySetup {
-                records: crate::support::monsters(&case["records_before"]),
+                records: support::monsters(&case["records_before"]),
                 positions: case
                     .array("enemy_positions")
                     .iter()
@@ -53,15 +52,14 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
                     .collect(),
             },
             order,
-            ..crate::support::battle()
+            ..support::battle()
         });
         let events = move_warrior(&mut state, &content, case.n::<i8>("dx"), case.n::<i8>("dy"))
             .unwrap_or_else(|error| panic!("{context}: {error}"));
-        let combat = state.combat.as_ref().unwrap();
-        crate::support::native_expect! {
-        bytes crate::support::record_bytes(&state.warriors) => &case["warriors_after"], &format!("{context} party");
-        bytes crate::support::record_bytes(&combat
-                        .enemies.records) => &case["records_after"], &format!("{context} monsters");
+        let combat = current_combat(&state);
+        support::native_expect! {
+            records &state.warriors => &case["warriors_after"], &format!("{context} party");
+            records &combat.enemies.records => &case["records_after"], &format!("{context} monsters");
         }
         assert_eq!(combat.map.tiles, case.words("map_after"), "{context} map");
         assert_eq!(
@@ -69,11 +67,11 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
             (case.n::<i16>("x"), case.n::<i16>("y")),
             "{context} position"
         );
-        crate::support::native_expect! {
-        scalar combat.squad.under_tiles[0] => &case["under"], "binary_warrior_opportunity";
-        bytes combat.attack_packet.as_ref().unwrap() => &case["packet"], &format!("{context} packet");
-        scalar state.random.seed => &case["seed_after"], "binary_warrior_opportunity";
-        scalar state.random.draws => &case["rng_draws"], "binary_warrior_opportunity";
+        support::native_expect! {
+            scalar combat.squad.under_tiles[0] => &case["under"], "binary_warrior_opportunity";
+            bytes combat.attack_packet.as_ref().unwrap() => &case["packet"], &format!("{context} packet");
+            scalar state.random.seed => &case["seed_after"], "binary_warrior_opportunity";
+            scalar state.random.draws => &case["rng_draws"], "binary_warrior_opportunity";
         }
         let sounds: Vec<_> = events
             .iter()
@@ -82,7 +80,7 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
                 _ => None,
             })
             .collect();
-        crate::support::expect_array(&(sounds), &case["sounds"]);
+        support::expect_array(&(sounds), &case["sounds"]);
         let calls: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
@@ -108,7 +106,7 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
 
 #[test]
 fn native_nonzero_reaction_return_advances_before_movement_cost_or_map_writes() {
-    let fixture: serde_json::Value = crate::support::fixture("warrior-opportunity.json");
+    let fixture: serde_json::Value = support::fixture("warrior-opportunity.json");
     let cases: Vec<_> = fixture
         .array("cases")
         .iter()
@@ -120,11 +118,9 @@ fn native_nonzero_reaction_return_advances_before_movement_cost_or_map_writes() 
 
         let mut expected = case.bytes("warriors_before");
         expected[0x9e0] = 0;
-        assert_bytes(
-            &case.bytes("warriors_after"),
-            &expected,
-            "aborted walk facing",
-        );
+        support::native_expect! {
+            bytes &case.bytes("warriors_after") => &expected, "aborted walk facing";
+        };
 
         assert_eq!(
             case.array("calls").last().unwrap(),

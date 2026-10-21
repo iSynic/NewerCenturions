@@ -445,6 +445,7 @@ fn fire(
     actor: (i16, i16),
     buffers: &mut crate::ammunition::WorkBuffers,
     display_writers: bool,
+    attack_count: &mut i16,
 ) -> Result<bool, RuleError> {
     let (item_context, body) = actor;
     let a = (body - 10) as usize;
@@ -472,6 +473,7 @@ fn fire(
     let p = packet(weapon, ammo, attacks)?;
     c.weapon_work.prepare(weapon, ammo)?;
     buffers.prepare_pair(weapon, ammo)?;
+    *attack_count = i16::from(p[0] as i8);
     c.attack_packet = Some(p.clone());
     c.attack_identity = Some([3, 0, 0]);
     random.bound(7);
@@ -672,6 +674,7 @@ pub fn scientist_turn_with_item_context_and_buffs(
         buffs,
         &mut Default::default(),
         false,
+        &mut 0,
     )
 }
 
@@ -685,6 +688,7 @@ pub(crate) fn scientist_turn_with_work(
     item_context: i16,
     buffs: &[u8],
     buffers: &mut crate::ammunition::WorkBuffers,
+    attack_count: &mut i16,
 ) -> Result<Vec<Event>, RuleError> {
     scientist_turn_inner(
         c,
@@ -696,6 +700,7 @@ pub(crate) fn scientist_turn_with_work(
         buffs,
         buffers,
         true,
+        attack_count,
     )
 }
 
@@ -710,6 +715,7 @@ fn scientist_turn_inner(
     buffs: &[u8],
     buffers: &mut crate::ammunition::WorkBuffers,
     display_writers: bool,
+    attack_count: &mut i16,
 ) -> Result<Vec<Event>, RuleError> {
     let body = c
         .active_body()
@@ -751,6 +757,7 @@ fn scientist_turn_inner(
                 (item_context, body),
                 buffers,
                 display_writers,
+                attack_count,
             )? {
                 if let Some(item) = buffers.item.as_ref() {
                     item_context = word(item, 32)?;
@@ -824,7 +831,24 @@ fn scientist_turn_inner(
             }
         }
         let m = &c.enemies.records[e].bytes;
-        if word(m, 0x48)? == 0 || (m[0x109] as i8) < 2 || attempt > 1 {
+        // combat115548 gates the movement-loop spell retry. The outer
+        // 115732..115776 branch separately retries a firearm, even while fleeing.
+        // Historical direct-helper receipts stop before that outer branch.
+        if word(m, 0x42)? == 0 || (m[0x109] as i8) < 2 || attempt > 1 {
+            if display_writers && word(m, 0x48)? != 0 && (m[0x109] as i8) >= 2 && attempt < 2 {
+                fire(
+                    c,
+                    w,
+                    mission,
+                    random,
+                    items,
+                    &mut events,
+                    (item_context, body),
+                    buffers,
+                    display_writers,
+                    attack_count,
+                )?;
+            }
             return Ok(events);
         }
         attempt += 1;
@@ -838,6 +862,7 @@ fn scientist_turn_inner(
             (item_context, body),
             buffers,
             display_writers,
+            attack_count,
         )? {
             if let Some(item) = buffers.item.as_ref() {
                 item_context = word(item, 32)?;

@@ -3,10 +3,7 @@ use crate::presentation::{Action, UiState};
 use centurions_content::word;
 use centurions_core::{Command, apply};
 
-fn native_fixture(name: &str) -> serde_json::Value {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evidence/fixtures");
-    serde_json::from_slice(&std::fs::read(root.join(name)).unwrap()).unwrap()
-}
+use crate::original_content::fixture as native_fixture;
 
 use crate::fixture_hex::decode;
 
@@ -37,6 +34,22 @@ impl DesktopReplay {
             state: Session::new(&content),
             content,
         }
+    }
+
+    fn editor(&self) -> &crate::editor::WarriorEditor {
+        self.app.characters.editor.as_ref().unwrap()
+    }
+
+    fn creation(&self) -> &crate::creation::Creation {
+        self.app.characters.creation.as_ref().unwrap()
+    }
+
+    fn information(&self) -> &crate::information::WarriorInformation {
+        self.app.characters.information.as_ref().unwrap()
+    }
+
+    fn appearance(&self) -> &crate::appearance::Appearance {
+        self.app.characters.appearance.as_ref().unwrap()
     }
 
     #[track_caller]
@@ -117,6 +130,7 @@ fn scenario_selection_and_archive_children_use_the_application_handlers() {
     let mut legacy: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     legacy["schema_version"] = 8.into();
+    crate::original_content::legacy_save(&mut legacy);
     std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
     assert!(centurions_core::load(&path, &driver.content).is_err());
     std::fs::remove_file(path).unwrap();
@@ -179,30 +193,11 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
     }
     assert!(driver.app.characters.editor.is_none());
     assert_eq!(
-        word(
-            &driver
-                .app
-                .characters
-                .creation
-                .as_ref()
-                .unwrap()
-                .draft
-                .warriors[0]
-                .bytes,
-            0xe4
-        )
-        .unwrap(),
+        word(&driver.creation().draft.warriors[0].bytes, 0xe4).unwrap(),
         1
     );
     assert!(
-        driver
-            .app
-            .characters
-            .creation
-            .as_ref()
-            .unwrap()
-            .draft
-            .warriors[0]
+        driver.creation().draft.warriors[0]
             .inventory()
             .unwrap()
             .len()
@@ -231,28 +226,12 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
     for item in [56, 2, 6, 2, 2, 66] {
         driver.act(ApplicationAction::CreationItem(item));
     }
-    assert!(
-        driver
-            .app
-            .characters
-            .editor
-            .as_ref()
-            .unwrap()
-            .scans
-            .is_some()
-    );
+    assert!(driver.editor().scans.is_some());
     driver.act(ApplicationAction::EditorItem(10));
     driver.act(ApplicationAction::EditorItem(32));
     driver.act(ApplicationAction::ScanAnswer(true));
     assert!(
-        driver
-            .app
-            .characters
-            .creation
-            .as_ref()
-            .unwrap()
-            .draft
-            .warriors[0]
+        driver.creation().draft.warriors[0]
             .knows_spell(1101)
             .unwrap()
     );
@@ -402,10 +381,7 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
         .is_err()
     );
     assert_eq!(driver.state, before);
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../evidence/fixtures/earned-combat-reload.json"
-    ))
-    .unwrap();
+    let fixture: serde_json::Value = crate::original_content::fixture("earned-combat-reload.json");
     driver.state = serde_json::from_value(fixture["foundations"][0]["session"].clone()).unwrap();
     assert_eq!(driver.state.phase, Phase::Combat);
     let mut friendly = driver.state.clone();
@@ -629,7 +605,7 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
         driver.act(ApplicationAction::EditorItem(item));
         assert_eq!(driver.state, before);
         if matches!(item, 82 | 83) {
-            assert_eq!(driver.app.characters.editor.as_ref().unwrap().draft, before);
+            assert_eq!(driver.editor().draft, before);
         }
     }
     driver.act(ApplicationAction::OpenEditor(0));
@@ -674,29 +650,9 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
         driver.act(ApplicationAction::EditorItem(item));
     }
     assert_eq!(driver.state, before_scans);
-    assert!(
-        driver
-            .app
-            .characters
-            .editor
-            .as_ref()
-            .unwrap()
-            .scans
-            .as_ref()
-            .unwrap()
-            .question
-    );
+    assert!(driver.editor().scans.as_ref().unwrap().question);
     driver.act(ApplicationAction::ScanAnswer(false));
-    assert!(
-        driver
-            .app
-            .characters
-            .editor
-            .as_ref()
-            .unwrap()
-            .scans
-            .is_some()
-    );
+    assert!(driver.editor().scans.is_some());
     driver.act(ApplicationAction::EditorItem(32));
     driver.act(ApplicationAction::ScanAnswer(true));
     assert_eq!(driver.state, before_scans);
@@ -717,16 +673,13 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     );
     driver.act(ApplicationAction::Menu(136, 8));
     driver.act(ApplicationAction::OpenEditor(0));
-    assert!(!driver.app.characters.editor.as_ref().unwrap().free);
-    let declined = driver.app.characters.editor.as_ref().unwrap().draft.clone();
+    assert!(!driver.editor().free);
+    let declined = driver.editor().draft.clone();
     assert!(matches!(
         driver.handle(ApplicationAction::EditorItem(45)),
         Err(centurions_core::RuleError::Refused { .. })
     ));
-    assert_eq!(
-        driver.app.characters.editor.as_ref().unwrap().draft,
-        declined
-    );
+    assert_eq!(driver.editor().draft, declined);
     driver.state.warriors[0].bytes[0x9d2..0x9d6].copy_from_slice(&5000_i32.to_be_bytes());
     driver.app.characters.editor.as_mut().unwrap().draft = driver.state.clone();
     let before_payment = driver.state.clone();
@@ -775,14 +728,7 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     driver.act(ApplicationAction::Menu(136, 2));
     driver.act(ApplicationAction::AppearanceItem(10));
     assert_eq!(driver.state, before_appearance);
-    let draft = driver
-        .app
-        .characters
-        .appearance
-        .as_ref()
-        .unwrap()
-        .draft
-        .clone();
+    let draft = driver.appearance().draft.clone();
     assert!(
         centurions_core::apply(
             Command::SetWarriorAppearance {
@@ -795,10 +741,7 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
         )
         .is_err()
     );
-    assert_eq!(
-        driver.app.characters.appearance.as_ref().unwrap().draft,
-        draft
-    );
+    assert_eq!(driver.appearance().draft, draft);
     driver.act(ApplicationAction::AppearanceItem(34));
     driver.act(ApplicationAction::AppearanceItem(11));
     driver.act(ApplicationAction::AppearanceItem(2));
@@ -876,14 +819,11 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     }
     let viewed = driver.state.clone();
     driver.act(ApplicationAction::InformationItem(100));
-    assert!(driver.app.characters.information.as_ref().unwrap().detailed);
+    assert!(driver.information().detailed);
     driver.act(ApplicationAction::InformationItem(73));
-    assert_eq!(
-        driver.app.characters.information.as_ref().unwrap().member,
-        1
-    );
+    assert_eq!(driver.information().member, 1);
     driver.act(ApplicationAction::InformationItem(58));
-    assert!(!driver.app.characters.information.as_ref().unwrap().detailed);
+    assert!(!driver.information().detailed);
     assert_eq!(driver.state, viewed);
     driver.app.restore_information(0);
     for item in 2..=5 {
@@ -894,14 +834,14 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     }
     for item in [96, 97] {
         driver.act(ApplicationAction::InformationItem(item));
-        assert!(driver.app.characters.creation.as_ref().unwrap().read_only);
+        assert!(driver.creation().read_only);
         driver.act(ApplicationAction::CreationChoice(1));
         driver.act(ApplicationAction::CreationItem(56));
         assert!(driver.app.characters.information.is_some());
         assert_eq!(driver.state, viewed);
     }
     driver.act(ApplicationAction::InformationItem(65));
-    assert!(!driver.app.characters.editor.as_ref().unwrap().free);
+    assert!(!driver.editor().free);
     driver.act(ApplicationAction::EditorItem(1));
     driver.act(ApplicationAction::InformationItem(72));
     assert!(!driver.app.blocks_game());
@@ -1357,10 +1297,8 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
                 decode(definition.as_str().unwrap());
         }
         if case.get("active_body").is_some() {
-            let combat: serde_json::Value = serde_json::from_str(include_str!(
-                "../../../../evidence/fixtures/earned-combat-reload.json"
-            ))
-            .unwrap();
+            let combat: serde_json::Value =
+                crate::original_content::fixture("earned-combat-reload.json");
             restored = serde_json::from_value(combat["foundations"][0]["session"].clone()).unwrap();
             let battle = restored.combat.as_mut().unwrap();
             battle.order[battle.cursor] = 2;

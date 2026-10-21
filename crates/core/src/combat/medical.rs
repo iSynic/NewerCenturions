@@ -266,7 +266,7 @@ pub fn begin_learned_heal(
                 .map_or(0, |position| position.map),
         )
         .ok_or_else(|| RuleError::Invalid("learned Heal mission missing".into()))?;
-    let packet = learned_packet(mission)?;
+    let packet = learned_packet(mission, 1101)?;
     if !player_psi::mode_allowed(&packet, true)? {
         return Err(RuleError::Invalid(
             "learned Heal unavailable in combat".into(),
@@ -308,20 +308,15 @@ pub fn begin_learned_heal(
     })
 }
 
-fn learned_packet(mission: &OpeningMission) -> Result<Vec<u8>, RuleError> {
+fn learned_packet(mission: &OpeningMission, spell: i16) -> Result<Vec<u8>, RuleError> {
     let attacks = &mission
         .combat
         .as_ref()
-        .ok_or_else(|| RuleError::Invalid("learned Heal attack content missing".into()))?
+        .ok_or("learned healing content missing")?
         .attacks;
-    let packet = spells::load_packet(attacks, 1101)?;
-    const LEARNED: [u8; 58] = [
-        0, 1, 255, 0, 0, 0, 0, 0, 0, 3, 0, 1, 8, 0, 0, 0, 0, 8, 13, 8, 8, 1, 1, 0, 0, 0, 0, 0, 0,
-        0, 6, 0, 0, 0, 0, 0, 2, 132, 2, 112, 0, 57, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0,
-        0,
-    ];
-    if packet != LEARNED {
-        return Err(unsupported("other learned portrait Heal packet"));
+    let packet = spells::load_packet(attacks, spell)?;
+    if packet[1] != 1 || word(&packet, 40)? != 57 {
+        return Err(unsupported("scan has no original portrait healing handler"));
     }
     Ok(packet)
 }
@@ -360,13 +355,17 @@ pub fn resolve(
         }
         MedicalOrigin::LearnedHeal => {
             if pending.item != 0
-                || pending.spell != 1101
                 || !matches!(pending.power, 1..=7)
-                || combat.attack_identity != Some([0, 0, 0])
+                || combat.attack_identity
+                    != Some([
+                        pending.spell / 1000 - 1,
+                        pending.spell % 1000 / 100 - 1,
+                        pending.spell % 100 - 1,
+                    ])
             {
                 return Err(unsupported("other learned medical continuation"));
             }
-            if packet != &learned_packet(mission)? {
+            if packet != &learned_packet(mission, pending.spell)? {
                 return Err(unsupported("other prepared learned Heal packet"));
             }
             if matches!(target, MedicalTarget::LivingPoint { .. }) {
@@ -427,9 +426,9 @@ fn resolve_inner(
                 .ok_or_else(|| RuleError::Invalid("medical portrait outside party".into()))?
                 .bytes;
             if !(-9..=0).contains(&word(w, 0x50)?) {
-                return Err(RuleError::Invalid(
-                    "medical portrait must be unconscious".into(),
-                ));
+                return Err(RuleError::Refused {
+                    feedback: vec![crate::feedback::NativeFeedback::Sound { resource_id: 143 }],
+                });
             }
             (warrior, true, vec![Event::Sound { resource_id: -141 }])
         }

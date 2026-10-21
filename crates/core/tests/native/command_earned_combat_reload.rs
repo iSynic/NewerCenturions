@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, snapshots, support};
 
 fn input(fixture: &Value, case: &Value) -> Session {
     let mut state: Session = serde_json::from_value(
@@ -12,7 +12,7 @@ fn input(fixture: &Value, case: &Value) -> Session {
     state
 }
 fn project(state: &mut Session, snapshot: &Value, baseline: &Value) {
-    crate::snapshots::earned_projection(state, snapshot, baseline);
+    snapshots::earned_projection(state, snapshot, baseline);
     if snapshot["seed"] != baseline["seed"] || snapshot["ammunition"] != baseline["ammunition"] {
         state.ammunition_work.item = Some(snapshot.bytes("item_work"));
         state.ammunition_work.weapon = Some(snapshot.bytes("weapon_work"));
@@ -20,13 +20,13 @@ fn project(state: &mut Session, snapshot: &Value, baseline: &Value) {
     }
 }
 
-use crate::support::same_session as same;
+use support::same_session as same;
 
-use crate::support::checkpoint;
+use support::checkpoint;
 
 fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) -> Option<Session> {
     let index = case.n::<usize>("foundation");
-    let receipt = crate::native_common::earned_receipt("earned-combat-reload", index);
+    let receipt = native_common::earned_receipt("earned-combat-reload", index);
     let commands = receipt.array("commands");
     let ordered_events = receipt.array("ordered_events");
     assert_eq!(ordered_events.len(), commands.len());
@@ -35,7 +35,9 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
     state = checkpoint(&state, content, &format!("prefix-start-{index}"));
     for (step, (command, recorded)) in commands.iter().zip(ordered_events).enumerate() {
         let command: Command = serde_json::from_value(command.clone()).unwrap();
-        let expected = crate::native_common::shield_result_events(
+        let expected = native_common::prefix_result_events(
+            &state,
+            &command,
             serde_json::from_value(recorded.clone()).unwrap(),
         );
         let before = state.clone();
@@ -53,10 +55,10 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
             let feedback = vec![centurions_core::feedback::NativeFeedback::Combat {
                 kind: centurions_core::feedback::CombatRefusal::OutOfRange,
             }];
-            crate::support::refuse_command(&before, content, command.clone(), feedback);
+            support::refuse_command(&before, content, command.clone(), feedback);
             assert_eq!(state.warriors, before.warriors);
             assert_eq!(state.random, before.random);
-            let combat = state.combat.as_ref().unwrap();
+            let combat = current_combat(&state);
             let start = combat.squad.positions[1];
             let end = combat.enemies.positions[5];
             let dx = f32::from(start.0 - end.0);
@@ -103,17 +105,17 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
     }
     expected.ammunition_work.weapon = Some(weapon);
     expected.ammunition_work.ammo = Some(ammo);
-    expected.inventory_record = crate::native_common::earned_inventory_work(index);
+    expected.inventory_record = native_common::earned_inventory_work(index);
     expected.combat.as_mut().unwrap().turn_origin =
-        crate::snapshots::recorded_turn_origin(&receipt, expected.combat.as_ref().unwrap());
-    same(&state, &expected);
+        snapshots::recorded_turn_origin(&receipt, current_combat(&expected));
+    support::same_captured_session(&state, &expected);
     Some(state)
 }
 
 #[test]
 fn historical_extra_cell_shot_rejects_atomically_and_valid_prefix_still_replays() {
-    let content = crate::support::content();
-    let fixture: Value = crate::support::fixture("earned-combat-reload.json");
+    let content = support::content();
+    let fixture: Value = support::fixture("earned-combat-reload.json");
     for case in fixture
         .array("cases")
         .iter()
@@ -126,8 +128,8 @@ fn historical_extra_cell_shot_rejects_atomically_and_valid_prefix_still_replays(
 
 #[test]
 fn historical_occupied_cell_refill_matches_complete_native_caller_and_save_resume() {
-    let content = crate::support::content();
-    let fixture: Value = crate::support::fixture("earned-combat-reload.json");
+    let content = support::content();
+    let fixture: Value = support::fixture("earned-combat-reload.json");
     for (index, case) in fixture
         .array("cases")
         .iter()
@@ -138,13 +140,13 @@ fn historical_occupied_cell_refill_matches_complete_native_caller_and_save_resum
         let initial = state.clone();
         let mut before = initial.clone();
         project(&mut before, &case["before"], &case["before"]);
-        same(&initial, &before);
+        support::same_captured_session(&initial, &before);
         let mut resumed = checkpoint(&state, &content, &format!("refill-before-{index}"));
         let command = Command::Move { dx: 1, dy: 1 };
         let events = replay_command(command.clone(), &mut state, &mut resumed, &content);
         let mut expected = initial.clone();
         project(&mut expected, &case["after"], &case["before"]);
-        same(&state, &expected);
+        support::same_captured_session(&state, &expected);
         assert!(events.is_empty());
 
         checkpoint(&state, &content, &format!("refill-after-{index}"));
@@ -153,9 +155,9 @@ fn historical_occupied_cell_refill_matches_complete_native_caller_and_save_resum
 
 #[test]
 fn last_stock_control_matches_complete_native_caller_and_save_resume() {
-    let content = crate::support::content();
-    let original_fixture: Value = crate::support::fixture("earned-combat-reload.json");
-    let bounds: Value = crate::support::fixture("earned-combat-reload-bounds.json");
+    let content = support::content();
+    let original_fixture: Value = support::fixture("earned-combat-reload.json");
+    let bounds: Value = support::fixture("earned-combat-reload-bounds.json");
     let case = bounds
         .array("cases")
         .iter()
@@ -175,13 +177,13 @@ fn last_stock_control_matches_complete_native_caller_and_save_resume() {
     let initial = state.clone();
     let mut before = initial.clone();
     project(&mut before, &case["before"], &case["before"]);
-    same(&initial, &before);
+    support::same_captured_session(&initial, &before);
     let mut resumed = checkpoint(&state, &content, "last-stock-before");
     let command = Command::Move { dx: 1, dy: 1 };
     let events = replay_command(command, &mut state, &mut resumed, &content);
     let mut expected = initial.clone();
     project(&mut expected, &case["after"], &case["before"]);
-    same(&state, &expected);
+    support::same_captured_session(&state, &expected);
     assert!(events.is_empty());
 
     checkpoint(&state, &content, "last-stock-after");
@@ -199,8 +201,8 @@ fn last_stock_control_matches_complete_native_caller_and_save_resume() {
 
 #[test]
 fn reserve_two_uses_the_source_supported_full_load_interval() {
-    let content = crate::support::content();
-    let fixture: Value = crate::support::fixture("earned-combat-reload.json");
+    let content = support::content();
+    let fixture: Value = support::fixture("earned-combat-reload.json");
     for case in fixture
         .array("cases")
         .iter()
@@ -215,7 +217,7 @@ fn reserve_two_uses_the_source_supported_full_load_interval() {
         let mut expected = initial.clone();
         project(&mut expected, &case["after"], &case["before"]);
         expected.ammunition[80] = 1;
-        same(&state, &expected);
+        support::same_captured_session(&state, &expected);
         assert!(events.is_empty());
         checkpoint(&state, &content, "stock-two-after");
     }

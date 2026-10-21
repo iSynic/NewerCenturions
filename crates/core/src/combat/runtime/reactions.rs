@@ -145,6 +145,9 @@ pub(super) fn check_neighbors_with_items(
                 } else {
                     c.enemies.records[(other - 10) as usize].bytes[0x104] = 0;
                 }
+                if other >= 10 {
+                    c.weapon_work.natural_attack_index = Some(0);
+                }
                 events.extend(resolve_attack(
                     c, w, random, other, body, 0, body, items, attacks, buffs, buffers,
                 )?);
@@ -167,6 +170,7 @@ pub(super) fn check_neighbors_with_items(
         put_word(&mut c.enemies.records[e].bytes, 0x10c, target);
         let count = (c.enemies.records[e].bytes[0x8a] as i8) / 2;
         let mut killed = false;
+        c.weapon_work.natural_attack_index = Some(0);
         for index in 0..count.max(0) as usize {
             let m = &mut c.enemies.records[e].bytes;
             m[0x109] = (m[0x109] as i8).wrapping_sub(2) as u8;
@@ -190,6 +194,7 @@ pub(super) fn check_neighbors_with_items(
                 killed = true;
                 break;
             }
+            c.weapon_work.natural_attack_index = Some(index as i16 + 1);
         }
         if !killed {
             return Ok(events);

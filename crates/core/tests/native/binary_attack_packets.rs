@@ -1,15 +1,15 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
-use crate::native_common::original_file as data;
 use centurions_core::combat::ally_turns;
 use centurions_core::combat::attack;
+use native_common::original_file as data;
 
 fn combat(records: &[u8], member: i16) -> Combat {
-    let mut combat = crate::support::battle();
+    let mut combat = support::battle();
     combat.battle = 117;
     combat.map.tiles.fill(1155);
     combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
-    combat.enemies.records = crate::support::monsters(records);
+    combat.enemies.records = support::monsters(records);
     combat.enemies.positions = vec![(40 + member, 40); records.len() / 288];
     combat.attack_identity = Some([2, 4, 6]);
     combat
@@ -17,7 +17,7 @@ fn combat(records: &[u8], member: i16) -> Combat {
 
 #[test]
 fn attack_packets_match_native_complete_writers_and_retention() {
-    let fixture = crate::support::fixture("attack-packets.json");
+    let fixture = support::fixture("attack-packets.json");
     let attacks = data("Data Files/Data S");
     let items = data("Data Files/Data ID");
     let cases = fixture.array("cases");
@@ -93,20 +93,19 @@ fn attack_packets_match_native_complete_writers_and_retention() {
                     &retained,
                 )
                 .unwrap();
-                let records = crate::support::record_bytes(&c.enemies.records);
+                let records = support::record_bytes(&c.enemies.records);
                 warrior = party[0].clone();
                 (result, packet, records)
             }
             _ => panic!("unknown native packet kind"),
         };
-        crate::support::native_expect! {
-        bytes packet => &case["packet_after"], &format!("case{index} {kind} packet");
-        bytes warrior.bytes => &case["warrior_after"], &format!("case{index} {kind} warrior");
-        bytes after_records => &case["records_after"], &format!("case{index} {kind} enemies");
-        scalar random.seed => &case["seed_after"], "binary_attack_packets";
-        scalar random.draws => &case["rng_draws"], "binary_attack_packets";
+        support::native_expect! {
+            bytes packet => &case["packet_after"], &format!("case{index} {kind} packet");
+            bytes warrior.bytes => &case["warrior_after"], &format!("case{index} {kind} warrior");
+            bytes after_records => &case["records_after"], &format!("case{index} {kind} enemies");
+            rng random => (&case["seed_after"], &case["rng_draws"]), "binary_attack_packets";
         }
 
-        crate::support::expect_array(&(result.sounds), &case["sounds"]);
+        support::expect_array(&(result.sounds), &case["sounds"]);
     }
 }

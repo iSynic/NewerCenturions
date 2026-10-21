@@ -106,6 +106,7 @@ fn empty_field_used() -> Vec<u8> {
 impl Combat {
     pub fn validate(&self, warriors: &[Warrior]) -> Result<(), RuleError> {
         self.retained_npcs.validate()?;
+        self.weapon_work.validate()?;
         if self.capture_actor.is_some_and(|actor| {
             Some(actor) != self.active_body()
                 || !(0..warriors.len() as i16).contains(&actor)

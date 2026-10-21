@@ -1,18 +1,16 @@
-use crate::prelude::*;
-
-use crate::support::assert_bytes;
+use crate::{prelude::*, support};
 
 fn state(f: &Value, c: &Value) -> Session {
     let mut s: Session = serde_json::from_value(f["foundation"].clone()).unwrap();
-    s.warriors = crate::support::warriors(&c["party_before"]);
+    s.warriors = support::warriors(&c["party_before"]);
     let combat = s.combat.as_mut().unwrap();
-    combat.enemies.records = crate::support::monsters(&c["records_before"]);
+    combat.enemies.records = support::monsters(&c["records_before"]);
     s.enemy_spell_disabled = u8::from(c["variant"] == 6);
     s
 }
 #[test]
 fn blocked_first_spell_chance_matches_six_complete_native_enemy_turns() {
-    let f = crate::support::fixture("reached-guardian-spell.json");
+    let f = support::fixture("reached-guardian-spell.json");
     let content = content();
     let mission = content.map(2).unwrap();
     for case in f.array("cases") {
@@ -40,16 +38,10 @@ fn blocked_first_spell_chance_matches_six_complete_native_enemy_turns() {
         )
         .unwrap();
         let context = format!("variant{}", case["variant"]);
-        assert_bytes(
-            &crate::support::record_bytes(&s.warriors),
-            &case.bytes("party_after"),
-            &format!("{context} party"),
-        );
-        assert_bytes(
-            &crate::support::record_bytes(&combat.enemies.records),
-            &case.bytes("records_after"),
-            &format!("{context} enemies"),
-        );
+        support::native_expect! {
+            bytes &support::record_bytes(&s.warriors) => &case.bytes("party_after"), &format!("{context} party");
+            bytes &support::record_bytes(&combat.enemies.records) => &case.bytes("records_after"), &format!("{context} enemies");
+        };
         assert_eq!(
             combat.map.tiles,
             words(&case.bytes("map_after")),
@@ -60,11 +52,9 @@ fn blocked_first_spell_chance_matches_six_complete_native_enemy_turns() {
             words(&case.bytes("order_after")),
             "{context} order"
         );
-        assert_eq!(
-            combat.enemies.positions,
-            crate::support::positions(&case.bytes("positions_after")),
-            "{context} positions"
-        );
+        support::native_expect! {
+            positions combat.enemies.positions => &case.bytes("positions_after"), "{context} positions";
+        };
         assert_eq!(combat.spell_fields, case.bytes("fields_after"));
         assert_eq!(combat.field_used, case.bytes("used_after"));
         assert_eq!(
@@ -73,18 +63,17 @@ fn blocked_first_spell_chance_matches_six_complete_native_enemy_turns() {
             "{context} packet"
         );
         assert_eq!(work.item_context, Some(case.n::<i16>("context_after")));
-        crate::support::native_expect! {
-        scalar work.attack_count => &case["attack_count_after"], "binary_enemy_spell_guards";
-        scalar rng.seed => &case["seed_after"], "binary_enemy_spell_guards";
-        scalar rng.draws => &case["rng_draws"], "binary_enemy_spell_guards";
+        support::native_expect! {
+            scalar work.attack_count => &case["attack_count_after"], "binary_enemy_spell_guards";
+            rng rng => (&case["seed_after"], &case["rng_draws"]), "binary_enemy_spell_guards";
         }
-        let sounds: Vec<_> = crate::support::event_sounds(&events);
+        let sounds: Vec<_> = support::event_sounds(&events);
         assert_eq!(serde_json::json!(sounds), case["sounds"], "{context} audio");
     }
 }
 #[test]
 fn reached_disabled_spell_turn_resumes_and_uncovered_spell_is_atomic() {
-    let f = crate::support::fixture("reached-guardian-spell.json");
+    let f = support::fixture("reached-guardian-spell.json");
     let content = content();
     let mut s = state(&f, &f["cases"][0]);
     let path = std::env::temp_dir().join(format!(

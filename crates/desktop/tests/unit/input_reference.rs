@@ -22,23 +22,37 @@ fn held_navigation_repeats_without_backlog_and_release_stops_it() {
         assert!(input.step((0, 0), 10.).is_none());
         assert!(input.step(actual, 10.).is_some());
     }
+    input.reset();
+    assert!(input.pointer_step((1, 0), true, true, 1.).is_some());
+    assert!(input.pointer_step((1, 0), false, true, 1.05).is_none());
+    assert!(input.pointer_step((1, 0), false, true, 1.11).is_some());
+    input.refuse();
+    assert!(input.pointer_step((1, 0), false, true, 2.).is_none());
+    assert!(input.pointer_step((1, 0), false, false, 2.).is_none());
+    assert!(input.pointer_step((1, 0), true, true, 3.).is_some());
+    input.stop_pointer();
+    assert!(input.pointer_step((1, 0), false, true, 4.).is_none());
+    let native: serde_json::Value = crate::original_content::fixture("thunder-mouse-hold.json");
+    for case in native["cases"].as_array().unwrap() {
+        input.pointer_step((1, 0), true, true, 5.);
+        assert_eq!(
+            input
+                .pointer_step((1, 0), false, case["held"].as_bool().unwrap(), 6.)
+                .is_some(),
+            case["repeat"].as_bool().unwrap()
+        );
+    }
 }
 
 fn state() -> Session {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../evidence/fixtures/player-psi.json"
-    ))
-    .unwrap();
+    let fixture: serde_json::Value = crate::original_content::fixture("player-psi.json");
     serde_json::from_value(fixture["route_foundation"].clone()).unwrap()
 }
 
 // Protects native camera clamps and click targeting using the same visible origin.
 #[test]
 fn outdoor_camera_and_mouse_targeting_match_original_centering() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../evidence/fixtures/outdoor-viewport.json"
-    ))
-    .unwrap();
+    let fixture: serde_json::Value = crate::original_content::fixture("outdoor-viewport.json");
     let mut state = state();
     for case in fixture["cases"].as_array().unwrap() {
         let x = case["position"][0].as_i64().unwrap() as i32;
@@ -69,8 +83,56 @@ fn command(action: Action) -> Command {
 // Protects the actual mechanical button, map routing, saved targeting and cancellation.
 #[test]
 fn combat_controls_capture_cancel_and_resolve_through_apply() {
-    use centurions_core::{apply, load, save};
+    let receipt: serde_json::Value =
+        crate::original_content::fixture("thunder-attack-estimates.json");
     let content = crate::original_content::load();
+    let native = centurions_content::native_text::NativeText::load(
+        &content,
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../analysis/extracted"),
+    )
+    .unwrap();
+    let mut estimate: Session = serde_json::from_value(receipt["input"].clone()).unwrap();
+    for case in receipt["cases"].as_array().unwrap() {
+        estimate.warriors[4].bytes[0x9dd] = u8::from(case["firing"].as_bool().unwrap());
+        let plan = centurions_core::item_display::attack_estimate(
+            &estimate,
+            &content,
+            10,
+            &native,
+            &Default::default(),
+        )
+        .unwrap();
+        let numbers: Vec<_> = plan
+            .effects
+            .iter()
+            .filter_map(|effect| match effect {
+                centurions_core::recovered_detail_ui::DetailEffect::NumberToString {
+                    value,
+                    ..
+                } => Some(*value),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(serde_json::json!(numbers), case["numbers"]);
+        for (address, field) in [
+            (0x45363c, "item_after"),
+            (0x4536d2, "ammunition_after"),
+            (0x453768, "weapon_after"),
+        ] {
+            let expected = case[field].as_str().unwrap();
+            let actual: Vec<_> = (0..150)
+                .map(|offset| plan.memory.byte(address + offset).unwrap())
+                .collect();
+            assert_eq!(
+                actual
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>(),
+                expected
+            );
+        }
+    }
+    use centurions_core::{apply, load, save};
     let mut state = state();
     state.psi_memory = Some(vec![0; 480]);
     let actor = state.combat.as_ref().unwrap().active_body().unwrap() as usize;
@@ -196,6 +258,7 @@ fn original_field_controls_dispatch_and_resume_without_mutating_blocked_sessions
     let mut downgraded: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     downgraded["schema_version"] = 9.into();
+    crate::original_content::legacy_save(&mut downgraded);
     std::fs::write(&path, serde_json::to_vec(&downgraded).unwrap()).unwrap();
     assert!(centurions_core::load(&path, &content).is_err());
     std::fs::remove_file(path).unwrap();

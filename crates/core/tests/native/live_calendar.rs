@@ -1,16 +1,16 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 fn long(b: &[u8], offset: usize) -> i32 {
     i32::from_be_bytes(b[offset..offset + 4].try_into().unwrap())
 }
 #[test]
 fn noon_and_midnight_moves_match_live_original_complete_warriors_and_rng() {
-    let content = crate::support::content();
-    let fixture: serde_json::Value = crate::support::fixture("live-calendar.json");
+    let content = support::content();
+    let fixture: serde_json::Value = support::fixture("live-calendar.json");
     for case in fixture.array("cases") {
         let before = &case["before"];
         let after = &case["after"];
-        let mut state = crate::support::mission_session(&content);
+        let mut state = support::mission_session(&content);
         state.warriors = before
             .array("warriors")
             .iter()
@@ -54,7 +54,7 @@ fn noon_and_midnight_moves_match_live_original_complete_warriors_and_rng() {
             )
         );
         assert_eq!(p.fatigue, word(&after["fatigue"].bytes("hex"), 0).unwrap());
-        crate::support::expect(state.random.seed, &after["random_seed"]);
+        support::expect(state.random.seed, &after["random_seed"]);
         assert_eq!(state.random.draws, 2);
     }
 }

@@ -9,6 +9,7 @@ pub struct MovementInput {
     direction: (i8, i8),
     repeat_at: f64,
     refused: bool,
+    pointer_held: bool,
     pub repeat_seconds: f64,
 }
 impl Default for MovementInput {
@@ -17,6 +18,7 @@ impl Default for MovementInput {
             direction: (0, 0),
             repeat_at: 0.,
             refused: false,
+            pointer_held: false,
             repeat_seconds: 0.1,
         }
     }
@@ -28,6 +30,35 @@ impl MovementInput {
     }
     pub fn refuse(&mut self) {
         self.refused = true;
+        self.stop_pointer();
+    }
+
+    pub fn stop_pointer(&mut self) {
+        self.pointer_held = false;
+    }
+
+    /// buttonchoice109b44 returns to movement while StillDown is true.
+    fn pointer_step(
+        &mut self,
+        direction: (i8, i8),
+        pressed: bool,
+        down: bool,
+        now: f64,
+    ) -> Option<Command> {
+        if !down || direction == (0, 0) {
+            self.stop_pointer();
+            return None;
+        }
+        if pressed {
+            self.pointer_held = true;
+            self.direction = (0, 0);
+            self.refused = false;
+        }
+        if self.pointer_held {
+            self.step(direction, now)
+        } else {
+            None
+        }
     }
 
     fn step(&mut self, direction: (i8, i8), now: f64) -> Option<Command> {
@@ -114,6 +145,9 @@ pub fn action(
     controls: &[Control],
     pointer: Option<Vec2>,
 ) -> Option<Action> {
+    if !is_mouse_button_down(MouseButton::Left) || ui.inspection.is_some() {
+        ui.movement.stop_pointer();
+    }
     if crate::collection::active(state, ui) && state.promotion.is_none() {
         if let Some(action) = crate::collection::input(state, ui, pointer) {
             return Some(action);
@@ -694,10 +728,32 @@ fn action_inner(
     } else if is_key_pressed(KeyCode::P) {
         return Some(Action::Open(Inspection::Psi));
     }
-    if let Some(command) = ui
-        .movement
-        .step(movement_direction(is_key_down), get_time())
+    let direction = movement_direction(is_key_down);
+    if direction != (0, 0) {
+        ui.movement.stop_pointer();
+    } else if state.phase == Phase::Exploration
+        && is_mouse_button_down(MouseButton::Left)
+        && let Some(point) = pointer.filter(|point| layout::MAP.contains(*point))
     {
+        let x = ((point.x - layout::MAP.x) / 32.) as i32;
+        let y = ((point.y - layout::MAP.y) / 32.) as i32;
+        let direction = match outdoor_move(state, x, y) {
+            Some(Action::Command(Command::Move { dx, dy })) => (dx, dy),
+            _ => (0, 0),
+        };
+        return ui
+            .movement
+            .pointer_step(
+                direction,
+                is_mouse_button_pressed(MouseButton::Left),
+                true,
+                get_time(),
+            )
+            .map(Action::Command);
+    } else {
+        ui.movement.stop_pointer();
+    }
+    if let Some(command) = ui.movement.step(direction, get_time()) {
         return Some(Action::Command(command));
     }
     if is_mouse_button_pressed(MouseButton::Left)

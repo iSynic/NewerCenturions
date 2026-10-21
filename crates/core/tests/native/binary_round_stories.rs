@@ -1,11 +1,11 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
 use centurions_core::combat::round_stories;
 use centurions_core::combat::round_stories::RoundEffect;
 
 #[test]
 fn summoned_difficulty_matches_original_record_widths_rounding_and_rng() {
-    let fixture = crate::support::fixture("difficulty-summons.json");
+    let fixture = support::fixture("difficulty-summons.json");
     for case in fixture.array("cases") {
         let before = MonsterRecord {
             bytes: case.bytes("before"),
@@ -19,24 +19,21 @@ fn summoned_difficulty_matches_original_record_widths_rounding_and_rng() {
         )
         .unwrap();
         assert_eq!(after.bytes, case.bytes("after"), "{}", case["case"]);
-        assert_eq!(
-            (random.seed, random.draws),
-            (case.n::<u32>("seed_after"), case.n::<u64>("draws"))
-        );
+        support::assert_rng(&random, &case["seed_after"], &case["draws"]);
     }
 }
 
-use crate::native_common::script_mission as mission;
+use native_common::script_mission as mission;
 fn input(
     fixture: &serde_json::Value,
     case: &serde_json::Value,
 ) -> (Combat, Vec<Warrior>, RandomState) {
-    let mut combat = crate::support::battle();
+    let mut combat = support::battle();
     combat.battle = 146;
     combat.map.tiles = case.words("map_before");
     combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
-    combat.enemies.records = crate::support::monsters(&case["records_before"]);
-    combat.enemies.positions = crate::support::positions(&case["positions_before"]);
+    combat.enemies.records = support::monsters(&case["records_before"]);
+    combat.enemies.positions = support::positions(&case["positions_before"]);
     combat.order[1] = 10;
     if case.get("order_before").is_some() {
         combat.order = case.words("order_before");
@@ -44,7 +41,7 @@ fn input(
     combat.script_enemy = case["actor_before"].as_u64().unwrap_or(0) as usize;
     (
         combat,
-        crate::support::warriors(&fixture["warriors_before"]),
+        support::warriors(&fixture["warriors_before"]),
         RandomState::new(case.n::<u32>("seed_before")),
     )
 }
@@ -57,7 +54,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
         "removal-rounds.json",
         "retained-round-origin.json",
     ] {
-        let fixture = crate::support::fixture(fixture_name);
+        let fixture = support::fixture(fixture_name);
         let mission = mission(&fixture);
         let definitions = fixture.bytes("monsters");
         let extras = fixture.bytes("extras");
@@ -108,7 +105,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                     }
                 }
             }
-            let records: Vec<u8> = crate::support::record_bytes(&combat.enemies.records);
+            let records: Vec<u8> = support::record_bytes(&combat.enemies.records);
             assert_eq!(records, case.bytes("records_after"), "records case{index}");
             assert_eq!(
                 combat.map.tiles,
@@ -131,18 +128,18 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 words(&case.bytes("positions_after")),
                 "positions case{index}"
             );
-            let party: Vec<u8> = crate::support::record_bytes(&warriors);
+            let party: Vec<u8> = support::record_bytes(&warriors);
             assert_eq!(party, case.bytes("warriors_after"), "party case{index}");
-            crate::support::expect(state.counter as i64, &case["round_after"]);
+            support::expect(state.counter as i64, &case["round_after"]);
             assert_eq!(
                 state.slots.to_vec(),
                 words(&case.bytes("slots_after")),
                 "slots case{index}"
             );
-            crate::support::native_expect! {
-            scalar random.seed as u64 => &case["seed_after"], "binary_round_stories";
-            scalar random.draws => &case["rng_draws"], "binary_round_stories";
-            scalar hostile_additions as i64 + initial_hostiles => &case["hostile_count_after"], "binary_round_stories";
+            support::native_expect! {
+                scalar random.seed as u64 => &case["seed_after"], "binary_round_stories";
+                scalar random.draws => &case["rng_draws"], "binary_round_stories";
+                scalar hostile_additions as i64 + initial_hostiles => &case["hostile_count_after"], "binary_round_stories";
             }
             let native: Vec<RoundEffect> = case
                 .array("events")
@@ -170,7 +167,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 sentinel.fill(0);
                 sentinel[8..10].copy_from_slice(&1_i16.to_be_bytes());
                 sentinel[24..26].copy_from_slice(&155_i16.to_be_bytes());
-                let mut session = crate::support::mission_session(&content);
+                let mut session = support::mission_session(&content);
                 let (mut arena, party, start_random) = input(&fixture, case);
                 session.warriors = party;
                 session.random = start_random;
@@ -198,7 +195,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                     4,
                     centurions_core::MapState::authored(content.map(4).unwrap()),
                 );
-                position.script = Some(crate::support::script_state(
+                position.script = Some(support::script_state(
                     mission
                         .script(case.words("slots_before")[0])
                         .unwrap()
@@ -209,8 +206,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                     id: 0,
                     text: String::new(),
                 });
-                let mut resumed =
-                    crate::support::checkpoint(&session, &content, "shared-round-before");
+                let mut resumed = support::checkpoint(&session, &content, "shared-round-before");
                 let mut observed = vec![];
                 for _ in 0..8 {
                     let events =
@@ -240,37 +236,33 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                     if session.round_dispatch.is_none() {
                         break;
                     }
-                    session = crate::support::checkpoint(&session, &content, "shared-round-paused");
+                    session = support::checkpoint(&session, &content, "shared-round-paused");
                     resumed = session.clone();
                 }
-                let actual = session.combat.as_ref().unwrap();
+                let actual = current_combat(&session);
                 assert!(session.round_dispatch.is_none());
                 let mut expected_effects = native.clone();
                 expected_effects.push(RoundEffect::Text(155));
                 assert_eq!(observed, expected_effects, "shared round case{index}");
-                crate::support::assert_bytes(
-                    &crate::support::record_bytes(&actual.enemies.records),
-                    &case.bytes("records_after"),
-                    &format!("shared round monsters case{index}"),
-                );
+                support::native_expect! {
+                    bytes &support::record_bytes(&actual.enemies.records) => &case.bytes("records_after"), &format!("shared round monsters case{index}");
+                };
                 assert_eq!(actual.enemies.positions, combat.enemies.positions);
                 assert_eq!(actual.map, combat.map);
                 assert_eq!(actual.order, combat.order);
                 assert_eq!(actual.round_scripts.slots[0], state.slots[0]);
                 assert_eq!(session.random, random);
-                crate::support::assert_bytes(
-                    &crate::support::record_bytes(&session.warriors),
-                    &case.bytes("warriors_after"),
-                    &format!("shared round warriors case{index}"),
-                );
-                crate::support::checkpoint(&session, &content, "shared-round-after");
+                support::native_expect! {
+                    bytes &support::record_bytes(&session.warriors) => &case.bytes("warriors_after"), &format!("shared round warriors case{index}");
+                };
+                support::checkpoint(&session, &content, "shared-round-after");
             }
             let carried = fixture_name == "retained-round-origin.json";
             if carried
                 || fixture_name == "removal-rounds.json" && case.n::<u32>("seed_before") == 12
             {
                 let content = content();
-                let mut state = crate::support::mission_session(&content);
+                let mut state = support::mission_session(&content);
                 let (mut arena, warriors, random) = input(&fixture, case);
                 state.warriors = warriors;
                 for warrior in &mut state.warriors {
@@ -297,29 +289,24 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 state.combat = Some(arena);
                 let mut events = apply(Command::EndTurn, &mut state, &content).unwrap();
                 if carried {
-                    let mut resumed =
-                        crate::support::checkpoint(&state, &content, "retained-summon");
+                    let mut resumed = support::checkpoint(&state, &content, "retained-summon");
                     let next =
                         replay_command(Command::Continue, &mut state, &mut resumed, &content);
                     events.extend(next);
                 }
                 assert_eq!(
-                    crate::support::record_bytes(&state.combat.as_ref().unwrap().enemies.records),
+                    support::record_bytes(&current_combat(&state).enemies.records),
                     case.bytes("records_after")
                 );
-                assert_eq!(
-                    (state.random.seed, state.random.draws),
-                    (case.n("seed_after"), case.n("rng_draws"))
-                );
+                support::assert_rng(&state.random, &case["seed_after"], &case["rng_draws"]);
                 assert!(matches!(events.last(), Some(Event::StoryPresented)));
                 for effect in &native {
                     if let RoundEffect::Removed(body) = effect {
                         assert!(events.contains(&Event::CombatantRemoved { body: *body }));
                     }
                 }
-                let mut resumed = crate::support::checkpoint(&state, &content, "round");
-                replay_command(Command::Continue, &mut state, &mut resumed, &content);
-                let scripts = &state.combat.as_ref().unwrap().round_scripts;
+                support::saved_command(Command::Continue, &mut state, &content);
+                let scripts = &current_combat(&state).round_scripts;
                 assert!(scripts.pending.is_none());
             }
         }
@@ -329,9 +316,9 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
 #[test]
 fn original_round_surrender_enters_question_then_declines_or_cleans_without_rewards() {
     let content = content();
-    let fixture = crate::support::fixture("round-surrender.json");
+    let fixture = support::fixture("round-surrender.json");
     for (case, stop) in fixture.array("cases").iter().zip(fixture.array("stops")) {
-        let mut state = crate::support::mission_session(&content);
+        let mut state = support::mission_session(&content);
         let (mut arena, warriors, random) = input(&fixture, case);
         state.warriors = warriors;
         state.random = random;
@@ -364,7 +351,7 @@ fn original_round_surrender_enters_question_then_declines_or_cleans_without_rewa
             state.exploration.as_ref().unwrap().presentation,
             Some(Presentation::Question { extra: 50, .. })
         ));
-        let mut resumed = crate::support::checkpoint(&state, &content, "round-surrender");
+        let mut resumed = support::checkpoint(&state, &content, "round-surrender");
         let command = Command::Choose {
             answer: stop.n::<u8>("answer") != 0,
         };
@@ -377,27 +364,16 @@ fn original_round_surrender_enters_question_then_declines_or_cleans_without_rewa
         assert_eq!((position.x, position.y), (stop.n("x"), stop.n("y")));
         if stop.n::<u8>("answer") == 0 {
             assert!(state.round_dispatch.is_none());
-            assert!(
-                state
-                    .combat
-                    .as_ref()
-                    .unwrap()
-                    .round_scripts
-                    .pending
-                    .is_none()
-            );
-            assert_eq!(state.combat.as_ref().unwrap().round_scripts.counter, 3);
+            assert!(current_combat(&state).round_scripts.pending.is_none());
+            assert_eq!(current_combat(&state).round_scripts.counter, 3);
         } else {
             assert!(state.combat.is_none());
             assert_eq!(
-                crate::support::record_bytes(&state.warriors),
+                support::record_bytes(&state.warriors),
                 case.bytes("warriors_after")
             );
             assert_eq!(state.allies, stop.bytes("allies"));
-            assert_eq!(
-                (state.random.seed, state.random.draws),
-                (case.n("seed_after"), case.n("rng_draws"))
-            );
+            support::assert_rng(&state.random, &case["seed_after"], &case["rng_draws"]);
             assert!(matches!(
                 position.presentation,
                 Some(Presentation::Dialogue { id: 93, .. })
@@ -424,8 +400,8 @@ fn original_round_surrender_enters_question_then_declines_or_cleans_without_rewa
                 }
                 replay_command(Command::Continue, &mut state, &mut resumed, &content);
             }
-            assert_eq!(state.combat.as_ref().unwrap().battle, 6);
-            state = crate::support::checkpoint(&state, &content, "round-child-battle");
+            assert_eq!(current_combat(&state).battle, 6);
+            state = support::checkpoint(&state, &content, "round-child-battle");
             let path = std::env::temp_dir().join(format!(
                 "centurions-round-schema-{}.json",
                 std::process::id()
@@ -433,6 +409,7 @@ fn original_round_surrender_enters_question_then_declines_or_cleans_without_rewa
             save(&path, &state, &content).unwrap();
             let mut legacy: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             legacy["schema_version"] = 7.into();
+            support::legacy_save(&mut legacy);
             std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
             assert!(load(&path, &content).is_err());
             legacy["schema_version"] = 8.into();
@@ -480,18 +457,18 @@ fn original_round_surrender_enters_question_then_declines_or_cleans_without_rewa
 #[test]
 fn surrender_question_cleanup_and_saved_script_return_match_native_early_exit() {
     let content = content();
-    for case in crate::support::fixture("story-cleanup.json").array("cases") {
+    for case in support::fixture("story-cleanup.json").array("cases") {
         let before = &case["before"];
-        let mut state = crate::support::mission_session(&content);
+        let mut state = support::mission_session(&content);
         state.phase = Phase::Combat;
-        state.warriors = crate::support::warriors(&before["party"]);
+        state.warriors = support::warriors(&before["party"]);
         state.allies = before.bytes("allies");
         state.ally_count = 2;
         state.random = RandomState::new(before.n("seed"));
-        let mut arena = crate::support::battle();
-        arena.enemies.records = crate::support::monsters(&before["records"]);
+        let mut arena = support::battle();
+        arena.enemies.records = support::monsters(&before["records"]);
         arena.enemies.positions = vec![(40, 40); 2];
-        arena.squad.positions = crate::support::positions(&before["party_positions"]);
+        arena.squad.positions = support::positions(&before["party_positions"]);
         arena.cursor = 110;
         arena.round_scripts.pending = Some(round_stories::RoundProgram {
             slot: 0,
@@ -510,7 +487,7 @@ fn surrender_question_cleanup_and_saved_script_return_match_native_early_exit() 
             4,
             centurions_core::MapState::authored(content.map(4).unwrap()),
         );
-        position.script = Some(crate::support::script_state(
+        position.script = Some(support::script_state(
             content.map(4).unwrap().script(11).unwrap().to_vec(),
             3,
         ));
@@ -519,30 +496,20 @@ fn surrender_question_cleanup_and_saved_script_return_match_native_early_exit() 
             text: String::new(),
         });
         let map = position.map_state();
-        let mut resumed = crate::support::checkpoint(&state, &content, "surrender-question");
+        let mut resumed = support::checkpoint(&state, &content, "surrender-question");
         assert_eq!(
             apply(Command::Choose { answer: true }, &mut state, &content).unwrap(),
             apply(Command::Choose { answer: true }, &mut resumed, &content).unwrap()
         );
         assert_eq!(state, resumed);
         let after = &case["after"];
-        assert_eq!(
-            crate::support::record_bytes(&state.warriors),
-            after.bytes("party")
-        );
+        assert_eq!(support::record_bytes(&state.warriors), after.bytes("party"));
         assert_eq!(state.allies, after.bytes("allies"));
         assert_eq!(
-            state
-                .booty_items
-                .iter()
-                .flat_map(|record| record.0)
-                .collect::<Vec<_>>(),
+            support::record_bytes(&state.booty_items),
             after.bytes("booty")
         );
-        assert_eq!(
-            (state.random.seed, state.random.draws),
-            (after.n("seed"), after.n("draws"))
-        );
+        support::assert_rng(&state.random, &after["seed"], &after["draws"]);
         assert_eq!(
             state.health_context.as_ref().unwrap().unavailable,
             after.n::<i8>("unavailable")
@@ -553,7 +520,7 @@ fn surrender_question_cleanup_and_saved_script_return_match_native_early_exit() 
             state.exploration.as_ref().unwrap().presentation,
             Some(Presentation::Dialogue { id: 93, .. })
         ));
-        resumed = crate::support::checkpoint(&state, &content, "surrender-cleaned");
+        resumed = support::checkpoint(&state, &content, "surrender-cleaned");
         for _ in 0..40 {
             if state.round_dispatch.is_none() {
                 break;
@@ -567,7 +534,7 @@ fn surrender_question_cleanup_and_saved_script_return_match_native_early_exit() 
                 Command::Continue
             };
             replay_command(command, &mut state, &mut resumed, &content);
-            resumed = crate::support::checkpoint(&state, &content, "surrender-script");
+            resumed = support::checkpoint(&state, &content, "surrender-script");
         }
         assert!(state.round_dispatch.is_none());
         assert!(state.scripted_cleanup.is_none());

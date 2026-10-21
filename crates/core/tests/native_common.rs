@@ -30,22 +30,49 @@ pub fn shield_result_events(events: Vec<Event>) -> Vec<Event> {
     result
 }
 
+/// Reconstructed prefix recordings predate the native death-feedback correction.
+/// Preserve those bytes; showresults158ee0 supplies the omitted non165 NPC cue.
+pub fn prefix_result_events(state: &Session, command: &Command, events: Vec<Event>) -> Vec<Event> {
+    let mut result = vec![];
+    for event in shield_result_events(events) {
+        if matches!(command, Command::ShootEnemy { .. })
+            && let Event::AttackResolved {
+                attacker,
+                target,
+                defeated: true,
+                ..
+            } = &event
+            && *attacker < 6
+            && *target >= 10
+            && state.warriors[*attacker as usize]
+                .record()
+                .equipped_weapon()
+                .unwrap()
+                != 165
+        {
+            let sound = state.combat.as_ref().unwrap().enemies.records[(*target - 10) as usize]
+                .record()
+                .death_sound()
+                .unwrap();
+            if sound != 0 {
+                result.push(Event::Sound { resource_id: sound });
+            }
+        }
+        result.push(event);
+    }
+    result
+}
+
 pub fn assert_body_records(
     warriors: &[Warrior],
     enemies: &[MonsterRecord],
     party: &Value,
     monsters: &Value,
 ) {
-    crate::support::assert_bytes(
-        &crate::support::record_bytes(warriors),
-        &bytes(party),
-        "party",
-    );
-    crate::support::assert_bytes(
-        &crate::support::record_bytes(enemies),
-        &bytes(monsters),
-        "monsters",
-    );
+    crate::support::native_expect! {
+        bytes crate::support::record_bytes(warriors) => party, "party";
+        bytes crate::support::record_bytes(enemies) => monsters, "monsters";
+    }
 }
 
 pub fn spell_sequence(
@@ -261,8 +288,7 @@ pub fn compare_health_round(input: &str) {
             case["body"]
         );
         assert_eq!(enemies[0].bytes, case.bytes("after_enemy"));
-        crate::support::expect(random.seed, &case["seed"]);
-        crate::support::expect(random.draws, &case["draws"]);
+        crate::support::assert_rng(&random, &case["seed"], &case["draws"]);
     }
 }
 pub fn snapshot_party(snapshot: &Value) -> Vec<Warrior> {
@@ -275,24 +301,28 @@ pub fn buffer_words(fixture: &Value, value: &Value) -> Vec<i16> {
     crate::support::words(&crate::support::buffer(fixture, value))
 }
 pub fn melee_combat(records: &[u8]) -> Combat {
-    Combat {
-        battle: 117,
-        map: TacticalMap {
-            tiles: vec![1155; 8100],
-            shift: (0, 0),
-            edge_word: 0,
-        },
-        squad: SquadPlacement {
-            positions: (0..6).map(|i| (40 + i, 40)).collect(),
-            under_tiles: vec![1155; 6],
-        },
-        enemies: EnemySetup {
-            records: crate::support::monsters(records),
-            positions: vec![(20, 20), (21, 20), (40, 40)],
-        },
-        attack_identity: Some([2, 4, 6]),
-        ..crate::support::battle()
-    }
+    let mut combat = crate::support::battle();
+    combat.battle = 117;
+    combat.map.tiles.fill(1155);
+    combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
+    combat.enemies.records = crate::support::monsters(records);
+    combat.enemies.positions = vec![(20, 20), (21, 20), (40, 40)];
+    combat.attack_identity = Some([2, 4, 6]);
+    combat
+}
+
+pub fn neighbor_combat(case: &Value, member: i16) -> Combat {
+    let mut combat = crate::support::battle();
+    combat.battle = 117;
+    combat.map.tiles = case.words("map_before");
+    combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
+    combat.squad.positions[member as usize] = (21, 20);
+    combat.enemies.records = vec![MonsterRecord {
+        bytes: case.bytes("enemy_before"),
+    }];
+    combat.enemies.positions = vec![(20, 20)];
+    combat.order = case.words("order_before");
+    combat
 }
 pub fn raw_word(raw: &[u8], offset: usize) -> i16 {
     i16::from_be_bytes(raw[offset..offset + 2].try_into().unwrap())
@@ -328,9 +358,6 @@ pub fn snapshot_rng(snapshot: &Value) -> RandomState {
         seed: snapshot.n::<u32>("rng_seed"),
         draws: snapshot.n::<u64>("rng_draws"),
     }
-}
-pub fn snapshot_enemies(snapshot: &Value) -> Vec<MonsterRecord> {
-    crate::support::monsters(&snapshot["records"])
 }
 pub use crate::support::positions as decoded_positions;
 pub fn snapshot_word(snapshot: &Value, key: &str) -> i16 {
@@ -475,21 +502,8 @@ pub fn psi_snapshot(content: &Content, snapshot: &Value) -> Session {
     state.attack_packet = Some(snapshot.bytes("packet"));
     state.attack_identity = Some(snapshot.words("identity").try_into().unwrap());
     state.random = random_state(snapshot);
-    let mut combat = crate::support::battle();
-    combat.battle = 85;
-    combat.map.tiles = snapshot.words("map");
-    combat.squad.positions = crate::support::positions(&snapshot["party_positions"]);
-    combat.enemies.records = snapshot_enemies(snapshot);
-    combat.enemies.positions = crate::support::positions(&snapshot["monster_positions"]);
-    combat.order = snapshot.words("order");
-    combat.cursor = snapshot.n("cursor");
-    combat.round = snapshot.n("round");
-    combat.spell_fields = snapshot.bytes("fields");
-    combat.field_used = snapshot.bytes("used");
-    combat.attack_packet = state.attack_packet.clone();
-    combat.attack_identity = state.attack_identity;
+    let mut combat = crate::support::psi_frame::combat(snapshot);
     combat.weapon_work = state.weapon_work;
-    combat.unavailable = snapshot.n("unavailable");
     state.combat = Some(combat);
     state.phase = Phase::Combat;
     state

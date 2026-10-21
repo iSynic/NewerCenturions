@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_content::combat::BattleRecord;
 
@@ -6,7 +6,7 @@ use centurions_core::combat::place_enemies;
 
 #[test]
 fn genetic_enemy_setup_matches_original_complete_records_placement_and_rng() {
-    let fixture: serde_json::Value = crate::support::fixture("genetic-enemies.json");
+    let fixture: serde_json::Value = support::fixture("genetic-enemies.json");
     let content = content();
     let mut mission = content.map(0).unwrap().clone();
     let properties = fixture.bytes("properties");
@@ -32,28 +32,27 @@ fn genetic_enemy_setup_matches_original_complete_records_placement_and_rng() {
         )
         .unwrap();
         let context = format!("battle {} seed {}", case["battle_id"], case["seed_before"]);
-        crate::support::native_expect! {
-        scalar enemies.records.len() => &case["count"], "binary_genetic_rewards";
-        bytes crate::support::record_bytes(&enemies.records) => &case["records"], &context;
-        words &(enemies
+        support::native_expect! {
+            scalar enemies.records.len() => &case["count"], "binary_genetic_rewards";
+            records &enemies.records => &case["records"], &context;
+            words &(enemies
                         .positions
                         .iter()
                         .flat_map(|(x, y)| [*x, *y])
                         .collect::<Vec<_>>()) => &case["positions"], "binary_genetic_rewards";
-        words &(map.tiles) => &case["tiles"], "binary_genetic_rewards";
-        scalar random.seed => &case["seed_after"], "binary_genetic_rewards";
-        scalar random.draws => &case["draws"], "binary_genetic_rewards";
+            words &(map.tiles) => &case["tiles"], "binary_genetic_rewards";
+            rng random => (&case["seed_after"], &case["draws"]), "binary_genetic_rewards";
         }
     }
 }
 
 #[test]
 fn genetic_victory_rewards_match_original_complete_records_loot_and_rng() {
-    let fixture: serde_json::Value = crate::support::fixture("genetic-victory.json");
+    let fixture: serde_json::Value = support::fixture("genetic-victory.json");
     let content = content();
     for case in fixture.array("cases") {
-        let mut warriors = crate::support::warriors(&case.bytes("warriors_before"));
-        let mut enemies = crate::support::monsters(&case.bytes("enemies_before"));
+        let mut warriors = support::warriors(&case.bytes("warriors_before"));
+        let mut enemies = support::monsters(&case.bytes("enemies_before"));
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let context = format!(
             "battle {} setup seed {}",
@@ -66,17 +65,16 @@ fn genetic_victory_rewards_match_original_complete_records_loot_and_rng() {
             Some(&content),
         )
         .unwrap_or_else(|error| panic!("{context}: {error:?}"));
-        crate::support::native_expect! {
-        bytes crate::support::record_bytes(&warriors) => &case["warriors_after"], &context;
-        bytes crate::support::record_bytes(&enemies) => &case["enemies_after"], &context;
+        support::native_expect! {
+            records &warriors => &case["warriors_after"], &context;
+            records &enemies => &case["enemies_after"], &context;
         }
         let mut loot = vec![InventoryRecord([0; 22]); 1000];
         loot[..items.len()].clone_from_slice(&items);
-        crate::support::native_expect! {
-        bytes loot.iter().flat_map(|item| item.0).collect::<Vec<_>>() => &case["loot_after"], &context;
-        scalar share => &case["share"], "binary_genetic_rewards";
-        scalar random.seed => &case["seed_after"], "binary_genetic_rewards";
-        scalar random.draws => &case["draws"], "binary_genetic_rewards";
+        support::native_expect! {
+            bytes loot.iter().flat_map(|item| item.0).collect::<Vec<_>>() => &case["loot_after"], &context;
+            scalar share => &case["share"], "binary_genetic_rewards";
+            rng random => (&case["seed_after"], &case["draws"]), "binary_genetic_rewards";
         }
     }
 }

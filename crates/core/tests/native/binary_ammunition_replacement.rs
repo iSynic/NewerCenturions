@@ -1,10 +1,10 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
-use crate::support::buffer as bytes;
+use support::buffer as bytes;
 
 #[test]
 fn replacement_matches_native_full_warriors_retained_instances_costs_and_audio() {
-    let fixture = crate::support::fixture("ammunition-management.json");
+    let fixture = support::fixture("ammunition-management.json");
     let content = content();
     let mission = content.map(0).unwrap();
     for (index, case) in fixture
@@ -37,14 +37,7 @@ fn replacement_matches_native_full_warriors_retained_instances_costs_and_audio()
             result.changed,
             case.n::<i64>("native_helper_return_word") != 0
         );
-        let expected = |key: &str| {
-            case[key]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|value| value.as_i64().unwrap() as i16)
-                .collect::<Vec<_>>()
-        };
+        let expected = |key: &str| case.n::<Vec<i16>>(key);
         assert_eq!(result.sounds, expected("sounds"), "case {index}");
         assert_eq!(result.warnings, expected("warnings"), "case {index}");
     }

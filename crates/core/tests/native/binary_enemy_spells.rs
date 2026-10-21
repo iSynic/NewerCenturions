@@ -1,12 +1,12 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::combat::spells::resolve_warriors;
 
 #[test]
 fn enemy_spell_damage_matches_original_complete_party_and_random_consumption() {
-    let fixture: serde_json::Value = crate::support::fixture("enemy-spell-damage.json");
+    let fixture: serde_json::Value = support::fixture("enemy-spell-damage.json");
     for (index, case) in fixture.array("cases").iter().enumerate() {
-        let warriors = crate::support::warriors(&case.bytes("before"));
+        let warriors = support::warriors(&case.bytes("before"));
         let packet = case.bytes("packet");
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let result = resolve_warriors(
@@ -19,12 +19,11 @@ fn enemy_spell_damage_matches_original_complete_party_and_random_consumption() {
             &mut random,
         )
         .unwrap();
-        let actual = crate::support::record_bytes(&result.warriors);
-        crate::support::native_expect! {
-        bytes actual => &case["after"], &format!("case {index}");
-        scalar random.seed => &case["seed_after"], "binary_enemy_spells";
-        scalar random.draws => &case["rng_draws"], "binary_enemy_spells";
-        scalar (result
+        let actual = support::record_bytes(&result.warriors);
+        support::native_expect! {
+            bytes actual => &case["after"], &format!("case {index}");
+            rng random => (&case["seed_after"], &case["rng_draws"]), "binary_enemy_spells";
+            scalar (result
                         .targets
                         .iter()
                         .flat_map(|(_, target)| target.sounds.iter().copied())
@@ -37,24 +36,24 @@ fn enemy_spell_damage_matches_original_complete_party_and_random_consumption() {
 fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption() {
     use centurions_content::combat::MonsterRecord;
     use centurions_core::combat::spells::select_targets;
-    let mut additional: serde_json::Value = crate::support::fixture("additional-spells.json");
+    let mut additional: serde_json::Value = support::fixture("additional-spells.json");
     additional["cases"] = additional["selection_cases"].take();
     let fixtures: [serde_json::Value; 6] = [
-        crate::support::fixture("enemy-spell-selection.json"),
-        crate::support::fixture("npc-area-selection.json"),
-        crate::support::fixture("firearm-targets.json"),
+        support::fixture("enemy-spell-selection.json"),
+        support::fixture("npc-area-selection.json"),
+        support::fixture("firearm-targets.json"),
         additional,
-        crate::support::fixture("condition-targets.json"),
-        crate::support::fixture("zero-area-selection.json"),
+        support::fixture("condition-targets.json"),
+        support::fixture("zero-area-selection.json"),
     ];
     for fixture in fixtures {
         let areas = fixture.bytes("areas");
-        let mission = crate::support::terrain_mission(&fixture);
+        let mission = support::terrain_mission(&fixture);
         for (index, case) in fixture.array("cases").iter().enumerate() {
-            let warriors = crate::support::warriors(&case.bytes("party"));
+            let warriors = support::warriors(&case.bytes("party"));
             let distance = case.n::<i16>("distance");
-            let tiles = crate::support::words(&case.bytes("map"));
-            let mut combat = crate::support::battle();
+            let tiles = support::words(&case.bytes("map"));
+            let mut combat = support::battle();
             combat.battle = 28;
             combat.map.tiles = tiles;
             combat.squad.positions = (0..6)
@@ -109,23 +108,20 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
                     case.array("draws").last().unwrap().n::<u8>("result") - 1,
                 );
             }
-            crate::support::native_expect! {
-            scalar result.range => &case["range"], "binary_enemy_spells";
-            scalar result.nearest => &case["nearest"], "binary_enemy_spells";
-            scalar result.count => &case["count"], "binary_enemy_spells";
-            bytes crate::support::word_bytes(&result.distances) => &case["distances"], "distances case {index}";
+            support::native_expect! {
+                scalar result.range => &case["range"], "binary_enemy_spells";
+                scalar result.nearest => &case["nearest"], "binary_enemy_spells";
+                scalar result.count => &case["count"], "binary_enemy_spells";
+                bytes support::word_bytes(&result.distances) => &case["distances"], "distances case {index}";
             }
             if case["invalid_shape"].as_bool().unwrap_or(false) {
                 // These original receipts stop before bestchoice: retain their measured prefix.
-                crate::support::expect(random.seed, &case["seed_after"]);
-                crate::support::expect(random.draws, &case["rng_draws"]);
+                support::assert_rng(&random, &case["seed_after"], &case["rng_draws"]);
                 continue;
             }
-            crate::support::assert_bytes(
-                &result.caster.bytes,
-                &case.bytes("caster_after"),
-                "caster",
-            );
+            support::native_expect! {
+                bytes &result.caster.bytes => &case.bytes("caster_after"), "caster";
+            };
             let mut targets = [255; 42];
             for (slot, target) in result.targets.iter().enumerate() {
                 targets[slot * 6..slot * 6 + 6].copy_from_slice(
@@ -135,11 +131,10 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
                         .collect::<Vec<_>>(),
                 );
             }
-            crate::support::native_expect! {
-            bytes targets => &case["targets"], &format!("targets case {index}");
-            scalar !result.targets.is_empty() => &case["cast"], "binary_enemy_spells";
-            scalar random.seed => &case["seed_after"], "binary_enemy_spells";
-            scalar random.draws => &case["rng_draws"], "binary_enemy_spells";
+            support::native_expect! {
+                bytes targets => &case["targets"], &format!("targets case {index}");
+                scalar !result.targets.is_empty() => &case["cast"], "binary_enemy_spells";
+                rng random => (&case["seed_after"], &case["rng_draws"]), "binary_enemy_spells";
             }
         }
     }
@@ -148,20 +143,20 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
 #[test]
 fn spell_target_masks_reflection_and_fields_match_original_complete_buffers() {
     use centurions_core::combat::spells::{SpellContext, SpellTarget, target_mask};
-    let fixture: serde_json::Value = crate::support::fixture("spell-targets.json");
+    let fixture: serde_json::Value = support::fixture("spell-targets.json");
     let areas = fixture.bytes("areas");
-    let tiles: Vec<i16> = crate::support::words(&fixture.bytes("map"));
+    let tiles: Vec<i16> = support::words(&fixture.bytes("map"));
     let party = fixture.bytes("party");
     for (index, case) in fixture.array("cases").iter().enumerate() {
         let variant = case.n::<i64>("variant");
-        let mut warriors = crate::support::warriors(&party);
+        let mut warriors = support::warriors(&party);
         if variant == 1 {
             for warrior in &mut warriors {
                 warrior.bytes[0x9a..0x9c].copy_from_slice(&1_i16.to_be_bytes());
             }
         }
-        let monsters = crate::support::monsters(&case["records"]);
-        let mut combat = crate::support::battle();
+        let monsters = support::monsters(&case["records"]);
+        let mut combat = support::battle();
         combat.battle = 28;
         combat.map.tiles = tiles.clone();
         combat.squad.positions = (0..6).map(|i| (20 + i, 20)).collect();
@@ -197,11 +192,10 @@ fn spell_target_masks_reflection_and_fields_match_original_complete_buffers() {
             &mut random,
         )
         .unwrap();
-        crate::support::native_expect! {
-        bytes crate::support::word_bytes(&result.mask) => &case["mask"], &format!("mask case {index}");
-        bytes result.fields => &case["fields"], &format!("fields case {index}");
-        scalar random.seed => &case["seed_after"], "binary_enemy_spells";
-        scalar random.draws => &case["rng_draws"], "binary_enemy_spells";
+        support::native_expect! {
+            bytes support::word_bytes(&result.mask) => &case["mask"], &format!("mask case {index}");
+            bytes result.fields => &case["fields"], &format!("fields case {index}");
+            rng random => (&case["seed_after"], &case["rng_draws"]), "binary_enemy_spells";
         }
     }
 }

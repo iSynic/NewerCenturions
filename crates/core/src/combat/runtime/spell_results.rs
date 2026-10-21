@@ -1,24 +1,12 @@
 //! Spell results in the original combat execution order.
 use crate::combat::{Combat, lifecycle};
 use crate::{Event, RandomState, RuleError};
-use centurions_content::combat::MonsterRecord;
 use centurions_content::{Warrior, word};
 
 pub(super) fn increment_stat(bytes: &mut [u8], offset: usize, amount: i32) {
     let value =
         i32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()).wrapping_add(amount);
     bytes[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
-}
-
-pub(super) fn enemy_death_sound(monster: &MonsterRecord) -> Result<i16, RuleError> {
-    centurions_content::span(&monster.bytes, 0, 288)?;
-    if monster.bytes[0xab] != 0 {
-        return Err(RuleError::Unsupported {
-            action: "combat.death",
-            dependency: "alternate enemy defeat feedback",
-        });
-    }
-    Ok(word(&monster.bytes, 0x6a)?)
 }
 
 pub(crate) fn append_spell_outcomes(
@@ -56,10 +44,7 @@ pub(crate) fn append_spell_outcomes(
                 if word(enemy, 0x4e)? != 0 {
                     c.weapon_work.sound()?
                 } else {
-                    return Err(RuleError::Unsupported {
-                        action: "combat.spell",
-                        dependency: "noncaster category-eight result audio",
-                    });
+                    c.weapon_work.natural_result_sound(enemy)?
                 }
             } else {
                 word(identity.2, 38)?
@@ -67,15 +52,13 @@ pub(crate) fn append_spell_outcomes(
             events.push(Event::Sound { resource_id: sound });
         }
         if outcome.killed {
-            let sound = if target >= 10 && enemy_defeat_feedback {
-                Some(enemy_death_sound(&c.enemies.records[target - 10])?)
+            let feedback = if target >= 10 && enemy_defeat_feedback {
+                super::death::enemy_death_feedback(&c.enemies.records[target - 10], target as i16)?
             } else {
-                None
+                vec![]
             };
             lifecycle::kill_body(c, w, target as i16)?;
-            if let Some(resource_id) = sound {
-                events.push(Event::Sound { resource_id });
-            }
+            events.extend(feedback);
         }
         // resolvespell151a88 presents successful zero-damage spelllist results.
         // showresults clears the interaction gate even when its code has no label.
@@ -150,6 +133,48 @@ pub(crate) fn resolve_spell_mask(
         .iter()
         .map(Warrior::stamina)
         .collect::<Result<Vec<_>, _>>()?;
+    // Authored NPC112 uses the same resolvespell healing branch as party casts.
+    if word(packet, 40)? == 57 {
+        let result = crate::combat::spells::resolve_support_for_caster(
+            w,
+            &c.enemies.records,
+            mask,
+            id,
+            &crate::combat::spells::DirectSpell {
+                packet,
+                level: id % 1000 / 100 - 1,
+                count,
+                armor_filter: c.weapon_work.armor_filter()?,
+                weapon_sound: c.weapon_work.sound()?,
+            },
+            (Some(caster), Some(memory)),
+            random,
+        )?;
+        w.clone_from_slice(&result.warriors);
+        c.enemies.records = result.enemies;
+        c.unavailable = c.unavailable.wrapping_sub(result.recovered as i8);
+        if result.healed {
+            c.attack_packet.as_mut().unwrap()[18] = 4;
+        }
+        if !result.targets.is_empty() {
+            c.field_used[0] = 1;
+        }
+        let mut events = result
+            .sounds
+            .into_iter()
+            .map(|resource_id| Event::Sound { resource_id })
+            .collect();
+        append_spell_outcomes(
+            c,
+            w,
+            result.targets,
+            vec![],
+            (Some(caster), id, packet, &previous_hp),
+            false,
+            &mut events,
+        )?;
+        return Ok(events);
+    }
     let result = crate::combat::spells::resolve_bodies_with_memory(
         w,
         &c.enemies.records,

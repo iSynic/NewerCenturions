@@ -396,7 +396,6 @@ pub fn draw(
         .psi_selection
         .as_ref()
         .map(|p| (p.spell, p.power))
-        .or(ui.psi_choice)
         .and_then(|(spell, power)| {
             let attacks = &content
                 .map(state.exploration.as_ref()?.map)?
@@ -404,29 +403,17 @@ pub fn draw(
                 .as_ref()?
                 .attacks;
             let packet = centurions_core::combat::spells::load_packet(attacks, spell).ok()?;
-            (spell == 1101 || word(&packet, 40).ok()? == 64).then_some((spell, power))
+            (packet[1] == 1).then_some((spell, power))
         });
     if state.medical_continuation.is_some() || portrait_spell.is_some() {
         crate::story_dialogs::portraits(state, assets, controls, |warrior| {
-            if let Some((spell, power)) = portrait_spell {
-                (spell != 1101
-                    || (-9..=0).contains(&state.warriors[warrior].stamina().unwrap_or(-10)))
-                .then_some(Action::Command(if state.psi_selection.is_some() {
-                    Command::FirePreparedPsiOnWarrior { warrior }
-                } else {
-                    Command::CastPsiOnWarrior {
-                        warrior,
-                        spell,
-                        power,
-                    }
-                }))
+            Some(Action::Command(if portrait_spell.is_some() {
+                Command::FirePreparedPsiOnWarrior { warrior }
             } else {
-                (-9..=0)
-                    .contains(&state.warriors[warrior].stamina().unwrap_or(-10))
-                    .then_some(Action::Command(Command::SelectMedicalTarget {
-                        selection: MedicalTarget::Portrait { warrior },
-                    }))
-            }
+                Command::SelectMedicalTarget {
+                    selection: MedicalTarget::Portrait { warrior },
+                }
+            }))
         });
     }
     let targets = state

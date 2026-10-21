@@ -197,6 +197,7 @@ pub(crate) fn resolve_support_for_caster(
             ));
             continue;
         }
+        let mut healing_death = false;
         if (1..=40).contains(&effect) {
             spell_conditions::add_duration(w, false, effect, duration)?;
             let reflected = word(w, 0x9a)? != 0 && next_random.bound(100) < 34;
@@ -215,12 +216,8 @@ pub(crate) fn resolve_support_for_caster(
                     .wrapping_add(damage.wrapping_abs())
                     .max(-10)
                     .min(word(w, 0x52)?);
-                if previous > 0 && after < 1 {
-                    return Err(RuleError::Unsupported {
-                        action: "combat.spell.support",
-                        dependency: "healing overflow death",
-                    });
-                }
+                // heal1287c2 calls killbody after the signed WORD addition wraps.
+                healing_death = previous > 0 && after < 1;
                 if previous <= 0 && after > 0 {
                     result.recovered = result.recovered.wrapping_add(1);
                 }
@@ -243,7 +240,7 @@ pub(crate) fn resolve_support_for_caster(
             AttackResult {
                 feedback: None,
                 damage,
-                killed: effect == 28 && previous > 0 && word(w, 0x50)? < 1,
+                killed: healing_death || (effect == 28 && previous > 0 && word(w, 0x50)? < 1),
                 sounds,
             },
         ));

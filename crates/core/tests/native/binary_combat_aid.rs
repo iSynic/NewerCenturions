@@ -1,18 +1,18 @@
-use crate::prelude::*;
+use crate::{prelude::*, snapshots, support};
 
-use crate::support::compare_record_bytes as assert_party;
-use crate::support::warriors as party;
+use support::compare_record_bytes as assert_party;
+use support::warriors as party;
 
-use crate::support::event_sounds as sounds;
+use support::event_sounds as sounds;
 
 fn state(fixture: &Value, index: usize) -> Session {
     serde_json::from_value(fixture["foundations"][index]["session"].clone()).unwrap()
 }
-use crate::snapshots::medical_input as install;
+use snapshots::medical_input as install;
 
 #[test]
 fn actual_owned_needle_consumption_and_preparation_match_native_complete_records() {
-    let fixture = crate::support::fixture("combat-aid.json");
+    let fixture = support::fixture("combat-aid.json");
     let content = content();
     for (index, case) in fixture.array("stim_cases").iter().enumerate() {
         let mut state = state(&fixture, usize::from(index != 0));
@@ -33,7 +33,7 @@ fn actual_owned_needle_consumption_and_preparation_match_native_complete_records
         assert_party(&actual, &party(&case["prepared"]["party"]));
         assert_eq!(result.packet, case["prepared"].bytes("packet"));
         assert_eq!(result.identity, [0, 3, 0]);
-        crate::support::expect(result.count, &case["prepared"]["count"]);
+        support::expect(result.count, &case["prepared"]["count"]);
         assert_eq!(
             result.loaded_item_field32,
             // The caller refreshes the display's independent item cache after preparation.
@@ -60,7 +60,7 @@ fn actual_owned_needle_consumption_and_preparation_match_native_complete_records
 
 #[test]
 fn four_native_target_continuations_match_at_the_medical_boundary() {
-    let fixture = crate::support::fixture("combat-aid.json");
+    let fixture = support::fixture("combat-aid.json");
     let content = content();
     let pending = MedicalContinuation {
         origin: centurions_core::MedicalOrigin::OwnedNeedle,
@@ -77,7 +77,7 @@ fn four_native_target_continuations_match_at_the_medical_boundary() {
             0 => MedicalTarget::Portrait { warrior: 3 },
             1 => MedicalTarget::Portrait { warrior: 5 },
             2 => {
-                let position = state.combat.as_ref().unwrap().squad.positions[2];
+                let position = current_combat(&state).squad.positions[2];
                 MedicalTarget::LivingPoint {
                     x: position.0,
                     y: position.1,
@@ -128,10 +128,10 @@ fn four_native_target_continuations_match_at_the_medical_boundary() {
             ][index]
         );
         let mut native_random = original.random.clone();
-        crate::support::replay_rng(&mut native_random, case.array("rng"));
+        support::replay_rng(&mut native_random, case.array("rng"));
         assert_eq!(state.random, native_random);
-        let actual = state.combat.as_ref().unwrap();
-        let before = original.combat.as_ref().unwrap();
+        let actual = current_combat(&state);
+        let before = current_combat(&original);
         assert_eq!(actual.enemies, before.enemies);
         assert_eq!(actual.spell_fields, before.spell_fields);
         assert_eq!(actual.weapon_work, before.weapon_work);
@@ -143,21 +143,12 @@ fn four_native_target_continuations_match_at_the_medical_boundary() {
         }
         assert_eq!(actual.attack_packet, Some(packet));
         if index == 1 {
-            assert_eq!(
-                actual.squad.positions,
-                case["after"]
-                    .words("party_positions")
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|position| (position[0], position[1]))
-                    .collect::<Vec<_>>()
-            );
-            crate::support::native_expect! {
+            support::native_expect! {
+            positions actual.squad.positions => &case["after"]["party_positions"], "native positions";
             words actual.squad.under_tiles => &case["after"]["under_tiles"], "binary_combat_aid";
             words actual.map.tiles => &case["after"]["map"], "binary_combat_aid";
             words actual.order => &case["after"]["order"], "binary_combat_aid";
-            }
+                }
             assert_eq!(actual.squad.positions[5], (9, 23));
             assert_eq!(actual.unavailable, before.unavailable.wrapping_sub(1));
         } else {
@@ -182,7 +173,7 @@ fn four_native_target_continuations_match_at_the_medical_boundary() {
 
 #[test]
 fn native_item_admission_and_invalid_targeting_are_atomic() {
-    let fixture = crate::support::fixture("combat-aid.json");
+    let fixture = support::fixture("combat-aid.json");
     let content = content();
     for case in fixture.array("admission_cases") {
         let mut state = state(&fixture, 1);

@@ -1,4 +1,4 @@
-//! Ordered compatibility pipeline for schema-12 saves and versions 1-11.
+//! Ordered compatibility pipeline for schema-13 saves and versions 1-12.
 //! Some legacy fields must be rejected, others restored; these steps must not
 //! be reordered into a blanket defaults pass followed by validation.
 use super::Save;
@@ -36,7 +36,7 @@ fn read_version_and_schedule(saved: &mut Save, content: &Content) -> Result<(), 
                 .clone();
             position.region_state = content.map(0).unwrap().regions.clone();
         }
-    } else if !matches!(saved.schema_version, 2..=12) {
+    } else if !matches!(saved.schema_version, 2..=13) {
         return Err(RuleError::Invalid(format!(
             "unsupported save version {}",
             saved.schema_version
@@ -46,6 +46,16 @@ fn read_version_and_schedule(saved: &mut Save, content: &Content) -> Result<(), 
 }
 
 fn check_control_contexts(saved: &mut Save) -> Result<(), RuleError> {
+    if saved.schema_version < 13
+        && (saved.session.weapon_work.natural_attack_index.is_some()
+            || saved
+                .session
+                .combat
+                .as_ref()
+                .is_some_and(|combat| combat.weapon_work.natural_attack_index.is_some()))
+    {
+        return Err("retained natural-attack context requires save version 13".into());
+    }
     if saved.schema_version < 12
         && saved
             .session

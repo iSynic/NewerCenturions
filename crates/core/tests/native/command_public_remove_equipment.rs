@@ -1,17 +1,17 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, snapshots, support};
 
 use centurions_core::ammunition::WorkBuffers;
 
-use crate::support::buffer as bytes;
+use support::buffer as bytes;
 
-use crate::native_common::buffer_words as words;
+use native_common::buffer_words as words;
 
-use crate::snapshots::captured_party as project_party;
+use snapshots::captured_party as project_party;
 
 fn initial(fixture: &Value, case: &Value) -> Session {
     let snapshot = &case["before"];
     let member = case.n::<usize>("member");
-    let mut state = crate::snapshots::helper_frame(fixture, snapshot, member);
+    let mut state = snapshots::helper_frame(fixture, snapshot, member);
     state.ammunition_work = WorkBuffers {
         item: Some(bytes(fixture, &snapshot["item_work"])),
         weapon: Some(bytes(fixture, &snapshot["weapon_work"])),
@@ -20,6 +20,7 @@ fn initial(fixture: &Value, case: &Value) -> Session {
     let weapon = state.ammunition_work.weapon.as_ref().unwrap();
     let ammo = state.ammunition_work.ammo.as_ref().unwrap();
     state.weapon_work = WeaponWork {
+        natural_attack_index: None,
         sound: Some(word(weapon, 14).unwrap()),
         weapon_armor_filter: Some(word(weapon, 136).unwrap()),
         ammunition_armor_filter: Some(word(ammo, 136).unwrap()),
@@ -67,12 +68,11 @@ fn compaction_is_unchanged(state: &Session, member: usize) {
     // At original compaction12006e no equipped row can move, and the unused
     // record fields it clears are already zero in these four native results.
 }
-use crate::support::checkpoint;
-use crate::support::same_session as same;
+use support::checkpoint;
 
 #[test]
 fn four_public_removals_at_zero_ap_match_complete_native_state_and_saved_replay() {
-    let fixture = crate::support::fixture("public-remove-equipment.json");
+    let fixture = support::fixture("public-remove-equipment.json");
     let content = content();
 
     for (index, case) in fixture.array("cases")[..4].iter().enumerate() {
@@ -90,13 +90,7 @@ fn four_public_removals_at_zero_ap_match_complete_native_state_and_saved_replay(
         assert_eq!(expected.combat, state.combat);
         compaction_is_unchanged(&expected, member);
 
-        let events: Vec<_> = case
-            .array("sounds")
-            .iter()
-            .map(|sound| Event::Sound {
-                resource_id: sound.as_i64().unwrap() as i16,
-            })
-            .collect();
+        let events: Vec<_> = support::sound_events(case.n::<Vec<i16>>("sounds"));
         let definition = &content.items[case.n::<usize>("id")];
         let sound = word(definition, 12).unwrap();
         let sound = if sound == 0 {
@@ -115,9 +109,9 @@ fn four_public_removals_at_zero_ap_match_complete_native_state_and_saved_replay(
             apply(command.clone(), &mut uninterrupted, &content).unwrap(),
             events
         );
-        same(&uninterrupted, &expected);
+        support::same_captured_session(&uninterrupted, &expected);
         assert_eq!(apply(command, &mut resumed, &content).unwrap(), events);
-        same(&resumed, &expected);
+        support::same_captured_session(&resumed, &expected);
         checkpoint(&uninterrupted, &content, &format!("{index}-after"));
         if index == 0 {
             assert_eq!(state.health_context.as_ref().unwrap().affected[0], 0);
@@ -126,7 +120,7 @@ fn four_public_removals_at_zero_ap_match_complete_native_state_and_saved_replay(
     }
 
     // Native wear/remove retries must not corrupt the subsequently loaded Psi packet.
-    let fixture = crate::support::fixture("equipment-spell-cache-alias.json");
+    let fixture = support::fixture("equipment-spell-cache-alias.json");
     for case in fixture.array("cases") {
         let input = Warrior::read(&bytes(&fixture, &case["before"]["member_record"])).unwrap();
         let result = if case["variant"] == "wear_retry_old1_to38" {
@@ -138,16 +132,14 @@ fn four_public_removals_at_zero_ap_match_complete_native_state_and_saved_replay(
                 false,
             )
             .unwrap();
-            crate::support::expect_array(&worn.sounds, &case["sounds"]);
+            support::expect_array(&worn.sounds, &case["sounds"]);
             worn.warrior
         } else {
             input
         };
-        crate::support::assert_bytes(
-            &result.bytes,
-            &bytes(&fixture, &case["after_equipment"]["member_record"]),
-            "equipment/cache alias",
-        );
+        support::native_expect! {
+            bytes &result.bytes => &bytes(&fixture, &case["after_equipment"]["member_record"]), "equipment/cache alias";
+        };
         let attacks = &content.map(0).unwrap().combat.as_ref().unwrap().attacks;
         assert_eq!(
             *attacks,

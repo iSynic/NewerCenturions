@@ -1,11 +1,11 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::combat::damage::*;
 
 #[test]
 fn damage_matches_complete_original_routine() {
-    let fixture: serde_json::Value = crate::support::fixture("damage.json");
-    let percentages = crate::support::fixture("percentage-damage.json");
+    let fixture: serde_json::Value = support::fixture("damage.json");
+    let percentages = support::fixture("percentage-damage.json");
     for (index, case) in fixture
         .array("cases")
         .iter()
@@ -38,12 +38,9 @@ fn damage_matches_complete_original_routine() {
             i16::try_from(case.n::<i64>("total")).unwrap(),
             "damage case {index}"
         );
-        crate::support::native_expect! {
-        scalar random.seed => &case["seed"], "binary_damage";
-        scalar random.draws => &case["draws"], "binary_damage";
-        }
+        support::assert_rng(&random, &case["seed"], &case["draws"]);
         if result.total >= 0 {
-            crate::support::expect(result.sound, &case["sound"]);
+            support::expect(result.sound, &case["sound"]);
         }
         let shield_sounds = if result.shield_sound {
             vec![206]

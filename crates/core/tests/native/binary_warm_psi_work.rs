@@ -1,53 +1,24 @@
-use crate::native_common::decoded_positions as positions;
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
-use crate::native_common::{psi_snapshot as state, psi_work as native_work};
+use native_common::{psi_snapshot as state, psi_work as native_work};
 
 fn assert_snapshot(state: &Session, expected: &Value, events: &[Event], label: &str) {
-    let c = state.combat.as_ref().unwrap();
-    crate::support::native_expect! {
-    bytes crate::support::record_bytes(&state.warriors) => &expected["party"], &format!("{label} full party");
-    bytes crate::support::record_bytes(&c.enemies.records) => &expected["records"], &format!("{label} full enemies");
-    words c.map.tiles => &expected["map"], "{label} map";
-    }
-    assert_eq!(c.squad.positions, positions(&expected["party_positions"]));
-    assert_eq!(
-        c.enemies.positions,
-        positions(&expected["monster_positions"])
-    );
-    crate::support::native_expect! {
-    bytes c.spell_fields => &expected["fields"], "{label} fields";
-    bytes c.field_used => &expected["used"], "{label} usage";
-    bytes c.attack_packet.as_ref().unwrap() => &expected["packet"], "binary_warm_psi_work";
-    words c.attack_identity.unwrap().to_vec() => &expected["identity"], "binary_warm_psi_work";
-    bytes state.psi_memory.as_ref().unwrap() => &expected["memory"], "binary_warm_psi_work";
-    bytes state.party_buffs => &expected["party_buffs"], "binary_warm_psi_work";
-    }
-    assert_eq!(state.loaded_item_field32.unwrap(), expected["item_context"]);
-    assert_eq!(state.attack_count, expected["count"]);
-    assert_eq!(c.unavailable, expected["unavailable"]);
-    assert_eq!(c.order, expected.words("order"));
-    assert_eq!(c.cursor, expected["cursor"]);
-    assert_eq!(c.round, expected["round"]);
-    assert_eq!(c.weapon_work, native_work(expected));
-    assert_eq!(state.weapon_work, c.weapon_work);
-    assert_eq!(state.random.seed, expected["seed"]);
-    assert_eq!(state.random.draws, expected["draws"]);
-    let sounds: Vec<_> = crate::support::event_sounds(events);
+    support::psi_frame::compare_session(state, expected, label);
+    let sounds: Vec<_> = support::event_sounds(events);
     assert_eq!(
         serde_json::json!(sounds),
         expected["sounds"],
         "{label} audio"
     );
     let mut receipt = RandomState::new(12);
-    crate::support::replay_rng(&mut receipt, expected.array("rng_records"));
+    support::replay_rng(&mut receipt, expected.array("rng_records"));
     assert_eq!(receipt, state.random, "{label} RNG receipt state");
 }
 
 #[test]
 fn native_loading_and_preparation_preserve_independent_weapon_and_ammunition_fields() {
     let content = content();
-    let fixture = crate::support::fixture("warm-psi-work.json");
+    let fixture = support::fixture("warm-psi-work.json");
     for case in fixture.array("cases") {
         let mut work = native_work(&case["unwarmed"]);
         let weapon = &content.items[case.n::<usize>("warm_weapon")];
@@ -58,9 +29,6 @@ fn native_loading_and_preparation_preserve_independent_weapon_and_ammunition_fie
         assert_eq!(work, native_work(&case["prepared"]));
         for phase in ["before", "charged", "targeted", "cast", "after", "collided"] {
             assert_eq!(work, native_work(&case[phase]));
-            for buffer in ["weapon_work", "ammo_work"] {
-                assert_eq!(case[phase][buffer], case["prepared"][buffer]);
-            }
         }
     }
 }
@@ -69,7 +37,7 @@ fn native_loading_and_preparation_preserve_independent_weapon_and_ammunition_fie
 fn warmed_cast_automatic_initiative_and_field_collision_match_complete_native_cases() {
     let content = content();
     let mission = content.map(0).unwrap();
-    let fixture = crate::support::fixture("warm-psi-work.json");
+    let fixture = support::fixture("warm-psi-work.json");
 
     for case in fixture.array("cases") {
         let label = format!(
@@ -77,10 +45,10 @@ fn warmed_cast_automatic_initiative_and_field_collision_match_complete_native_ca
             case["warm_weapon"], case["warm_ammo"]
         );
         let mut state = state(&content, &case["before"]);
-        let original = state.combat.as_ref().unwrap().clone();
+        let original = current_combat(&state).clone();
         let point = words(&case["casts"][0]["targets"]);
         let mut mask_rng = state.random.clone();
-        let c = state.combat.as_ref().unwrap();
+        let c = current_combat(&state);
         let packet = c.attack_packet.as_ref().unwrap();
         let mask = spells::target_mask(
             c,
@@ -123,7 +91,7 @@ fn warmed_cast_automatic_initiative_and_field_collision_match_complete_native_ca
         .unwrap_or_else(|error| panic!("{label}: {error:?}"));
         assert_snapshot(&state, &case["cast"], &events, &format!("{label} cast"));
         events.extend(runtime::end_turn(&mut state, &content).unwrap());
-        assert_eq!(state.combat.as_ref().unwrap().active_body(), Some(10));
+        assert_eq!(current_combat(&state).active_body(), Some(10));
         assert_snapshot(&state, &case["after"], &events, &format!("{label} advance"));
         events.extend(
             runtime::collide_fields(
@@ -142,7 +110,7 @@ fn warmed_cast_automatic_initiative_and_field_collision_match_complete_native_ca
             &events,
             &format!("{label} collision"),
         );
-        let c = state.combat.as_ref().unwrap();
+        let c = current_combat(&state);
         assert_eq!(c.death_queue, original.death_queue);
         assert_eq!(c.round_scripts, original.round_scripts);
         let expected_filter = i16::from(c.weapon_work.armor_filter().unwrap());

@@ -1,11 +1,11 @@
-use crate::prelude::*;
-use crate::support::{checkpoint, replay_command as step};
+use crate::{prelude::*, support};
+use support::{checkpoint, replay_command as step};
 
 use std::path::PathBuf;
 
 fn fixture() -> (Content, Session) {
-    let content = crate::support::content();
-    let state = crate::support::mission_session(&content);
+    let content = support::content();
+    let state = support::mission_session(&content);
     (content, state)
 }
 
@@ -15,19 +15,19 @@ fn path(name: &str) -> PathBuf {
 
 fn stage_choice(state: &mut Session, parameter: i16) {
     let position = state.exploration.as_mut().unwrap();
-    position.script = Some(crate::support::script_state(vec![0; 42], 1));
+    position.script = Some(support::script_state(vec![0; 42], 1));
     position.presentation = Some(Presentation::StageChange { parameter });
 }
 
 #[test]
 fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     let (content, mut state) = fixture();
-    for case in crate::support::fixture("story-statistics.json").array("cases") {
-        let warriors = crate::support::warriors(&case.bytes("before"));
+    for case in support::fixture("story-statistics.json").array("cases") {
+        let warriors = support::warriors(&case.bytes("before"));
         let mask = case.n::<Vec<i16>>("mask").try_into().unwrap();
         let expected = case.bytes("after");
         assert_eq!(
-            digest(&crate::support::record_bytes(
+            digest(&support::record_bytes(
                 &centurions_core::story_party::adjust_statistics(
                     &warriors,
                     &mask,
@@ -41,7 +41,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         if parameter < 0 {
             continue;
         }
-        let mut adjusted = crate::support::mission_session(&content);
+        let mut adjusted = support::mission_session(&content);
         adjusted.warriors = warriors;
         adjusted.party_mask = mask;
         let position = adjusted.exploration.as_mut().unwrap();
@@ -49,7 +49,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         record[8..40].fill(0);
         record[8..10].copy_from_slice(&108_i16.to_be_bytes());
         record[24..26].copy_from_slice(&parameter.to_be_bytes());
-        position.script = Some(crate::support::script_state(record, 0));
+        position.script = Some(support::script_state(record, 0));
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
             text: String::new(),
@@ -57,13 +57,13 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         let mut restored = checkpoint(&adjusted, &content, "story-statistics");
         replay_command(Command::Continue, &mut adjusted, &mut restored, &content);
         assert_eq!(
-            digest(&crate::support::record_bytes(&adjusted.warriors)),
+            digest(&support::record_bytes(&adjusted.warriors)),
             digest(&expected)
         );
     }
     // Protects original avoidance answers and saved admission from repeating the lottery.
-    for case in crate::support::fixture("regional-choice.json").array("cases") {
-        let mut walking = crate::support::mission_session(&content);
+    for case in support::fixture("regional-choice.json").array("cases") {
+        let mut walking = support::mission_session(&content);
         let position = walking.exploration.as_mut().unwrap();
         position.x = 10;
         position.y = 10;
@@ -99,10 +99,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
                     .iter()
                     .any(|event| matches!(event, Event::CombatStarted { battle: 1, .. }))
             );
-            assert_eq!(
-                walking.combat.as_ref().unwrap().order[1..7],
-                [0, 1, 2, 3, 4, 5]
-            );
+            assert_eq!(current_combat(&walking).order[1..7], [0, 1, 2, 3, 4, 5]);
         } else {
             assert_eq!(walking.phase, Phase::Exploration);
             assert!(walking.exploration.as_ref().unwrap().presentation.is_none());
@@ -115,7 +112,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     for (offset, value) in [(8, 47_i16), (10, 9), (12, 200), (24, 2), (26, 6000)] {
         record[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
     }
-    position.script = Some(crate::support::script_state(record, 0));
+    position.script = Some(support::script_state(record, 0));
     position.presentation = Some(Presentation::Dialogue {
         id: 0,
         text: String::new(),
@@ -125,13 +122,13 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     assert_eq!(state, before);
 
     // Scripted effects retain selection, original record changes and RNG across reload.
-    for case in crate::support::fixture("story-spell.json").array("cases") {
-        let mut casting = crate::support::mission_session(&content);
-        casting.warriors = crate::support::warriors(&case.bytes("before"));
+    for case in support::fixture("story-spell.json").array("cases") {
+        let mut casting = support::mission_session(&content);
+        casting.warriors = support::warriors(&case.bytes("before"));
         casting.random = RandomState::new(12);
         casting.party_mask = case.n::<Vec<i16>>("mask").try_into().unwrap();
         let position = casting.exploration.as_mut().unwrap();
-        position.script = Some(crate::support::script_state(
+        position.script = Some(support::script_state(
             content.map(0).unwrap().script(176).unwrap().to_vec(),
             1,
         ));
@@ -139,33 +136,26 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             id: 661,
             text: String::new(),
         });
-        let mut resumed = checkpoint(&casting, &content, "script-spell");
-        let events = replay_command(Command::Continue, &mut casting, &mut resumed, &content);
+        let events = support::saved_command(Command::Continue, &mut casting, &content);
         assert_eq!(
-            crate::support::record_bytes(&casting.warriors),
+            support::record_bytes(&casting.warriors),
             case.bytes("after")
         );
-        assert_eq!(
-            (casting.random.seed, casting.random.draws),
-            (case.n("seed"), case.n("draws"))
-        );
-        assert_eq!(
-            crate::support::event_sounds(&events),
-            case.n::<Vec<i16>>("sounds")
-        );
+        support::assert_rng(&casting.random, &case["seed"], &case["draws"]);
+        assert_eq!(support::event_sounds(&events), case.n::<Vec<i16>>("sounds"));
     }
     assert!(apply(Command::SelectMenuEntry { index: 4 }, &mut state, &content).is_err());
     assert_eq!(state, before);
 
     // The round35 dialog must pause before script36's faction changes and reduction.
-    for case in crate::support::fixture("story-faction.json").array("cases") {
-        let mut neutralizing = crate::support::mission_session(&content);
+    for case in support::fixture("story-faction.json").array("cases") {
+        let mut neutralizing = support::mission_session(&content);
         neutralizing.phase = Phase::Combat;
         for warrior in &mut neutralizing.warriors {
             warrior.bytes[0x9df] = 1;
         }
-        let mut arena = crate::support::battle();
-        arena.enemies.records = crate::support::monsters(&case.bytes("before"));
+        let mut arena = support::battle();
+        arena.enemies.records = support::monsters(&case.bytes("before"));
         arena.enemies.positions = vec![(10, 10); arena.enemies.records.len()];
         arena.order[1] = 0;
         arena.order[2] = 10;
@@ -180,11 +170,11 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             apply(Command::EndTurn, &mut neutralizing, &content).unwrap(),
             vec![Event::StoryPresented]
         );
-        let paused = neutralizing.combat.as_ref().unwrap();
+        let paused = current_combat(&neutralizing);
         assert_eq!(paused.cursor, 110);
         assert_eq!(paused.round_scripts.counter, 3);
         assert_eq!(
-            crate::support::record_bytes(&paused.enemies.records),
+            support::record_bytes(&paused.enemies.records),
             case.bytes("before")
         );
         assert_eq!(neutralizing.random, random);
@@ -202,6 +192,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         let mut legacy: Value =
             serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
         legacy["schema_version"] = 5.into();
+        support::legacy_save(&mut legacy);
         std::fs::write(&checkpoint, serde_json::to_vec(&legacy).unwrap()).unwrap();
         assert!(load(&checkpoint, &content).is_err());
         replay_command(
@@ -210,7 +201,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             &mut restored,
             &content,
         );
-        let arena = neutralizing.combat.as_ref().unwrap();
+        let arena = current_combat(&neutralizing);
         assert!(arena.round_scripts.pending.is_none());
         assert_eq!(arena.round_scripts.counter, 3);
         assert_eq!(arena.active_body(), Some(0));
@@ -222,7 +213,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             .enemies
             .records
             .iter()
-            .zip(crate::support::monsters(&case.bytes("after")))
+            .zip(support::monsters(&case.bytes("after")))
         {
             assert_eq!(
                 centurions_content::word(&actual.bytes, 14).unwrap(),
@@ -234,12 +225,11 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         std::fs::remove_file(checkpoint).unwrap();
     }
     // Source-qualified newland opcode119 uses43800e, independently of the active PC/selected NPC.
-    let mut survivor = crate::support::mission_session(&content);
+    let mut survivor = support::mission_session(&content);
     survivor.phase = Phase::Combat;
-    let mut arena = crate::support::battle();
-    arena.enemies.records = crate::support::monsters(
-        &crate::support::fixture("death-summon.json").array("cases")[1].bytes("before"),
-    );
+    let mut arena = support::battle();
+    arena.enemies.records =
+        support::monsters(&support::fixture("death-summon.json").array("cases")[1].bytes("before"));
     arena.enemies.records.push(arena.enemies.records[0].clone());
     arena.enemies.positions = vec![(20, 20), (21, 20)];
     arena.script_enemy = 1;
@@ -249,28 +239,28 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     let position = survivor.exploration.as_mut().unwrap();
     let mut record = vec![0; 42];
     record[8..10].copy_from_slice(&119_i16.to_be_bytes());
-    position.script = Some(crate::support::script_state(record, 0));
+    position.script = Some(support::script_state(record, 0));
     position.presentation = Some(Presentation::Dialogue {
         id: 0,
         text: String::new(),
     });
     let mut restored = checkpoint(&survivor, &content, "retained-survivor");
     replay_command(Command::Continue, &mut survivor, &mut restored, &content);
-    let arena = survivor.combat.as_ref().unwrap();
+    let arena = current_combat(&survivor);
     assert_eq!(arena.enemies.records[0], untouched);
     assert_eq!(arena.enemies.records[1].stamina().unwrap(), 1);
     assert_eq!(word(&arena.enemies.records[1].bytes, 14).unwrap(), 0);
     assert_eq!(arena.enemies.records[1].bytes[0x82], 1);
     // The queued curse must use its removed body's location and preserve its lingering field.
-    let case = crate::support::fixture("tactical-curse.json");
-    let mut curse = crate::support::mission_session(&content);
+    let case = support::fixture("tactical-curse.json");
+    let mut curse = support::mission_session(&content);
     curse.phase = Phase::Combat;
-    curse.warriors = crate::support::warriors(&case.bytes("before"));
+    curse.warriors = support::warriors(&case.bytes("before"));
     curse.random = RandomState::new(12);
-    let mut combat = crate::support::battle();
+    let mut combat = support::battle();
     combat.map.tiles = case.words("map");
     combat.squad.positions = (0..6).map(|i| (20 + i, 20)).collect();
-    combat.enemies.records = crate::support::monsters(&case.bytes("enemy_before"));
+    combat.enemies.records = support::monsters(&case.bytes("enemy_before"));
     combat.enemies.positions = vec![(20, 22)];
     combat.order[1] = 0;
     let entry = centurions_core::combat::death_scripts::DeathEntry {
@@ -290,23 +280,14 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         ..Default::default()
     });
     apply(Command::Continue, &mut curse, &content).unwrap();
+    assert_eq!(support::record_bytes(&curse.warriors), case.bytes("after"));
     assert_eq!(
-        crate::support::record_bytes(&curse.warriors),
-        case.bytes("after")
-    );
-    assert_eq!(
-        curse.combat.as_ref().unwrap().enemies.records[0].bytes,
+        current_combat(&curse).enemies.records[0].bytes,
         case.bytes("enemy_after")
     );
-    assert_eq!(
-        curse.combat.as_ref().unwrap().spell_fields,
-        case.bytes("fields")
-    );
+    assert_eq!(current_combat(&curse).spell_fields, case.bytes("fields"));
     assert_eq!(curse.party_mask.as_slice(), &case.words("mask")[..6]);
-    assert_eq!(
-        (curse.random.seed, curse.random.draws),
-        (case.n("seed"), case.n("draws"))
-    );
+    support::assert_rng(&curse.random, &case["seed"], &case["draws"]);
     // A queued original question must return through the shared dispatcher after reload.
     curse.warriors[0].bytes[0x40..0x42].copy_from_slice(&5_i16.to_be_bytes());
     let entry = centurions_core::combat::death_scripts::DeathEntry {
@@ -345,10 +326,10 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     assert_eq!(curse.random, random);
 
     // The authored purchase must pay once, preserve its continuation and refuse without charging.
-    for case in crate::support::fixture("script-round.json").array("cases") {
+    for case in support::fixture("script-round.json").array("cases") {
         let mut expected = case.bytes("after");
         let mut random = RandomState::new(12);
-        let mut warriors = crate::support::warriors(&case.bytes("before"));
+        let mut warriors = support::warriors(&case.bytes("before"));
         if case.n::<i16>("combat") == 0 {
             let context = centurions_core::story_health::context(&warriors, 0, None);
             warriors =
@@ -357,7 +338,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
                     .warriors;
         } else {
             centurions_core::combat::runtime::reduce_round(
-                &mut crate::support::battle(),
+                &mut support::battle(),
                 &mut warriors,
                 &mut random,
             )
@@ -367,21 +348,18 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
                 bytes[0x14..0x16].fill(0);
             }
         }
-        assert_eq!(crate::support::record_bytes(&warriors), expected);
-        assert_eq!(
-            (random.seed, random.draws),
-            (case.n("seed"), case.n("draws"))
-        );
+        assert_eq!(support::record_bytes(&warriors), expected);
+        support::assert_rng(&random, &case["seed"], &case["draws"]);
     }
     // The supplied death16 recreates MD61, then updates the mission score exactly once.
-    for case in crate::support::fixture("death-summon.json").array("cases") {
-        let mut summoning = crate::support::mission_session(&content);
+    for case in support::fixture("death-summon.json").array("cases") {
+        let mut summoning = support::mission_session(&content);
         summoning.phase = Phase::Combat;
         summoning.mission_score = 10;
         summoning.random = RandomState::new(12);
-        let mut combat = crate::support::battle();
+        let mut combat = support::battle();
         combat.map.tiles = case.words("map_before");
-        combat.enemies.records = crate::support::monsters(&case.bytes("before"));
+        combat.enemies.records = support::monsters(&case.bytes("before"));
         combat.enemies.positions = vec![(20, 20)];
         combat.order[1] = 0;
         let entry = centurions_core::combat::death_scripts::DeathEntry {
@@ -425,18 +403,17 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             ));
             assert!(round.combat_story.is_none());
         }
-        let mut resumed = checkpoint(&summoning, &content, "death-summon");
-        replay_command(Command::Continue, &mut summoning, &mut resumed, &content);
+        support::saved_command(Command::Continue, &mut summoning, &content);
         assert_eq!(summoning.mission_score, 8);
-        let combat = summoning.combat.as_ref().unwrap();
+        let combat = current_combat(&summoning);
         assert_eq!(
-            crate::support::record_bytes(&combat.enemies.records),
+            support::record_bytes(&combat.enemies.records),
             case.bytes("after")
         );
         assert_eq!(combat.map.tiles, case.words("map_after"));
         assert_eq!(
             combat.enemies.positions[1],
-            crate::support::positions(&case.bytes("position"))[0]
+            support::positions(&case.bytes("position"))[0]
         );
         // The native receipt stops before the caller's survivor dialog entry.
         let mut expected_random = RandomState {
@@ -449,7 +426,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         assert_eq!(summoning.random, expected_random);
     }
     for credits in [30_000, 0] {
-        let mut purchase = crate::support::mission_session(&content);
+        let mut purchase = support::mission_session(&content);
         purchase.party_currency = credits;
         for warrior in &mut purchase.warriors {
             warrior.bytes[0x9da..0x9dc].fill(0);
@@ -459,7 +436,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             id: 0,
             text: String::new(),
         });
-        position.script = Some(crate::support::script_state(
+        position.script = Some(support::script_state(
             content.map(0).unwrap().script(308).unwrap().to_vec(),
             1,
         ));
@@ -482,13 +459,13 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         assert_eq!(purchase.party_currency, if credits > 0 { 7_000 } else { 0 });
     }
     // Confiscation protects native gear/modifier restoration and a pending recovery save.
-    let receipt = crate::support::fixture("confiscated-equipment.json");
+    let receipt = support::fixture("confiscated-equipment.json");
     let mut captive: Session = serde_json::from_value(receipt["input"].clone()).unwrap();
     let mut record = content.map(0).unwrap().script(282).unwrap().to_vec();
     record[20..24].fill(0); // Bound this caller after taking equipment, before its battle.
     let stage = |state: &mut Session, record, cursor| {
         let position = state.exploration.as_mut().unwrap();
-        position.script = Some(crate::support::script_state(record, cursor));
+        position.script = Some(support::script_state(record, cursor));
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
             text: String::new(),
@@ -497,7 +474,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     stage(&mut captive, record, 4);
     let events = apply(Command::Continue, &mut captive, &content).unwrap();
     assert_eq!(
-        crate::support::record_bytes(&captive.warriors),
+        support::record_bytes(&captive.warriors),
         bytes(receipt["taken"].text("warriors"))
     );
     let held = captive.confiscated.as_ref().unwrap();
@@ -551,7 +528,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         );
         apply(Command::Continue, candidate, &content).unwrap();
         assert_eq!(
-            crate::support::record_bytes(&candidate.warriors),
+            support::record_bytes(&candidate.warriors),
             bytes(receipt["restored"].text("warriors"))
         );
         assert_eq!(
@@ -567,8 +544,8 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     }
     assert_eq!(captive, resumed);
     // A supplied one-item choice must close once and resume its dialogue after reload.
-    let limited = crate::support::fixture("limited-loot.json");
-    let mut choice = crate::support::mission_session(&content);
+    let limited = support::fixture("limited-loot.json");
+    let mut choice = support::mission_session(&content);
     stage(
         &mut choice,
         content.map(0).unwrap().script(191).unwrap().to_vec(),
@@ -691,6 +668,7 @@ fn v2_migration_preserves_recovered_history_and_rejects_unknown_maps() {
     let mut document: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&destination).unwrap()).unwrap();
     document["schema_version"] = 2.into();
+    support::legacy_save(&mut document);
     let session = document["session"].as_object_mut().unwrap();
     for field in [
         "menus",
@@ -739,7 +717,7 @@ fn shared_direct_death_child_preserves_original_header_and_saved_dialogue_return
     position.presentation = None;
     position.script = Some(ScriptState {
         map_slot: 8,
-        ..crate::support::script_state(content.map(1).unwrap().script(55).unwrap().to_vec(), 1)
+        ..support::script_state(content.map(1).unwrap().script(55).unwrap().to_vec(), 1)
     });
     combat::begin_battle(&mut state, &content, 14, 0).unwrap();
     // Controlled defeat is the same boundary used by the native nested-caller fixture.
@@ -811,7 +789,7 @@ fn shared_direct_death_child_preserves_original_header_and_saved_dialogue_return
     let returned = state.exploration.as_ref().unwrap().script.as_ref().unwrap();
     assert_eq!(
         &returned.record,
-        &crate::support::fixture("nested-caller.json").array("cases")[0].bytes("body_after")
+        &support::fixture("nested-caller.json").array("cases")[0].bytes("body_after")
     );
     assert_eq!(state.warriors, rewarded);
     assert_eq!(state.random, rewarded_random);

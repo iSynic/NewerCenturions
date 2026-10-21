@@ -1,22 +1,22 @@
-use crate::prelude::*;
-use crate::support::assert_bytes;
+use crate::{prelude::*, support};
+use support::assert_bytes;
 
 #[test]
 fn inactive_battle_entry_matches_original_complete_records_formation_order_and_rng() {
-    let content = crate::support::content();
-    let fixture: serde_json::Value = crate::support::fixture("inactive-battle-entry.json");
+    let content = support::content();
+    let fixture: serde_json::Value = support::fixture("inactive-battle-entry.json");
     let cases = fixture.array("cases");
 
     for case in cases {
-        let mut state = crate::support::mission_session(&content);
-        state.warriors = crate::support::warriors(&case["warriors_before"]);
+        let mut state = support::mission_session(&content);
+        state.warriors = support::warriors(&case["warriors_before"]);
         if case["seed_before"] == 12 {
             state.health_context = Some(centurions_core::story_health::context(
                 &state.warriors,
                 0,
                 None,
             ));
-            crate::support::expect(
+            support::expect(
                 state.health_context.as_ref().unwrap().unavailable,
                 &case["unavailable"],
             );
@@ -35,13 +35,13 @@ fn inactive_battle_entry_matches_original_complete_records_formation_order_and_r
 }
 #[test]
 fn ordinary_battle_return_restores_all_participation_after_reward_boundary() {
-    let fixture: serde_json::Value = crate::support::fixture("inactive-battle-return.json");
+    let fixture: serde_json::Value = support::fixture("inactive-battle-return.json");
     let cases = fixture.array("cases");
 
     for case in cases.iter().filter(|case| case["aborted"] == false) {
-        let before: Vec<_> = crate::support::warriors(&case["before"]);
+        let before: Vec<_> = support::warriors(&case["before"]);
         let returned = centurions_core::story_party::group_return(&before, false, 0).unwrap();
-        let actual: Vec<_> = crate::support::record_bytes(&returned.warriors);
+        let actual: Vec<_> = support::record_bytes(&returned.warriors);
         assert_bytes(&actual, &case.bytes("after"), "ordinary return warriors");
     }
 }

@@ -49,11 +49,12 @@ pub(crate) fn inspect(
             .checked_add(8)
             .filter(|row| *row < 100)
             .ok_or("inventory scroll outside native rows")?;
-        state.inventory_record = Some(InventoryRecord(
+        let record = InventoryRecord(
             span(&warrior.bytes, 0x132 + row * 22, 22)?
                 .try_into()
                 .unwrap(),
-        ));
+        );
+        display_owned_row(state, content, record)?;
     }
     if let Some((side, slot)) = selected {
         if side > 1 || slot >= if shop && side == 1 { 1000 } else { 100 } {
@@ -70,14 +71,33 @@ pub(crate) fn inspect(
             }
             crate::shop::display_record(state, content, id)?;
         } else {
-            state.inventory_record = Some(
-                state.warriors[members[side]]
-                    .inventory()?
-                    .get(slot)
-                    .cloned()
-                    .ok_or("inventory selection missing")?,
-            );
+            let record = state.warriors[members[side]]
+                .inventory()?
+                .get(slot)
+                .cloned()
+                .ok_or("inventory selection missing")?;
+            display_owned_row(state, content, record)?;
         }
     }
     Ok(vec![])
+}
+
+/// ploticon14a074 loads the raw definition and clears an empty owned row's icon.
+fn display_owned_row(
+    state: &mut Session,
+    content: &Content,
+    record: InventoryRecord,
+) -> Result<(), RuleError> {
+    let mut definition = content
+        .items
+        .get(usize::from(record.id().unsigned_abs()))
+        .ok_or("inventory display definition missing")?
+        .clone();
+    if record.id() == 0 {
+        definition[10..12].fill(0);
+    }
+    state.loaded_item_field32 = Some(centurions_content::word(&definition, 32)?);
+    state.ammunition_work.item = Some(definition);
+    state.inventory_record = Some(record);
+    Ok(())
 }

@@ -1,18 +1,18 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, snapshots, support};
 
 use centurions_core::ammunition::WorkBuffers;
 
-use crate::support::buffer as bytes;
+use support::buffer as bytes;
 
-use crate::native_common::buffer_words as words;
-use crate::native_common::snapshot_word as number;
+use native_common::buffer_words as words;
+use native_common::snapshot_word as number;
 
-use crate::native_common::random_state as random;
+use native_common::random_state as random;
 
 fn initial(fixture: &Value, case: &Value) -> Session {
     let snapshot = &case["before"];
     let member = snapshot.n::<usize>("active_member");
-    let mut state = crate::snapshots::helper_frame(fixture, snapshot, member);
+    let mut state = snapshots::helper_frame(fixture, snapshot, member);
     // Captured neutral input buffers establish scalar projections only.
     // They are not authored definition0; raw records remain unknown.
     for key in ["item_work", "weapon_work", "ammo_work"] {
@@ -20,6 +20,7 @@ fn initial(fixture: &Value, case: &Value) -> Session {
     }
     state.ammunition_work = WorkBuffers::default();
     state.weapon_work = WeaponWork {
+        natural_attack_index: None,
         sound: Some(0),
         weapon_armor_filter: Some(0),
         ammunition_armor_filter: Some(0),
@@ -59,7 +60,7 @@ fn normalized(content: &Content, id: usize) -> Vec<u8> {
 }
 
 fn full_party(state: &Session) -> Vec<u8> {
-    crate::support::record_bytes(&state.warriors)
+    support::record_bytes(&state.warriors)
 }
 
 fn native_loaders(fixture: &Value, case: &Value, content: &Content) {
@@ -89,7 +90,7 @@ fn native_loaders(fixture: &Value, case: &Value, content: &Content) {
 fn compose_reaction(state: &Session, fixture: &Value, case: &Value, content: &Content) -> Session {
     let mut expected = state.clone();
     let mode = number(case, "mode");
-    assert_eq!(expected.combat.as_ref().unwrap().active_body(), Some(0));
+    assert_eq!(current_combat(&expected).active_body(), Some(0));
     assert_eq!(expected.warriors[0].bytes[0x9dd], 1);
     assert_eq!(word(&expected.warriors[0].bytes, 0xe4).unwrap(), 1);
     assert_eq!(word(&expected.warriors[0].bytes, 0xca).unwrap(), 0);
@@ -125,6 +126,7 @@ fn compose_reaction(state: &Session, fixture: &Value, case: &Value, content: &Co
     };
     expected.loaded_item_field32 = Some(word(&item, 32).unwrap());
     expected.weapon_work = WeaponWork {
+        natural_attack_index: None,
         sound: Some(word(&natural, 14).unwrap()),
         weapon_armor_filter: Some(word(&natural, 136).unwrap()),
         ammunition_armor_filter: Some(word(&natural, 136).unwrap()),
@@ -156,25 +158,22 @@ fn compose_reaction(state: &Session, fixture: &Value, case: &Value, content: &Co
 }
 
 fn cell(state: &Session, x: i16, y: i16) -> usize {
-    let shift = state.combat.as_ref().unwrap().map.shift;
+    let shift = current_combat(state).map.shift;
     (usize::try_from(x + shift.0 + 5).unwrap() * 90) + usize::try_from(y + shift.1 + 5).unwrap()
 }
-use crate::support::checkpoint;
-use crate::support::same_session as same;
+use support::checkpoint;
+use support::same_session as same;
 
 #[test]
 fn public_moves_match_native_reactions_and_source_composed_outer_effects() {
-    let fixture = crate::support::fixture("reaction-work-refresh.json");
+    let fixture = support::fixture("reaction-work-refresh.json");
     let content = content();
 
     for (index, case) in fixture.array("cases").iter().enumerate() {
         assert_eq!(number(case, "mode"), [0, 2][index]);
         let mut state = initial(&fixture, case);
-        assert_eq!(state.combat.as_ref().unwrap().squad.positions[0], (20, 20));
-        assert_eq!(
-            state.combat.as_ref().unwrap().enemies.positions,
-            vec![(21, 20)]
-        );
+        assert_eq!(current_combat(&state).squad.positions[0], (20, 20));
+        assert_eq!(current_combat(&state).enemies.positions, vec![(21, 20)]);
         let old_cell = cell(&state, 20, 20);
         let next_cell = cell(&state, 19, 20);
         let mission = content
@@ -252,12 +251,12 @@ fn public_moves_match_native_reactions_and_source_composed_outer_effects() {
             apply(command.clone(), &mut uninterrupted, &content).unwrap(),
             events
         );
-        same(&uninterrupted, &expected);
+        support::same_captured_session(&uninterrupted, &expected);
         assert_eq!(apply(command, &mut resumed, &content).unwrap(), events);
-        same(&resumed, &expected);
+        support::same_captured_session(&resumed, &expected);
         same(
             &checkpoint(&uninterrupted, &content, &format!("{index}-after")),
-            &expected,
+            &uninterrupted,
         );
     }
 }

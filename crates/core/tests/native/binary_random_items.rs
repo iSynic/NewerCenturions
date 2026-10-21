@@ -1,13 +1,13 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::items;
 
 #[test]
 fn item_initialization_and_enhancement_match_original_records_and_randomness() {
     for name in ["random-items.json", "difficulty-items.json"] {
-        let fixture: serde_json::Value = crate::support::fixture(name);
+        let fixture: serde_json::Value = support::fixture(name);
 
-        let content = crate::support::content();
+        let content = support::content();
         let cases = fixture.array("cases");
 
         for (index, case) in cases
@@ -29,10 +29,9 @@ fn item_initialization_and_enhancement_match_original_records_and_randomness() {
                 &mut random,
             )
             .unwrap_or_else(|error| panic!("case{index} item{id}: {error:?}"));
-            crate::support::native_expect! {
-            bytes record.0.to_vec() => &case["after"], "case{index} item{id}";
-            scalar random.seed => &case["seed_after"], "binary_random_items";
-            scalar random.draws => &case["rng_draws"], "binary_random_items";
+            support::native_expect! {
+                bytes record.0.to_vec() => &case["after"], "case{index} item{id}";
+                rng random => (&case["seed_after"], &case["rng_draws"]), "binary_random_items";
             }
         }
     }

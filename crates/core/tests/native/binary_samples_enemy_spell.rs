@@ -1,16 +1,12 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
-use crate::native_common::snapshot_party as party;
+use native_common::snapshot_party as party;
 
-use crate::native_common::snapshot_enemies as enemies;
-
-use crate::native_common::random_state as random;
-
-use crate::support::assert_bytes;
+use native_common::random_state as random;
 
 #[test]
 fn samples_party_race_exclusion_matches_complete_native_records_rng_and_ordered_audio() {
-    let fixture = crate::support::fixture("samples-enemy-spell.json");
+    let fixture = support::fixture("samples-enemy-spell.json");
     let mut tested = 0;
     for (index, case) in fixture.array("cases").iter().enumerate() {
         if case.n::<bool>("complete_turn") {
@@ -24,9 +20,7 @@ fn samples_party_race_exclusion_matches_complete_native_records_rng_and_ordered_
         }
         tested += 1;
         let warriors = party(before);
-        let monsters = enemies(before);
-        assert_eq!(warriors.len(), 6);
-        assert_eq!(monsters.len(), 14);
+        let monsters = support::monsters(&before["records"]);
         let packet = before.bytes("packet");
         assert_eq!(word(&packet, 50).unwrap(), 0x2000);
         assert_eq!(word(&warriors[3].bytes, 0x32).unwrap(), 3);
@@ -50,9 +44,9 @@ fn samples_party_race_exclusion_matches_complete_native_records_rng_and_ordered_
             &mut actual_random,
         )
         .unwrap();
-        crate::support::native_expect! {
-        bytes crate::support::record_bytes(&result.warriors) => &after["party"], &format!("case {index} complete party");
-        bytes crate::support::record_bytes(&result.enemies) => &after["records"], &format!("case {index} complete monsters");
+        support::native_expect! {
+            records &result.warriors => &after["party"], &format!("case {index} complete party");
+            records &result.enemies => &after["records"], &format!("case {index} complete monsters");
         }
         assert_eq!(result.race_excluded, [3]);
         let applied = words(case["resolutions"][0]["applied_mask"].as_str().unwrap());
@@ -68,14 +62,12 @@ fn samples_party_race_exclusion_matches_complete_native_records_rng_and_ordered_
                 .filter_map(|(body, flag)| (*flag > 0).then_some(body))
                 .collect::<Vec<_>>()
         );
-        assert_bytes(
-            &result.warriors[3].bytes,
-            &warriors[3].bytes,
-            "excluded warrior",
-        );
+        support::native_expect! {
+            bytes &result.warriors[3].bytes => &warriors[3].bytes, "excluded warrior";
+        };
         assert_eq!(actual_random, random(after));
         let mut receipts = random(before);
-        crate::support::replay_rng(&mut receipts, case.array("rng"));
+        support::replay_rng(&mut receipts, case.array("rng"));
         assert_eq!(receipts, actual_random);
 
         let mut ordered = result
@@ -90,7 +82,7 @@ fn samples_party_race_exclusion_matches_complete_native_records_rng_and_ordered_
             .into_iter()
             .chain(ordered.into_iter().flat_map(|(_, sounds)| sounds))
             .collect::<Vec<_>>();
-        crate::support::expect_array(&(actual_sounds), &case["sounds"]);
+        support::expect_array(&(actual_sounds), &case["sounds"]);
         assert_eq!(actual_sounds, [204, 204, 204, 651, 204, 204]);
     }
     assert_eq!(tested, 2);
@@ -98,7 +90,7 @@ fn samples_party_race_exclusion_matches_complete_native_records_rng_and_ordered_
 
 #[test]
 fn restricted_monster_targets_remain_diagnostic_without_native_alias_memory() {
-    let fixture = crate::support::fixture("samples-enemy-spell.json");
+    let fixture = support::fixture("samples-enemy-spell.json");
     let mut tested = 0;
     for case in fixture.array("cases") {
         if case.n::<bool>("complete_turn") {
@@ -111,7 +103,7 @@ fn restricted_monster_targets_remain_diagnostic_without_native_alias_memory() {
         }
         tested += 1;
         let warriors = party(before);
-        let monsters = enemies(before);
+        let monsters = support::monsters(&before["records"]);
         let packet = before.bytes("packet");
         let mut actual_random = random(before);
         let result = resolve_bodies(
@@ -153,9 +145,9 @@ fn restricted_monster_targets_remain_diagnostic_without_native_alias_memory() {
         assert_eq!(actual_random, random(before));
         assert_eq!(usage.used, previous_usage);
         assert_eq!(usage.slot, 7);
-        crate::support::native_expect! {
-        bytes crate::support::record_bytes(&warriors) => &before["party"], "unchanged party inputs";
-        bytes crate::support::record_bytes(&monsters) => &before["records"], "unchanged monster inputs";
+        support::native_expect! {
+            records &warriors => &before["party"], "unchanged party inputs";
+            records &monsters => &before["records"], "unchanged monster inputs";
         }
     }
     assert_eq!(tested, 2);
@@ -163,10 +155,10 @@ fn restricted_monster_targets_remain_diagnostic_without_native_alias_memory() {
 
 #[test]
 fn collision_race_gate_precedes_usage_and_unsupported_restrictions_remain_atomic() {
-    let fixture = crate::support::fixture("samples-enemy-spell.json");
+    let fixture = support::fixture("samples-enemy-spell.json");
     let before = &fixture["cases"][1]["before"];
     let warriors = party(before);
-    let monsters = enemies(before);
+    let monsters = support::monsters(&before["records"]);
     let packet = before.bytes("packet");
     let mut mask = vec![0; 110];
     mask[3] = 1;
@@ -197,16 +189,8 @@ fn collision_race_gate_precedes_usage_and_unsupported_restrictions_remain_atomic
     assert_eq!(result.race_excluded, [3]);
     assert_eq!(usage.used, previous_usage);
     assert_eq!(usage.slot, 7);
-    for (actual, expected) in result.warriors.iter().zip(&warriors) {
-        assert_bytes(&actual.bytes, &expected.bytes, "excluded collision party");
-    }
-    for (actual, expected) in result.enemies.iter().zip(&monsters) {
-        assert_bytes(
-            &actual.bytes,
-            &expected.bytes,
-            "excluded collision monsters",
-        );
-    }
+    support::compare_record_bytes(&result.warriors, &warriors);
+    support::compare_record_bytes(&result.enemies, &monsters);
     let mut prefix = random(before);
     let receipt = &fixture["cases"][4]["rng"][0];
     assert_eq!(prefix.bound(receipt.n::<i16>("bound")), 1);

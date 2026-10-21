@@ -1,16 +1,16 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::{story_move_away, story_registration};
 
 #[test]
 fn original_registration_and_caller_match_stable_synthetic_words() {
-    let original: serde_json::Value = crate::support::fixture("registration.json");
-    let caller: serde_json::Value = crate::support::fixture("registration-caller.json");
+    let original: serde_json::Value = support::fixture("registration.json");
+    let caller: serde_json::Value = support::fixture("registration-caller.json");
     for fixture in [&original, &caller] {
         for case in fixture.array("cases") {
             let accepted =
                 story_registration::registration_word_accepted(case.n::<u32>("synthetic_word"));
-            crate::support::expect(accepted, &case["accepted"]);
+            support::expect(accepted, &case["accepted"]);
         }
     }
     for case in caller.array("cases") {

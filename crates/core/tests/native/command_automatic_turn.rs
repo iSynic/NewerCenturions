@@ -1,23 +1,23 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, snapshots, support};
 
 fn project(state: &mut Session, snapshot: &Value, owned: bool) {
     for (warrior, native) in state
         .warriors
         .iter_mut()
-        .zip(crate::support::warriors(&snapshot["party"]))
+        .zip(support::warriors(&snapshot["party"]))
     {
         warrior.bytes = native.bytes;
     }
     if owned {
-        state.crate_items = crate::support::inventory(&snapshot.bytes("crate"));
+        state.crate_items = support::inventory(&snapshot.bytes("crate"));
     }
-    state.ammunition = crate::support::longs(&snapshot.bytes("ammunition"));
-    state.random = crate::native_common::snapshot_rng(snapshot);
+    state.ammunition = support::longs(&snapshot.bytes("ammunition"));
+    state.random = native_common::snapshot_rng(snapshot);
     state.loaded_item_field32 = Some(snapshot.n::<i16>("item_context"));
     state.attack_count = snapshot.n::<i16>("attack_count");
     state.psi_memory = Some(snapshot.bytes("memory"));
     state.party_buffs = snapshot.bytes("party_buffs");
-    state.weapon_work = crate::snapshots::weapon_work(&|key| {
+    state.weapon_work = snapshots::weapon_work(&|key| {
         snapshot.bytes(if key == "weapon_work" {
             "weapon"
         } else {
@@ -29,8 +29,8 @@ fn project(state: &mut Session, snapshot: &Value, owned: bool) {
         snapshot["shift_x"].as_i64().unwrap_or(0) as i16,
         snapshot["shift_y"].as_i64().unwrap_or(0) as i16,
     );
-    combat.enemies.records = crate::support::monsters(&snapshot.bytes("target"));
-    crate::snapshots::geometry(
+    combat.enemies.records = support::monsters(&snapshot.bytes("target"));
+    snapshots::geometry(
         combat,
         &|key| {
             if key == "under_tiles" {
@@ -45,7 +45,7 @@ fn project(state: &mut Session, snapshot: &Value, owned: bool) {
     combat.cursor = snapshot.n::<usize>("cursor");
     combat.round = snapshot.n::<i16>("round");
     combat.unavailable = snapshot.n::<i8>("unavailable");
-    crate::snapshots::spell_work(combat, &|key| snapshot.bytes(key));
+    snapshots::spell_work(combat, &|key| snapshot.bytes(key));
     combat.weapon_work = state.weapon_work;
     state.attack_packet = combat.attack_packet.clone();
     state.attack_identity = combat.attack_identity;
@@ -71,7 +71,7 @@ fn native_automatic_turns_preserve_complete_state_events_and_save_resume() {
         ("empty-rifle-advance.json", false, "cases"),
         ("owned-player-firearm-target.json", true, "fire_cases"),
     ] {
-        let fixture = crate::support::fixture(name);
+        let fixture = support::fixture(name);
         for (index, case) in fixture.array(group).iter().enumerate() {
             let before = &case[if owned { "combat_before" } else { "before" }];
             let after = &case[if owned { "advanced" } else { "after" }];
@@ -79,13 +79,12 @@ fn native_automatic_turns_preserve_complete_state_events_and_save_resume() {
                 serde_json::from_value(fixture["foundation"]["session"].clone()).unwrap();
             state.phase = Phase::Combat;
             state.combat = Some(if owned {
-                let mut combat = crate::support::battle();
+                let mut combat = support::battle();
                 combat.battle = 85;
                 combat
             } else {
                 serde_json::from_value(
-                    crate::support::fixture("player-psi.json")["route_foundation"]["combat"]
-                        .clone(),
+                    support::fixture("player-psi.json")["route_foundation"]["combat"].clone(),
                 )
                 .unwrap()
             });
@@ -100,7 +99,7 @@ fn native_automatic_turns_preserve_complete_state_events_and_save_resume() {
                     ammunition: 203,
                 }
             };
-            let mut resumed = crate::support::checkpoint(&state, &content, "automatic-before");
+            let mut resumed = support::checkpoint(&state, &content, "automatic-before");
             let events = replay_command(command, &mut state, &mut resumed, &content);
             let mut expected = original;
             project(&mut expected, after, owned);
@@ -115,7 +114,7 @@ fn native_automatic_turns_preserve_complete_state_events_and_save_resume() {
                 expected.selected_warrior,
                 expected.health_context.as_ref(),
             ));
-            crate::support::same_session(&state, &expected);
+            support::same_captured_session(&state, &expected);
             let mut expected_events: Vec<_> = after.n::<Vec<i16>>("sounds")
                 [before.array("sounds").len()..]
                 .iter()
@@ -133,7 +132,7 @@ fn native_automatic_turns_preserve_complete_state_events_and_save_resume() {
             }
             expected_events.push(Event::TurnStarted { body: 10, round: 1 });
             assert_eq!(events, expected_events, "{name}:{index}");
-            crate::support::checkpoint(&state, &content, "automatic-after");
+            support::checkpoint(&state, &content, "automatic-after");
         }
     }
 }

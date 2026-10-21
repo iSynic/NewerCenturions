@@ -4,6 +4,30 @@ use crate::{Event, Phase, Presentation, RuleError, ScriptState, Session};
 use centurions_content::{Content, word};
 use serde::{Deserialize, Serialize};
 
+/// killbody12e8a4 uses showresults -14 for alternate bodies; both NPC
+/// branches read the same death cue at showresults158ee0/158f14.
+pub(super) fn enemy_death_feedback(
+    monster: &centurions_content::combat::MonsterRecord,
+    body: i16,
+) -> Result<Vec<Event>, RuleError> {
+    centurions_content::span(&monster.bytes, 0, 288)?;
+    let mut events = vec![];
+    if monster.bytes[0xab] != 0 {
+        events.push(Event::Feedback(
+            crate::feedback::NativeFeedback::CombatResult {
+                body,
+                code: -14,
+                amount: 0,
+                audible: false,
+            },
+        ));
+    }
+    events.push(Event::Sound {
+        resource_id: word(&monster.bytes, 0x6a)?,
+    });
+    Ok(events)
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeathStory {
     #[serde(default)]

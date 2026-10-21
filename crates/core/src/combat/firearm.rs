@@ -769,7 +769,7 @@ pub fn reload_command(
             .warriors
             .get(index)
             .ok_or_else(|| RuleError::Invalid("warrior outside squad".into()))?;
-        let result = crate::ammunition::refit(
+        let result = crate::ammunition::refit_with_record(
             warrior,
             &state.ammunition,
             content,
@@ -781,6 +781,7 @@ pub fn reload_command(
             },
             &state.ammunition_work,
             &mut state.random,
+            state.inventory_record.as_ref(),
         )?;
         return crate::ammunition::commit_result(state, index, result);
     }
@@ -798,7 +799,7 @@ pub fn reload_command(
     if work.item.is_none() {
         work.item = Some(crate::ammunition::definition(content, 0)?);
     }
-    let result = crate::ammunition::refit(
+    let result = crate::ammunition::refit_with_record(
         warrior,
         &state.ammunition,
         content,
@@ -810,6 +811,7 @@ pub fn reload_command(
         },
         &work,
         &mut state.random,
+        state.inventory_record.as_ref(),
     )?;
     let complete = result.native_return != 0;
     let mut events = crate::ammunition::commit_result(state, index, result)?;

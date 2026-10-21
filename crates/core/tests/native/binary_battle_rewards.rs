@@ -1,16 +1,16 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
 use centurions_core::combat::rewards;
 
-use crate::native_common::patched;
-use crate::support::record_bytes as flatten;
-use crate::support::warriors as party;
+use native_common::patched;
+use support::record_bytes as flatten;
+use support::warriors as party;
 
 #[test]
 fn complete_original_reward_table_cash_drops_and_ordinary_close() {
-    let fixture: Value = crate::support::fixture("battle-rewards.json");
+    let fixture: Value = support::fixture("battle-rewards.json");
 
-    let content = crate::support::content();
+    let content = support::content();
     let baseline = fixture.bytes("warriors");
     let cases = fixture.array("cases");
 
@@ -18,7 +18,7 @@ fn complete_original_reward_table_cash_drops_and_ordinary_close() {
         let name = case.text("name");
         let before = patched(baseline.clone(), &case["before_changes"]);
         let enemy_bytes = case.bytes("enemies");
-        let enemies: Vec<_> = crate::support::monsters(&enemy_bytes);
+        let enemies: Vec<_> = support::monsters(&enemy_bytes);
         let mut random = RandomState {
             seed: case.n::<u32>("seed_before"),
             draws: 0,
@@ -36,13 +36,13 @@ fn complete_original_reward_table_cash_drops_and_ordinary_close() {
         let prep = patched(before, &case["prep_changes"]);
         assert_eq!(flatten(&result.warriors), prep, "{name} preparation");
         assert_eq!(digest(&prep), case.text("prep_sha256"), "{name}");
-        crate::support::native_expect! {
-        scalar result.share => &case["share"], "binary_battle_rewards";
-        scalar result.total => &case["total"], "binary_battle_rewards";
-        scalar result.currency => &case["currency_after"], "binary_battle_rewards";
+        support::native_expect! {
+            scalar result.share => &case["share"], "binary_battle_rewards";
+            scalar result.total => &case["total"], "binary_battle_rewards";
+            scalar result.currency => &case["currency_after"], "binary_battle_rewards";
         }
         assert_eq!(
-            crate::support::record_bytes(&result.enemies),
+            support::record_bytes(&result.enemies),
             patched(enemy_bytes, &case["enemy_changes"]),
             "{name} enemies"
         );
@@ -56,10 +56,7 @@ fn complete_original_reward_table_cash_drops_and_ordinary_close() {
             "{name} crate"
         );
         assert_eq!(digest(&loot), case.text("crate_sha256"), "{name}");
-        crate::support::native_expect! {
-        scalar random.seed => &case["seed_after"], "binary_battle_rewards";
-        scalar random.draws => &case["rng_draws"], "binary_battle_rewards";
-        }
+        support::assert_rng(&random, &case["seed_after"], &case["rng_draws"]);
         let closed = flatten(&rewards::close_without_promotion(&result.warriors).unwrap());
         assert_eq!(
             closed,

@@ -1,13 +1,13 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 #[test]
 fn authored_pack_collection_matches_live_records_reserve_and_rng() {
-    let content = crate::support::content();
-    let fixture: serde_json::Value = crate::support::fixture("live-ammunition.json");
+    let content = support::content();
+    let fixture: serde_json::Value = support::fixture("live-ammunition.json");
     let case = &fixture["cases"][0];
     let before = &case["before"];
     let after = &case["after"];
-    let mut state = crate::support::mission_session(&content);
+    let mut state = support::mission_session(&content);
     state.warriors = before
         .array("warriors")
         .iter()
@@ -55,15 +55,15 @@ fn authored_pack_collection_matches_live_records_reserve_and_rng() {
             "warrior {index}"
         );
     }
-    crate::support::native_expect! {
-    bytes crate::support::long_bytes(&state.ammunition) => &after["ammunition"]["hex"], "live_ammunition";
-    bytes state
+    support::native_expect! {
+        bytes support::long_bytes(&state.ammunition) => &after["ammunition"]["hex"], "live_ammunition";
+        bytes state
                 .booty_items
                 .iter()
                 .take(20)
                 .flat_map(|item| item.0)
                 .collect::<Vec<_>>() => &after["loot"]["hex"], "live_ammunition";
-    scalar state.random.seed => &after["random_seed"], "live_ammunition";
+        scalar state.random.seed => &after["random_seed"], "live_ammunition";
     }
     assert_eq!(state.random.draws, 1);
 }

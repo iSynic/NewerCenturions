@@ -1,37 +1,37 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
 use centurions_core::combat::final_turn_stories;
 use centurions_core::combat::final_turn_stories::TurnEffect;
 
-use crate::native_common::script_mission as mission;
+use native_common::script_mission as mission;
 fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>, RandomState) {
-    let mut combat = crate::support::battle();
+    let mut combat = support::battle();
     combat.battle = 134;
     combat.map.tiles = case.words("map_before");
     combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
-    combat.enemies.records = crate::support::monsters(&case["records_before"]);
-    combat.enemies.positions = crate::support::positions(&case["positions_before"]);
+    combat.enemies.records = support::monsters(&case["records_before"]);
+    combat.enemies.positions = support::positions(&case["positions_before"]);
     combat.order[1] = 10 + case["active_index"].as_i64().unwrap_or(0) as i16;
     combat.script_enemy = case["actor_before"].as_u64().unwrap_or(0) as usize;
     (
         combat,
-        crate::support::warriors(&case["warriors_before"]),
+        support::warriors(&case["warriors_before"]),
         RandomState::new(case.n::<u32>("seed_before")),
     )
 }
 
 #[test]
 fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
-    let fixture = crate::support::fixture("final-turn-stories.json");
+    let fixture = support::fixture("final-turn-stories.json");
     let mission = mission(&fixture);
     let definitions = fixture.bytes("monsters");
     let extras = fixture.bytes("extras");
-    let earlier = crate::support::fixture("earlier-turn-stories.json");
-    let retained = crate::support::fixture("retained-turn-origin.json");
-    let conditions = crate::support::fixture("npc-turn-conditions.json");
-    let replacement = crate::support::fixture("body-replacement.json");
-    let selected = crate::support::fixture("retained-body-replacement.json");
-    let builder = crate::support::fixture("difficulty-summons.json");
+    let earlier = support::fixture("earlier-turn-stories.json");
+    let retained = support::fixture("retained-turn-origin.json");
+    let conditions = support::fixture("npc-turn-conditions.json");
+    let replacement = support::fixture("body-replacement.json");
+    let selected = support::fixture("retained-body-replacement.json");
+    let builder = support::fixture("difficulty-summons.json");
     let builder = &builder["cases"][replacement.n::<usize>("builder_case")];
     for case in replacement
         .array("cases")
@@ -50,12 +50,12 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
                 .unwrap();
         tables.monsters[288..576].copy_from_slice(&definition);
         let extra = [1_i16, 0, 655, 469, 470];
-        tables.encounters[2470..2480].copy_from_slice(&crate::support::word_bytes(&extra));
-        let mut state = crate::support::mission_session(&content);
-        let mut arena = crate::support::battle();
+        tables.encounters[2470..2480].copy_from_slice(&support::word_bytes(&extra));
+        let mut state = support::mission_session(&content);
+        let mut arena = support::battle();
         arena.difficulty = builder.n("difficulty");
         arena.selected_enemy = selected;
-        arena.enemies.records = crate::support::monsters(&case.bytes("before"));
+        arena.enemies.records = support::monsters(&case.bytes("before"));
         arena.enemies.positions = vec![(10, 10); selected + 1];
         arena.order[1] = 0;
         state.phase = Phase::Combat;
@@ -65,34 +65,30 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
         script[8..10].copy_from_slice(&120_i16.to_be_bytes());
         script[24..26].copy_from_slice(&247_i16.to_be_bytes());
         let position = state.exploration.as_mut().unwrap();
-        position.script = Some(crate::support::script_state(script, 0));
+        position.script = Some(support::script_state(script, 0));
         position.presentation = Some(Presentation::Dialogue {
             id: 469,
             text: String::new(),
         });
-        let mut resumed = crate::support::checkpoint(&state, &content, "actor-before");
-        crate::support::replay_command(Command::Continue, &mut state, &mut resumed, &content);
+        let mut resumed = support::checkpoint(&state, &content, "actor-before");
+        support::replay_command(Command::Continue, &mut state, &mut resumed, &content);
         assert_eq!(
-            crate::support::record_bytes(&state.combat.as_ref().unwrap().enemies.records),
+            support::record_bytes(&current_combat(&state).enemies.records),
             case.bytes("before")
         );
-        state = crate::support::checkpoint(&state, &content, "actor-introduction");
+        state = support::checkpoint(&state, &content, "actor-introduction");
         resumed = state.clone();
-        let events =
-            crate::support::replay_command(Command::Continue, &mut state, &mut resumed, &content);
+        let events = support::replay_command(Command::Continue, &mut state, &mut resumed, &content);
         assert_eq!(
-            crate::support::record_bytes(&state.combat.as_ref().unwrap().enemies.records),
+            support::record_bytes(&current_combat(&state).enemies.records),
             case.bytes("after")
         );
-        assert_eq!(
-            (state.random.seed, state.random.draws),
-            (builder.n::<u32>("seed_after"), builder.n::<u64>("draws"))
-        );
+        support::assert_rng(&state.random, &builder["seed_after"], &builder["draws"]);
         if !stopped {
-            assert_eq!(crate::support::event_sounds(&events), vec![655]);
-            state = crate::support::checkpoint(&state, &content, "actor-conclusion");
+            assert_eq!(support::event_sounds(&events), vec![655]);
+            state = support::checkpoint(&state, &content, "actor-conclusion");
             resumed = state.clone();
-            crate::support::replay_command(Command::Continue, &mut state, &mut resumed, &content);
+            support::replay_command(Command::Continue, &mut state, &mut resumed, &content);
         }
         assert!(state.actor_replacement.is_none());
     }
@@ -114,7 +110,7 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
             &mut random,
         )
         .unwrap_or_else(|error| panic!("case{index}: {error}"));
-        let records: Vec<u8> = crate::support::record_bytes(&combat.enemies.records);
+        let records: Vec<u8> = support::record_bytes(&combat.enemies.records);
         assert_eq!(records, case.bytes("records_after"), "records case{index}");
         assert_eq!(
             combat.map.tiles,
@@ -126,24 +122,22 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
             words(&case.bytes("order_after")),
             "order case{index}"
         );
-        assert_eq!(
-            combat.enemies.positions,
-            crate::support::positions(&case["positions_after"]),
-            "positions case{index}"
-        );
-        let party: Vec<u8> = crate::support::record_bytes(&warriors);
+        support::native_expect! {
+            positions combat.enemies.positions => &case["positions_after"], "positions case{index}";
+        };
+        let party: Vec<u8> = support::record_bytes(&warriors);
         assert_eq!(party, case.bytes("warriors_after"), "party case{index}");
-        crate::support::native_expect! {
-        scalar random.seed as u64 => &case["seed_after"], "binary_final_turn_stories";
-        scalar random.draws => &case["rng_draws"], "binary_final_turn_stories";
-        scalar outcome.skipped_turn => &case["skipped_turn"], "binary_final_turn_stories";
-        scalar i64::from(outcome.increment_kills) => &case["kills_after"], "binary_final_turn_stories";
-        scalar combat.script_enemy => &case["actor_after"], "binary_final_turn_stories";
+        support::native_expect! {
+            scalar random.seed as u64 => &case["seed_after"], "binary_final_turn_stories";
+            scalar random.draws => &case["rng_draws"], "binary_final_turn_stories";
+            scalar outcome.skipped_turn => &case["skipped_turn"], "binary_final_turn_stories";
+            scalar i64::from(outcome.increment_kills) => &case["kills_after"], "binary_final_turn_stories";
+            scalar combat.script_enemy => &case["actor_after"], "binary_final_turn_stories";
         }
         let initial_hostile = case["hostile_count_before"]
             .as_i64()
             .unwrap_or_else(|| i64::from(case.n::<i64>("faction") != 0));
-        crate::support::expect(
+        support::expect(
             initial_hostile + i64::from(outcome.hostile_additions),
             &case["hostile_count_after"],
         );
@@ -167,7 +161,7 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
         // Friendly-only final controls have already won before the getup boundary.
         if case.n::<i16>("monster_id") < 107 || case.n::<i16>("faction") != 0 {
             let content = content();
-            let mut state = crate::support::mission_session(&content);
+            let mut state = support::mission_session(&content);
             let (mut arena, _, start_random) = input(case);
             arena.cursor = 0;
             let conditioned = arena.enemies.records[0].bytes[0xcf] != 0
@@ -180,14 +174,13 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
                 arena.enemies.positions.push((25, 25));
                 arena.order[2] = 0;
             }
-            state.warriors = crate::support::warriors(&case.bytes("warriors_before"));
+            state.warriors = support::warriors(&case.bytes("warriors_before"));
             state.phase = Phase::Combat;
             state.combat = Some(arena);
             state.random = start_random;
             let events = if conditioned {
-                let mut resumed =
-                    crate::support::checkpoint(&state, &content, "npc-condition-before");
-                crate::support::replay_command(Command::EndTurn, &mut state, &mut resumed, &content)
+                let mut resumed = support::checkpoint(&state, &content, "npc-condition-before");
+                support::replay_command(Command::EndTurn, &mut state, &mut resumed, &content)
             } else {
                 apply(Command::EndTurn, &mut state, &content).unwrap()
             };
@@ -202,15 +195,13 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
                             || word(&record.bytes, 14).unwrap() == 0)
                 );
                 assert!(events.contains(&Event::BattleEnded { victory: true }));
-                crate::support::checkpoint(&state, &content, "final-story-victory");
+                support::checkpoint(&state, &content, "final-story-victory");
                 continue;
             };
             assert_eq!(arena.script_enemy, combat.script_enemy);
             if !outcome.skipped_turn || conditioned {
                 assert_eq!(
-                    crate::support::record_bytes(
-                        &arena.enemies.records[..combat.enemies.records.len()]
-                    ),
+                    support::record_bytes(&arena.enemies.records[..combat.enemies.records.len()]),
                     records
                 );
                 assert_eq!(state.random, random);
@@ -227,18 +218,12 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
             if case.get("active_index").is_some() || conditioned {
                 assert_eq!(
                     state,
-                    crate::support::checkpoint(&state, &content, "retained-origin")
+                    support::checkpoint(&state, &content, "retained-origin")
                 );
             }
             if conditioned && !outcome.skipped_turn {
-                let mut resumed =
-                    crate::support::checkpoint(&state, &content, "npc-condition-action");
-                crate::support::replay_command(
-                    Command::RunEnemyTurn,
-                    &mut state,
-                    &mut resumed,
-                    &content,
-                );
+                let mut resumed = support::checkpoint(&state, &content, "npc-condition-action");
+                support::replay_command(Command::RunEnemyTurn, &mut state, &mut resumed, &content);
             }
         }
     }

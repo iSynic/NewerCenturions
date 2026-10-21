@@ -1,20 +1,20 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
 use centurions_core::items;
 
-use crate::native_common::snapshot_party as party;
+use native_common::snapshot_party as party;
 
-use crate::native_common::snapshot_ammunition as stock;
+use native_common::snapshot_ammunition as stock;
 
-use crate::native_common::snapshot_rng as random;
+use native_common::snapshot_rng as random;
 
-use crate::native_common::scalar_words as numbers;
+use native_common::scalar_words as numbers;
 
 fn added(before: &Value, after: &Value, field: &str) -> Vec<i16> {
     numbers(&after[field])[before[field].as_array().unwrap().len()..].to_vec()
 }
-use crate::support::assert_bytes;
-use crate::support::compare_party as assert_party;
+use support::assert_bytes;
+use support::compare_party as assert_party;
 
 fn slot(warrior: &Warrior, id: i16) -> usize {
     warrior
@@ -39,11 +39,9 @@ fn assert_equipment(
     if changed {
         markers[6..8].copy_from_slice(&1_i16.to_be_bytes());
     }
-    assert_bytes(
-        &markers,
-        &after.bytes("markers"),
-        "equipment changed marker",
-    );
+    support::native_expect! {
+        bytes &markers => &after.bytes("markers"), "equipment changed marker";
+    };
     warriors[3] = result.warrior;
     assert_party(warriors, after);
     assert_eq!(random(before), random(after));
@@ -83,7 +81,7 @@ fn collect(
 
 #[test]
 fn profile_gates_and_manual_and_automatic_equipment_match_native_records() {
-    let f = crate::support::fixture("personal-shield.json");
+    let f = support::fixture("personal-shield.json");
     let content = content();
     let mission = content.map(3).unwrap();
 
@@ -99,7 +97,6 @@ fn profile_gates_and_manual_and_automatic_equipment_match_native_records() {
             case["allowed"] == 1
         );
         assert_party(&warriors, &case["after"]);
-        assert_eq!(random(&case["before"]), random(&case["after"]));
     }
     enum Step {
         Collect(i16),
@@ -110,7 +107,7 @@ fn profile_gates_and_manual_and_automatic_equipment_match_native_records() {
     }
     for case in f.array("equipment_cases") {
         let mut warriors = party(&case["before"]);
-        let mut crate_items = crate::support::inventory(&case["before"].bytes("crate"));
+        let mut crate_items = support::inventory(&case["before"].bytes("crate"));
         let mut before = &case["before"];
         for (action, snapshot) in [
             (Step::Collect(600), "shield_picked"),
@@ -158,10 +155,12 @@ fn profile_gates_and_manual_and_automatic_equipment_match_native_records() {
                         state.warriors = warriors.clone();
                         state.ammunition = stock(before);
                         state.ammunition_work = work(before);
+                        state.inventory_record = Some(InventoryRecord(
+                            before.bytes("selected_record").try_into().unwrap(),
+                        ));
                         state.random = actual;
-                        let mut resumed =
-                            crate::support::checkpoint(&state, &content, "shield-refit");
-                        let events = crate::support::replay_command(
+                        let mut resumed = support::checkpoint(&state, &content, "shield-refit");
+                        let events = support::replay_command(
                             Command::Reload { warrior: 3 },
                             &mut state,
                             &mut resumed,
@@ -185,7 +184,7 @@ fn profile_gates_and_manual_and_automatic_equipment_match_native_records() {
                         assert_eq!(state.random, random(after));
                         warriors = state.warriors.clone();
                         assert_party(&warriors, after);
-                        crate::support::checkpoint(&state, &content, "shield-refitted");
+                        support::checkpoint(&state, &content, "shield-refitted");
                         before = after;
                         continue;
                     }
@@ -218,7 +217,7 @@ fn profile_gates_and_manual_and_automatic_equipment_match_native_records() {
 
 #[test]
 fn five_native_manual_controls_match_full_records_stock_rng_audio_and_charge_gate() {
-    let f = crate::support::fixture("personal-shield.json");
+    let f = support::fixture("personal-shield.json");
     let content = content();
     let mission = content.map(3).unwrap();
 

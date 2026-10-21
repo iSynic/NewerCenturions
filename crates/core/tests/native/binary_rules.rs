@@ -1,10 +1,10 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::rules;
 
 #[test]
 fn matches_independent_68k_execution() {
-    let cases = crate::support::fixture("rules.json");
+    let cases = support::fixture("rules.json");
     for [bound, raw, expected] in cases.n::<Vec<[i16; 3]>>("rand") {
         assert_eq!(
             rules::random_bound(bound, raw),

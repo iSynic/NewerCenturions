@@ -1,10 +1,10 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::{story_move_away, typed_encounter};
 
 #[test]
 fn original_move_away_matches_signed_position_and_flags() {
-    let fixture: Value = crate::support::fixture("move-away.json");
+    let fixture: Value = support::fixture("move-away.json");
 
     let cases = fixture.array("cases");
 
@@ -44,11 +44,11 @@ fn original_move_away_matches_signed_position_and_flags() {
             case.n::<i16>("floor"),
             flags,
         );
-        crate::support::native_expect! {
-        scalar result.x => &case["x_after"], "binary_move_away";
-        scalar result.y => &case["y_after"], "binary_move_away";
-        scalar result.floor => &case["floor_after"], "binary_move_away";
-        scalar result.mark => &case["mark_after"], "binary_move_away";
+        support::native_expect! {
+            scalar result.x => &case["x_after"], "binary_move_away";
+            scalar result.y => &case["y_after"], "binary_move_away";
+            scalar result.floor => &case["floor_after"], "binary_move_away";
+            scalar result.mark => &case["mark_after"], "binary_move_away";
         }
         assert_eq!(
             result.flags.map(|v| v as u8).to_vec(),

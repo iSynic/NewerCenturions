@@ -1,9 +1,8 @@
-use crate::prelude::*;
-use crate::support::assert_bytes;
+use crate::{prelude::*, support};
 
 #[test]
 fn field_timers_and_usage_reset_match_original_complete_buffers() {
-    for (index, case) in crate::support::fixture("spell-fields.json")["ticks"]
+    for (index, case) in support::fixture("spell-fields.json")["ticks"]
         .as_array()
         .unwrap()
         .iter()
@@ -12,25 +11,21 @@ fn field_timers_and_usage_reset_match_original_complete_buffers() {
         let fields = case.bytes("fields_before");
         let used = case.bytes("used_before");
         let cursor = case.n::<i16>("cursor_before");
-        crate::support::expect(cursor.wrapping_add(1), &case["cursor_after"]);
+        support::expect(cursor.wrapping_add(1), &case["cursor_after"]);
         let actual = spells::tick_fields(&fields, cursor.wrapping_add(1)).unwrap();
-        assert_bytes(
-            &actual,
-            &case.bytes("fields_after"),
-            &format!("field tick {index}"),
-        );
+        support::native_expect! {
+            bytes &actual => &case.bytes("fields_after"), &format!("field tick {index}");
+        };
         let actual = spells::reset_used(&used).unwrap();
-        assert_bytes(
-            &actual,
-            &case.bytes("used_after"),
-            &format!("used reset {index}"),
-        );
+        support::native_expect! {
+            bytes &actual => &case.bytes("used_after"), &format!("used reset {index}");
+        };
     }
 }
 
 #[test]
 fn complete_collisions_match_original_all_bodies_fields_usage_and_randomness() {
-    let fixture = crate::support::fixture("spell-fields.json");
+    let fixture = support::fixture("spell-fields.json");
     let mission = OpeningMission {
         shared: std::sync::Arc::new(centurions_content::mission::StoryTables {
             areas: fixture.bytes("areas"),
@@ -43,16 +38,16 @@ fn complete_collisions_match_original_all_bodies_fields_usage_and_randomness() {
             }),
             ..Default::default()
         }),
-        ..crate::support::mission()
+        ..support::mission()
     };
-    let rotated = crate::support::fixture("rotated-fields.json");
+    let rotated = support::fixture("rotated-fields.json");
     for case in fixture.array("cases").iter().chain(rotated.array("cases")) {
-        let mut warriors = crate::support::warriors(&case["warriors_before"]);
-        let mut combat = crate::support::battle();
+        let mut warriors = support::warriors(&case["warriors_before"]);
+        let mut combat = support::battle();
         combat.battle = 28;
         combat.map.tiles = fixture.words("map");
         combat.squad.positions = (0..6).map(|i| (20 + i, 20)).collect();
-        combat.enemies.records = crate::support::monsters(&case["enemies_before"]);
+        combat.enemies.records = support::monsters(&case["enemies_before"]);
         combat.enemies.positions = vec![(20, 22), (22, 22)];
         combat.order = vec![-1, 10];
         combat.spell_fields = case.bytes("fields_before");
@@ -74,16 +69,15 @@ fn complete_collisions_match_original_all_bodies_fields_usage_and_randomness() {
             case.n::<i16>("body"),
         )
         .unwrap();
-        crate::support::native_expect! {
-            bytes crate::support::record_bytes(&warriors) => &case["warriors_after"], "collision party";
-            bytes crate::support::record_bytes(&combat.enemies.records) => &case["enemies_after"], "collision enemies";
+        support::native_expect! {
+            records &warriors => &case["warriors_after"], "collision party";
+            records &combat.enemies.records => &case["enemies_after"], "collision enemies";
             bytes combat.spell_fields => &case["fields_after"], "collision fields";
             bytes combat.field_used => &case["used_after"], "collision usage";
             scalar count => &case["count_after"], "collision count";
             scalar combat.attack_identity.unwrap()[1] => &case["level_after"], "collision level";
-            scalar random.seed => &case["seed_after"], "collision seed";
-            scalar random.draws => &case["rng_draws"], "collision draws";
-            scalar crate::support::event_sounds(&events) => &case["sounds"], "collision ordered sounds";
+            rng random => (&case["seed_after"], &case["rng_draws"]), "collision seed";
+            scalar support::event_sounds(&events) => &case["sounds"], "collision ordered sounds";
         }
     }
 }

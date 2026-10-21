@@ -1,20 +1,20 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
 use centurions_core::combat::damage::DamageFlags;
 use centurions_core::combat::damage::DamagePacket;
 use centurions_core::combat::damage::resolve_damage;
 
-use crate::native_common::snapshot_party as party;
+use native_common::snapshot_party as party;
 
-use crate::native_common::snapshot_rng as random;
+use native_common::snapshot_rng as random;
 
-use crate::native_common::snapshot_ammunition as stock;
+use native_common::snapshot_ammunition as stock;
 
-use crate::support::assert_bytes;
+use support::assert_bytes;
 
 #[test]
 fn two_native_charged_shots_match_complete_damage_records_rng_and_shield_audio() {
-    let f = crate::support::fixture("shield-ranged.json");
+    let f = support::fixture("shield-ranged.json");
 
     for case in f.array("shot_cases") {
         let before = &case["targeted"];
@@ -32,14 +32,14 @@ fn two_native_charged_shots_match_complete_damage_records_rng_and_shield_audio()
             ]
         );
         // The native duration and hit prefix precedes the recovered damage boundary.
-        crate::support::replay_rng(&mut actual, &draws[..3]);
+        support::replay_rng(&mut actual, &draws[..3]);
         let entry = after
             .array("native_calls")
             .iter()
             .find(|call| call["address"] == "15075a")
             .unwrap();
         assert_eq!(entry["arguments"], serde_json::json!([3, 1, 1, 1, 0]));
-        crate::support::expect(actual.draws, &entry["draws"]);
+        support::expect(actual.draws, &entry["draws"]);
         let mut warriors = party(before);
         let packet = before.bytes("packet");
         assert_eq!(packet, bytes(&case["resolutions"][0]["packet"]));
@@ -75,11 +75,9 @@ fn two_native_charged_shots_match_complete_damage_records_rng_and_shield_audio()
         target[0x50..0x52].copy_from_slice(&party(before)[3].bytes[0x50..0x52]);
         assert_bytes(&warriors[3].bytes, &target, "complete damage target");
         for member in [1, 2, 4, 5] {
-            assert_bytes(
-                &warriors[member].bytes,
-                &expected[member].bytes,
-                "uninvolved warrior",
-            );
+            support::native_expect! {
+                bytes &warriors[member].bytes => &expected[member].bytes, "uninvolved warrior";
+            };
         }
         let mut actor = expected[0].bytes.clone();
         for offset in [0x3c, 0x40] {
@@ -88,7 +86,7 @@ fn two_native_charged_shots_match_complete_damage_records_rng_and_shield_audio()
         assert_bytes(&warriors[0].bytes, &actor, "actor outside caller AP/MOV");
         assert_eq!(actual, random(after));
         let mut receipt = random(before);
-        crate::support::replay_rng(&mut receipt, draws);
+        support::replay_rng(&mut receipt, draws);
         assert_eq!(actual, receipt);
         let calls = after.array("native_calls");
         let shield: Vec<_> = calls
@@ -131,7 +129,7 @@ fn two_native_charged_shots_match_complete_damage_records_rng_and_shield_audio()
 
 #[test]
 fn native_pre_compaction_pistol_fit_restores_battery_cache_without_an_admission_guard() {
-    let f = crate::support::fixture("shield-ranged.json");
+    let f = support::fixture("shield-ranged.json");
 
     let case = &f["restore_cases"][0];
     let before = &case["before"];
@@ -171,13 +169,7 @@ fn native_pre_compaction_pistol_fit_restores_battery_cache_without_an_admission_
     assert_eq!(result.sounds, native_sounds);
     warriors[3] = result.warrior;
     let expected = party(after);
-    for (actual, expected) in warriors.iter().zip(expected) {
-        assert_bytes(
-            &actual.bytes,
-            &expected.bytes,
-            "complete firearm cache restoration party",
-        );
-    }
+    support::compare_record_bytes(&warriors, &expected);
     assert_eq!(word(&warriors[3].bytes, 0x126).unwrap(), 201);
     let item = warriors[3].inventory().unwrap()[slot].clone();
     assert_eq!(word(&item.0, 2).unwrap(), 12);
@@ -186,7 +178,7 @@ fn native_pre_compaction_pistol_fit_restores_battery_cache_without_an_admission_
     assert_eq!(result.ammunition[1], 128);
     assert_eq!(actual, random(after));
     let mut receipt = random(before);
-    crate::support::replay_rng(
+    support::replay_rng(
         &mut receipt,
         &after.array("draws")[before.array("draws").len()..],
     );

@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::story_party::PartySaveContext;
 use centurions_core::story_party::apply_group_mask;
@@ -7,16 +7,15 @@ use centurions_core::story_party::group_return;
 use centurions_core::story_party::select_party;
 use centurions_core::story_variables::StoryContinuation;
 
-use crate::support::warriors;
+use support::warriors;
 
-use crate::support::assert_bytes;
-use crate::support::positions;
+use support::positions;
 
-use crate::support::record_bytes as flatten;
+use support::record_bytes as flatten;
 
 #[test]
 fn party_selection_matches_original_masks_complete_records_and_randomness() {
-    let fixture = crate::support::fixture("story-party.json");
+    let fixture = support::fixture("story-party.json");
     for case in fixture.array("selection_cases") {
         let warriors = warriors(&case["before"]);
         let context = &case["context"];
@@ -38,15 +37,15 @@ fn party_selection_matches_original_masks_complete_records_and_randomness() {
             &mut random,
         )
         .unwrap();
-        crate::support::native_expect! {
-        words mask.as_slice() => &case["mask"], "{extra:?} {context:?}";
-        bytes flatten(&warriors) => &case["after"], "selection warriors";
-        scalar u64::from(random.seed) => &case["seed_after"], "binary_story_party";
-        scalar random.draws => &case["draws"], "binary_story_party";
+        support::native_expect! {
+            words mask.as_slice() => &case["mask"], "{extra:?} {context:?}";
+            bytes flatten(&warriors) => &case["after"], "selection warriors";
+            scalar u64::from(random.seed) => &case["seed_after"], "binary_story_party";
+            scalar random.draws => &case["draws"], "binary_story_party";
         }
     }
-    for case in crate::support::fixture("story-filter.json").array("cases") {
-        let mut content = crate::support::content();
+    for case in support::fixture("story-filter.json").array("cases") {
+        let mut content = support::content();
         let map = &mut content.scenario.as_mut().unwrap().maps[0];
         std::sync::Arc::make_mut(&mut map.shared)
             .combat
@@ -54,7 +53,7 @@ fn party_selection_matches_original_masks_complete_records_and_randomness() {
             .unwrap()
             .encounters[..10]
             .copy_from_slice(&case.bytes("extra"));
-        let mut state = crate::support::mission_session(&content);
+        let mut state = support::mission_session(&content);
         state.warriors = warriors(&case["before"]);
         state.random = RandomState::new(12);
         state.party_mask = case.words("mask_before").try_into().unwrap();
@@ -66,7 +65,7 @@ fn party_selection_matches_original_masks_complete_records_and_randomness() {
             id: 0,
             text: String::new(),
         });
-        position.script = Some(crate::support::script_state(record, case.n::<u8>("action")));
+        position.script = Some(support::script_state(record, case.n::<u8>("action")));
         apply(Command::Continue, &mut state, &content).unwrap();
         assert_eq!(state.party_mask.as_slice(), case.words("mask_after"));
         assert_eq!(state.random.seed, case.n::<u32>("seed"));
@@ -77,7 +76,7 @@ fn party_selection_matches_original_masks_complete_records_and_randomness() {
 
 #[test]
 fn late_group_filter_matches_original_tiles_formation_order_and_complete_warriors() {
-    let fixture = crate::support::fixture("story-party.json");
+    let fixture = support::fixture("story-party.json");
     for case in fixture.array("group_cases") {
         let map = TacticalMap {
             tiles: case.words("tiles_before"),
@@ -101,32 +100,32 @@ fn late_group_filter_matches_original_tiles_formation_order_and_complete_warrior
             case.n::<bool>("group"),
         )
         .unwrap();
-        crate::support::native_expect! {
-        bytes flatten(&result.warriors) => &case["warriors_after"], "group warriors";
-        words result.map.tiles => &case["tiles_after"], format!("group {} variant {}",case["group"],case["variant"]);
+        support::native_expect! {
+            bytes flatten(&result.warriors) => &case["warriors_after"], "group warriors";
+            words result.map.tiles => &case["tiles_after"], format!("group {} variant {}",case["group"],case["variant"]);
         }
         assert_eq!(result.squad.positions, positions(&case["squad_after"]));
-        crate::support::native_expect! {
-        words result.squad.under_tiles => &case["under_after"], "binary_story_party";
-        words result.order => &case["order_after"], "binary_story_party";
+        support::native_expect! {
+            words result.squad.under_tiles => &case["under_after"], "binary_story_party";
+            words result.order => &case["order_after"], "binary_story_party";
         }
     }
 }
 
 #[test]
 fn group_encounters_match_original_selection_and_post_combat_continuations() {
-    let fixture = crate::support::fixture("story-party.json");
+    let fixture = support::fixture("story-party.json");
     for case in fixture.array("return_cases") {
         let extra = case.bytes("extra");
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let plan = group_encounter(&extra, &mut random).unwrap();
-        crate::support::expect(plan.battle, &case["battle"]);
+        support::expect(plan.battle, &case["battle"]);
         assert_eq!(plan.sound, word(&extra, 4).unwrap());
         assert_eq!(plan.message, word(&extra, 6).unwrap());
         assert_eq!(plan.failure_script, word(&extra, 8).unwrap());
-        crate::support::native_expect! {
-        scalar u64::from(random.seed) => &case["seed_after"], "binary_story_party";
-        scalar random.draws => &case["draws"], "binary_story_party";
+        support::native_expect! {
+            scalar u64::from(random.seed) => &case["seed_after"], "binary_story_party";
+            scalar random.draws => &case["draws"], "binary_story_party";
         }
         let mut events = vec![];
         if plan.sound != 0 {
@@ -138,19 +137,15 @@ fn group_encounters_match_original_selection_and_post_combat_continuations() {
         events.push(serde_json::json!(["combat", 1]));
         let before = warriors(&case["before"]);
         if case["aborted"] == true {
-            assert_bytes(
-                &flatten(&before),
-                &case.bytes("after"),
-                "aborted group warriors",
-            );
+            support::native_expect! {
+                bytes &flatten(&before) => &case.bytes("after"), "aborted group warriors";
+            };
         } else {
             let retreated = case.n::<bool>("retreated");
             let result = group_return(&before, retreated, plan.failure_script).unwrap();
-            assert_bytes(
-                &flatten(&result.warriors),
-                &case.bytes("after"),
-                "returned group warriors",
-            );
+            support::native_expect! {
+                bytes &flatten(&result.warriors) => &case.bytes("after"), "returned group warriors";
+            };
             events.push(serde_json::json!(["land", 8]));
             if retreated {
                 assert_eq!(

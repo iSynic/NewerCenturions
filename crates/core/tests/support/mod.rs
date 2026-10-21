@@ -1,9 +1,14 @@
 use crate::fixture_hex as hex;
 use centurions_content::Content;
-use centurions_core::{Command, Session, apply};
+use centurions_core::{Command, Event, Session, apply};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
+mod native_context;
+pub mod psi_frame;
+pub use native_context::{captured_session, legacy_save};
+mod command_replay;
+pub use command_replay::{current_combat, saved_command};
 
 pub fn fixture_content(identity: &str) -> Content {
     Content {
@@ -195,6 +200,11 @@ impl NativeRecord for centurions_content::combat::MonsterRecord {
         &self.bytes
     }
 }
+impl NativeRecord for centurions_content::InventoryRecord {
+    fn record_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
 pub trait NativeCase {
     fn n<T: NativeScalar>(&self, key: &str) -> T;
     fn text(&self, key: &str) -> &str;
@@ -311,11 +321,24 @@ macro_rules! native_expect {
     ($($kind:ident $actual:expr => $expected:expr, $context:expr;)*) => {
         $(crate::support::native_expect!(@$kind $actual, $expected, $context);)*
     };
+    (@rng $actual:expr, $expected:expr, $context:expr) => {
+        {
+            let (seed, draws) = $expected;
+            crate::support::native_expect!(@scalar $actual.seed, seed, $context);
+            crate::support::native_expect!(@scalar $actual.draws, draws, $context);
+        }
+    };
     (@scalar $actual:expr, $expected:expr, $context:expr) => {
         { let actual = &$actual; assert_eq!(actual, &crate::support::native_value(actual, $expected), "{}", $context); }
     };
+    (@records $actual:expr, $expected:expr, $context:expr) => {
+        crate::support::native_expect!(@bytes crate::support::record_bytes($actual), $expected, $context)
+    };
     (@bytes $actual:expr, $expected:expr, $context:expr) => {
-        assert_eq!(&$actual[..], &crate::support::bytes($expected)[..], "{}", $context)
+        crate::support::assert_bytes(&$actual[..], &crate::support::bytes($expected), &$context)
+    };
+    (@positions $actual:expr, $expected:expr, $context:expr) => {
+        assert_eq!(&$actual[..], &crate::support::positions($expected)[..], "{}", $context)
     };
     (@words $actual:expr, $expected:expr, $context:expr) => {
         assert_eq!(&$actual[..], &crate::support::words($expected)[..], "{}", $context)
@@ -479,7 +502,13 @@ pub fn refuse_command(
     feedback: Vec<centurions_core::feedback::NativeFeedback>,
 ) {
     let mut candidate = state.clone();
-    let events = apply(command, &mut candidate, content).unwrap();
+    let events = match apply(command, &mut candidate, content) {
+        Err(centurions_core::RuleError::Refused { feedback }) => {
+            same_session(&candidate, state);
+            feedback.into_iter().map(Event::Feedback).collect()
+        }
+        result => result.unwrap(),
+    };
     assert_eq!(
         events,
         feedback
@@ -493,22 +522,11 @@ pub fn refuse_command(
         candidate.combat.as_ref().unwrap(),
         state.combat.as_ref().unwrap(),
     );
-    assert_eq!(
-        (
-            &after.map,
-            &after.squad,
-            &after.enemies,
-            after.cursor,
-            &after.order
-        ),
-        (
-            &before.map,
-            &before.squad,
-            &before.enemies,
-            before.cursor,
-            &before.order
-        )
-    );
+    assert_eq!(after.map, before.map);
+    assert_eq!(after.squad, before.squad);
+    assert_eq!(after.enemies, before.enemies);
+    assert_eq!(after.cursor, before.cursor);
+    assert_eq!(after.order, before.order);
 }
 
 pub fn compare_party(actual: &[centurions_content::Warrior], snapshot: &Value) {
@@ -525,4 +543,52 @@ pub fn compare_party_named(
 
 pub fn compare_record_bytes<T: NativeRecord>(actual: &[T], expected: &[T]) {
     assert_eq!(record_bytes(actual), record_bytes(expected));
+}
+
+#[track_caller]
+pub fn assert_rng(actual: &centurions_core::RandomState, seed: &Value, draws: &Value) {
+    assert_eq!(
+        actual.seed,
+        seed.as_u64().unwrap() as u32,
+        "native RNG seed"
+    );
+    assert_eq!(actual.draws, draws.as_u64().unwrap(), "native RNG draws");
+}
+
+/// Native attack receipts may append caller metadata after the two body IDs.
+pub fn attack_calls(value: &Value) -> Vec<(i16, i16)> {
+    value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|call| {
+            (
+                call[0].as_i64().unwrap() as i16,
+                call[1].as_i64().unwrap() as i16,
+            )
+        })
+        .collect()
+}
+
+pub fn same_captured_session(actual: &Session, expected: &Session) {
+    same_session(&captured_session(actual), &captured_session(expected));
+}
+
+/// Apply the sparse byte changes recorded by original-instruction receipts.
+pub fn patch_bytes(raw: &mut [u8], changes: &Value) {
+    for change in changes.as_array().unwrap() {
+        raw[change[0].as_u64().unwrap() as usize] = change[1].as_u64().unwrap() as u8;
+    }
+}
+
+/// Remove one saved field when constructing a historical-version specimen.
+pub fn remove_field(value: &mut Value, name: &str) {
+    value.as_object_mut().unwrap().remove(name);
+}
+
+pub fn sound_events(sounds: impl IntoIterator<Item = i16>) -> Vec<Event> {
+    sounds
+        .into_iter()
+        .map(|resource_id| Event::Sound { resource_id })
+        .collect()
 }

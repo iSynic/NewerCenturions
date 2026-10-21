@@ -1,10 +1,10 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::story_schedule::edit;
 
 #[test]
 fn scheduled_record_edits_match_original_complete_table_and_wrapping_day() {
-    let fixture = crate::support::fixture("schedule-edit.json");
+    let fixture = support::fixture("schedule-edit.json");
     for case in fixture.array("cases") {
         if case.n::<bool>("boundary_only") {
             continue;
@@ -18,7 +18,7 @@ fn scheduled_record_edits_match_original_complete_table_and_wrapping_day() {
 
 #[test]
 fn unsigned_native_seek_boundaries_reject_without_changing_the_table() {
-    let fixture = crate::support::fixture("schedule-edit.json");
+    let fixture = support::fixture("schedule-edit.json");
     for case in fixture.array("cases") {
         if !case.n::<bool>("boundary_only") {
             continue;

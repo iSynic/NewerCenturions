@@ -1,10 +1,10 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::{MapState, mission};
 
 #[test]
 fn accepted_stage_restoration_matches_complete_original_warriors() {
-    let fixture: serde_json::Value = crate::support::fixture("stage-travel.json");
+    let fixture: serde_json::Value = support::fixture("stage-travel.json");
     for case in fixture.array("stage_cases") {
         let parameter = case.n::<i16>("parameter");
         let before = case.bytes("before");
@@ -25,12 +25,12 @@ fn accepted_stage_restoration_matches_complete_original_warriors() {
             warriors
         };
         assert_eq!(
-            crate::support::record_bytes(&actual),
+            support::record_bytes(&actual),
             case.bytes("after"),
             "stage {parameter}"
         );
         if accepted {
-            crate::support::expect(
+            support::expect(
                 mission::stage_target(parameter).unwrap(),
                 &case["stage_after"],
             );
@@ -40,7 +40,7 @@ fn accepted_stage_restoration_matches_complete_original_warriors() {
 
 #[test]
 fn packed_map_records_match_original_stage_and_travel_io() {
-    let fixture: serde_json::Value = crate::support::fixture("stage-travel.json");
+    let fixture: serde_json::Value = support::fixture("stage-travel.json");
     for family in ["stage_cases", "travel_cases"] {
         for case in fixture[family].as_array().unwrap() {
             for key in ["map_before", "map_after", "saved_origin"] {

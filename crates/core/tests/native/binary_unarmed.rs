@@ -1,11 +1,11 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::combat::attack::unarmed_attack;
 
 #[test]
 fn unarmed_attack_matches_original_routine() {
     for name in ["unarmed.json", "difficulty-unarmed.json"] {
-        let fixture: serde_json::Value = crate::support::fixture(name);
+        let fixture: serde_json::Value = support::fixture(name);
         for case in fixture.array("cases").iter() {
             let mut warrior = Warrior::read(&case.bytes("input")).unwrap();
             let mut target = MonsterRecord {
@@ -19,12 +19,11 @@ fn unarmed_attack_matches_original_routine() {
                 case["difficulty"].as_i64().unwrap_or(0) as i16,
             )
             .unwrap();
-            crate::support::native_expect! {
-            bytes warrior.bytes => &case["after"], "warrior case {index}";
-            bytes target.bytes => &case["after_target"], "enemy case {index}";
-            scalar random.seed => &case["seed"], "binary_unarmed";
-            scalar random.draws => &case["draws"], "binary_unarmed";
-            scalar (result.sounds) => &case["sounds"], "binary_unarmed";
+            support::native_expect! {
+                bytes warrior.bytes => &case["after"], "warrior case {index}";
+                bytes target.bytes => &case["after_target"], "enemy case {index}";
+                rng random => (&case["seed"], &case["draws"]), "binary_unarmed";
+                scalar (result.sounds) => &case["sounds"], "binary_unarmed";
             }
         }
     }

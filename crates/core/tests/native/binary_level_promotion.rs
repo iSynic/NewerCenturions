@@ -1,22 +1,22 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
 use centurions_core::story_inventory;
 use centurions_core::story_promotion;
 use centurions_core::story_promotion::LibraryRandom;
 use centurions_core::story_treasure;
 
-use crate::native_common::patched;
-use crate::support::record_bytes as flatten;
-use crate::support::warriors as party;
+use native_common::patched;
+use support::record_bytes as flatten;
+use support::warriors as party;
 
 #[test]
 fn native_close_promotes_each_living_member_once_and_preserves_valid_spells() {
-    let fixture: Value = crate::support::fixture("level-promotion.json");
+    let fixture: Value = support::fixture("level-promotion.json");
 
-    let content = crate::support::content();
+    let content = support::content();
     let map = content.map(0).unwrap();
     let baseline = fixture.bytes("warriors");
-    let interactive = crate::support::fixture("interactive-promotion.json");
+    let interactive = support::fixture("interactive-promotion.json");
     let cases = fixture.array("cases");
 
     for (index, case) in cases
@@ -48,7 +48,7 @@ fn native_close_promotes_each_living_member_once_and_preserves_valid_spells() {
         assert_eq!(digest(&expected), case["after_sha256"], "case{index}");
         assert_eq!(warriors, initial, "input party mutated");
         if case.n::<bool>("registered") {
-            let mut state = crate::support::mission_session(&content);
+            let mut state = support::mission_session(&content);
             state.warriors = initial;
             state.library_random_seed = case.n("library_seed_before");
             let position = state.exploration.as_mut().unwrap();
@@ -114,25 +114,24 @@ fn native_close_promotes_each_living_member_once_and_preserves_valid_spells() {
             );
             assert_eq!(state.random, random);
             if case["sounds"].is_array() {
-                crate::support::expect(crate::support::event_sounds(&events), &case["sounds"]);
+                support::expect(support::event_sounds(&events), &case["sounds"]);
             }
             assert_eq!(
                 (state.library_random_seed, state.library_random_draws),
                 (library.seed, library.draws)
             );
         }
-        crate::support::native_expect! {
-        scalar library.seed => &case["library_seed_after"], "binary_level_promotion";
-        scalar library.draws => &case["library_draws"], "binary_level_promotion";
+        support::native_expect! {
+            rng library => (&case["library_seed_after"], &case["library_draws"]), "binary_level_promotion";
         }
     }
 }
 
 #[test]
 fn original_reward_chain_crosses_level_thresholds_at_close() {
-    let fixture: Value = crate::support::fixture("level-promotion.json");
+    let fixture: Value = support::fixture("level-promotion.json");
 
-    let content = crate::support::content();
+    let content = support::content();
     let map = content.map(0).unwrap();
     let baseline = fixture.bytes("warriors");
     for case in fixture
@@ -181,11 +180,9 @@ fn original_reward_chain_crosses_level_thresholds_at_close() {
                 crate_bytes[i * 22..i * 22 + 22].copy_from_slice(&item.0);
             }
             assert_eq!(crate_bytes, stage.bytes("crate"), "chain stage{n}");
-            crate::support::native_expect! {
-            scalar library.seed => &stage["library_seed"], "binary_level_promotion";
-            scalar library.draws => &stage["library_draws"], "binary_level_promotion";
-            scalar random.seed => &stage["seed"], "binary_level_promotion";
-            scalar random.draws => &stage["draws"], "binary_level_promotion";
+            support::native_expect! {
+                rng library => (&stage["library_seed"], &stage["library_draws"]), "binary_level_promotion";
+                rng random => (&stage["seed"], &stage["draws"]), "binary_level_promotion";
             }
             assert_eq!(stage["currency"], 937);
         }

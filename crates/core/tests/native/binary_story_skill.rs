@@ -1,10 +1,10 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::story_skill::{SkillPlan, predicate};
 
 #[test]
 fn chosen_warrior_checks_match_original_signed_comparisons_and_dispatch() {
-    let fixture: serde_json::Value = crate::support::fixture("story-skill.json");
+    let fixture: serde_json::Value = support::fixture("story-skill.json");
     for case in fixture.array("cases") {
         let extra = case.bytes("extra");
         let raw = case.bytes("warrior");

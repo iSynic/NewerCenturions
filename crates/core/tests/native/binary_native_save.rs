@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 #[path = "../support/native_save_receipts.rs"]
 mod receipts;
@@ -6,7 +6,7 @@ mod receipts;
 // Protects original-file import against layout drift and incomplete multi-file saves.
 #[test]
 fn native_writer_records_import_read_only_and_resume_as_versioned_saves() {
-    let content = crate::support::content();
+    let content = support::content();
     let directory =
         std::env::temp_dir().join(format!("centurions-native-save-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -20,8 +20,8 @@ fn native_writer_records_import_read_only_and_resume_as_versioned_saves() {
     )
     .unwrap();
     assert_eq!(
-        crate::support::record_bytes(&imported.warriors),
-        crate::support::record_bytes(&original.warriors)
+        support::record_bytes(&imported.warriors),
+        support::record_bytes(&original.warriors)
     );
     assert_eq!(imported.mission, original.mission);
     assert_eq!(imported.ammunition, original.ammunition);
@@ -52,10 +52,10 @@ fn native_writer_records_import_read_only_and_resume_as_versioned_saves() {
         )
     );
     assert_eq!(position.map_state().native_bytes().unwrap(), native);
-    let reader = crate::support::fixture("native-load.json");
+    let reader = support::fixture("native-load.json");
     assert_eq!(reader["return"].as_i64().unwrap(), 1);
     assert_eq!(
-        crate::support::record_bytes(&imported.warriors),
+        support::record_bytes(&imported.warriors),
         reader.bytes("warriors")
     );
     let read_map = ["478e42", "443086", "4358e6", "4085b8", "40c500", "414390"]

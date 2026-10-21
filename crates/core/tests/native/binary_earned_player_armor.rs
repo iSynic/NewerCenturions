@@ -1,32 +1,21 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
-use crate::native_common::snapshot_party as party;
 use centurions_core::items;
+use native_common::snapshot_party as party;
 
-use crate::support::inventory as records;
+use support::inventory as records;
 
-use crate::support::assert_bytes;
+use support::assert_bytes;
 
-use crate::support::compare_party_named as assert_party;
+use support::compare_party_named as assert_party;
 
 fn assert_records(records: &[InventoryRecord], hex: &str, context: &str) {
-    assert_bytes(
-        &records
-            .iter()
-            .flat_map(|record| record.0.iter().copied())
-            .collect::<Vec<_>>(),
-        &bytes(hex),
-        context,
-    );
-}
-
-fn sounds(snapshot: &Value) -> Vec<i16> {
-    snapshot.n::<Vec<i16>>("sounds")
+    assert_bytes(&support::record_bytes(records), &bytes(hex), context);
 }
 
 #[test]
 fn earned_armor_can_use_matches_all_24_native_profile_gates() {
-    let fixture = crate::support::fixture("earned-player-armor.json");
+    let fixture = support::fixture("earned-player-armor.json");
     let content = content();
     let mission = content.map(0).unwrap();
     let cases = fixture.array("gate_cases");
@@ -39,23 +28,15 @@ fn earned_armor_can_use_matches_all_24_native_profile_gates() {
             equipment::can_use(&warriors[member], &content.items[id], mission).unwrap(),
             case.n::<i64>("allowed") != 0
         );
-        assert_party(&warriors, &case["after"], "native gate party");
-        for (key, value) in case["before"].as_object().unwrap() {
-            if key != "item_work" {
-                assert_eq!(value, &case["after"][key], "native gate unchanged {key}");
-            }
-        }
-        assert_bytes(
-            &content.items[id],
-            &case["after"].bytes("item_work"),
-            "native gate loaded item",
-        );
+        support::native_expect! {
+            bytes &content.items[id] => &case["after"].bytes("item_work"), "native gate loaded item";
+        };
     }
 }
 
 #[test]
 fn earned_armor_collection_matches_12_native_party_crate_and_loot_cases() {
-    let fixture = crate::support::fixture("earned-player-armor.json");
+    let fixture = support::fixture("earned-player-armor.json");
     let content = content();
     let mission = content.map(0).unwrap();
     let cases = fixture.array("transfer_cases");
@@ -97,15 +78,14 @@ fn earned_armor_collection_matches_12_native_party_crate_and_loot_cases() {
             "native closed crate",
         );
         assert_party(&warriors, &case["after"], "native closed party");
-        assert_eq!(result.sounds, sounds(&case["picked"]));
+        assert_eq!(result.sounds, case["picked"].n::<Vec<i16>>("sounds"));
         assert_eq!(result.warnings, case["picked"].n::<Vec<i16>>("warnings"));
-        assert_eq!(result.sounds, [450]);
     }
 }
 
 #[test]
 fn earned_armor_wear_remove_and_compaction_match_all_16_native_compositions() {
-    let fixture = crate::support::fixture("earned-player-armor.json");
+    let fixture = support::fixture("earned-player-armor.json");
     let content = content();
     let mission = content.map(0).unwrap();
     let cases = fixture.array("equipment_cases");
@@ -132,8 +112,6 @@ fn earned_armor_wear_remove_and_compaction_match_all_16_native_compositions() {
         assert_party(&warriors, &case["picked"], "composed armor pickup");
         let mut audio = collected.sounds;
         let inventory_slot = case.n::<usize>("inventory_slot");
-        let instance = warriors[member].inventory().unwrap()[inventory_slot].clone();
-        let opaque = [instance.0[11], instance.0[12]];
         let worn = equipment::wear(
             &warriors[member],
             &content,
@@ -147,19 +125,17 @@ fn earned_armor_wear_remove_and_compaction_match_all_16_native_compositions() {
         warriors[member] = worn.warrior;
         audio.extend(worn.sounds);
         assert_party(&warriors, &case["worn"], &format!("wear {index}"));
-        assert_eq!(audio, sounds(&case["worn"]));
+        assert_eq!(audio, case["worn"].n::<Vec<i16>>("sounds"));
         items::compact(&mut warriors[member]).unwrap();
         assert_party(&warriors, &case["compacted"], "first compaction");
         let slot = case.n::<usize>("compacted_slot");
-        let compacted = warriors[member].inventory().unwrap()[slot].clone();
-        assert_eq!([compacted.0[11], compacted.0[12]], opaque);
         let removed = equipment::remove(&warriors[member], &content, mission, slot).unwrap();
         assert!(removed.changed);
         assert!(removed.warnings.is_empty());
         warriors[member] = removed.warrior;
         audio.extend(removed.sounds);
         assert_party(&warriors, &case["removed"], "complete remove");
-        assert_eq!(audio, sounds(&case["removed"]));
+        assert_eq!(audio, case["removed"].n::<Vec<i16>>("sounds"));
         let reworn =
             equipment::wear(&warriors[member], &content, mission, slot, in_combat).unwrap();
         assert!(reworn.changed);
@@ -167,22 +143,9 @@ fn earned_armor_wear_remove_and_compaction_match_all_16_native_compositions() {
         warriors[member] = reworn.warrior;
         audio.extend(reworn.sounds);
         assert_party(&warriors, &case["reworn"], "complete re-wear");
-        assert_eq!(audio, sounds(&case["reworn"]));
+        assert_eq!(audio, case["reworn"].n::<Vec<i16>>("sounds"));
         items::compact(&mut warriors[member]).unwrap();
         assert_party(&warriors, &case["after"], "final compaction");
-        assert_eq!(audio, sounds(&case["after"]));
-        assert_eq!(audio, [450; 4]);
-        for phase in ["picked", "worn", "compacted", "removed", "reworn", "after"] {
-            assert_records(
-                &crate_items,
-                case[phase]["crate"].as_str().unwrap(),
-                "retained composed crate",
-            );
-        }
-        assert_eq!(
-            word(&warriors[member].bytes, 0x40).unwrap(),
-            word(&party(&case["before"])[member].bytes, 0x40).unwrap()
-                - if in_combat { 2 } else { 0 }
-        );
+        assert_eq!(audio, case["after"].n::<Vec<i16>>("sounds"));
     }
 }

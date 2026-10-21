@@ -1,12 +1,12 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::combat::runtime::victory_records;
 
 #[test]
 fn victory_rewards_match_original_branch() {
-    let fixture: serde_json::Value = crate::support::fixture("victory.json");
+    let fixture: serde_json::Value = support::fixture("victory.json");
     for case in fixture.array("cases") {
-        let mut warriors: Vec<Warrior> = crate::support::warriors(&case["warriors"]);
+        let mut warriors: Vec<Warrior> = support::warriors(&case["warriors"]);
         let mut enemies = vec![
             MonsterRecord {
                 bytes: case.bytes("enemy")
@@ -15,26 +15,21 @@ fn victory_rewards_match_original_branch() {
         ];
         let mut random = RandomState::new(12);
         victory_records(&mut warriors, &mut enemies, &mut random).unwrap();
-        crate::support::assert_bytes(
-            &crate::support::record_bytes(&warriors),
-            &case.bytes("after_warriors"),
-            "native victory records",
-        );
-        crate::support::native_expect! {
-        bytes enemies[0].bytes => &case["after_enemy"], "binary_victory";
-        scalar random.seed => &case["seed"], "binary_victory";
-        scalar random.draws => &case["draws"], "binary_victory";
+        support::native_expect! {
+            bytes &support::record_bytes(&warriors) => &case.bytes("after_warriors"), "native victory records";
+            bytes enemies[0].bytes => &case["after_enemy"], "binary_victory";
+            rng random => (&case["seed"], &case["draws"]), "binary_victory";
         }
     }
 }
 
 #[test]
 fn army_rewards_and_sorted_loot_match_original_full_records_and_randomness() {
-    let content = crate::support::content();
-    let fixture: serde_json::Value = crate::support::fixture("army-victory.json");
+    let content = support::content();
+    let fixture: serde_json::Value = support::fixture("army-victory.json");
     for case in fixture.array("cases") {
-        let mut warriors: Vec<_> = crate::support::warriors(&case["warriors"]);
-        let mut enemies: Vec<_> = crate::support::monsters(&case["enemy"]);
+        let mut warriors: Vec<_> = support::warriors(&case["warriors"]);
+        let mut enemies: Vec<_> = support::monsters(&case["enemy"]);
         let mut random = RandomState::new(case.n::<u32>("initial_seed"));
         let (_, loot) = centurions_core::combat::runtime::victory_loot(
             &mut warriors,
@@ -43,16 +38,10 @@ fn army_rewards_and_sorted_loot_match_original_full_records_and_randomness() {
             Some(&content),
         )
         .unwrap();
-        crate::support::assert_bytes(
-            &crate::support::record_bytes(&warriors),
-            &case.bytes("after_warriors"),
-            "native victory records",
-        );
-        crate::support::assert_bytes(
-            &crate::support::record_bytes(&enemies),
-            &case.bytes("after_enemy"),
-            "native victory records",
-        );
+        support::native_expect! {
+            bytes &support::record_bytes(&warriors) => &case.bytes("after_warriors"), "native victory records";
+            bytes &support::record_bytes(&enemies) => &case.bytes("after_enemy"), "native victory records";
+        };
         let expected: Vec<_> = case
             .bytes("loot")
             .as_chunks::<22>()
@@ -67,9 +56,6 @@ fn army_rewards_and_sorted_loot_match_original_full_records_and_randomness() {
             "loot seed {}",
             case["initial_seed"]
         );
-        crate::support::native_expect! {
-        scalar random.seed => &case["seed"], "binary_victory";
-        scalar random.draws => &case["draws"], "binary_victory";
-        }
+        support::assert_rng(&random, &case["seed"], &case["draws"]);
     }
 }

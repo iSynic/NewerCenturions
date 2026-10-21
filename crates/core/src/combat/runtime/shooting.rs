@@ -7,11 +7,6 @@ use crate::{Event, RuleError, Session};
 use centurions_content::Content;
 use centurions_content::records::{AttackPacket, ItemDefinition};
 
-// Current owned-firearm caller qualification retains a health/death context
-// for this native item ID. This is a caller restriction, not a universal weapon
-// property; broadening it belongs in a separately verified behavioral change.
-const OWNED_FIREARM_HEALTH_CONTEXT: i16 = 165;
-
 pub fn player_shoot(
     state: &mut Session,
     content: &Content,
@@ -38,8 +33,6 @@ pub fn player_shoot_immediate(
         .and_then(Combat::active_body)
         .filter(|body| (0..6).contains(body))
         .ok_or_else(|| RuleError::Invalid("active warrior missing".into()))?;
-    let refresh_health =
-        state.warriors[body as usize].record().equipped_weapon()? == OWNED_FIREARM_HEALTH_CONTEXT;
     let events = match player_shoot_action(state, content, target) {
         Ok(mut events) => {
             events.insert(0, Event::Sound { resource_id: 145 });
@@ -52,7 +45,8 @@ pub fn player_shoot_immediate(
         Err(RuleError::Refused { feedback }) => feedback.into_iter().map(Event::Feedback).collect(),
         Err(error) => return Err(error),
     };
-    if refresh_health && state.combat.as_ref().and_then(Combat::active_body) != Some(body) {
+    // Getup's combatupdate2 refreshes the new actor independently of the old weapon.
+    if state.combat.as_ref().and_then(Combat::active_body) != Some(body) {
         refresh_active_item_context(state, content)?;
     }
     Ok(events)
@@ -224,9 +218,8 @@ pub(super) fn player_shoot_action_at(
             };
             if result.killed {
                 lifecycle::kill_body(c, &mut state.warriors, target)?;
-                if weapon_id == OWNED_FIREARM_HEALTH_CONTEXT
-                    && let Some(health) = state.health_context.as_mut()
-                {
+                // killbody12e506 retains every direct defeated body before returning.
+                if let Some(health) = state.health_context.as_mut() {
                     health.last_body = target;
                 }
             }
@@ -236,7 +229,8 @@ pub(super) fn player_shoot_action_at(
                     .into_iter()
                     .map(|resource_id| Event::Sound { resource_id }),
             );
-            if result.killed && weapon_id == OWNED_FIREARM_HEALTH_CONTEXT && target >= 10 {
+            // showresults158ee0 reads the defeated NPC's cue for every weapon.
+            if result.killed && target >= 10 {
                 let sound = c.enemies.records[(target - 10) as usize]
                     .record()
                     .death_sound()?;

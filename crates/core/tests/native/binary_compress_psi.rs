@@ -1,27 +1,27 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
 use centurions_core::combat::damage::DamageFlags;
 use centurions_core::combat::damage::DamagePacket;
 use centurions_core::combat::damage::resolve_damage;
 
-use crate::support::warriors as party;
+use support::warriors as party;
 
-use crate::support::monsters as enemies;
+use support::monsters as enemies;
 
-use crate::native_common::random_state as random;
+use native_common::random_state as random;
 
-use crate::native_common::body_spell_sounds as audio;
+use native_common::body_spell_sounds as audio;
 
 fn verify_receipts(case: &Value, actual: &RandomState) {
     let mut expected = random(&case["before"]);
-    crate::support::replay_rng(&mut expected, case.array("rng"));
+    support::replay_rng(&mut expected, case.array("rng"));
     assert_eq!(&expected, actual);
     assert_eq!(expected, random(&case["after"]));
 }
 
 #[test]
 fn three_complete_compress_resolutions_match_party_npc_records_rng_and_audio() {
-    let fixture = crate::support::fixture("compress-psi.json");
+    let fixture = support::fixture("compress-psi.json");
     let cases = fixture.array("cast_cases");
 
     for case in cases.iter().skip(1) {
@@ -51,7 +51,7 @@ fn three_complete_compress_resolutions_match_party_npc_records_rng_and_audio() {
             &mut actual,
         )
         .unwrap();
-        crate::native_common::assert_body_records(
+        native_common::assert_body_records(
             &result.warriors,
             &result.enemies,
             &after["party"],
@@ -69,7 +69,7 @@ fn three_complete_compress_resolutions_match_party_npc_records_rng_and_audio() {
         );
         assert!(result.race_excluded.is_empty());
         assert_eq!(result.targets.len(), 1);
-        crate::support::expect(result.targets[0].0, &case["target"]);
+        support::expect(result.targets[0].0, &case["target"]);
 
         if case["target"] == 18 {
             assert_eq!(result.targets[0].1.damage, 0);
@@ -79,7 +79,7 @@ fn three_complete_compress_resolutions_match_party_npc_records_rng_and_audio() {
 
 #[test]
 fn all_eight_mass_helper_controls_match_native_signed_products_and_complete_records() {
-    let fixture = crate::support::fixture("compress-psi.json");
+    let fixture = support::fixture("compress-psi.json");
     let cases = fixture.array("mass_cases");
 
     for case in cases {
@@ -104,10 +104,10 @@ fn all_eight_mass_helper_controls_match_native_signed_products_and_complete_reco
             &mut actual,
         )
         .unwrap();
-        crate::support::native_expect! {
-        scalar result.total => &case["damage"], "binary_compress_psi";
-        scalar result.total => &after["last_amount"], "binary_compress_psi";
-        bytes crate::support::record_bytes(&monsters) => &after["records"], "complete native helper records";
+        support::native_expect! {
+            scalar result.total => &case["damage"], "binary_compress_psi";
+            scalar result.total => &after["last_amount"], "binary_compress_psi";
+            records &monsters => &after["records"], "complete native helper records";
         }
 
         verify_receipts(case, &actual);
@@ -116,15 +116,14 @@ fn all_eight_mass_helper_controls_match_native_signed_products_and_complete_reco
 
 #[test]
 fn all_seven_reached_resolutions_match_native_records_cleanup_and_rng() {
-    let fixture = crate::support::fixture("compress-psi.json");
+    let fixture = support::fixture("compress-psi.json");
     let case = &fixture["cast_cases"][0];
-    let (combat, impacts, party_deaths) =
-        crate::native_common::spell_sequence(&fixture, case, Some(6));
+    let (combat, impacts, party_deaths) = native_common::spell_sequence(&fixture, case, Some(6));
     assert_eq!(impacts, [503, 503, 503, 402, 503, 108, 108]);
     assert_eq!(party_deaths, 1);
-    crate::support::native_expect! {
-    scalar combat.unavailable => &case["after"]["unavailable"], "compress unavailable";
-    words combat.order => &case["after"]["order"], "compress order";
-    words combat.map.tiles => &case["after"]["map"], "compress map";
+    support::native_expect! {
+        scalar combat.unavailable => &case["after"]["unavailable"], "compress unavailable";
+        words combat.order => &case["after"]["order"], "compress order";
+        words combat.map.tiles => &case["after"]["map"], "compress map";
     }
 }

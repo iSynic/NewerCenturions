@@ -1,16 +1,16 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::combat::allies::place_allies;
 use centurions_core::combat::allies::synchronize;
 use centurions_core::combat::runtime::neighbors;
 
-use crate::support::monsters as records;
+use support::monsters as records;
 
 #[test]
 fn ally_placement_matches_original_records_positions_and_map() {
-    let fixture = crate::support::fixture("ally-combat.json");
-    let large = crate::support::fixture("large-ally-placement.json");
-    let mission = crate::support::terrain_mission(&fixture);
+    let fixture = support::fixture("ally-combat.json");
+    let large = support::fixture("large-ally-placement.json");
+    let mission = support::terrain_mission(&fixture);
     for case in fixture
         .array("cases")
         .iter()
@@ -34,15 +34,12 @@ fn ally_placement_matches_original_records_positions_and_map() {
             &mut random,
         )
         .unwrap();
-        crate::support::native_expect! {
-        bytes crate::support::record_bytes(&result.records) => &case["records_after"], "ally placement";
-        words map.tiles => &case["map_after"], "ally placement";
-        scalar result.records.len() => &case["enemy_count"], "ally placement";
-        }
-        assert_eq!(
-            result.positions,
-            crate::support::positions(&case.bytes("positions"))
-        );
+        support::native_expect! {
+            records &result.records => &case["records_after"], "ally placement";
+            words map.tiles => &case["map_after"], "ally placement";
+            scalar result.records.len() => &case["enemy_count"], "ally placement";
+            positions result.positions => &case.bytes("positions"), "native positions";
+        };
         assert_eq!(random, RandomState::new(12));
     }
     let mut map = TacticalMap {
@@ -77,7 +74,7 @@ fn ally_placement_matches_original_records_positions_and_map() {
 
 #[test]
 fn original_bodycount_preserves_selection_order_rng_and_empty_survivor_quirk() {
-    let fixture = crate::support::fixture("ally-combat.json");
+    let fixture = support::fixture("ally-combat.json");
     for case in fixture
         .array("cases")
         .iter()
@@ -92,13 +89,12 @@ fn original_bodycount_preserves_selection_order_rng_and_empty_survivor_quirk() {
             &mut random,
         )
         .unwrap();
-        crate::support::native_expect! {
-        bytes result.menu => &case["menu_after"], "ally synchronization";
-        bytes crate::support::record_bytes(&records) => &case["records_after"], "ally synchronization";
-        scalar result.count => &case["count_after"], "ally synchronization";
-        scalar result.sounds => &case["sounds"], "ally synchronization";
-        scalar random.seed => &case["seed_after"], "binary_ally_combat";
-        scalar random.draws => &case["rng_draws"], "binary_ally_combat";
+        support::native_expect! {
+            bytes result.menu => &case["menu_after"], "ally synchronization";
+            records &records => &case["records_after"], "ally synchronization";
+            scalar result.count => &case["count_after"], "ally synchronization";
+            scalar result.sounds => &case["sounds"], "ally synchronization";
+            rng random => (&case["seed_after"], &case["rng_draws"]), "binary_ally_combat";
         }
         assert_eq!(result.modal, case.n::<u64>("dialogs") > 0);
     }
@@ -106,13 +102,13 @@ fn original_bodycount_preserves_selection_order_rng_and_empty_survivor_quirk() {
 
 #[test]
 fn adjacent_faction_targets_match_original_warrior_scientist_and_hostile_lists() {
-    let fixture = crate::support::fixture("ally-combat.json");
+    let fixture = support::fixture("ally-combat.json");
     for case in fixture
         .array("cases")
         .iter()
         .filter(|v| v["kind"] == "targets")
     {
-        let mut combat = crate::support::battle();
+        let mut combat = support::battle();
         combat.map.tiles = case.words("map");
         combat.map.shift = (-5, -5);
         combat.squad.positions = vec![(25, 25)];

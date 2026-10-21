@@ -18,7 +18,10 @@ their existence does not establish complete interactive or original-game parity.
 ## Local implementation checkpoint
 
 The maintained runtime keeps the compiler split and shared command boundary.
-Schema 12 saves retain readers for versions 1–11. Persistent round/death caller
+Schema 13 saves retain readers for versions 1–12. Version 13 adds the original
+retained natural-attack index used by unarmed NPC result audio. Historical saves
+leave that context unknown until an original writer establishes it; the reader
+does not guess an index. Persistent round/death caller
 ownership, retained death queues and script pauses are validated before replacing
 a session; older formats cannot silently admit those new contexts. Version 10 also
 retains outdoor camp/search state, clinic access and interrupted control actions.
@@ -45,11 +48,10 @@ conclusion and mission-one reset. Each recording is independently replayed and
 compared with saved suffixes. Assistance is explicit; these checks test
 functionality without requiring unaided campaign completion.
 
-This does not certify every alternative or obtainable feature. Remaining work
-is tracked in one reconciled completion inventory: complete original caller
-comparisons, broader combat/Psi/actor qualification, remaining branch coverage,
-Hive Leader fault qualification, and live presentation and interaction
-acceptance. All 35 historical case identities now have executed current ownership or an
+The headless Thunder checklist is complete at its recorded native/component
+service boundaries, except for the Hive Leader memory qualification below.
+This does not certify complete original-game fidelity or live desktop behavior.
+All 35 historical case identities now have executed current ownership or an
 exact independent superseding receipt. Ten original ray-dispatch and six movement-spell controls now compare actual
 commands and saved replay at explicit native service boundaries. Four historical
 occupied-refill controls also run through Move with documented NPC health
@@ -59,9 +61,9 @@ The two nested-caller cases compare the
 complete captured three-window sequence, retained records, queue/header bytes,
 RNG and ordered feedback. Their controlled service boundaries remain explicit.
 
-Current enforced accounting is 26,849 test code lines / 108,920 maintained
-production code lines (24.650202%, ceiling 25%). Physical totals are 28,084 test
-and 112,232 production lines. Test helpers and verification scripts are counted;
+Current enforced accounting is 27,545 test code lines / 110,367 maintained
+production code lines (24.9576%, ceiling 25%). Physical totals are 28,846 test
+and 113,840 production lines. Test helpers and verification scripts are counted;
 expanded bodies, generated catalogs, fixtures, vendor code and recovery tools
 are excluded from maintained production code. All frozen native references
 remain intact. New bounded native cases compare natural effects and all 256
@@ -69,6 +71,18 @@ original MacRoman case-fold outputs. A complete original opcode-8 header copy
 now agrees with the actual movement/save path. Original script replacement
 retains the full footer; Click Mouse pauses persist and resume through the
 desktop feedback handler. These are distinct from live observations.
+
+The latest caller pass compares 90 bounded original controls. It corrects rifle
+targeting and retry/Getup ordering, partial reload work, paid portrait-healing
+selection, enemy healing/death feedback, retained attack audio, owned-item
+inspection and battery refits. Three repeated six-route assisted campaign checks
+and the 316-test original-data workspace suite passed. Component and
+source-composed joins are explicitly distinguished from whole original UI runs.
+
+Hive Leader shape zero reads 49 bytes outside initialized mapped memory. The
+explicit zero-fill receipt qualifies that policy only; the actual original Mac
+memory and whole-turn behavior remain unverified. No guessed memory outcome is
+claimed as original-game parity.
 
 Fresh cold, representative maintained-runtime edit and no-change release
 measurements, compiler version, hardware and memory peaks are recorded in the
@@ -82,7 +96,7 @@ resource use require user-operated acceptance. Complete populated Mac save
 import, other genuine scenarios and publishing remain separate work. Experimental
 Linux and macOS builds are available; live acceptance on those platforms remains
 separate from compilation and save roundtrip checks.
-No automated desktop control or public release is part of this pass.
+Headless checks do not operate the user's desktop or close live acceptance.
 
 ## Recovery workflow
 

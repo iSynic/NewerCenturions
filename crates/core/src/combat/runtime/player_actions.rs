@@ -1,8 +1,6 @@
 //! Player actions in the original combat execution order.
-use super::{
-    alive, end_turn, finish_player_action, hostile, neighbors, position, refusal, resolve_attack,
-};
-use crate::combat::{Combat, lifecycle};
+use super::{end_turn, finish_player_action, neighbors, refusal, resolve_attack};
+use crate::combat::Combat;
 use crate::{Event, Phase, RandomState, RuleError, Session};
 use centurions_content::{Content, Warrior};
 
@@ -13,46 +11,7 @@ pub fn select_enemy_target(
     random: &mut RandomState,
     body: i16,
 ) -> Result<i16, RuleError> {
-    if body < 10 || body >= 10 + c.enemies.records.len() as i16 {
-        return Err(RuleError::Invalid("invalid targeting enemy".into()));
-    }
-    let e = (body - 10) as usize;
-    let mut target = c.enemies.records[e].record().target_body()?;
-    if !alive(c, w, target) || !hostile(c, w, body, target)? {
-        let mut selected = None;
-        for _ in 0..10000 {
-            let t = random.bound(c.enemies.records.len() as i16 + 10) - 1;
-            if alive(c, w, t) && hostile(c, w, body, t)? {
-                selected = Some(t);
-                break;
-            }
-        }
-        target = selected.ok_or_else(|| RuleError::Invalid("no eligible enemy target".into()))?;
-    }
-    let mut scan = 0;
-    let selected_target = target;
-    loop {
-        c.enemies.records[e].record_mut().set_target_body(target);
-        if lifecycle::can_see(c, mission, position(c, body), position(c, target), 0)? {
-            break;
-        }
-        if scan >= 110 {
-            target = selected_target;
-            c.enemies.records[e].record_mut().set_target_body(target);
-            break;
-        }
-        target = scan;
-        scan += 1;
-        while !alive(c, w, target) || !hostile(c, w, body, target)? {
-            if scan >= 110 {
-                target = selected_target;
-                break;
-            }
-            target = scan;
-            scan += 1;
-        }
-    }
-    Ok(target)
+    crate::combat::targeting::select_actor_target(c, w, mission, random, body)
 }
 
 pub fn player_guard(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {

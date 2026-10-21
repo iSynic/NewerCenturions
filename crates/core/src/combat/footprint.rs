@@ -308,10 +308,19 @@ pub(crate) fn move_enemy_before_place(
     let size = size(monster)?;
     let fleeing = monster.bytes[0xb2] != 0;
     let target = word(&monster.bytes, 0x10c)?;
-    let target_position = if (0..6).contains(&target) {
-        combat.squad.positions.get(target as usize)
+    // movemonster13e2b6 indexes the native party-coordinate array with -1.
+    // 44709a - 4 is retained NPC99 at 446f0a + 99*4, not a zero default.
+    let retained_position = if target == -1 {
+        Some(combat.story_position(99)?)
     } else if target >= 10 {
-        combat.enemies.positions.get((target - 10) as usize)
+        Some(combat.story_position((target - 10) as usize)?)
+    } else {
+        None
+    };
+    let target_position = if let Some(position) = retained_position.as_ref() {
+        Some(position)
+    } else if (0..6).contains(&target) {
+        combat.squad.positions.get(target as usize)
     } else {
         None
     }

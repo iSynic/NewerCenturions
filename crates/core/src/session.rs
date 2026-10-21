@@ -107,6 +107,7 @@ impl Session {
         let context = content.context(self.mission.as_deref(), self.scenario_level)?;
         let content = context.as_ref();
         self.ammunition_work.validate()?;
+        self.weapon_work.validate()?;
         if self
             .loot_quality
             .as_ref()

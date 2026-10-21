@@ -134,6 +134,7 @@ pub fn weapon_work(read: &dyn Fn(&str) -> Vec<u8>) -> WeaponWork {
     let weapon = read("weapon_work");
     let ammunition = read("ammo_work");
     WeaponWork {
+        natural_attack_index: None,
         sound: Some(word(&weapon, 14).unwrap()),
         weapon_armor_filter: Some(word(&weapon, 136).unwrap()),
         ammunition_armor_filter: Some(word(&ammunition, 136).unwrap()),

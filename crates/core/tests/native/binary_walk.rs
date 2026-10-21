@@ -1,18 +1,18 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::combat::move_warrior;
 
 #[test]
 fn walking_matches_instruction_state_and_effects() {
-    let fixture: serde_json::Value = crate::support::fixture("walk.json");
+    let fixture: serde_json::Value = support::fixture("walk.json");
     let content = Content {
         scenario: Some(centurions_content::mission::ScenarioContent::single(
             OpeningMission {
                 default_tile: 0,
-                ..crate::support::terrain_mission(&fixture)
+                ..support::terrain_mission(&fixture)
             },
         )),
-        ..crate::support::fixture_content("walking")
+        ..support::fixture_content("walking")
     };
     for case in fixture.array("cases") {
         let dx = case.n::<i8>("dx");
@@ -23,7 +23,7 @@ fn walking_matches_instruction_state_and_effects() {
         tiles[25 * 90 + 25] = 0;
         tiles[(25 + i32::from(dx)) as usize * 90 + (25 + i32::from(dy)) as usize] =
             case.n::<i16>("tile");
-        let mut combat = crate::support::battle();
+        let mut combat = support::battle();
         combat.battle = 2;
         combat.map.tiles = tiles;
         combat.squad.positions = vec![(20, 20); 6];
@@ -32,21 +32,14 @@ fn walking_matches_instruction_state_and_effects() {
         let events = move_warrior(&mut state, &content, dx, dy).unwrap();
         assert_eq!(state.warriors[0].bytes, case.bytes("after"));
         let combat = state.combat.unwrap();
-        assert_eq!(
-            crate::support::word_bytes(&combat.map.tiles),
-            case.bytes("tiles")
-        );
+        assert_eq!(support::word_bytes(&combat.map.tiles), case.bytes("tiles"));
         assert_eq!(
             combat.squad.positions[0],
             (case.n::<i16>("x"), case.n::<i16>("y"))
         );
-        crate::support::expect(combat.squad.under_tiles[0], &case["under"]);
-        let sounds = crate::support::event_sounds(&events);
-        let mut expected_sounds = case
-            .array("sounds")
-            .iter()
-            .map(|v| v.as_i64().unwrap() as i16)
-            .collect::<Vec<_>>();
+        support::expect(combat.squad.under_tiles[0], &case["under"]);
+        let sounds = support::event_sounds(&events);
+        let mut expected_sounds = case.n::<Vec<i16>>("sounds");
         // This probe stops at the failure label before the caller's final sound.
         // The complete caller is covered by binary_warrior_opportunity.
         if !events

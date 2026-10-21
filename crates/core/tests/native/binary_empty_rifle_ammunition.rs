@@ -1,26 +1,22 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
 use centurions_core::ammunition;
 use centurions_core::ammunition::RefitFlags;
 use centurions_core::ammunition::WorkBuffers;
 use centurions_core::items;
 
-use crate::native_common::snapshot_party as party;
+use native_common::snapshot_party as party;
 fn reserves(snapshot: &Value) -> Vec<i32> {
-    crate::support::longs(&snapshot.bytes("ammunition"))
+    support::longs(&snapshot.bytes("ammunition"))
 }
 
-use crate::support::compare_party_named as assert_party;
-fn sounds(snapshot: &Value) -> Vec<i16> {
-    snapshot.n::<Vec<i16>>("sounds")
-}
+use support::compare_party_named as assert_party;
+
 #[test]
 fn actual_empty_rifle_collection_wear_and_compaction_match_four_native_cases() {
-    let f = crate::support::fixture("empty-rifle-ammunition.json");
+    let f = support::fixture("empty-rifle-ammunition.json");
     let content = content();
-    let map = f["foundations"][0]["session"]["exploration"]["map"]
-        .as_u64()
-        .unwrap() as i32;
+    let map = f["foundations"][0]["session"]["exploration"].n::<i32>("map");
     let mission = content.map(map).unwrap();
 
     for (i, case) in f.array("wear_cases").iter().enumerate() {
@@ -38,7 +34,7 @@ fn actual_empty_rifle_collection_wear_and_compaction_match_four_native_cases() {
         assert_eq!(word(&original.0, 4).unwrap(), 0);
         let collected = equipment::collect_item(&w[0], &original, &content, mission).unwrap();
         assert!(collected.collected);
-        assert_eq!(collected.sounds, sounds(&case["picked"]));
+        assert_eq!(collected.sounds, case["picked"].n::<Vec<i16>>("sounds"));
         w[0] = collected.warrior;
         assert_party(&w, &case["picked"], &format!("pickup{i}"));
         assert_eq!(collected.item.id(), 0);
@@ -54,7 +50,7 @@ fn actual_empty_rifle_collection_wear_and_compaction_match_four_native_cases() {
         assert!(result.warnings.is_empty());
         assert_eq!(
             result.sounds,
-            &sounds(&case["worn"])[sounds(&case["picked"]).len()..]
+            &case["worn"].n::<Vec<i16>>("sounds")[case["picked"].n::<Vec<i16>>("sounds").len()..]
         );
         w[0] = result.warrior;
         assert_party(&w, &case["worn"], &format!("wear{i}"));
@@ -65,7 +61,7 @@ fn actual_empty_rifle_collection_wear_and_compaction_match_four_native_cases() {
 }
 #[test]
 fn selected_203_ammunition_matches_24_native_callers_complete_party_stock_rng_and_audio() {
-    let f = crate::support::fixture("empty-rifle-ammunition.json");
+    let f = support::fixture("empty-rifle-ammunition.json");
     let content = content();
 
     for (i, case) in f.array("manual_cases").iter().enumerate() {
@@ -92,7 +88,7 @@ fn selected_203_ammunition_matches_24_native_callers_complete_party_stock_rng_an
             reserves(after),
             "manual{i} all200 reserves"
         );
-        crate::support::expect(result.loaded_item_field32, &after["item_context"]);
+        support::expect(result.loaded_item_field32, &after["item_context"]);
         assert_eq!(
             result.loaded,
             case.n::<i64>("reserve203") > 0,
@@ -100,13 +96,10 @@ fn selected_203_ammunition_matches_24_native_callers_complete_party_stock_rng_an
         );
         assert_eq!(
             result.sounds,
-            &sounds(after)[sounds(before).len()..],
+            &after.n::<Vec<i16>>("sounds")[before.n::<Vec<i16>>("sounds").len()..],
             "manual{i} audio"
         );
-        crate::support::native_expect! {
-        scalar random.seed => &after["rng_seed"], "binary_empty_rifle_ammunition";
-        scalar random.draws => &after["rng_draws"], "binary_empty_rifle_ammunition";
-        }
+        support::assert_rng(&random, &after["rng_seed"], &after["rng_draws"]);
 
         if result.loaded {
             assert_eq!(
@@ -121,7 +114,7 @@ fn selected_203_ammunition_matches_24_native_callers_complete_party_stock_rng_an
 }
 #[test]
 fn automatic_empty_refit_matches_twelve_native_direct_helper_cases() {
-    let f = crate::support::fixture("empty-rifle-ammunition.json");
+    let f = support::fixture("empty-rifle-ammunition.json");
     let content = content();
 
     for (i, case) in f.array("refit_cases").iter().enumerate() {
@@ -182,7 +175,7 @@ fn automatic_empty_refit_matches_twelve_native_direct_helper_cases() {
         warriors[0] = result.warrior;
         assert_party(&warriors, after, &format!("refit{i} all six warriors"));
         assert_eq!(result.reserves, reserves(after), "refit{i} all200 reserves");
-        crate::support::expect(result.native_return, &case["refit_return"]);
+        support::expect(result.native_return, &case["refit_return"]);
         for (actual, key) in [
             (result.work.item, "item_work"),
             (result.work.weapon, "weapon"),
@@ -194,20 +187,20 @@ fn automatic_empty_refit_matches_twelve_native_direct_helper_cases() {
                 "refit{i} full150 {key}"
             );
         }
-        assert_eq!(result.sounds, sounds(after)[sounds(before).len()..]);
+        assert_eq!(
+            result.sounds,
+            after.n::<Vec<i16>>("sounds")[before.n::<Vec<i16>>("sounds").len()..]
+        );
         assert!(result.warnings.is_empty());
         let mut independent = RandomState {
             seed: before.n::<u32>("rng_seed"),
             draws: before.n::<u64>("rng_draws"),
         };
-        crate::support::replay_rng(
+        support::replay_rng(
             &mut independent,
             &after.array("draws")[before.array("draws").len()..],
         );
         assert_eq!(random, independent);
-        crate::support::native_expect! {
-        scalar random.seed => &after["rng_seed"], "binary_empty_rifle_ammunition";
-        scalar random.draws => &after["rng_draws"], "binary_empty_rifle_ammunition";
-        }
+        support::assert_rng(&random, &after["rng_seed"], &after["rng_draws"]);
     }
 }

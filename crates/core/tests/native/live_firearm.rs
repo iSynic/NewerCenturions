@@ -1,8 +1,8 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::combat::*;
 
-use crate::support::positions;
+use support::positions;
 fn origin(c: &serde_json::Value) -> (i16, i16) {
     let b = c.bytes("origin");
     (
@@ -13,15 +13,15 @@ fn origin(c: &serde_json::Value) -> (i16, i16) {
 
 #[test]
 fn composed_shot_matches_live_original_records_rng_and_next_turn() {
-    let f: serde_json::Value = crate::support::fixture("live-firearm.json");
+    let f: serde_json::Value = support::fixture("live-firearm.json");
 
-    let content = crate::support::content();
+    let content = support::content();
     let before = &f["before"];
     let after = &f["after"];
     let c = &before["combat"];
     let hex = |key: &str| c[key].as_str().unwrap();
     let o = origin(c);
-    let mut state = crate::support::mission_session(&content);
+    let mut state = support::mission_session(&content);
     state.phase = Phase::Combat;
     state.warriors = before
         .array("warriors")
@@ -29,25 +29,17 @@ fn composed_shot_matches_live_original_records_rng_and_next_turn() {
         .map(|v| Warrior::read(&decode(v.as_str().unwrap())).unwrap())
         .collect();
     state.random = RandomState::new(before.n::<u32>("random_seed"));
-    state.combat = Some(Combat {
-        battle: 2,
-        map: TacticalMap {
-            tiles: words(hex("map")),
-            shift: (o.0 - 5, o.1 - 5),
-            edge_word: 0,
-        },
-        squad: SquadPlacement {
-            positions: positions(hex("squad_positions")),
-            under_tiles: words(hex("under_tiles")),
-        },
-        enemies: EnemySetup {
-            records: crate::support::monsters(&decode(hex("enemies"))),
-            positions: positions(hex("enemy_positions")),
-        },
-        order: words(hex("order")),
-        cursor: words(hex("cursor_enemy_index"))[0] as usize,
-        ..crate::support::battle()
-    });
+    let mut combat = support::battle();
+    combat.battle = 2;
+    combat.map.tiles = words(hex("map"));
+    combat.map.shift = (o.0 - 5, o.1 - 5);
+    combat.squad.positions = positions(hex("squad_positions"));
+    combat.squad.under_tiles = words(hex("under_tiles"));
+    combat.enemies.records = support::monsters(&decode(hex("enemies")));
+    combat.enemies.positions = positions(hex("enemy_positions"));
+    combat.order = words(hex("order"));
+    combat.cursor = words(hex("cursor_enemy_index"))[0] as usize;
+    state.combat = Some(combat);
     let events = apply(Command::ShootEnemy { body: 12 }, &mut state, &content).unwrap();
     assert!(events.iter().any(|e| matches!(
         e,
@@ -58,7 +50,7 @@ fn composed_shot_matches_live_original_records_rng_and_next_turn() {
             defeated: false
         }
     )));
-    crate::support::expect(state.random.seed, &after["random_seed"]);
+    support::expect(state.random.seed, &after["random_seed"]);
     for (i, warrior) in state.warriors.iter().enumerate() {
         assert_eq!(
             warrior.bytes,
@@ -72,11 +64,11 @@ fn composed_shot_matches_live_original_records_rng_and_next_turn() {
         c.cursor,
         words(expected.text("cursor_enemy_index"))[0] as usize
     );
-    crate::support::native_expect! {
-    words &(c.order) => &expected["order"], "live_firearm";
-    words &(c.map.tiles) => &expected["map"], "live_firearm";
-    bytes crate::support::record_bytes(&c.enemies.records) => &expected["enemies"], "live_firearm";
-    words &(c.squad.under_tiles) => &expected["under_tiles"], "live_firearm";
+    support::native_expect! {
+        words &(c.order) => &expected["order"], "live_firearm";
+        words &(c.map.tiles) => &expected["map"], "live_firearm";
+        records &c.enemies.records => &expected["enemies"], "live_firearm";
+        words &(c.squad.under_tiles) => &expected["under_tiles"], "live_firearm";
     }
     let after_origin = origin(expected);
     for (actual, key) in [&c.squad.positions, &c.enemies.positions]
@@ -94,17 +86,17 @@ fn composed_shot_matches_live_original_records_rng_and_next_turn() {
 
 #[test]
 fn victory_point_fields_match_live_original_five_wasp_rewards() {
-    let f: serde_json::Value = crate::support::fixture("live-firearm.json");
+    let f: serde_json::Value = support::fixture("live-firearm.json");
     let v = &f["victory"];
     let mut warriors: Vec<_> = v
         .array("warriors")
         .iter()
         .map(|w| Warrior::read(&decode(w.as_str().unwrap())).unwrap())
         .collect();
-    let mut enemies: Vec<_> = crate::support::monsters(&v["enemies"]);
+    let mut enemies: Vec<_> = support::monsters(&v["enemies"]);
     let share =
         runtime::victory_records(&mut warriors, &mut enemies, &mut RandomState::new(12)).unwrap();
-    crate::support::expect(share, &v["share"]);
+    support::expect(share, &v["share"]);
     for (i, w) in warriors.iter().enumerate() {
         let expected = decode(v["after_warriors"][i].as_str().unwrap());
         assert_eq!(

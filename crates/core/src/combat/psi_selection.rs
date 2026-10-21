@@ -150,57 +150,31 @@ pub(crate) fn fire_warrior(
     pending.validate(state)?;
     let combat = state.combat.as_ref().unwrap();
     let packet = combat.attack_packet.as_ref().unwrap();
-    let target = *combat
-        .squad
-        .positions
-        .get(warrior)
-        .ok_or("portrait scan warrior missing")?;
-    if packet[1] != 1 || !(pending.spell == 1101 || word(packet, 40)? == 64) {
-        return Err("scan has no portrait target handler".into());
-    }
-    if pending.spell == 1101 {
-        state.psi_selection = None;
-        state.selected_warrior = pending.actor;
-        let mut health = crate::story_health::context(
-            &state.warriors,
-            pending.actor,
-            state.health_context.as_ref(),
-        );
-        health.affected[pending.actor] = 1;
-        health.effect = packet[18] as i8;
-        state.health_context = Some(health);
-        state.medical_continuation = Some(crate::MedicalContinuation {
-            origin: crate::MedicalOrigin::LearnedHeal,
-            actor: pending.actor,
-            item: 0,
-            spell: pending.spell,
-            power: pending.power,
+    // combatchoice119dd2 accepts the healing effect57, not revival effect64.
+    if packet[1] != 1 || word(packet, 40)? != 57 {
+        return Err(RuleError::Refused {
+            feedback: vec![crate::feedback::NativeFeedback::Sound { resource_id: 143 }],
         });
-        runtime::refresh_active_item_context(state, content)?;
-        return runtime::select_medical_target(
-            state,
-            content,
-            crate::MedicalTarget::Portrait { warrior },
-        );
     }
-    if state.psi_memory.is_none() {
-        state.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
-    }
-    let mut events = player_psi::cast_prepared_at(
-        state,
-        mission(state, content)?,
-        &pending,
-        target,
-        0,
-        Some(warrior as i16),
-    )?;
     state.psi_selection = None;
-    events.extend(runtime::finish_player_action(
-        state,
-        content,
-        pending.actor as i16,
-    )?);
-    Ok(events)
+    state.selected_warrior = pending.actor;
+    let mut health = crate::story_health::context(
+        &state.warriors,
+        pending.actor,
+        state.health_context.as_ref(),
+    );
+    health.affected[pending.actor] = 1;
+    health.effect = packet[18] as i8;
+    state.health_context = Some(health);
+    state.medical_continuation = Some(crate::MedicalContinuation {
+        origin: crate::MedicalOrigin::LearnedHeal,
+        actor: pending.actor,
+        item: 0,
+        spell: pending.spell,
+        power: pending.power,
+    });
+    runtime::refresh_active_item_context(state, content)?;
+    runtime::select_medical_target(state, content, crate::MedicalTarget::Portrait { warrior })
 }
 
 pub(crate) fn begin_targeting(

@@ -1,69 +1,28 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
-use crate::support::warriors as party;
 use centurions_core::combat::attack;
 use centurions_core::combat::damage;
 use centurions_core::combat::party_buffs;
+use support::warriors as party;
 
-use crate::support::positions;
+use support::{assert_bytes, record_bytes as flatten_party};
 
-use crate::support::{assert_bytes, record_bytes as flatten_party};
-
-fn combat(s: &Value, caster: i16) -> Combat {
-    let mut order = vec![-1; 110];
-    order[1] = caster;
-    Combat {
-        battle: 85,
-        map: TacticalMap {
-            tiles: words(s.text("map")),
-            shift: (0, 0),
-            edge_word: 0,
-        },
-        squad: SquadPlacement {
-            positions: positions(s.text("party_positions")),
-            under_tiles: vec![1155; 6],
-        },
-        enemies: EnemySetup {
-            records: crate::support::monsters(&s["records"]),
-            positions: positions(s.text("monster_positions")),
-        },
-        order,
-        spell_fields: s.bytes("fields"),
-        field_used: s.bytes("used"),
-        attack_packet: Some(s.bytes("packet")),
-        attack_identity: Some(words(s.text("identity")).try_into().unwrap()),
-        unavailable: s.n::<i8>("unavailable"),
-        ..crate::support::battle()
-    }
+fn combat(snapshot: &Value, caster: i16) -> Combat {
+    let mut combat = support::psi_frame::combat(snapshot);
+    combat.order = vec![-1; 110];
+    combat.order[1] = caster;
+    combat.cursor = 1;
+    combat.round = 0;
+    combat
 }
 fn compare(c: &Combat, w: &[Warrior], s: &Value, label: &str) {
-    crate::support::native_expect! {
-    bytes flatten_party(w) => &s["party"], &format!("{label} party");
-    bytes crate::support::record_bytes(&c.enemies.records) => &s["records"], &format!("{label} records");
-    words &(c.map.tiles) => &s["map"], "binary_support_psi";
-    }
-    assert_eq!(
-        c.squad.positions,
-        positions(s.text("party_positions")),
-        "{label} party positions"
-    );
-    assert_eq!(
-        c.enemies.positions,
-        positions(s.text("monster_positions")),
-        "{label} enemy positions"
-    );
-    crate::support::native_expect! {
-    bytes c.spell_fields => &s["fields"], &format!("{label} fields");
-    bytes c.field_used => &s["used"], &format!("{label} used");
-    bytes c.attack_packet.as_ref().unwrap() => &s["packet"], &format!("{label} packet");
-    words &(c.attack_identity.unwrap().to_vec()) => &s["identity"], "binary_support_psi";
-    scalar c.unavailable as u8 => &s["unavailable"], "binary_support_psi";
-    }
+    support::psi_frame::compare(c, w, s, label);
+    assert_eq!(c.unavailable as u8, s.n::<u8>("unavailable"), "{label}");
 }
-use crate::support::event_sounds as sounds;
+use support::event_sounds as sounds;
 #[test]
 fn support_casts_match_complete_native_records_packets_memory_rng_and_audio() {
-    let f = crate::support::fixture("player-support-psi.json");
+    let f = support::fixture("player-support-psi.json");
     let content = content();
     let mission = content.map(0).unwrap();
 
@@ -112,12 +71,12 @@ fn support_casts_match_complete_native_records_packets_memory_rng_and_audio() {
             case.n::<Vec<i16>>("sounds"),
             "{label} sounds"
         );
-        assert_eq!(random, crate::native_common::random_state(after));
+        assert_eq!(random, native_common::random_state(after));
     }
 }
 #[test]
 fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
-    let f = crate::support::fixture("player-support-psi.json");
+    let f = support::fixture("player-support-psi.json");
     let content = content();
     let attacks = &content.map(0).unwrap().combat.as_ref().unwrap().attacks;
 
@@ -158,7 +117,7 @@ fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
         .unwrap_or_else(|e| panic!("{label} {e:?}"));
         c.attack_packet = Some(packet);
         compare(&c, &w, after, &label);
-        assert_eq!(random, crate::native_common::random_state(after));
+        assert_eq!(random, native_common::random_state(after));
         let mut sounds = result.sounds;
         sounds.push(if result.damage == 0 {
             650
@@ -173,21 +132,19 @@ fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
 }
 #[test]
 fn party_timers_and_damage_modifier_match_independent_native_branches() {
-    let f = crate::support::fixture("player-support-psi.json");
+    let f = support::fixture("player-support-psi.json");
     for (i, case) in f.array("tick_cases").iter().enumerate() {
         let mut buffs = case["before"].bytes("party_buffs");
         party_buffs::reduce(&mut buffs).unwrap();
-        assert_bytes(
-            &buffs,
-            &case["after"].bytes("party_buffs"),
-            &format!("tick {i}"),
-        );
+        support::native_expect! {
+            bytes &buffs => &case["after"].bytes("party_buffs"), &format!("tick {i}");
+        };
     }
     for (i, case) in f.array("mitigation_cases").iter().enumerate() {
         let buffs = case["before"].bytes("party_buffs");
         let amount = case["before"].n::<i16>("last_amount");
         let result = party_buffs::attack2_damage(&buffs, 0, amount).unwrap();
-        crate::support::expect(result.unwrap_or(amount), &case["after"]["last_amount"]);
+        support::expect(result.unwrap_or(amount), &case["after"]["last_amount"]);
         assert_eq!(
             if result.is_some() { vec![-694] } else { vec![] },
             case.n::<Vec<i16>>("sounds"),
@@ -197,7 +154,7 @@ fn party_timers_and_damage_modifier_match_independent_native_branches() {
 }
 #[test]
 fn electric_ward_matches_native_damage_component_rng_and_target_flags() {
-    let f = crate::support::fixture("player-support-psi.json");
+    let f = support::fixture("player-support-psi.json");
     for (i, case) in f.array("electric_cases").iter().enumerate() {
         let label = format!("electric {i}");
         let before = &case["before"];
@@ -220,27 +177,27 @@ fn electric_ward_matches_native_damage_component_rng_and_target_flags() {
             &mut random,
         )
         .unwrap();
-        crate::support::native_expect! {
-        scalar result.total => &case["damage"], "binary_support_psi";
-        bytes flatten_party(&w) => &after["party"], &format!("{label} party");
+        support::native_expect! {
+            scalar result.total => &case["damage"], "binary_support_psi";
+            bytes flatten_party(&w) => &after["party"], &format!("{label} party");
         }
-        assert_eq!(random, crate::native_common::random_state(after));
+        assert_eq!(random, native_common::random_state(after));
         assert!(!result.shield_sound);
         assert!(case.n::<Vec<i16>>("sounds").is_empty());
     }
 }
 #[test]
 fn mode_affordability_and_geometry_match_native_preflight_without_mutation() {
-    let f = crate::support::fixture("player-support-psi.json");
+    let f = support::fixture("player-support-psi.json");
     let content = content();
     let mission = content.map(0).unwrap();
     for case in f.array("admission_cases").iter() {
         let before = &case["before"];
         let packet = before.bytes("packet");
         let w = party(before.text("party"));
-        crate::support::native_expect! {
-        scalar player_psi::mode_allowed(&packet, case.n::<bool>("combat")).unwrap() => &case["mode_allowed"], "binary_support_psi";
-        scalar w[5].psi_points().unwrap() >= player_psi::cost(&packet, 1).unwrap() => &case["affordable"], "binary_support_psi";
+        support::native_expect! {
+            scalar player_psi::mode_allowed(&packet, case.n::<bool>("combat")).unwrap() => &case["mode_allowed"], "binary_support_psi";
+            scalar w[5].psi_points().unwrap() >= player_psi::cost(&packet, 1).unwrap() => &case["affordable"], "binary_support_psi";
         }
     }
     for case in f.array("geometry_cases").iter() {
@@ -248,15 +205,15 @@ fn mode_affordability_and_geometry_match_native_preflight_without_mutation() {
         let c = combat(before, 0);
         let packet = before.bytes("packet");
         let range = player_psi::range(&packet, 1).unwrap();
-        crate::support::expect(range, &case["range"]);
+        support::expect(range, &case["range"]);
         let target = (20 + case.n::<i16>("distance"), 20);
-        crate::support::expect(
+        support::expect(
             player_psi::in_range((20, 20), target, range),
             &case["in_range"],
         );
         let sight = case["spell_id"] == 1101
             || centurions_core::combat::lifecycle::can_see(&c, mission, (20, 20), target, 0)
                 .unwrap();
-        crate::support::expect(sight, &case["sight_allowed"]);
+        support::expect(sight, &case["sight_allowed"]);
     }
 }

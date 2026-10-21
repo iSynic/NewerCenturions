@@ -97,6 +97,7 @@ pub struct AmmunitionResult {
     pub sounds: Vec<i16>,
     pub warnings: Vec<i16>,
     pub changed_ammo: bool,
+    pub(crate) retained_record: Option<InventoryRecord>,
 }
 
 fn unsupported(dependency: &'static str) -> RuleError {
@@ -136,14 +137,17 @@ fn validate_instance(record: &InventoryRecord, content: &Content) -> Result<i16,
     let loaded = word(&record.0, 4)?;
     let compatible = |id| -> Result<bool, RuleError> {
         let ammo = definition(content, id)?;
-        Ok(word(&ammo, 26)? == 26
-            && (category == 20 || word(&ammo, 18)? == 0)
-            && word(&weapon, 32)? == word(&ammo, 34)?)
+        // refit14e5e4 matches the caliber even when ammunition has a use effect.
+        // fit handles those effects separately after its candidate is selected.
+        Ok(word(&ammo, 26)? == 26 && word(&weapon, 32)? == word(&ammo, 34)?)
     };
     if loaded != 0 {
-        if !(200..400).contains(&loaded) || !compatible(loaded)? {
+        // refit14e5e4 uses an existing magazine's reserve index directly. Its
+        // empty-magazine branch can itself write 200 + inventory slot here.
+        if !(200..400).contains(&loaded) {
             return Err("incompatible loaded ammunition".into());
         }
+        definition(content, loaded)?;
         return Ok(loaded);
     }
     for id in 200..400 {
@@ -195,6 +199,7 @@ fn initial(
         sounds: vec![],
         warnings: vec![],
         changed_ammo: false,
+        retained_record: None,
     })
 }
 
@@ -224,15 +229,11 @@ fn refill_energy(
     }
     if word(&result.warrior.bytes, offset + 2)? > 0 {
         if remove_first {
-            result.warrior =
-                crate::editor_items::equipment_record(&result.warrior, content, slot, false)?.0;
+            refit_equipment(result, content, slot, false)?;
         }
         put_word(&mut result.warrior.bytes, 0xee, 0);
         result.warrior.bytes[offset + 9] = 0;
-        let (warrior, warnings) =
-            crate::editor_items::equipment_record(&result.warrior, content, slot, true)?;
-        result.warrior = warrior;
-        result.warnings.extend(warnings);
+        refit_equipment(result, content, slot, true)?;
         if result.warrior.bytes[offset + 9] != 0 {
             let id = word(&result.warrior.bytes, offset)?;
             result.sounds.push(word(&definition(content, id)?, 12)?);
@@ -241,6 +242,30 @@ fn refill_energy(
         let energy = word(&result.warrior.bytes, 0x26)?.wrapping_add(amount);
         put_word(&mut result.warrior.bytes, 0x26, energy);
     }
+    Ok(())
+}
+
+fn refit_equipment(
+    result: &mut AmmunitionResult,
+    content: &Content,
+    slot: usize,
+    wearing: bool,
+) -> Result<(), RuleError> {
+    let retained = result.retained_record.as_ref().ok_or_else(|| {
+        unsupported("unrepresented selected inventory record for battery re-wear")
+    })?;
+    let equipped = crate::editor_items::retained_equipment(
+        &result.warrior,
+        content,
+        slot,
+        wearing,
+        false,
+        retained,
+    )?;
+    result.warrior = equipped.warrior;
+    result.retained_record = Some(equipped.record);
+    result.work.item = Some(equipped.definition);
+    result.warnings.extend(equipped.warnings);
     Ok(())
 }
 
@@ -275,6 +300,29 @@ pub fn refit(
     work: &WorkBuffers,
     random: &mut RandomState,
 ) -> Result<AmmunitionResult, RuleError> {
+    // The historical primitive API supplies its selected battery row. Session
+    // callers supply the actual retained record through refit_with_record.
+    let retained = warrior.inventory()?.into_iter().find(|row| row.0[10] == 20);
+    refit_with_record(
+        warrior,
+        reserves,
+        content,
+        flags,
+        work,
+        random,
+        retained.as_ref(),
+    )
+}
+
+pub(crate) fn refit_with_record(
+    warrior: &Warrior,
+    reserves: &[i32],
+    content: &Content,
+    flags: RefitFlags,
+    work: &WorkBuffers,
+    random: &mut RandomState,
+    retained: Option<&InventoryRecord>,
+) -> Result<AmmunitionResult, RuleError> {
     let inventory = warrior.inventory()?;
     for record in inventory.iter().filter(|record| record.0[9] != 0) {
         let loaded = word(&record.0, 2)?;
@@ -284,6 +332,7 @@ pub fn refit(
         }
     }
     let mut result = initial(warrior, reserves, work)?;
+    result.retained_record = retained.cloned();
     let mut next_random = random.clone();
     for (slot, record) in inventory.iter().enumerate() {
         let offset = 0x132 + slot * 22;
@@ -407,6 +456,9 @@ pub(crate) fn commit_result(
     state.warriors[member] = result.warrior;
     state.ammunition = result.reserves;
     state.ammunition_work = result.work;
+    if let Some(record) = result.retained_record {
+        state.inventory_record = Some(record);
+    }
     Ok(result
         .sounds
         .into_iter()

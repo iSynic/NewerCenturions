@@ -1,10 +1,10 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 // Protects complete creation records, original stat rounding and both random-stream boundaries.
 #[test]
 fn creation_rolls_match_native_records_and_random_consumption() {
-    let content = crate::support::content();
-    for case in crate::support::fixture("new-warrior.json").array("cases") {
+    let content = support::content();
+    for case in support::fixture("new-warrior.json").array("cases") {
         let mut state = Session::new(&content);
         state.random = RandomState::new(case.n("seed_before"));
         apply(
@@ -23,15 +23,10 @@ fn creation_rolls_match_native_records_and_random_consumption() {
             &content,
         )
         .unwrap();
-        crate::support::assert_bytes(
-            &state.warriors[0].bytes,
-            &case.bytes("after"),
-            case.text("case"),
-        );
-        assert_eq!(
-            (state.random.seed, state.random.draws),
-            (case.n("seed_after"), case.n("draws"))
-        );
+        support::native_expect! {
+            bytes &state.warriors[0].bytes => &case.bytes("after"), case.text("case");
+        };
+        support::assert_rng(&state.random, &case["seed_after"], &case["draws"]);
         assert_eq!(state.library_random_draws, 0);
         let events = apply(Command::CreationEquipment, &mut state, &content).unwrap();
         assert_eq!(
@@ -43,14 +38,13 @@ fn creation_rolls_match_native_records_and_random_consumption() {
                 })
                 .collect::<Vec<_>>()
         );
-        crate::support::assert_bytes(
-            &state.warriors[0].bytes,
-            &case.bytes("after_initial_items"),
-            case.text("case"),
-        );
-        assert_eq!(
-            (state.random.seed, state.random.draws),
-            (case.n("items_seed_after"), case.n("items_draws"))
+        support::native_expect! {
+            bytes &state.warriors[0].bytes => &case.bytes("after_initial_items"), case.text("case");
+        };
+        support::assert_rng(
+            &state.random,
+            &case["items_seed_after"],
+            &case["items_draws"],
         );
     }
 }

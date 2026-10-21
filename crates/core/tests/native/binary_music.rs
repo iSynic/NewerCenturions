@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 use centurions_core::recovered_prompt_control::{PromptControlState, PromptLimits, submit_music};
 use centurions_core::recovered_rendering::RenderingMemory;
 
@@ -8,7 +8,7 @@ mod no_services;
 // Complete native A5/RNG and ordered hardware contracts; no playback or full registry.
 #[test]
 fn native_music_boundaries_preserve_state_and_selection_draws() {
-    let fixture = crate::support::fixture("submitmusic-boundary.json");
+    let fixture = support::fixture("submitmusic-boundary.json");
     for case in fixture.array("cases") {
         let captured = &case["native_music"][0];
         let buffers = &fixture["shared_a5_buffers"];
@@ -39,7 +39,7 @@ fn native_music_boundaries_preserve_state_and_selection_draws() {
         let actual: Vec<_> = (0..expected.len())
             .map(|offset| plan.state.memory.byte(0x3fe210 + offset as u32).unwrap())
             .collect();
-        crate::support::assert_bytes(&actual, &expected, case.text("case"));
+        support::assert_bytes(&actual, &expected, case.text("case"));
         assert_eq!(plan.state.random.seed, case["after"].n::<u32>("seed"));
         assert_eq!(plan.state.random.draws, case["after"].n::<u64>("draws"));
         assert_eq!(services.cursor.get(), services.music.len());

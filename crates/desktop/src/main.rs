@@ -71,6 +71,7 @@ async fn main() {
     loop {
         if !activity.poll() && capture.is_none() {
             ui.movement.reset();
+            ui.movement.stop_pointer();
             std::thread::sleep(std::time::Duration::from_millis(100));
             next_frame().await;
             continue;
@@ -272,6 +273,9 @@ async fn main() {
                 action = input::action(state, content, &mut ui, &controls, pointer);
             } else {
                 ui.movement.reset();
+                if blocked {
+                    ui.movement.stop_pointer();
+                }
             }
             if let Some(Action::Application(command)) = action.clone() {
                 blocked = true;

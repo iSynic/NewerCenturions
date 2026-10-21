@@ -1,24 +1,19 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
-use crate::support::warriors as party;
 use centurions_core::items;
+use support::warriors as party;
 
-use crate::support::inventory as records;
+use support::inventory as records;
 
-use crate::support::assert_bytes;
+use support::assert_bytes;
 
-use crate::support::compare_party_named as assert_party;
-fn sounds(snapshot: &Value) -> Vec<i16> {
-    snapshot.n::<Vec<i16>>("sounds")
-}
-fn warnings(snapshot: &Value) -> Vec<i16> {
-    snapshot.n::<Vec<i16>>("warnings")
-}
-use crate::support::event_sounds;
+use support::compare_party_named as assert_party;
+
+use support::event_sounds;
 
 #[test]
 fn equipment_admission_matches_all_12_native_race_and_mos_cases() {
-    let fixture = crate::support::fixture("required-player-gear.json");
+    let fixture = support::fixture("required-player-gear.json");
     let content = content();
     let mission = content.map(0).unwrap();
     let cases = fixture.array("gate_cases");
@@ -33,13 +28,13 @@ fn equipment_admission_matches_all_12_native_race_and_mos_cases() {
         );
         assert_party(&warriors, &case["after"], "admission unchanged");
 
-        assert!(sounds(&case["after"]).is_empty());
+        assert!(case["after"].n::<Vec<i16>>("sounds").is_empty());
     }
 }
 
 #[test]
 fn crate_transfer_matches_18_native_whole_party_and_storage_cases() {
-    let fixture = crate::support::fixture("required-player-gear.json");
+    let fixture = support::fixture("required-player-gear.json");
     let content = content();
     let cases = fixture.array("transfer_cases");
 
@@ -73,8 +68,8 @@ fn crate_transfer_matches_18_native_whole_party_and_storage_cases() {
         let actual: Vec<_> = loot.iter().flat_map(|r| r.0).collect();
         assert_bytes(&actual, &case["picked"].bytes("loot"), "picked loot");
         assert_eq!(result.collected, case.n::<i64>("collected") != 0);
-        assert_eq!(result.sounds, sounds(&case["picked"]));
-        assert_eq!(result.warnings, warnings(&case["picked"]));
+        assert_eq!(result.sounds, case["picked"].n::<Vec<i16>>("sounds"));
+        assert_eq!(result.warnings, case["picked"].n::<Vec<i16>>("warnings"));
         let events = equipment::take_crate(&mut state, &content, slot, 0).unwrap();
         assert_party(
             &state.warriors,
@@ -83,7 +78,7 @@ fn crate_transfer_matches_18_native_whole_party_and_storage_cases() {
         );
         let actual: Vec<_> = state.crate_items.iter().flat_map(|r| r.0).collect();
         assert_bytes(&actual, &case["after"].bytes("crate"), "closed crate");
-        assert_eq!(event_sounds(&events), sounds(&case["after"]));
+        assert_eq!(event_sounds(&events), case["after"].n::<Vec<i16>>("sounds"));
         assert_eq!(state.random.draws, 0);
         assert_eq!(state.random.seed, 12);
     }
@@ -91,7 +86,7 @@ fn crate_transfer_matches_18_native_whole_party_and_storage_cases() {
 
 #[test]
 fn equipment_wear_compact_remove_and_rewear_match_48_native_cases() {
-    let fixture = crate::support::fixture("required-player-gear.json");
+    let fixture = support::fixture("required-player-gear.json");
     let content = content();
     let cases = fixture.array("equipment_cases");
 
@@ -107,7 +102,7 @@ fn equipment_wear_compact_remove_and_rewear_match_48_native_cases() {
             )
             .unwrap();
         let mut warriors = party(case["before"].text("party"));
-        let mut audio = sounds(&case["before"]);
+        let mut audio = case["before"].n::<Vec<i16>>("sounds");
         let result = equipment::wear(
             &warriors[member],
             &content,
@@ -123,7 +118,7 @@ fn equipment_wear_compact_remove_and_rewear_match_48_native_cases() {
         );
         warriors[member] = result.warrior;
         audio.extend(result.sounds);
-        let mut expected_audio = sounds(&case["worn"]);
+        let mut expected_audio = case["worn"].n::<Vec<i16>>("sounds");
         // The historical probe returns at warn16474a before Sound6000.
         // Enabled wear still reaches that shared original warning wrapper.
         for warning in &result.warnings {
@@ -131,7 +126,7 @@ fn equipment_wear_compact_remove_and_rewear_match_48_native_cases() {
             expected_audio.push(6000);
         }
         assert_eq!(audio, expected_audio);
-        assert_eq!(result.warnings, warnings(&case["worn"]));
+        assert_eq!(result.warnings, case["worn"].n::<Vec<i16>>("warnings"));
         assert_party(&warriors, &case["worn"], &format!("wear{index}"));
         if !result.changed {
             continue;
@@ -150,7 +145,7 @@ fn equipment_wear_compact_remove_and_rewear_match_48_native_cases() {
         warriors[member] = removed.warrior;
         audio.extend(removed.sounds);
         assert_party(&warriors, &case["removed_state"], &format!("remove{index}"));
-        assert_eq!(audio, sounds(&case["removed_state"]));
+        assert_eq!(audio, case["removed_state"].n::<Vec<i16>>("sounds"));
         let reworn = equipment::wear(
             &warriors[member],
             &content,
@@ -163,13 +158,13 @@ fn equipment_wear_compact_remove_and_rewear_match_48_native_cases() {
         warriors[member] = reworn.warrior;
         audio.extend(reworn.sounds);
         assert_party(&warriors, &case["reworn_state"], &format!("rewear{index}"));
-        assert_eq!(audio, sounds(&case["reworn_state"]));
+        assert_eq!(audio, case["reworn_state"].n::<Vec<i16>>("sounds"));
     }
 }
 
 #[test]
 fn replacement_firearm_preparation_shot_and_refill_match_four_native_callers() {
-    let fixture = crate::support::fixture("required-player-gear.json");
+    let fixture = support::fixture("required-player-gear.json");
     let content = content();
     for (index, case) in fixture.array("equipment_cases").iter().enumerate() {
         if case["fired"].is_null() {
@@ -192,11 +187,9 @@ fn replacement_firearm_preparation_shot_and_refill_match_four_native_callers() {
             &mission.combat.as_ref().unwrap().attacks,
         )
         .unwrap();
-        assert_bytes(
-            &prepared.packet,
-            &case["prepared"].bytes("packet"),
-            "prepared packet",
-        );
+        support::native_expect! {
+            bytes &prepared.packet => &case["prepared"].bytes("packet"), "prepared packet";
+        };
         assert_eq!(prepared.rounds, 1);
         assert_eq!(prepared.shots, 1);
         assert_eq!(word(&case["prepared"].bytes("weapon"), 44).unwrap(), 4101);
@@ -205,39 +198,28 @@ fn replacement_firearm_preparation_shot_and_refill_match_four_native_callers() {
         let mut order = vec![-1; 110];
         order[1] = member as i16;
         state.phase = Phase::Combat;
-        state.combat = Some(Combat {
-            battle: 85,
-            map: TacticalMap {
-                tiles,
-                shift: (0, 0),
-                edge_word: 0,
-            },
-            squad: SquadPlacement {
-                positions: vec![(20, 10); 6],
-                under_tiles: vec![1155; 6],
-            },
-            enemies: EnemySetup {
-                records: vec![MonsterRecord {
-                    bytes: case["prepared"].bytes("target"),
-                }],
-                positions: vec![(20, 20)],
-            },
-            order,
-            attack_packet: None,
-            attack_identity: None,
-            ..crate::support::battle()
-        });
+        let mut combat = support::battle();
+        combat.battle = 85;
+        combat.map.tiles = tiles;
+        combat.squad.positions.fill((20, 10));
+        combat.enemies.records = vec![MonsterRecord {
+            bytes: case["prepared"].bytes("target"),
+        }];
+        combat.enemies.positions = vec![(20, 20)];
+        combat.order = order;
+        combat.attack_packet = None;
+        combat.attack_identity = None;
+        state.combat = Some(combat);
         state.random = RandomState::new(12);
         let events = runtime::player_shoot_action(&mut state, &content, 10).unwrap();
         assert_party(&state.warriors, &case["fired"], &format!("shot{index}"));
-        assert_bytes(
-            &state.combat.as_ref().unwrap().enemies.records[0].bytes,
-            &case["fired"].bytes("target"),
-            "shot target",
-        );
+        support::native_expect! {
+            bytes &current_combat(&state).enemies.records[0].bytes => &case["fired"].bytes("target"), "shot target";
+        };
         assert_eq!(state.random.draws, 54);
-        crate::support::expect(state.random.seed, &case["fired"]["rng_seed"]);
-        let expected_audio = &sounds(&case["fired"])[sounds(&case["targeted"]).len()..];
+        support::expect(state.random.seed, &case["fired"]["rng_seed"]);
+        let expected_audio = &case["fired"].n::<Vec<i16>>("sounds")
+            [case["targeted"].n::<Vec<i16>>("sounds").len()..];
         assert_eq!(event_sounds(&events), expected_audio);
         state.ammunition[3] = 12;
         let events = firearm::reload_command(&mut state, &content, member).unwrap();
@@ -249,6 +231,6 @@ fn replacement_firearm_preparation_shot_and_refill_match_four_native_callers() {
         assert_eq!(state.ammunition[3], 9);
         assert_eq!(event_sounds(&events), vec![405]);
         assert_eq!(state.random.draws, 55);
-        crate::support::expect(state.random.seed, &case["reloaded"]["rng_seed"]);
+        support::expect(state.random.seed, &case["reloaded"]["rng_seed"]);
     }
 }

@@ -23,7 +23,7 @@ pub(super) fn execute(
             }
             let mut events = vec![];
             for member in 0..state.warriors.len() {
-                let result = ammunition::refit(
+                let result = ammunition::refit_with_record(
                     &state.warriors[member],
                     &state.ammunition,
                     content,
@@ -35,6 +35,7 @@ pub(super) fn execute(
                     },
                     &state.ammunition_work,
                     &mut state.random,
+                    state.inventory_record.as_ref(),
                 )?;
                 events.extend(ammunition::commit_result(state, member, result)?);
             }

@@ -161,6 +161,8 @@ fn calendar_content(schedule: Vec<u8>) -> Content {
 
 fn calendar_state(content: &Content, input: &str, hour: i16, minute: i16) -> Session {
     let mut state = Session::new(content);
+    // The calendar receipts predate the separately captured natural-sound context.
+    state.weapon_work.natural_attack_index = None;
     state.warriors = decode(input)
         .as_chunks::<3138>()
         .0

@@ -26,15 +26,16 @@ See [installation notes](docs/installation.md) if you need help getting it runni
 ## Screenshots
 
 <img width="802" height="632" alt="The New Centurions screenshot" src="https://github.com/user-attachments/assets/c4dd1720-2598-4bdf-92d0-d091ed59266e" />
-<img width="802" height="632" alt="The New Centurions screenshot" src="https://github.com/user-attachments/assets/dfba2cc2-34f4-4e30-b7e9-385d32a3f442" />
-<img width="802" height="632" alt="The New Centurions screenshot" src="https://github.com/user-attachments/assets/c9540a6f-94a6-43d8-aca0-d0c694dc343b" />
+<img width="800" height="625" alt="image" src="https://github.com/user-attachments/assets/39bbd5aa-1229-415a-bca3-773cfdf73a4a" />
+<img width="798" height="627" alt="image" src="https://github.com/user-attachments/assets/aa37ebf1-a1e2-4617-a305-60b80f53deed" />
+
 
 ## Working on the code
 
 [Building and testing](docs/building.md) · [Code guide](docs/maintainability.md) ·
 [Recovery notes and known limitations](docs/reconstruction.md)
 
-Built with Codex Astra 6 and Sol 6.1.
+Built with the help of Codex Astra 6 and Sol 6.1.
 
 The reconstruction code is [MIT licensed](LICENSE). The original game belongs
 to its respective owners. See [THIRD_PARTY.md](THIRD_PARTY.md) for bundled code

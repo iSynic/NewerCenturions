@@ -1,20 +1,20 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, support};
 
 use centurions_core::combat::spells::resolve_collision_with_item_cache;
 
-use crate::support::warriors as party;
+use support::warriors as party;
 
-use crate::support::monsters as enemies;
+use support::monsters as enemies;
 
-use crate::native_common::random_state as random;
+use native_common::random_state as random;
 
-use crate::support::assert_bytes;
+use support::assert_bytes;
 
-use crate::native_common::body_spell_sounds as audio;
+use native_common::body_spell_sounds as audio;
 
 #[test]
 fn npc18_restriction_and_native_immunity_match_three_complete_resolver_cases() {
-    let fixture = crate::support::fixture("restricted-npc-spell.json");
+    let fixture = support::fixture("restricted-npc-spell.json");
     let source = std::fs::read(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../NewCenturions/TheNewCenturions/Data Files/Data ID"),
@@ -52,7 +52,7 @@ fn npc18_restriction_and_native_immunity_match_three_complete_resolver_cases() {
             &mut actual,
         )
         .unwrap();
-        crate::native_common::assert_body_records(
+        native_common::assert_body_records(
             &result.warriors,
             &result.enemies,
             &after["party"],
@@ -63,10 +63,10 @@ fn npc18_restriction_and_native_immunity_match_three_complete_resolver_cases() {
             result.race_excluded,
             if index == 3 { vec![18] } else { vec![] }
         );
-        crate::support::expect_array(&(audio(&result)), &case["sounds"]);
+        support::expect_array(&(audio(&result)), &case["sounds"]);
         assert_eq!(actual, random(after));
         let mut receipts = random(before);
-        crate::support::replay_rng(&mut receipts, case.array("rng"));
+        support::replay_rng(&mut receipts, case.array("rng"));
         assert_eq!(receipts, actual);
         let mut usage = FieldUsage {
             slot: 7,
@@ -85,7 +85,7 @@ fn npc18_restriction_and_native_immunity_match_three_complete_resolver_cases() {
             &mut collision_random,
         )
         .unwrap();
-        crate::native_common::assert_body_records(
+        native_common::assert_body_records(
             &collision.warriors,
             &collision.enemies,
             &after["party"],
@@ -100,9 +100,9 @@ fn npc18_restriction_and_native_immunity_match_three_complete_resolver_cases() {
 
 #[test]
 fn reached_caller_all_four_resolutions_match_native_party_monsters_and_rng() {
-    let fixture = crate::support::fixture("restricted-npc-spell.json");
+    let fixture = support::fixture("restricted-npc-spell.json");
     let case = &fixture["cases"][0];
-    let (_, impacts, deaths) = crate::native_common::spell_sequence(&fixture, case, None);
+    let (_, impacts, deaths) = native_common::spell_sequence(&fixture, case, None);
     assert_eq!(impacts, [204, 204, 206]);
     assert_eq!(deaths, 0);
 }

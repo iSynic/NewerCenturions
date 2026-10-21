@@ -287,6 +287,8 @@ mod command_public_remove_equipment;
 mod command_reaction_work_refresh;
 #[path = "native/command_support_psi.rs"]
 mod command_support_psi;
+#[path = "native/command_thunder_branches.rs"]
+mod command_thunder_branches;
 mod enemy_callers;
 #[path = "native/enemy_target_bounds.rs"]
 mod enemy_target_bounds;

@@ -1,6 +1,6 @@
-use crate::native_common::raw_word as word;
-use crate::prelude::*;
-use crate::support::{assert_bytes, items};
+use crate::{native_common, prelude::*, support};
+use native_common::raw_word as word;
+use support::items;
 
 #[test]
 fn endgame_weapon_corpus_matches_original() {
@@ -8,7 +8,7 @@ fn endgame_weapon_corpus_matches_original() {
 }
 
 pub(super) fn corpus(name: &str, native_melee_audio: bool) {
-    let fixture = crate::support::fixture(name);
+    let fixture = support::fixture(name);
     if fixture.get("preparation_cases").is_some() {
         preparation(&fixture);
         firearms(&fixture);
@@ -42,9 +42,9 @@ pub(super) fn preparation(fixture: &Value) {
             &attacks,
         )
         .unwrap();
-        crate::support::native_expect! {
-        bytes prepared.packet => &case["packet"], "case{index} packet";
-        bytes enemy.bytes => &case["enemy_after"], "case{index} enemy";
+        support::native_expect! {
+            bytes prepared.packet => &case["packet"], "case{index} packet";
+            bytes enemy.bytes => &case["enemy_after"], "case{index} enemy";
         }
     }
 }
@@ -72,12 +72,11 @@ pub(super) fn firearms(fixture: &Value) {
         let result =
             enemy_weapons::resolve(&mut warrior, &mut enemy, &prepared, &mut random, 0).unwrap();
         party[member * 3138..(member + 1) * 3138].copy_from_slice(&warrior.bytes);
-        crate::support::native_expect! {
-        bytes party => &case["warriors_after"], &format!("case{index} full party");
-        bytes enemy.bytes => &case["enemy_after"], "case{index} enemy";
-        scalar random.seed => &case["seed_after"], "binary_endgame_weapons";
-        scalar random.draws => &case["rng_draws"], "binary_endgame_weapons";
-        scalar (result.sounds) => &case["sounds"], "binary_endgame_weapons";
+        support::native_expect! {
+            bytes party => &case["warriors_after"], &format!("case{index} full party");
+            bytes enemy.bytes => &case["enemy_after"], "case{index} enemy";
+            rng random => (&case["seed_after"], &case["rng_draws"]), "binary_endgame_weapons";
+            scalar (result.sounds) => &case["sounds"], "binary_endgame_weapons";
         }
     }
 }
@@ -111,17 +110,14 @@ pub(super) fn melee(cases: &[Value], native_audio: bool) {
             &[0; 58],
         )
         .unwrap();
-        assert_bytes(
-            &packet,
-            &case.bytes("packet"),
-            &format!("case{index} packet"),
-        );
+        support::native_expect! {
+            bytes &packet => &case.bytes("packet"), &format!("case{index} packet");
+        };
         party[member * 3138..(member + 1) * 3138].copy_from_slice(&warrior.bytes);
-        crate::support::native_expect! {
-        bytes party => &case["warriors_after"], &format!("case{index} party");
-        bytes enemy.bytes => &case["enemy_after"], &format!("case{index} attacker");
-        scalar random.seed => &case["seed_after"], "binary_endgame_weapons";
-        scalar random.draws => &case["rng_draws"], "binary_endgame_weapons";
+        support::native_expect! {
+            bytes party => &case["warriors_after"], &format!("case{index} party");
+            bytes enemy.bytes => &case["enemy_after"], &format!("case{index} attacker");
+            rng random => (&case["seed_after"], &case["rng_draws"]), "binary_endgame_weapons";
         }
         if native_audio {
             assert_eq!(
@@ -146,27 +142,8 @@ pub(super) fn neighbors(fixture: &Value, native_audio: bool) {
 
     for (index, case) in cases.iter().enumerate() {
         let raw = case.bytes("warriors_before");
-        let mut warriors: Vec<_> = crate::support::warriors(&raw);
-        let mut combat = Combat {
-            battle: 117,
-            map: TacticalMap {
-                tiles: case.words("map_before"),
-                shift: (0, 0),
-                edge_word: 0,
-            },
-            squad: SquadPlacement {
-                positions: vec![(21, 20), (41, 40), (42, 40), (43, 40), (44, 40), (45, 40)],
-                under_tiles: vec![1155; 6],
-            },
-            enemies: EnemySetup {
-                records: vec![MonsterRecord {
-                    bytes: case.bytes("enemy_before"),
-                }],
-                positions: vec![(20, 20)],
-            },
-            order: case.words("order_before"),
-            ..crate::support::battle()
-        };
+        let mut warriors: Vec<_> = support::warriors(&raw);
+        let mut combat = native_common::neighbor_combat(case, 0);
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let events = runtime::check_neighbors_with_definitions(
             &mut combat,
@@ -176,20 +153,17 @@ pub(super) fn neighbors(fixture: &Value, native_audio: bool) {
             &items,
         )
         .unwrap();
-        let actual: Vec<_> = crate::support::record_bytes(&warriors);
-        crate::support::native_expect! {
-        bytes actual => &case["warriors_after"], &format!("case{index} party");
-        bytes combat.enemies.records[0].bytes => &case["enemy_after"], &format!("case{index} attacker");
+        let actual: Vec<_> = support::record_bytes(&warriors);
+        support::native_expect! {
+            bytes actual => &case["warriors_after"], &format!("case{index} party");
+            bytes combat.enemies.records[0].bytes => &case["enemy_after"], &format!("case{index} attacker");
         }
         assert_eq!(combat.map.tiles, case.words("map_after"), "case{index} map");
         assert_eq!(combat.order, case.words("order_after"), "case{index} order");
-        crate::support::native_expect! {
-        scalar random.seed => &case["seed_after"], "binary_endgame_weapons";
-        scalar random.draws => &case["rng_draws"], "binary_endgame_weapons";
-        }
+        support::assert_rng(&random, &case["seed_after"], &case["rng_draws"]);
         // Earlier probes intercept result-audio; their empty list is not a silence oracle.
         if native_audio {
-            crate::support::expect(crate::support::event_sounds(&events), &case["sounds"]);
+            support::expect(support::event_sounds(&events), &case["sounds"]);
         }
         let resolved: Vec<_> = events
             .iter()
@@ -202,13 +176,7 @@ pub(super) fn neighbors(fixture: &Value, native_audio: bool) {
             .collect();
         assert_eq!(
             resolved,
-            case.array("calls")
-                .iter()
-                .map(|call| (
-                    call[0].as_i64().unwrap() as i16,
-                    call[1].as_i64().unwrap() as i16
-                ))
-                .collect::<Vec<_>>(),
+            support::attack_calls(&case["calls"]),
             "case{index} ordered attack calls"
         );
     }
@@ -235,28 +203,25 @@ pub(super) fn friendly(fixture: &Value) {
             &attacks,
         )
         .unwrap();
-        assert_bytes(
-            &prepared.packet,
-            &case.bytes("packet"),
-            &format!("body{index} packet"),
-        );
+        support::native_expect! {
+            bytes &prepared.packet => &case.bytes("packet"), &format!("body{index} packet");
+        };
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let result =
             spells::resolve_enemy_firearm_body(&mut target, &enemy, &prepared, 0, &mut random)
                 .unwrap();
-        crate::support::native_expect! {
-        bytes target.bytes => &case["target_after"], &format!("body{index} target");
-        bytes enemy.bytes => &case["enemy_after"], &format!("body{index} attacker");
-        scalar random.seed => &case["seed_after"], "binary_endgame_weapons";
-        scalar random.draws => &case["rng_draws"], "binary_endgame_weapons";
-        scalar (result.sounds) => &case["sounds"], "binary_endgame_weapons";
+        support::native_expect! {
+            bytes target.bytes => &case["target_after"], &format!("body{index} target");
+            bytes enemy.bytes => &case["enemy_after"], &format!("body{index} attacker");
+            rng random => (&case["seed_after"], &case["rng_draws"]), "binary_endgame_weapons";
+            scalar (result.sounds) => &case["sounds"], "binary_endgame_weapons";
         }
     }
 }
 
 #[test]
 fn required_endgame_ranged_to_natural_fallback_matches_original_full_records_and_randomness() {
-    let fixture: serde_json::Value = crate::support::fixture("endgame-weapons.json");
+    let fixture: serde_json::Value = support::fixture("endgame-weapons.json");
     let cases = fixture.array("natural_cases");
 
     for (index, case) in cases.iter().enumerate() {
@@ -272,23 +237,18 @@ fn required_endgame_ranged_to_natural_fallback_matches_original_full_records_and
             &mut enemy,
             case.n::<usize>("index"),
             &mut random,
-            &std::fs::read(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../NewCenturions/TheNewCenturions/Data Files/Data S"
-            ))
-            .unwrap(),
+            &support::data("Data S"),
             &[0; 58],
             0,
         )
         .unwrap();
         assert_eq!(packet, case.bytes("packet"), "case{index} packet");
         party[member * 3138..(member + 1) * 3138].copy_from_slice(&warrior.bytes);
-        crate::support::native_expect! {
-        bytes party => &case["warriors_after"], "case{index} party";
-        bytes enemy.bytes => &case["enemy_after"], "case{index} enemy";
-        scalar random.seed => &case["seed_after"], "binary_endgame_weapons";
-        scalar random.draws => &case["rng_draws"], "binary_endgame_weapons";
-        scalar (result
+        support::native_expect! {
+            bytes party => &case["warriors_after"], "case{index} party";
+            bytes enemy.bytes => &case["enemy_after"], "case{index} enemy";
+            rng random => (&case["seed_after"], &case["rng_draws"]), "binary_endgame_weapons";
+            scalar (result
                         .sounds
                         .into_iter()
                         .chain([centurions_core::combat::ally_turns::result_audio(
@@ -305,45 +265,28 @@ fn required_endgame_ranged_to_natural_fallback_matches_original_full_records_and
 
 #[test]
 fn required_endgame_firearm_whole_caller_matches_native_cast_order_records_and_work_context() {
-    let f: serde_json::Value = crate::support::fixture("endgame-weapons.json");
+    let f: serde_json::Value = support::fixture("endgame-weapons.json");
 
-    let content = crate::support::content();
+    let content = support::content();
     let mission = content.map(0).unwrap();
     let cases = f.array("full_caller_cases");
 
     for (index, case) in cases.iter().enumerate() {
         let before_records = case.bytes("records_before");
-        let mut warriors: Vec<_> = crate::support::warriors(&case["warriors_before"]);
-        let position_words = case.words("warrior_positions");
+        let mut warriors: Vec<_> = support::warriors(&case["warriors_before"]);
         let mut positions = vec![(20, 20)];
         if before_records.len() > 288 {
             positions.push((24, 20));
         }
-        let mut combat = Combat {
-            battle: 129,
-            map: TacticalMap {
-                tiles: case.words("map_before"),
-                shift: (0, 0),
-                edge_word: 0,
-            },
-            squad: SquadPlacement {
-                positions: position_words
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|p| (p[0], p[1]))
-                    .collect(),
-                under_tiles: vec![1155; 6],
-            },
-            enemies: EnemySetup {
-                records: crate::support::monsters(&before_records),
-                positions,
-            },
-            order: case.words("order_before"),
-            attack_packet: Some(case.bytes("packet_before")),
-            attack_identity: Some(case.n::<Vec<i16>>("identity_before").try_into().unwrap()),
-            ..crate::support::battle()
-        };
+        let mut combat = support::battle();
+        combat.battle = 129;
+        combat.map.tiles = case.words("map_before");
+        combat.squad.positions = support::positions(&case["warrior_positions"]);
+        combat.enemies.records = support::monsters(&before_records);
+        combat.enemies.positions = positions;
+        combat.order = case.words("order_before");
+        combat.attack_packet = Some(case.bytes("packet_before"));
+        combat.attack_identity = Some(case.n::<Vec<i16>>("identity_before").try_into().unwrap());
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let mut work = runtime::EnemyWork {
             item_context: Some(case.n::<i16>("item_context_before")),
@@ -366,11 +309,11 @@ fn required_endgame_firearm_whole_caller_matches_native_cast_order_records_and_w
                 case["monster_id"], case["variant"]
             )
         });
-        let actual_party: Vec<_> = crate::support::record_bytes(&warriors);
-        let actual_records: Vec<_> = crate::support::record_bytes(&combat.enemies.records);
-        crate::support::native_expect! {
-        bytes actual_party => &case["warriors_after"], &format!("case{index} party");
-        bytes actual_records => &case["records_after"], &format!("case{index} enemies");
+        let actual_party: Vec<_> = support::record_bytes(&warriors);
+        let actual_records: Vec<_> = support::record_bytes(&combat.enemies.records);
+        support::native_expect! {
+            bytes actual_party => &case["warriors_after"], &format!("case{index} party");
+            bytes actual_records => &case["records_after"], &format!("case{index} enemies");
         }
         assert_eq!(work.packet, combat.attack_packet, "case{index} packet work");
         assert_eq!(
@@ -389,28 +332,20 @@ fn required_endgame_firearm_whole_caller_matches_native_cast_order_records_and_w
         );
         assert_eq!(combat.map.tiles, case.words("map_after"), "case{index} map");
         assert_eq!(combat.order, case.words("order_after"), "case{index} order");
-        let after_positions = case.words("positions_after");
-        assert_eq!(
-            combat.enemies.positions,
-            after_positions
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|p| (p[0], p[1]))
-                .collect::<Vec<_>>(),
-            "case{index} positions"
-        );
-        crate::support::expect(combat.unavailable, &case["unavailable_after"]);
+
+        support::native_expect! {
+            positions combat.enemies.positions => &case["positions_after"], "case{index} positions";
+        };
+        support::expect(combat.unavailable, &case["unavailable_after"]);
         assert_eq!(
             work.item_context,
             Some(case.n::<i16>("item_context_after")),
             "case{index} item context"
         );
-        crate::support::native_expect! {
-        scalar work.attack_count => &case["attack_count_after"], "binary_endgame_weapons";
-        scalar random.seed => &case["seed_after"], "binary_endgame_weapons";
-        scalar random.draws => &case["rng_draws"], "binary_endgame_weapons";
-        scalar (crate::support::event_sounds(&events)) => &case["sounds"], "binary_endgame_weapons";
+        support::native_expect! {
+            scalar work.attack_count => &case["attack_count_after"], "binary_endgame_weapons";
+            rng random => (&case["seed_after"], &case["rng_draws"]), "binary_endgame_weapons";
+            scalar (support::event_sounds(&events)) => &case["sounds"], "binary_endgame_weapons";
         }
         let mut expected_hits = vec![];
         let mut prior_party = case.bytes("warriors_before");

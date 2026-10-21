@@ -3,6 +3,8 @@ use crate::combat::Combat;
 use crate::{Event, RuleError, Session};
 use centurions_content::{Content, Warrior, word};
 use serde::{Deserialize, Serialize};
+mod actor_selection;
+pub(crate) use actor_selection::select_actor_target;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FirearmQuantity {

@@ -148,8 +148,10 @@ before extraction. A common ancestor must not become the implementation site for
 each child screen.
 
 **Saves:** keep serialized field/variant names, defaults and order stable during a
-structural refactor. Schema 12 and readers for 1–11 retain their validation and
-rejection rules. Newly required persistence belongs in a separate, explicitly
+structural refactor. The structural refactor retained schema 12 and readers for 1–11. A subsequent
+original-instruction correction introduced schema 13 for the retained natural-attack
+index, with readers for 1–12 and explicit unknown legacy context. Preserve that
+versioned boundary and the existing validation/rejection rules. Newly required persistence belongs in a separate, explicitly
 versioned feature change. A loaded session is validated before replacement;
 original assets and imported saves remain read-only.
 

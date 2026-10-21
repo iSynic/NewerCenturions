@@ -1,10 +1,10 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::combat::build_tactical_map;
 
 #[test]
 fn tactical_map_matches_all_cells_and_random_consumption() {
-    let fixture = crate::support::fixture("combat-map.json");
+    let fixture = support::fixture("combat-map.json");
     let land = fixture.bytes("land");
     let properties = fixture.bytes("properties");
     let mission = OpeningMission {
@@ -27,7 +27,7 @@ fn tactical_map_matches_all_cells_and_random_consumption() {
         } else {
             1
         },
-        ..crate::support::mission()
+        ..support::mission()
     };
     for case in fixture.array("cases") {
         let mut random = RandomState::new(case.n("seed"));
@@ -40,9 +40,6 @@ fn tactical_map_matches_all_cells_and_random_consumption() {
         );
         assert_eq!(map.shift, (case.n("shift_x"), case.n("shift_y")));
         assert_eq!(map.edge_word, case.n::<i16>("edge_after"));
-        assert_eq!(
-            (random.seed, random.draws),
-            (case.n("after_seed"), case.n("draws"))
-        );
+        support::assert_rng(&random, &case["after_seed"], &case["draws"]);
     }
 }

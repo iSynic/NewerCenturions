@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::story::{
     MENU_RECORD_BYTES, MenuSelection, disable_menu_entry, dispatch_menu_branch, menu_selector,
@@ -7,7 +7,7 @@ use centurions_core::story::{
 
 #[test]
 fn disabled_encounter_entry_matches_original_record_mutation() {
-    let fixture: serde_json::Value = crate::support::fixture("encounter-choice.json");
+    let fixture: serde_json::Value = support::fixture("encounter-choice.json");
     for case in fixture.array("disable_cases") {
         let mut menu = case.bytes("before");
         let original_length = menu.len();
@@ -21,7 +21,7 @@ fn disabled_encounter_entry_matches_original_record_mutation() {
 
 #[test]
 fn encounter_branch_copy_matches_original_complete_script_record() {
-    let fixture: serde_json::Value = crate::support::fixture("encounter-choice.json");
+    let fixture: serde_json::Value = support::fixture("encounter-choice.json");
     for case in fixture.array("dispatch_cases") {
         let menu = case.bytes("record");
         let selector = case.n::<i8>("selected");
@@ -42,7 +42,7 @@ fn encounter_branch_copy_matches_original_complete_script_record() {
 
 #[test]
 fn enabled_encounter_choices_preserve_original_signed_selector() {
-    let fixture: serde_json::Value = crate::support::fixture("encounter-choice.json");
+    let fixture: serde_json::Value = support::fixture("encounter-choice.json");
     for case in fixture.array("cases") {
         let menu = case.bytes("record_before");
         let native_item = case.array("inputs").last().unwrap().as_u64().unwrap();
@@ -54,7 +54,7 @@ fn enabled_encounter_choices_preserve_original_signed_selector() {
             .count();
         let (actual_item, selector) = menu_selector(&menu, index).unwrap();
         assert_eq!(u64::from(actual_item), native_item, "{}", case["name"]);
-        crate::support::expect(i64::from(selector), &case["return_code"]);
+        support::expect(i64::from(selector), &case["return_code"]);
 
         assert!(menu_selector(&menu, 4).is_err());
     }

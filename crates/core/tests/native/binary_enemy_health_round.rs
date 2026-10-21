@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::combat::lifecycle;
 use centurions_core::combat::natural_conditions::enemy_drain_tick;
@@ -13,7 +13,7 @@ fn decrement_conditions(record: &mut [u8]) {
 
 #[test]
 fn enemy_health_drain_and_death_cleanup_match_complete_native_monster_slices() {
-    let fixture = crate::support::fixture("enemy-health-round.json");
+    let fixture = support::fixture("enemy-health-round.json");
     let foundation: Combat =
         serde_json::from_value(fixture["foundation"]["combat"].clone()).unwrap();
     let mut verified = 0;
@@ -41,8 +41,8 @@ fn enemy_health_drain_and_death_cleanup_match_complete_native_monster_slices() {
         combat.order = before.words("order");
         combat.spell_fields = decode(&before["fields"]);
         combat.field_used = decode(&before["used"]);
-        combat.enemies.records = crate::support::monsters(&decode(&before["records"]));
-        let mut warriors: Vec<_> = crate::support::warriors(&decode(&before["party"]));
+        combat.enemies.records = support::monsters(&decode(&before["records"]));
+        let mut warriors: Vec<_> = support::warriors(&decode(&before["party"]));
         let random = RandomState::new(before.n::<u32>("seed"));
         let saved_combat = combat.clone();
         decrement_conditions(&mut combat.enemies.records[1].bytes);
@@ -60,14 +60,14 @@ fn enemy_health_drain_and_death_cleanup_match_complete_native_monster_slices() {
         combat.field_used = spells::reset_used(&combat.field_used).unwrap();
         assert!(combat.spell_fields.iter().all(|value| *value == 0));
         combat.enemies.records[1].bytes[0x105] = 0;
-        crate::support::native_expect! {
-        bytes &(crate::support::record_bytes(&warriors)) => &after["party"], "binary_enemy_health_round";
-        bytes &(crate::support::record_bytes(&combat
+        support::native_expect! {
+            bytes &(support::record_bytes(&warriors)) => &after["party"], "binary_enemy_health_round";
+            bytes &(support::record_bytes(&combat
                         .enemies.records)) => &after["records"], "binary_enemy_health_round";
-        words combat.map.tiles => &after["map"], "map, case {index}";
-        words combat.order => &after["order"], "order, case {index}";
-        bytes &(combat.spell_fields) => &after["fields"], "binary_enemy_health_round";
-        bytes &(combat.field_used) => &after["used"], "binary_enemy_health_round";
+            words combat.map.tiles => &after["map"], "map, case {index}";
+            words combat.order => &after["order"], "order, case {index}";
+            bytes &(combat.spell_fields) => &after["fields"], "binary_enemy_health_round";
+            bytes &(combat.field_used) => &after["used"], "binary_enemy_health_round";
         }
         assert_eq!(combat.death_queue, saved_combat.death_queue);
         assert_eq!(combat.enemies.positions, saved_combat.enemies.positions);
@@ -76,23 +76,22 @@ fn enemy_health_drain_and_death_cleanup_match_complete_native_monster_slices() {
         assert_eq!(combat.attack_packet, saved_combat.attack_packet);
         assert_eq!(combat.attack_identity, saved_combat.attack_identity);
         assert_eq!(combat.round_scripts, saved_combat.round_scripts);
-        crate::support::native_expect! {
-        scalar (sounds) => &case["sounds"], "binary_enemy_health_round";
-        scalar random.seed => &after["seed"], "binary_enemy_health_round";
-        scalar random.draws => &after["draws"], "binary_enemy_health_round";
+        support::native_expect! {
+            scalar (sounds) => &case["sounds"], "binary_enemy_health_round";
+            rng random => (&after["seed"], &after["draws"]), "binary_enemy_health_round";
         }
 
         verified += 1;
     }
     assert_eq!(verified, 208);
     let content = content();
-    for case in crate::support::fixture("enemy-psi-round.json").array("cases") {
-        let mut combat = crate::support::battle();
+    for case in support::fixture("enemy-psi-round.json").array("cases") {
+        let mut combat = support::battle();
         combat.enemies.records = vec![MonsterRecord {
             bytes: case.bytes("before"),
         }];
         combat.enemies.positions = vec![(20, 20)];
-        let mut warriors = crate::support::mission_session(&content).warriors;
+        let mut warriors = support::mission_session(&content).warriors;
         combat.squad.positions.fill((20, 21));
         let mut random = RandomState::new(12);
         runtime::reduce_enemy_round_with_fields(

@@ -1,24 +1,24 @@
-use crate::prelude::*;
+use crate::{native_common, prelude::*, snapshots, support};
 
-use crate::support::buffer as bytes;
+use support::buffer as bytes;
 
 use centurions_core::combat::spells::RestrictionMemoryView;
 
-use crate::native_common::buffer_words as words;
-use crate::native_common::snapshot_word as number;
+use native_common::buffer_words as words;
+use native_common::snapshot_word as number;
 
-use crate::native_common::foundation_session as initial;
+use native_common::foundation_session as initial;
 
 fn projected(before: &Session, fixture: &Value, snapshot: &Value, baseline: &Value) -> Session {
     let mut expected = before.clone();
     let read = |key: &str| bytes(fixture, &snapshot[key]);
-    crate::snapshots::session(
+    snapshots::session(
         &mut expected,
         snapshot,
         &read,
         number(snapshot, "selected_member") as usize,
     );
-    crate::snapshots::carried_items(&mut expected, &read);
+    snapshots::carried_items(&mut expected, &read);
     if snapshot["draws"] != baseline["draws"] {
         expected.ammunition_work.item = Some(bytes(fixture, &snapshot["item_work"]));
     }
@@ -26,34 +26,34 @@ fn projected(before: &Session, fixture: &Value, snapshot: &Value, baseline: &Val
     expected.enemy_spell_disabled = number(snapshot, "enemy_spell_disabled") as u8;
     let combat = expected.combat.as_mut().unwrap();
     let previous = (combat.cursor, combat.round);
-    crate::snapshots::records(combat, &|key| bytes(fixture, &snapshot[key]));
+    snapshots::records(combat, &|key| bytes(fixture, &snapshot[key]));
     // Preserve the command's viewport while comparing original absolute rule coordinates.
-    let delta = crate::snapshots::viewport_delta(snapshot, baseline);
-    crate::snapshots::geometry(combat, &|key| bytes(fixture, &snapshot[key]), delta);
+    let delta = snapshots::viewport_delta(snapshot, baseline);
+    snapshots::geometry(combat, &|key| bytes(fixture, &snapshot[key]), delta);
     combat.cursor = number(snapshot, "cursor") as usize;
-    combat.round = before.combat.as_ref().unwrap().round.wrapping_add(
+    combat.round = current_combat(before).round.wrapping_add(
         number(snapshot, "round_script_counter")
             .wrapping_sub(number(baseline, "round_script_counter")),
     );
-    crate::snapshots::turn_origin(combat, previous);
+    snapshots::turn_origin(combat, previous);
     combat.round_scripts.counter = number(snapshot, "round_script_counter") as i8;
     combat.round_scripts.slots = words(fixture, &snapshot["round_slots"]).try_into().unwrap();
-    crate::snapshots::spell_work(combat, &|key| bytes(fixture, &snapshot[key]));
+    snapshots::spell_work(combat, &|key| bytes(fixture, &snapshot[key]));
     combat.unavailable = number(snapshot, "unavailable") as i8;
 
-    combat.weapon_work = crate::snapshots::weapon_work(&read);
+    combat.weapon_work = snapshots::weapon_work(&read);
     expected.attack_packet = combat.attack_packet.clone();
     expected.attack_identity = combat.attack_identity;
     expected.weapon_work = combat.weapon_work;
-    crate::snapshots::health(&mut expected, snapshot, &read);
-    crate::snapshots::actor_work(&mut expected, snapshot);
+    snapshots::health(&mut expected, snapshot, &read);
+    snapshots::actor_work(&mut expected, snapshot);
     expected
 }
-use crate::support::checkpoint;
-use crate::support::same_session as same;
+use support::checkpoint;
+use support::same_session as same;
 
 fn full_native_slots(state: &Session, fixture: &Value, snapshot: &Value, baseline: &Value) {
-    let combat = state.combat.as_ref().unwrap();
+    let combat = current_combat(state);
     let mut records = bytes(fixture, &baseline["all_records"]);
     for (index, record) in combat.enemies.records.iter().enumerate() {
         records[index * 288..(index + 1) * 288].copy_from_slice(&record.bytes);
@@ -169,7 +169,7 @@ fn native_events(fixture: &Value, case: &Value) -> Vec<Event> {
 
 fn current_decision(index: usize) {
     let content = content();
-    let fixture = crate::support::fixture("current-terrain-restricted-npc-spell.json");
+    let fixture = support::fixture("current-terrain-restricted-npc-spell.json");
 
     for case in &fixture.array("cases")[index..index + 1] {
         let mut state = initial(&fixture, case);
@@ -182,13 +182,13 @@ fn current_decision(index: usize) {
         let mut resumed = checkpoint(&state, &content, &format!("before-{index}"));
         let events = apply(Command::RunEnemyTurn, &mut state, &content).unwrap();
         assert_eq!(events, expected_events, "case {index}");
-        same(&state, &expected);
+        support::same_captured_session(&state, &expected);
         full_native_slots(&state, &fixture, &case["after"], &case["before"]);
         assert_eq!(
             apply(Command::RunEnemyTurn, &mut resumed, &content).unwrap(),
             events
         );
-        same(&resumed, &expected);
+        support::same_captured_session(&resumed, &expected);
         let mut random = before.random.clone();
         for draw in case.array("rng") {
             assert_eq!(random.bound(number(draw, "bound")), number(draw, "result"));
@@ -215,10 +215,10 @@ fn seed1_current_decision_and_getup_match_native_state_events_and_saved_resume()
 #[test]
 fn current_seed12_target_selection_matches_the_original_count_and_ordered_targets() {
     let content = content();
-    let fixture = crate::support::fixture("current-terrain-restricted-npc-spell.json");
+    let fixture = support::fixture("current-terrain-restricted-npc-spell.json");
     let case = &fixture["cases"][0];
     let state = initial(&fixture, case);
-    let combat = state.combat.as_ref().unwrap();
+    let combat = current_combat(&state);
     let mission = content
         .map(state.exploration.as_ref().unwrap().map)
         .unwrap();
@@ -273,10 +273,7 @@ fn current_seed12_target_selection_matches_the_original_count_and_ordered_target
     );
     same(&rotated, &resumed);
     assert!(
-        rotated
-            .combat
-            .as_ref()
-            .unwrap()
+        current_combat(&rotated)
             .spell_fields
             .as_chunks::<20>()
             .0
@@ -288,13 +285,13 @@ fn current_seed12_target_selection_matches_the_original_count_and_ordered_target
 
 #[test]
 fn each_captured_resolution_matches_native_targets_damage_and_rng_interval() {
-    let fixture = crate::support::fixture("current-terrain-restricted-npc-spell.json");
+    let fixture = support::fixture("current-terrain-restricted-npc-spell.json");
     for (case_index, case) in fixture.array("cases").iter().enumerate() {
         let foundation = initial(&fixture, case);
         let mut before_party = bytes(&fixture, &case["before"]["party"]);
         let mut before_npcs = bytes(&fixture, &case["before"]["records"]);
         for (index, resolution) in case.array("resolutions").iter().enumerate() {
-            let warriors: Vec<_> = crate::support::warriors(&before_party);
+            let warriors: Vec<_> = support::warriors(&before_party);
             let enemies: Vec<_> = before_npcs
                 .as_chunks::<288>()
                 .0

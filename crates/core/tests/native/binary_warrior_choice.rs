@@ -1,10 +1,10 @@
-use crate::prelude::*;
+use crate::{prelude::*, support};
 
 use centurions_core::story_skill::single_warrior;
 
 #[test]
 fn single_living_warrior_selection_matches_original_gate_and_mask() {
-    let fixture: serde_json::Value = crate::support::fixture("warrior-choice.json");
+    let fixture: serde_json::Value = support::fixture("warrior-choice.json");
     for case in fixture.array("selection_cases") {
         let selected = case.n::<usize>("selected");
         let stamina = case.n::<i16>("stamina");

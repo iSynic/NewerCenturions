@@ -82,10 +82,23 @@ pub(super) fn reload_at_occupied_cell(
         effects.extend(runtime::player_shoot(state, content, target)?);
         return Ok(effects);
     }
-    combat.weapon_work.load_weapon(&weapon)?;
-    state.ammunition_work.weapon = Some(weapon);
     state.attack_count = 0;
-    let refit = crate::ammunition::refit(
+    // prepattack14c7be returns before loading ammunition only for an empty
+    // magazine. A partial burst retains its prepared packet even on refusal.
+    if equipped.quantity()? != 0 {
+        let ammunition = crate::ammunition::definition(content, equipped.ammunition_id()?)?;
+        let prepared =
+            crate::combat::firearm::prepare(&state.warriors[actor], &weapon, &ammunition, attacks)?;
+        state.ammunition_work.prepare_pair(&weapon, &ammunition)?;
+        combat.weapon_work.prepare(&weapon, &ammunition)?;
+        state.attack_count = prepared.shots;
+        state.attack_packet = Some(prepared.packet.clone());
+        combat.attack_packet = Some(prepared.packet);
+    } else {
+        combat.weapon_work.load_weapon(&weapon)?;
+        state.ammunition_work.weapon = Some(weapon);
+    }
+    let refit = crate::ammunition::refit_with_record(
         &state.warriors[actor],
         &state.ammunition,
         content,
@@ -97,6 +110,7 @@ pub(super) fn reload_at_occupied_cell(
         },
         &state.ammunition_work,
         &mut state.random,
+        state.inventory_record.as_ref(),
     )?;
     let completed = refit.native_return != 0;
     effects.extend(crate::ammunition::commit_result(state, actor, refit)?);
