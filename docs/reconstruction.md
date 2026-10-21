@@ -49,7 +49,7 @@ compared with saved suffixes. Assistance is explicit; these checks test
 functionality without requiring unaided campaign completion.
 
 The headless Thunder checklist is complete at its recorded native/component
-service boundaries, except for the Hive Leader memory qualification below.
+service boundaries, including the accepted Hive Leader compatibility qualification below.
 This does not certify complete original-game fidelity or live desktop behavior.
 All 35 historical case identities now have executed current ownership or an
 exact independent superseding receipt. Ten original ray-dispatch and six movement-spell controls now compare actual
@@ -61,9 +61,9 @@ The two nested-caller cases compare the
 complete captured three-window sequence, retained records, queue/header bytes,
 RNG and ordered feedback. Their controlled service boundaries remain explicit.
 
-Current enforced accounting is 27,545 test code lines / 110,367 maintained
-production code lines (24.9576%, ceiling 25%). Physical totals are 28,846 test
-and 113,840 production lines. Test helpers and verification scripts are counted;
+Current enforced accounting is 27,468 test code lines / 110,367 maintained
+production code lines (24.8879%, ceiling 25%). Physical totals are 28,767 test
+and 113,842 production lines. Test helpers and verification scripts are counted;
 expanded bodies, generated catalogs, fixtures, vendor code and recovery tools
 are excluded from maintained production code. All frozen native references
 remain intact. New bounded native cases compare natural effects and all 256
@@ -79,10 +79,12 @@ inspection and battery refits. Three repeated six-route assisted campaign checks
 and the 316-test original-data workspace suite passed. Component and
 source-composed joins are explicitly distinguished from whole original UI runs.
 
-Hive Leader shape zero reads 49 bytes outside initialized mapped memory. The
-explicit zero-fill receipt qualifies that policy only; the actual original Mac
-memory and whole-turn behavior remain unverified. No guessed memory outcome is
-claimed as original-game parity.
+Hive Leader shape zero reads 49 bytes beyond guest RAM/ROM. New bounded original
+execution shows that readable host memory can change selection; two unreadable-
+memory controls agree with deterministic empty-mask/zero-fill handling. The owner
+accepted that compatibility policy, closing T-V06 with qualification. Original-Mac
+whole-turn fidelity remains unverified. No host-memory-dependent result or
+compatibility policy is claimed as complete original-game parity.
 
 Fresh cold, representative maintained-runtime edit and no-change release
 measurements, compiler version, hardware and memory peaks are recorded in the

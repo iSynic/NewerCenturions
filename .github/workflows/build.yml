@@ -110,14 +110,26 @@ jobs:
               packages[0].rename(root / f'NewerCenturions-{tag}-{platform}{suffix}.zip')
           PY
           cat > release-notes.md <<'NOTES'
-          Thunder combat and inventory corrections: rifle targeting and reload work, enemy healing and death handling, paid portrait-healing selection, battery refits and owned-item inspection. Held mouse movement is restored. Native effect order and RNG behavior are preserved where independently compared.
+          This beta records the accepted Hive Leader compatibility policy and its new original-code verification. Gameplay behavior is unchanged from beta 8.
 
-          Local validation passed 316 original-data workspace tests and three repeated six-route assisted campaign checks, including save/reload suffixes. All 639 protected original/reference files remain unchanged. Test code is 24.96% of maintained production code. Clean local release compilation took 7m11s; the representative runtime rebuild took 60s. New saves use schema 13; readers for versions 1-12 remain available.
+          ### Hive qualification
 
-          Known limitations: the Hive Leader path still depends on an explicit zero-fill policy for memory absent from the mapped original. Bounded comparisons establish that policy, not whole-turn parity with a live original Mac game. Current-build live acceptance remains open for file dialogs, window recovery, held movement/targeting, inventory/shop interactions, audio, visual/help placement and sustained desktop performance. Assisted headless replays do not close those gates.
+          The original shape-zero targeting lookup reads outside guest RAM/ROM. Bounded execution of the original Centurions code showed that readable host memory can change the result; two unreadable-memory controls agree with the reconstruction's deterministic empty-mask/zero-fill handling. That compatibility policy is accepted, and checklist item T-V06 is closed with qualification. Original-Mac whole-turn fidelity remains unverified. This is not a claim of complete original-game parity.
 
-          Windows x86_64, Linux x86_64, macOS Apple Silicon and macOS Intel packages are included. Linux and macOS remain experimental; live platform acceptance is incomplete. macOS applications use an ad hoc signature; they are not Developer ID signed or notarized.
+          ### Validation and saves
 
-          Extract beside your existing New Centurions installation. Original game files and preserved resource forks are required and are not bundled. Keep backups of reconstructed saves when switching builds. Complete original-game parity is not claimed.
+          Local validation passed 316 original-data workspace tests, five default-feature tests, 15 Python checks, formatting, Clippy and release compilation. All 682 protected original/reference files remain unchanged. Test code is 24.89% of maintained production code. The extended campaign replay was not rerun for this policy-only change; earlier assisted campaign evidence retains its original scope.
+
+          Save schema 13 and readers for versions 1-12 are unchanged. Keep backups when switching builds. Compatibility with populated original Mac saves remains unverified.
+
+          ### Remaining live acceptance
+
+          Current-build user-operated checks remain open for named Save/Open and cancellation; fullscreen/window recovery; held movement, targeting and modal scheduling; inventory, trade and shops; sound/music and preferences; original visuals/help/text placement; and sustained desktop CPU, memory and responsiveness. Headless checks and the accepted Hive policy do not close these seven live-acceptance groups.
+
+          ### Downloads and installation
+
+          Windows x86_64, Linux x86_64, macOS Apple Silicon and macOS Intel packages are included. Linux and macOS remain experimental; native CI checks are separate from live platform acceptance. macOS bundles use ad hoc signatures and are not Developer ID signed or notarized.
+
+          Extract beside your existing New Centurions installation. Original game files and preserved resource forks are required and are not bundled. SHA256SUMS.txt records the verified archive hashes.
           NOTES
           gh release create "$RELEASE_TAG" release-assets/*.zip --verify-tag --draft --title "Newer Centurions $RELEASE_TAG" --notes-file release-notes.md

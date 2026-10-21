@@ -64,7 +64,9 @@ pub(super) fn best_choice(
     distances: &[i16; 112],
     range: i16,
 ) -> Result<Option<usize>, RuleError> {
-    // WORD underflow reaches unmapped memory; the reference emulator zeroes fault reads.
+    // Compatibility policy: the original WORD underflow reads outside Mac RAM.
+    // Basilisk can read unrelated host bytes there; only unreadable-page results
+    // support this empty mask. See evidence/hive-memory-verification.md.
     let empty = [0; 49];
     let pattern = if shape == 0 {
         &empty[..]

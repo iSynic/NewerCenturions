@@ -36,6 +36,8 @@ fn enemy_spell_damage_matches_original_complete_party_and_random_consumption() {
 fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption() {
     use centurions_content::combat::MonsterRecord;
     use centurions_core::combat::spells::select_targets;
+    let hive = support::fixture("hive-native-memory.json");
+    let mut hive_compared = 0;
     let mut additional: serde_json::Value = support::fixture("additional-spells.json");
     additional["cases"] = additional["selection_cases"].take();
     let fixtures: [serde_json::Value; 6] = [
@@ -102,6 +104,14 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
                 )
             };
             let result = result.unwrap();
+            if let Some(native) = hive
+                .array("fault_controls")
+                .iter()
+                .find(|native| native["input_case"] == case["case"])
+            {
+                assert_eq!(result.cast, native.n::<i16>("selected_word") >= 0);
+                hive_compared += 1;
+            }
             if result.cast && rotated {
                 assert_eq!(
                     result.rotation,
@@ -138,6 +148,7 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
             }
         }
     }
+    assert_eq!(hive_compared, hive.array("fault_controls").len());
 }
 
 #[test]

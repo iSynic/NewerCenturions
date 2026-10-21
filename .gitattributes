@@ -29,3 +29,6 @@ tools/ghidra/VerifyNpcPoisonPsi.java -text whitespace=cr-at-eol
 
 # Preserve the omitted-music candidate as the recorded native-run bytes.
 tools/ghidra/VerifyCurrentNpcPoisonCaller.java -text whitespace=cr-at-eol
+
+# Preserve the Hive native-memory receipt byte identity.
+evidence/fixtures/hive-native-memory.json -text whitespace=cr-at-eol
