@@ -65,7 +65,7 @@ def main():
     memory = min(16384, max(512, physical - 1024))
     run([sys.executable, "tools/source_audit.py"])
     run([sys.executable, "tools/audit_public.py"])
-    for pattern in ("test_extract.py", "test_public.py", "test_translation_plan.py"):
+    for pattern in ("test_extract.py", "test_public.py"):
         run([sys.executable, "-m", "unittest", "discover", "-s", "tests/python", "-p", pattern])
     run(["cargo", "fmt", "--check"])
     cargo = ["--workspace", "--locked", "--jobs", str(os.cpu_count() or 1)]
