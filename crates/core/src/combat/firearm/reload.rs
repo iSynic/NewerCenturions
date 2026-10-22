@@ -39,9 +39,9 @@ pub fn reload_command(
                 silent: false,
                 warnings: true,
             },
-            &state.ammunition_work,
+            &state.native_work.ammunition_work,
             &mut state.random,
-            state.inventory_record.as_ref(),
+            state.native_work.inventory_record.as_ref(),
         )?;
         return crate::ammunition::commit_result(state, index, result);
     }
@@ -51,7 +51,7 @@ pub fn reload_command(
     } else {
         warrior.record().melee_weapon()?
     };
-    let mut work = state.ammunition_work.clone();
+    let mut work = state.native_work.ammunition_work.clone();
     work.load_weapon(&content.items, id)?;
     if work.item.is_none() {
         work.item = Some(crate::ammunition::definition(content, 0)?);
@@ -68,17 +68,23 @@ pub fn reload_command(
         },
         &work,
         &mut state.random,
-        state.inventory_record.as_ref(),
+        state.native_work.inventory_record.as_ref(),
     )?;
     let complete = result.completed_refit();
     let mut events = crate::ammunition::commit_result(state, index, result)?;
     if !complete {
         state.warriors[index].record_mut().set_automatic_mode(0);
-        if !events
-            .iter()
-            .any(|event| matches!(event, Event::CollectionRejected { warning: 25 }))
-        {
-            events.push(Event::CollectionRejected { warning: 25 });
+        if !events.iter().any(|event| {
+            matches!(
+                event,
+                Event::CollectionRejected {
+                    warning: crate::feedback::OUT_OF_AMMUNITION_WARNING,
+                }
+            )
+        }) {
+            events.push(Event::CollectionRejected {
+                warning: crate::feedback::OUT_OF_AMMUNITION_WARNING,
+            });
         }
     }
     Ok(events)

@@ -7,10 +7,12 @@ use centurions_content::Content;
 
 mod operation;
 use centurions_content::records::StoryRecord;
-use operation::Operation;
+pub(crate) use operation::Operation;
 
 mod battles;
+mod branches;
 mod conditions;
+mod lands;
 mod party;
 mod presentation;
 
@@ -80,6 +82,13 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
         let (opcode, parameter) = StoryRecord(&script.record).instruction(cursor)?;
         let operation = Operation::from_native(opcode);
         script.cursor += 1;
+        crate::trace::story(
+            "exploration",
+            script.map_slot as i32,
+            cursor,
+            opcode,
+            parameter,
+        );
         let step = match operation {
             Operation::CombatCleanup
             | Operation::UndoLastStep
@@ -97,7 +106,8 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
             | Operation::GroupBattle
             | Operation::SelectedBattle
             | Operation::NpcBattle
-            | Operation::StageTransition => battles::execute(
+            | Operation::StageTransition
+            | Operation::DestroyCategories => battles::execute(
                 operation,
                 parameter,
                 state,
@@ -124,7 +134,15 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
             | Operation::ReplaceScript
             | Operation::LimitedShopOrTreasure
             | Operation::Treasure
-            | Operation::Experience => party::execute(
+            | Operation::Experience
+            | Operation::GiveCondition
+            | Operation::AlterShop
+            | Operation::RandomTreasure
+            | Operation::DropAllEquipment
+            | Operation::PickByTrait
+            | Operation::PickByCaste
+            | Operation::DropMemberCredits
+            | Operation::TakeVictoryPoints => party::execute(
                 operation,
                 parameter,
                 state,
@@ -133,6 +151,19 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                 cursor,
                 &mut effects,
             )?,
+            Operation::PartyConditionBranch
+            | Operation::GameTimeBranch
+            | Operation::ItemChargesBranch
+            | Operation::QuestRangeBranch
+            | Operation::PsiPointsBranch
+            | Operation::CharacterConditionBranch
+            | Operation::PickedBranch
+            | Operation::MiscellaneousBranch => {
+                branches::execute(operation, parameter, state, content, map, &mut effects)?
+            }
+            Operation::ChangeLandTiles | Operation::PartyPosition | Operation::ResizeRegion => {
+                lands::execute(operation, parameter, state, content, map, &mut effects)?
+            }
             Operation::ClearObjects
             | Operation::ChangeRegion
             | Operation::ReplaceMapEvent
@@ -143,6 +174,8 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
             | Operation::ConsumePartyItems
             | Operation::ChooseWarrior
             | Operation::Travel
+            | Operation::TeleportActivate
+            | Operation::BreakEncounter
             | Operation::Menu
             | Operation::TypedMenu
             | Operation::PartyItemBranch
@@ -151,10 +184,13 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
             | Operation::RandomBranch
             | Operation::AllyClassBranch
             | Operation::DisableMenuEntry
+            | Operation::DisableEncounterChoice
             | Operation::PaymentBranch
             | Operation::ItemPrerequisiteBranch
             | Operation::ChanceBranch
-            | Operation::FlagBranch => conditions::execute(
+            | Operation::FlagBranch
+            | Operation::DifficultyBranch
+            | Operation::TileBranch => conditions::execute(
                 operation,
                 parameter,
                 state,

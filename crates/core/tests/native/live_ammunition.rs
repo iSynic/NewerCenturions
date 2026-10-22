@@ -38,6 +38,8 @@ fn authored_pack_collection_matches_live_records_reserve_and_rng() {
         menu: None,
         persist: false,
         origin: None,
+        caller_action: None,
+        chained: false,
     });
     apply(
         Command::TakeLoot {

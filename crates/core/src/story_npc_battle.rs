@@ -1,5 +1,5 @@
 use crate::{RandomState, RuleError, combat::death_scripts::EncounterBattleFrame};
-use centurions_content::Warrior;
+use centurions_content::{WARRIOR_BYTES, Warrior, records::NpcBattleExtra};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -22,18 +22,18 @@ pub enum NpcBattleReturn {
 
 impl NpcBattleStart {
     pub fn capture(extra: &[u8], header: &[u8], action_index: i16) -> Result<Self, RuleError> {
-        if extra.len() != 10 {
+        if extra.len() != NpcBattleExtra::BYTES {
             return Err(RuleError::Invalid("invalid NPC battle extra record".into()));
         }
         let frame = EncounterBattleFrame::capture(header, action_index)?;
-        let word = |offset| i16::from_be_bytes([extra[offset], extra[offset + 1]]);
+        let extra = NpcBattleExtra(extra);
         Ok(Self {
             frame,
-            battle: word(0),
-            maximum_battle: word(2),
-            escape_script: word(4),
-            sound: word(6),
-            text: word(8),
+            battle: extra.battle()?,
+            maximum_battle: extra.maximum_battle()?,
+            escape_script: extra.escape_script()?,
+            sound: extra.sound()?,
+            text: extra.text()?,
         })
     }
 
@@ -73,25 +73,29 @@ pub fn finish(
     warriors: &mut [Warrior],
     remembered_move: [u8; 2],
 ) -> Result<Option<[u8; 2]>, RuleError> {
-    if warriors.is_empty() || warriors.len() > 6 || warriors.iter().any(|w| w.bytes.len() != 3138) {
+    if warriors.is_empty()
+        || warriors.len() > 6
+        || warriors.iter().any(|w| w.bytes.len() != WARRIOR_BYTES)
+    {
         return Err(RuleError::Invalid("invalid NPC battle party".into()));
     }
     match outcome {
         NpcBattleReturn::Abort => Ok(None),
         NpcBattleReturn::Reward | NpcBattleReturn::EscapeScript(_) => {
             for warrior in warriors {
-                warrior.bytes[0x9df] = 1;
+                warrior.record_mut().set_active_flag(1);
             }
             Ok(None)
         }
         NpcBattleReturn::EscapeMove => {
             for warrior in warriors {
-                let level = i16::from_be_bytes(warrior.bytes[0x3a..0x3c].try_into().unwrap());
+                let level = warrior.record().level()?;
                 // The original EXT.L retains the signed low word of MULS.W.
                 let award = i32::from(level.wrapping_mul(200));
-                let current = u32::from_be_bytes(warrior.bytes[0x9ce..0x9d2].try_into().unwrap());
-                warrior.bytes[0x9ce..0x9d2]
-                    .copy_from_slice(&current.wrapping_add(award as u32).to_be_bytes());
+                let current = warrior.record().remaining_experience()?;
+                warrior
+                    .record_mut()
+                    .set_remaining_experience(current.wrapping_add(award));
             }
             Ok(Some(remembered_move))
         }

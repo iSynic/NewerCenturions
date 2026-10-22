@@ -31,7 +31,7 @@ pub(super) fn execute(
                 return Err(RuleError::Refused { feedback: vec![] });
             }
             state.warriors[0].record_mut().clear_learned_scans();
-            state.psi_memory = Some(initial_psi_memory(&state.warriors)?);
+            state.native_work.psi_memory = Some(initial_psi_memory(&state.warriors)?);
             Ok(vec![])
         }
         Command::GenerateWarrior { request } => {
@@ -46,7 +46,7 @@ pub(super) fn execute(
                 &mut state.library_random_draws,
             )?;
             state.warriors = vec![warrior];
-            state.psi_memory = Some(initial_psi_memory(&state.warriors)?);
+            state.native_work.psi_memory = Some(initial_psi_memory(&state.warriors)?);
             Ok(vec![Event::Sound { resource_id: 130 }])
         }
         Command::SelectWarriors { warriors } => {
@@ -55,16 +55,16 @@ pub(super) fn execute(
             }
             roster::validate_squad(&warriors)?;
             state.warriors = warriors;
-            state.psi_memory = Some(initial_psi_memory(&state.warriors)?);
+            state.native_work.psi_memory = Some(initial_psi_memory(&state.warriors)?);
             for warrior in &state.warriors {
-                state.loaded_item_field32 =
+                state.native_work.loaded_item_field32 =
                     Some(combat::ally_turns::item_context_after_weight_calc(
                         warrior,
                         &content.items,
-                        state.loaded_item_field32.unwrap_or(0),
+                        state.native_work.loaded_item_field32.unwrap_or(0),
                     )?);
             }
-            state.ammunition_work.item = None;
+            state.native_work.ammunition_work.item = None;
             Ok(vec![Event::StartersImported {
                 count: state.warriors.len(),
             }])
@@ -74,11 +74,11 @@ pub(super) fn execute(
             roster::validate_squad(&warriors)?;
             state.warriors = warriors;
             state.selected_warrior = 0;
-            state.psi_memory = Some(initial_psi_memory(&state.warriors)?);
+            state.native_work.psi_memory = Some(initial_psi_memory(&state.warriors)?);
             state.psi_menu_choices = std::array::from_fn(|_| None);
-            state.health_context = None;
-            state.loaded_item_field32 = None;
-            state.ammunition_work = ammunition::WorkBuffers::default();
+            state.native_work.health_context = None;
+            state.native_work.loaded_item_field32 = None;
+            state.native_work.ammunition_work = ammunition::WorkBuffers::default();
             Ok(vec![])
         }
         Command::ReorderSquad { destinations } => {
@@ -97,8 +97,8 @@ pub(super) fn execute(
                 state.warriors[destination] = before[member].clone();
                 state.psi_menu_choices[destination] = choices[member].clone();
             }
-            state.psi_memory = Some(initial_psi_memory(&state.warriors)?);
-            state.health_context = None;
+            state.native_work.psi_memory = Some(initial_psi_memory(&state.warriors)?);
+            state.native_work.health_context = None;
             Ok(vec![])
         }
         Command::EditWarriorScans { warrior, controls } => {
@@ -223,9 +223,13 @@ pub(super) fn execute(
                 });
             }
             if !free_upgrade {
-                let map = content
-                    .map(state.exploration.as_ref().map_or(0, |p| p.map))
-                    .ok_or_else(|| RuleError::Invalid("upgrade MOS tables missing".into()))?;
+                let map = crate::Session::land_in(
+                    content,
+                    state.mission.as_deref(),
+                    state.scenario_level,
+                    state.exploration.as_ref(),
+                )
+                .ok_or_else(|| RuleError::Invalid("upgrade MOS tables missing".into()))?;
                 let mos = record.record().profession()?;
                 let profile = centurions_content::span(
                     &map.profiles,
@@ -298,16 +302,16 @@ pub(super) fn execute(
                 .iter()
                 .map(|i| content.warriors[*i].clone())
                 .collect();
-            state.psi_memory = Some(initial_psi_memory(&state.warriors)?);
+            state.native_work.psi_memory = Some(initial_psi_memory(&state.warriors)?);
             for warrior in &state.warriors {
-                state.loaded_item_field32 =
+                state.native_work.loaded_item_field32 =
                     Some(combat::ally_turns::item_context_after_weight_calc(
                         warrior,
                         &content.items,
-                        state.loaded_item_field32.unwrap_or(0),
+                        state.native_work.loaded_item_field32.unwrap_or(0),
                     )?);
             }
-            state.ammunition_work.item = None;
+            state.native_work.ammunition_work.item = None;
             Ok(vec![Event::StartersImported {
                 count: state.warriors.len(),
             }])

@@ -17,7 +17,10 @@ fn frame(content: &Content, map: i32, script: Option<i16>, slot: usize, paramete
                 && word(&record, 24 + i * 2).unwrap() == parameter
         })
         .unwrap();
-    position.script = Some(support::script_state(record, cursor as u8));
+    position.script = Some(centurions_core::ScriptState::scheduled(
+        record,
+        cursor as u8,
+    ));
     position.presentation = Some(Presentation::Dialogue {
         id: 0,
         text: String::new(),
@@ -133,7 +136,8 @@ fn authored_item_variable_ally_and_random_branches_resume_without_repeating_effe
         let mut state = frame(&content, 8, None, 42, 580);
         if allied {
             let definitions = &content.map(8).unwrap().combat.as_ref().unwrap().monsters;
-            state.allies[..288].copy_from_slice(&definitions[112 * 288..113 * 288]);
+            state.allies[..288]
+                .copy_from_slice(&definitions[112 * MONSTER_BYTES..113 * MONSTER_BYTES]);
             state.ally_count = 1;
         }
         continue_saved(&mut state, &content);
@@ -144,7 +148,7 @@ fn authored_item_variable_ally_and_random_branches_resume_without_repeating_effe
         let mut state = frame(&content, 0, Some(161), 0, 318);
         // A recorded setup seed and party selection, never a mid-action RNG edit.
         state.random = RandomState::new(seed);
-        state.party_mask.fill(1);
+        state.native_work.party_mask.fill(1);
         continue_saved(&mut state, &content);
         let id = dialogue(&state).unwrap();
         assert!((603..=606).contains(&id));
@@ -173,7 +177,8 @@ fn authored_item_variable_ally_and_random_branches_resume_without_repeating_effe
     }
     let mut state: Session =
         serde_json::from_value(foundation["foundations"][0]["session"].clone()).unwrap();
-    let definition = &content.map(0).unwrap().combat.as_ref().unwrap().monsters[26 * 288..27 * 288];
+    let definition = &content.map(0).unwrap().combat.as_ref().unwrap().monsters
+        [26 * MONSTER_BYTES..27 * MONSTER_BYTES];
     support::expect(
         word(definition, 0x6a).unwrap(),
         &support::fixture("death-feedback.json")["alternate"]["record_sound"],

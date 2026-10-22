@@ -8,7 +8,7 @@ use crate::{
 };
 use attack::AttackResult;
 use centurions_content::records::{
-    AttackPacketMut, Condition, EnemyRecord, EnemyRecordMut, ItemDefinition,
+    AttackPacketMut, Condition, DamageTargetKind, EnemyRecord, EnemyRecordMut, ItemDefinition,
 };
 pub(super) fn resolve(
     combat: &mut Combat,
@@ -53,7 +53,7 @@ pub(super) fn resolve(
     let condition = EnemyRecord::from_bytes(source)
         .natural_attack(index)
         .condition;
-    if ItemDefinition(weapon).category()? != 2 || ItemDefinition(weapon).effect_selector()? != 0 {
+    if ItemDefinition(weapon).category()? != 2 {
         return Err(RuleError::Unsupported {
             action: "combat.enemy_melee",
             dependency: "nonphysical melee weapon definition",
@@ -67,6 +67,17 @@ pub(super) fn resolve(
             .record_mut()
             .set_selected_item(id);
     }
+    let weapon_condition = if loaded {
+        crate::combat::natural_conditions::admit_weapon_condition(
+            weapon,
+            &mut next.enemies.records[target_index].bytes,
+            DamageTargetKind::Enemy,
+            false,
+            &mut rng,
+        )?
+    } else {
+        None
+    };
     let (attacker_x, target_x) = (
         next.enemies.positions[attacker_index].0,
         next.enemies.positions[target_index].0,
@@ -157,8 +168,14 @@ pub(super) fn resolve(
             );
         }
         if reflected {
-            let result =
-                attack::resolve_reflected_attack(target, &packet, index, !loaded, &mut rng)?;
+            let result = attack::resolve_reflected_attack(
+                target,
+                &packet,
+                index,
+                !loaded,
+                weapon_condition,
+                &mut rng,
+            )?;
             *combat = next;
             *random = rng;
             return Ok((result, packet, true));
@@ -184,20 +201,28 @@ pub(super) fn resolve(
     let mut sounds = vec![];
     let mut clear_target = false;
     let mut feedback = None;
+    let mut natural = None;
     if damage != 0 {
         if !loaded {
-            if let Some(effect) = crate::combat::natural_conditions::monster_attack_effect(
+            if let Some(mut effect) = crate::combat::natural_conditions::monster_attack_effect(
                 target, &source, index, &mut rng,
             )? {
-                feedback = effect.feedback;
+                feedback = effect.feedback.take();
                 damage = damage.wrapping_add(effect.extra_damage);
                 if effect.applied && condition == 5 {
                     sounds.push(667);
                 }
                 clear_target = effect.applied && condition == 10;
+                natural = Some(effect);
             } else {
                 damage = 0;
             }
+        } else if let Some(condition) = weapon_condition {
+            feedback = Some(crate::combat::natural_conditions::apply_weapon_condition(
+                target,
+                DamageTargetKind::Enemy,
+                condition,
+            )?);
         }
         EnemyRecordMut::from_bytes(target).mark_damaged();
         let health = EnemyRecord::from_bytes(target)
@@ -211,6 +236,9 @@ pub(super) fn resolve(
         killed: EnemyRecord::from_bytes(target).stamina()? < 1,
         sounds,
     };
+    if let Some(effect) = natural {
+        effect.credit_attacker(&mut next.enemies.records[attacker_index].bytes)?;
+    }
     if clear_target {
         next.enemies.records[attacker_index]
             .record_mut()

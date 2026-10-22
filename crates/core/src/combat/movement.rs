@@ -44,14 +44,13 @@ pub(super) fn move_warrior_inner(
         ));
     }
     let body = body as usize;
-    let mission = content
-        .map(
-            state
-                .exploration
-                .as_ref()
-                .map_or(0, |position| position.map),
-        )
-        .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
+    let mission = crate::Session::land_in(
+        content,
+        state.mission.as_deref(),
+        state.scenario_level,
+        state.exploration.as_ref(),
+    )
+    .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
     let position = combat.squad.positions[body];
     let destination = (
         position.0.wrapping_add(i16::from(dx)),
@@ -78,7 +77,7 @@ pub(super) fn move_warrior_inner(
                 &content.items,
                 &mission.combat.as_ref().unwrap().attacks,
                 &state.party_buffs,
-                &mut state.ammunition_work,
+                &mut state.native_work.ammunition_work,
             )?;
             if state.warriors[body].record().active_flag() == 0 {
                 effects.extend(runtime::end_turn(state, content)?);
@@ -136,7 +135,7 @@ pub(super) fn move_warrior_inner(
         definitions,
         attacks,
         &state.party_buffs,
-        &mut state.ammunition_work,
+        &mut state.native_work.ammunition_work,
     )?;
     state.warriors[body].record_mut().face_horizontal_step(dx);
     if mission.movement_blocker(tile - 1000)? != 0 {
@@ -162,7 +161,7 @@ pub(super) fn move_warrior_inner(
         definitions,
         attacks,
         &state.party_buffs,
-        &mut state.ammunition_work,
+        &mut state.native_work.ammunition_work,
     )?);
     if state.warriors[body].record().active_flag() == 0 {
         effects.extend(runtime::end_turn(state, content)?);
@@ -193,10 +192,10 @@ pub(super) fn move_warrior_inner(
         combat,
         &mut state.warriors,
         mission,
-        &mut state.attack_count,
+        &mut state.native_work.attack_count,
         &mut state.random,
         body as i16,
-        &mut state.party_mask,
+        &mut state.native_work.party_mask,
     )?);
     if state.warriors[body].stamina()? < 1 {
         state.warriors[body].record_mut().set_action_points(0);
@@ -210,7 +209,7 @@ pub(super) fn move_warrior_inner(
             definitions,
             attacks,
             &state.party_buffs,
-            &mut state.ammunition_work,
+            &mut state.native_work.ammunition_work,
         )?);
         if state.warriors[body].record().active_flag() == 0 {
             effects.extend(runtime::end_turn(state, content)?);

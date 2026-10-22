@@ -60,7 +60,10 @@ pub(crate) fn buy(
         let sound = if ItemDefinition(definition).pickup_sound()? != 0 {
             ItemDefinition(definition).pickup_sound()?
         } else {
-            state.random.bound(2).wrapping_add(403)
+            state
+                .random
+                .bound(2)
+                .wrapping_add(crate::feedback::CLIP_SOUND_BASE)
         };
         events.push(Event::Sound { resource_id: sound });
         events.push(Event::Feedback(crate::feedback::NativeFeedback::Flash {

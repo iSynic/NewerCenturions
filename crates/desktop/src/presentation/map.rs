@@ -32,7 +32,7 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
     let Some(position) = &state.exploration else {
         return;
     };
-    let Some(mission) = content.map(position.map) else {
+    let Some(mission) = state.land(content) else {
         return;
     };
     let combat = state.combat.as_ref();
@@ -117,6 +117,16 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
             WHITE,
         );
     }
+}
+
+/// newland27's picture, centred in a 320-pixel square of the map window.
+pub(super) fn draw_story_picture(assets: &Assets, ui: &UiState) {
+    let Some(texture) = ui.picture.and_then(|id| assets.panels.get(&id)) else {
+        return;
+    };
+    let x = ((320. - texture.width()) / 2.).trunc();
+    let y = ((320. - texture.height()) / 2.).trunc();
+    draw_texture(texture, layout::MAP.x + x, layout::MAP.y + y, WHITE);
 }
 
 pub(super) fn draw_outdoor_effect(state: &Session, assets: &Assets, ui: &UiState) {

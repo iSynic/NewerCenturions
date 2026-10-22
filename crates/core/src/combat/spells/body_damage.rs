@@ -220,11 +220,15 @@ pub(super) fn resolve_bodies_inner(
                 let threshold = EnemyRecord::from_bytes(m)
                     .level()?
                     .wrapping_mul(4)
-                    .wrapping_add(if EnemyRecord::from_bytes(m).has_creature_category(3) {
-                        1035
-                    } else {
-                        35
-                    })
+                    .wrapping_add(
+                        if EnemyRecord::from_bytes(m)
+                            .has_creature_category(EnemyRecord::MECHANICAL_CATEGORY)
+                        {
+                            1035
+                        } else {
+                            35
+                        },
+                    )
                     .wrapping_add(
                         AttackPacket(packet)
                             .save_bonus_per_attack()

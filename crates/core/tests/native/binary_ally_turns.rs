@@ -25,7 +25,9 @@ fn combat(case: &serde_json::Value, distance: i16) -> Combat {
     combat.enemies.records = records(&case.bytes("records_before"));
     combat.enemies.positions = vec![(20, 20), (20 + distance, 20)];
     // The original oracle starts from the captured zero NPC backing array.
-    combat.retained_npcs = Session::new(&support::fixture_content("native backing")).npc_backing;
+    combat.retained_npcs = Session::new(&support::fixture_content("native backing"))
+        .native_work
+        .npc_backing;
     combat.retained_npcs.origin = (5, 5);
     for slot in combat.retained_npcs.slots.iter_mut().flatten() {
         slot.position = (5, 5);
@@ -99,7 +101,7 @@ fn scientist_turn_matches_original_records_map_and_rng() {
         command_combat.order[2] = 0;
         state.combat = Some(command_combat);
         state.phase = centurions_core::Phase::Combat;
-        state.loaded_item_field32 = Some(case.n("item_context"));
+        state.native_work.loaded_item_field32 = Some(case.n("item_context"));
         state.random = RandomState::new(12);
         if case["mode"] == 3 {
             let mut legacy = state.clone();
@@ -113,11 +115,11 @@ fn scientist_turn_matches_original_records_map_and_rng() {
         support::native_expect! {
             records &actual.enemies.records => &expected["records_after"], "rifle command NPCs";
             records &state.warriors => &expected["warriors_after"], "rifle Getup party";
-            bytes state.ammunition_work.item.as_ref().unwrap() => &expected["item_after"], "rifle item work";
-            bytes state.ammunition_work.weapon.as_ref().unwrap() => &expected["weapon_after"], "rifle weapon work";
-            bytes state.ammunition_work.ammo.as_ref().unwrap() => &expected["ammo_after"], "rifle ammo work";
-            bytes state.attack_packet.as_ref().unwrap() => &expected["packet_after"], "rifle packet";
-            scalar state.attack_count => &expected["count_after"], "rifle count";
+            bytes state.native_work.ammunition_work.item.as_ref().unwrap() => &expected["item_after"], "rifle item work";
+            bytes state.native_work.ammunition_work.weapon.as_ref().unwrap() => &expected["weapon_after"], "rifle weapon work";
+            bytes state.native_work.ammunition_work.ammo.as_ref().unwrap() => &expected["ammo_after"], "rifle ammo work";
+            bytes state.native_work.attack_packet.as_ref().unwrap() => &expected["packet_after"], "rifle packet";
+            scalar state.native_work.attack_count => &expected["count_after"], "rifle count";
             scalar actual.cursor => &expected["cursor_after"], "rifle next turn";
             scalar state.selected_warrior => &expected["selected_after"], "rifle selected warrior";
             positions actual.enemies.positions => &expected["positions"], "rifle final positions";
@@ -170,7 +172,7 @@ fn item_work_context_matches_original_load_and_weight_calculation() {
         } else {
             let party = case.bytes("warriors_before");
             let member = case.n::<usize>("member");
-            let w = Warrior::read(&party[member * 3138..(member + 1) * 3138]).unwrap();
+            let w = crate::support::warrior_at(&party, member);
             item_context_after_weight_calc(&w, &content.items, 0x5a5a).unwrap()
         };
         support::expect(result, &case["field32"]);

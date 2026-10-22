@@ -1,5 +1,16 @@
 use crate::{Content, Event, Phase, RuleError, Session, combat};
-use centurions_content::{span, word};
+use centurions_content::records::{Condition, ExtraTable, RetreatClassesExtra};
+
+/// newland127 continues a macro only while a living enemy carries the definition
+/// ID (BYTE 0x103, compared as a signed word with the parameter).
+pub(crate) fn monster_present(combat: &combat::Combat, id: i16) -> Result<bool, RuleError> {
+    for enemy in &combat.enemies.records {
+        if i16::from(enemy.record().definition_id()) == id && enemy.record().stamina()? > 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 
 /// Native newland body operations share the queued origin even after an encounter choice.
 pub(crate) fn apply(
@@ -11,23 +22,21 @@ pub(crate) fn apply(
     if state.phase != Phase::Combat && opcode != 119 {
         return Ok((vec![], false));
     }
-    let map = state
-        .map(content, state.exploration.as_ref().map_or(0, |p| p.map))
-        .ok_or("combat story map unavailable")?;
+    let map = state.land(content).ok_or("combat story map unavailable")?;
     let combat = state.combat.as_mut().ok_or("combat story roster missing")?;
     if opcode == 119 {
         if state.warriors.len() as i16 - 1 < i16::from(combat.unavailable) {
             for warrior in &mut state.warriors {
-                warrior.bytes[0x50..0x52].copy_from_slice(&1_i16.to_be_bytes());
-                warrior.bytes[0x90..0x92].fill(0);
+                warrior.record_mut().set_stamina(1);
+                warrior.record_mut().set_automatic_mode(0);
             }
             combat.unavailable = 0;
             return Ok((vec![], true));
         }
         let record = combat.story_record_mut(combat.script_enemy)?;
-        record.bytes[0x110..0x112].copy_from_slice(&1_i16.to_be_bytes());
-        record.bytes[14..16].fill(0);
-        record.bytes[0x82] = 1;
+        record.record_mut().set_stamina(1);
+        record.record_mut().set_faction(0);
+        record.record_mut().set_target_scan_excluded(true);
         return Ok((vec![], false));
     }
     let (center, faction) = if matches!(opcode, 123 | 124) {
@@ -42,35 +51,31 @@ pub(crate) fn apply(
         } else {
             let index = combat.script_enemy;
             let record = combat.story_record(index)?;
-            (combat.story_position(index)?, word(&record.bytes, 14)?)
+            (combat.story_position(index)?, record.record().faction()?)
         }
     } else {
         ((0, 0), 0)
     };
-    let extra = span(
+    let extra = ExtraTable(
         &map.combat
             .as_ref()
             .ok_or("combat story tables missing")?
             .encounters,
-        parameter.unsigned_abs() as usize * 10,
-        10,
-    )?;
+    )
+    .by_magnitude(parameter)?;
     match opcode {
         122 => combat::round_stories::neutralize(combat, extra)?,
         123 => {
-            for class in extra
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|bytes| i16::from_be_bytes(*bytes))
+            for class in RetreatClassesExtra(extra)
+                .classes()
                 .filter(|class| *class != 0)
             {
                 for record in &mut combat.enemies.records {
-                    if i16::from(record.bytes[0x103] as i8) == class
-                        && word(&record.bytes, 14)? == faction
+                    if i16::from(record.record().definition_id()) == class
+                        && record.record().faction()? == faction
                     {
-                        record.bytes[0xb2] = 255;
-                        record.bytes[0x46..0x48].copy_from_slice(&70_i16.to_be_bytes());
+                        record.record_mut().set_condition(Condition::Retreating, -1);
+                        record.record_mut().set_fleeing_chance(70);
                     }
                 }
             }
@@ -124,7 +129,11 @@ pub(crate) fn apply(
             let events = combat::round_stories::destroy_class(
                 combat,
                 extra,
-                state.health_context.as_ref().map(|health| health.last_body),
+                state
+                    .native_work
+                    .health_context
+                    .as_ref()
+                    .map(|health| health.last_body),
                 &mut state.random,
             )?
             .into_iter()

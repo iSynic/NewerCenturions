@@ -121,7 +121,7 @@ pub(super) fn select_turn_bounded(
             .ok_or_else(|| RuleError::Invalid("combat missing".into()))?;
         combat.capture_actor = None;
         combat.turn_origin = None;
-        state.party_mask.fill(0);
+        state.native_work.party_mask.fill(0);
         state.bandage_ready = Some(1);
     }
     let c = state
@@ -189,14 +189,13 @@ pub(super) fn select_turn_bounded(
         {
             continue;
         }
-        let mission = content
-            .map(
-                state
-                    .exploration
-                    .as_ref()
-                    .map_or(0, |position| position.map),
-            )
-            .ok_or_else(|| RuleError::Invalid("combat tables missing".into()))?;
+        let mission = crate::Session::land_in(
+            content,
+            state.mission.as_deref(),
+            state.scenario_level,
+            state.exploration.as_ref(),
+        )
+        .ok_or_else(|| RuleError::Invalid("combat tables missing".into()))?;
         let (turn, skipped) =
             initialize_active_turn(c, &mut state.warriors, mission, &mut state.random)?;
         events.extend(turn);

@@ -112,16 +112,20 @@ pub(super) fn player_attack_inner(
         body,
         Some(&content.items),
         Some(
-            &content
-                .map(state.exploration.as_ref().unwrap().map)
-                .unwrap()
-                .combat
-                .as_ref()
-                .unwrap()
-                .attacks,
+            &crate::Session::land_in(
+                content,
+                state.mission.as_deref(),
+                state.scenario_level,
+                state.exploration.as_ref(),
+            )
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .attacks,
         ),
         &state.party_buffs,
-        &mut state.ammunition_work,
+        &mut state.native_work.ammunition_work,
     )?;
     events.extend(finish_player_action(state, content, body)?);
     Ok(events)

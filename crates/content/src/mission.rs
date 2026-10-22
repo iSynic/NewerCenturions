@@ -1,5 +1,9 @@
+use crate::tile_sets::{self, TILE_SETS, TileSet};
 use crate::{ContentError, span, word};
-use std::{ops::Deref, sync::Arc};
+use std::{
+    ops::Deref,
+    sync::{Arc, OnceLock},
+};
 
 pub const MAP_SIDE: usize = 90;
 pub const MAP_CELLS: usize = MAP_SIDE * MAP_SIDE;
@@ -72,6 +76,28 @@ pub struct ScenarioContent {
     pub opening_map: i32,
     pub items: Vec<Vec<u8>>,
     pub catalog: Arc<std::collections::BTreeMap<(String, u8), ScenarioContent>>,
+    /// The installation's tile sets, shared by every level.
+    pub tile_sets: Arc<Vec<TileSet>>,
+    switched: SwitchedMaps,
+}
+
+/// Each map under another tile set, made when a land first switches to it. A clone
+/// starts empty, since the clone's maps may then be edited.
+#[derive(Debug)]
+struct SwitchedMaps(Vec<[OnceLock<OpeningMission>; TILE_SETS]>);
+
+impl Clone for SwitchedMaps {
+    fn clone(&self) -> Self {
+        switch_slots(self.0.len())
+    }
+}
+
+fn switch_slots(maps: usize) -> SwitchedMaps {
+    SwitchedMaps(
+        (0..maps)
+            .map(|_| std::array::from_fn(|_| OnceLock::new()))
+            .collect(),
+    )
 }
 
 impl ScenarioContent {
@@ -84,19 +110,23 @@ impl ScenarioContent {
             opening_map: 0,
             items: vec![],
             catalog: Default::default(),
+            tile_sets: Default::default(),
+            switched: switch_slots(1),
         }
     }
 
     pub fn read(
         mut read: impl FnMut(&str) -> Result<Vec<u8>, ContentError>,
     ) -> Result<Self, ContentError> {
-        Self::read_level(&mut read, "The Thunder of Guns", 0)
+        let tile_sets = Arc::new(tile_sets::read_all(&mut read));
+        Self::read_level(&mut read, "The Thunder of Guns", 0, tile_sets)
     }
 
     pub fn read_level(
         mut read: impl FnMut(&str) -> Result<Vec<u8>, ContentError>,
         name: &str,
         level: u8,
+        tile_sets: Arc<Vec<TileSet>>,
     ) -> Result<Self, ContentError> {
         let directory = format!("TheNewCenturions/Scenarios/{name}/{level}/");
         let mut selected = |path: &str| read(&path.replace(SCENARIO, &directory));
@@ -115,19 +145,10 @@ impl ScenarioContent {
         for index in 0..land.len() / (MAP_CELLS * 8) {
             let region = span(&regions, index * 644, 644)?.to_vec();
             let terrain = region[0x208];
-            let filename = match terrain {
-                1 => "Data P BD",
-                2 => "Data Swamp BD",
-                3 => "Data Snow BD",
-                4 => "Data Sub BD",
-                5 => "Data Desert BD",
-                6 => "Data Lava BD",
-                7 => "Data Castle BD",
-                8 => "Data Techno BD",
-                9 => "Data Biologic BD",
-                _ => return Err(ContentError::Invalid(format!("unknown terrain {terrain}"))),
+            let set = match tile_sets.iter().find(|set| set.terrain == terrain) {
+                Some(set) => set.clone(),
+                None => tile_sets::read(read, terrain)?,
             };
-            let properties = read(&format!("TheNewCenturions/Data Files/{filename}"))?;
             let raw = span(&land, index * MAP_CELLS * 8, MAP_CELLS * 8)?;
             maps.push(OpeningMission {
                 name: opening.name.clone(),
@@ -152,10 +173,10 @@ impl ScenarioContent {
                     .iter()
                     .map(|v| i32::from_be_bytes(*v))
                     .collect(),
-                tile_properties: span(&properties, 64, 12000)?.to_vec(),
+                tile_properties: set.properties,
                 terrain,
-                default_tile: word(&properties, 0)?,
-                minutes_per_tick: if word(&properties, 2)? == 0 { 5 } else { 1 },
+                default_tile: set.default_tile,
+                minutes_per_tick: set.minutes_per_tick,
                 shared: opening.shared.clone(),
             });
         }
@@ -199,6 +220,7 @@ impl ScenarioContent {
         .map(|row| row.to_vec())
         .collect();
         Ok(Self {
+            switched: switch_slots(maps.len()),
             maps,
             stages,
             name: name.into(),
@@ -206,7 +228,28 @@ impl ScenarioContent {
             opening_map,
             items,
             catalog: Default::default(),
+            tile_sets,
         })
+    }
+
+    /// The map under the tile set its live region table names. A map keeps its authored
+    /// set until a story switches it; None for a set the installation lacks.
+    pub fn land(&self, index: i32, terrain: u8) -> Option<&OpeningMission> {
+        let index = usize::try_from(index).ok()?;
+        let map = self.maps.get(index)?;
+        // The authored region table names the authored set.
+        if map.terrain == terrain || map.regions.get(520) == Some(&terrain) {
+            return Some(map);
+        }
+        let set = self.tile_sets.iter().find(|set| set.terrain == terrain)?;
+        let slot = self.switched.0.get(index)?.get(usize::from(terrain) - 1)?;
+        Some(slot.get_or_init(|| OpeningMission {
+            tile_properties: set.properties.clone(),
+            terrain,
+            default_tile: set.default_tile,
+            minutes_per_tick: set.minutes_per_tick,
+            ..map.clone()
+        }))
     }
 
     pub fn selection(&self, name: &str, level: u8) -> Option<&Self> {
@@ -260,19 +303,7 @@ impl OpeningMission {
             .iter()
             .map(|v| i32::from_be_bytes(*v))
             .collect();
-        let filename = match terrain {
-            1 => "Data P BD",
-            2 => "Data Swamp BD",
-            3 => "Data Snow BD",
-            4 => "Data Sub BD",
-            5 => "Data Desert BD",
-            6 => "Data Lava BD",
-            7 => "Data Castle BD",
-            8 => "Data Techno BD",
-            9 => "Data Biologic BD",
-            _ => return Err(ContentError::Invalid(format!("unknown terrain {terrain}"))),
-        };
-        let properties = read(&format!("TheNewCenturions/Data Files/{filename}"))?;
+        let set = tile_sets::read(&mut read, terrain)?;
         let schedule = read(&format!("{SCENARIO}Data TD3"))?;
         if schedule.is_empty() || !schedule.len().is_multiple_of(40) || schedule.len() > 151 * 40 {
             return Err(ContentError::Invalid(
@@ -287,10 +318,10 @@ impl OpeningMission {
             floor,
             objects,
             events,
-            tile_properties: span(&properties, 64, 12000)?.to_vec(),
+            tile_properties: set.properties,
             terrain,
-            default_tile: word(&properties, 0)?,
-            minutes_per_tick: if word(&properties, 2)? == 0 { 5 } else { 1 },
+            default_tile: set.default_tile,
+            minutes_per_tick: set.minutes_per_tick,
             shared: Arc::new(StoryTables {
                 areas: read("TheNewCenturions/Data Files/Data AD")?,
                 item_cache: Vec::new(),

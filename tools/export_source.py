@@ -15,6 +15,7 @@ PUBLIC_IGNORE = """/NewCenturions/
 /assets/
 /analysis/
 /reference/
+/archive/
 /evidence/
 /target/
 /dist/

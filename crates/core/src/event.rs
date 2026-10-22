@@ -70,6 +70,13 @@ pub enum Event {
         y: i32,
     },
     StoryPresented,
+    /// newland27 draws the PICT centred in a 320-pixel square of the map window,
+    /// where it stays until the map is drawn again.
+    PictureDrawn {
+        resource_id: i16,
+    },
+    /// newland28 redraws the screen over a drawn picture.
+    ScreenRedrawn,
     Message {
         id: i16,
         text: String,

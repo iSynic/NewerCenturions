@@ -12,10 +12,7 @@ fn original_treasure_eight_preserves_participation_and_awards_experience() {
     for case in cases {
         let before = case.bytes("before");
         let warriors: Vec<_> = support::warriors(&before);
-        let mut random = RandomState {
-            seed: case.n::<u32>("seed_before"),
-            draws: 0,
-        };
+        let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let result = story_treasure::prepare(
             &warriors,
             &case.bytes("table_before"),

@@ -59,17 +59,20 @@ pub fn compare_session(state: &Session, snapshot: &Value, label: &str) {
     let combat = state.combat.as_ref().unwrap();
     compare(combat, &state.warriors, snapshot, label);
     crate::support::native_expect! {
-        bytes state.psi_memory.as_ref().unwrap() => &snapshot["memory"], label;
+        bytes state.native_work.psi_memory.as_ref().unwrap() => &snapshot["memory"], label;
         bytes state.party_buffs => &snapshot["party_buffs"], label;
         words combat.order => &snapshot["order"], label;
         scalar combat.cursor => &snapshot["cursor"], label;
         scalar combat.round => &snapshot["round"], label;
         scalar combat.unavailable => &snapshot["unavailable"], label;
-        scalar state.attack_count => &snapshot["count"], label;
+        scalar state.native_work.attack_count => &snapshot["count"], label;
     }
-    assert_eq!(state.loaded_item_field32, Some(snapshot.n("item_context")));
+    assert_eq!(
+        state.native_work.loaded_item_field32,
+        Some(snapshot.n("item_context"))
+    );
     let expected = crate::native_common::psi_work(snapshot);
     assert_eq!(captured_work(combat.weapon_work), expected);
-    assert_eq!(captured_work(state.weapon_work), expected);
+    assert_eq!(captured_work(state.native_work.weapon_work), expected);
     crate::support::assert_rng(&state.random, &snapshot["seed"], &snapshot["draws"]);
 }

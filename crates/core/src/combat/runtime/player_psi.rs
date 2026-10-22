@@ -70,23 +70,18 @@ pub(super) fn player_psi_target(
         .and_then(Combat::active_body)
         .filter(|body| (0..6).contains(body))
         .ok_or_else(|| RuleError::Invalid("psi casting requires an active warrior".into()))?;
-    let mission = content
-        .map(
-            state
-                .exploration
-                .as_ref()
-                .map_or(0, |position| position.map),
-        )
+    let mission = state
+        .land(content)
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
-    if state.psi_memory.is_none() {
-        state.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
+    if state.native_work.psi_memory.is_none() {
+        state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
     }
     let mut events = crate::combat::player_psi::cast_with_buffs(
         state.combat.as_mut().unwrap(),
         &mut state.warriors,
         mission,
         &mut state.random,
-        state.psi_memory.as_mut().unwrap(),
+        state.native_work.psi_memory.as_mut().unwrap(),
         &mut state.party_buffs,
         state.psi_disabled,
         crate::combat::player_psi::CastRequest {
@@ -116,7 +111,7 @@ pub(super) fn player_psi_target(
     ) {
         state.bandage_ready = Some(0);
     }
-    state.attack_count = power;
+    state.native_work.attack_count = power;
     state.psi_menu_choices[actor as usize] = Some(crate::PsiMenuChoice {
         row: (spell % 1000 / 100 - 1) as u8,
         column: (spell % 100 - 1) as u8,

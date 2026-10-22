@@ -108,8 +108,8 @@ impl NpcBacking {
 impl crate::Session {
     pub(crate) fn retain_npcs(&mut self) {
         if let Some(combat) = &self.combat {
-            self.npc_backing.capture(combat);
-            self.retained_death_queue = Some(combat.death_queue.clone());
+            self.native_work.npc_backing.capture(combat);
+            self.native_work.retained_death_queue = Some(combat.death_queue.clone());
         }
     }
 }

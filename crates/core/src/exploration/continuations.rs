@@ -1,7 +1,7 @@
 //! Continuations for maintained exploration.
 use super::{active_map, finish_script, run_script};
 use crate::{Event, Presentation, RuleError, Session, combat};
-use centurions_content::{Content, word};
+use centurions_content::Content;
 
 pub fn continue_messages(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let position = state
@@ -24,6 +24,11 @@ pub fn continue_messages(state: &mut Session, content: &Content) -> Result<Vec<E
         return Ok(vec![Event::StoryPresented]);
     }
     if state.phase == crate::Phase::Combat {
+        crate::trace::declined(
+            "exploration.continue_messages",
+            "combat",
+            "messages ended during combat",
+        );
         Ok(vec![])
     } else {
         run_script(state, content)
@@ -37,9 +42,9 @@ pub fn continue_story(state: &mut Session, content: &Content) -> Result<Vec<Even
 pub fn needs_spell_confirmation(state: &Session) -> bool {
     state.warriors.iter().any(|warrior| {
         warrior.stamina().unwrap_or(0) > 0
-            && i32::from_be_bytes(warrior.bytes[0x9ce..0x9d2].try_into().unwrap()) < 0
-            && word(&warrior.bytes, 0x5a).unwrap_or(0) != 0
-            && word(&warrior.bytes, 0x36).unwrap_or(0) != 0
+            && warrior.record().remaining_experience().unwrap() < 0
+            && warrior.record().maximum_psi().unwrap_or(0) != 0
+            && warrior.record().psi_school().unwrap_or(0) != 0
     })
 }
 
@@ -112,7 +117,7 @@ pub(super) fn continue_with_spells(
         for warrior in closed.promoted {
             events.push(Event::LevelAdvanced {
                 warrior,
-                level: word(&state.warriors[warrior].bytes, 0x3a)?,
+                level: state.warriors[warrior].record().level()?,
             });
         }
     }
@@ -137,6 +142,7 @@ pub(crate) fn finish_story_page(
                 | Presentation::Typed { .. }
                 | Presentation::StageChange { .. }
                 | Presentation::WarriorChoice { .. }
+                | Presentation::PartyPick { .. }
         )
     ) {
         return Err(RuleError::Invalid(

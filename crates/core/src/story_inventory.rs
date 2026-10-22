@@ -1,10 +1,12 @@
 pub mod payment;
 use crate::{Event, RandomState, RuleError, combat, items};
 use centurions_content::{
-    Content, InventoryRecord, Warrior,
-    mission::long,
-    records::{InventorySlotsMut, ItemDefinition},
-    span, word,
+    Content, InventoryRecord, WARRIOR_BYTES, Warrior,
+    records::{
+        CharacterInformation, EquipmentStat, InventorySlotsMut, ItemConsumptionExtra,
+        ItemDefinition, ItemPrerequisiteExtra, TreasureRecord,
+    },
+    span,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,9 +27,9 @@ pub fn query_party_item(warriors: &[Warrior], id: i16) -> Result<Option<PartyIte
 }
 
 pub fn item_prerequisite_matches(warriors: &[Warrior], extra: &[u8]) -> Result<bool, RuleError> {
-    let extra = span(extra, 0, 10)?;
-    let found = query_party_item(warriors, word(extra, 0)?)?.is_some();
-    Ok(match word(extra, 2)? {
+    let extra = ItemPrerequisiteExtra::new(extra)?;
+    let found = query_party_item(warriors, extra.item()?)?.is_some();
+    Ok(match extra.mode()? {
         0 => !found,
         1 => found,
         2 => true,
@@ -60,12 +62,12 @@ pub fn consume_party_items_retained(
     extra: &[u8],
     retained: Option<&InventoryRecord>,
 ) -> Result<Consumption, RuleError> {
-    let extra = span(extra, 0, 10)?;
-    let id = word(extra, 0)?;
-    let maximum = word(extra, 2)?;
-    let mode = word(extra, 4)?;
+    let extra = ItemConsumptionExtra::new(extra)?;
+    let id = extra.item()?;
+    let maximum = extra.maximum()?;
+    let mode = extra.mode()?;
     for warrior in warriors {
-        span(&warrior.bytes, 0, 3138)?;
+        span(&warrior.bytes, 0, WARRIOR_BYTES)?;
     }
     let mut result = Consumption {
         warriors: warriors.to_vec(),
@@ -86,7 +88,10 @@ pub fn consume_party_items_retained(
                 continue;
             }
             if mode == 3 {
-                result.definition = Some(crate::ammunition::definition(content, word(extra, 8)?)?);
+                result.definition = Some(crate::ammunition::definition(
+                    content,
+                    extra.replacement()?,
+                )?);
                 if item.equipment_flag() != 0 {
                     let record = result.record.as_ref().ok_or(RuleError::Unsupported {
                         action: "story.consume_item",
@@ -104,10 +109,10 @@ pub fn consume_party_items_retained(
                             Event::Feedback(crate::feedback::NativeFeedback::Warning { index })
                         }));
                 }
-                let replacement = word(extra, 8)?;
+                let replacement = extra.replacement()?;
                 let definition = result.definition.as_ref().unwrap();
                 let mut replacement_item = warrior.record().inventory_slot(slot);
-                replacement_item.0[..2].copy_from_slice(&replacement.to_be_bytes());
+                replacement_item.set_id(replacement);
                 replacement_item.set_quantity(ItemDefinition(definition).supplied_quantity()?);
                 warrior
                     .record_mut()
@@ -137,7 +142,7 @@ pub fn consume_party_items_retained(
                 let quantity = warrior
                     .record()
                     .inventory_quantity(slot)?
-                    .wrapping_add(word(extra, 6)?);
+                    .wrapping_add(extra.quantity_change()?);
                 warrior.record_mut().set_inventory_quantity(slot, quantity);
                 result.definition = Some(crate::ammunition::definition(content, id)?);
                 let definition = content
@@ -165,13 +170,11 @@ pub fn consume_party_items_retained(
             if item.equipment_flag() != 0 {
                 if warrior.record().inventory_quantity(slot)? == -1 {
                     let class = ItemDefinition(definition).category()?.wrapping_abs();
-                    let offset =
-                        0xc6 + usize::try_from(class).map_err(|_| "invalid removed class")? * 2;
-                    warrior
-                        .bytes
-                        .get_mut(offset..offset + 2)
-                        .ok_or("removed class outside warrior")?
-                        .fill(0);
+                    // i16::MIN survives wrapping_abs and keeps its own error.
+                    usize::try_from(class).map_err(|_| "invalid removed class")?;
+                    EquipmentStat::Equipment(class)
+                        .write(warrior, 0)
+                        .map_err(|_| "removed class outside warrior")?;
                     warrior.record_mut().set_inventory_equipment_flag(slot, 0);
                 } else if crate::equipment::removal_blocked(warrior, slot, definition)? {
                     result.events.extend([
@@ -227,7 +230,7 @@ pub fn consume_party_items_retained(
 pub fn normalize_story_loot(warriors: &[Warrior]) -> Result<Vec<Warrior>, RuleError> {
     let mut result = warriors.to_vec();
     for warrior in &mut result {
-        span(&warrior.bytes, 0, 3138)?;
+        span(&warrior.bytes, 0, WARRIOR_BYTES)?;
         normalize_warrior_after_battle(warrior)?;
     }
     Ok(result)
@@ -292,13 +295,13 @@ pub fn award_story_experience(
         if warrior.stamina()? <= 0 || warrior.record().automatic_mode()? < 0 {
             continue;
         }
-        let experience =
-            long(&warrior.bytes, 0x9d2)?
-                .checked_add(share)
-                .ok_or(RuleError::Unsupported {
-                    action: "story.experience",
-                    dependency: "SANE experience overflow",
-                })?;
+        let experience = CharacterInformation(&warrior.bytes)
+            .upgrade_points()?
+            .checked_add(share)
+            .ok_or(RuleError::Unsupported {
+                action: "story.experience",
+                dependency: "SANE experience overflow",
+            })?;
         let experience = if experience < 0 {
             i32::from(((experience >> 16) as i16).wrapping_abs())
         } else {
@@ -327,8 +330,8 @@ pub fn grant_story_treasure(
     random: &mut RandomState,
     difficulty: i16,
 ) -> Result<Vec<InventoryRecord>, RuleError> {
-    let treasure = span(treasure, 0, 88)?;
-    if treasure[80..88].iter().any(|value| *value != 0) {
+    let treasure = TreasureRecord::new(treasure)?;
+    if treasure.has_awards() {
         return Err(RuleError::Unsupported {
             action: "story.treasure",
             dependency: "treasure credit and experience awards",
@@ -336,10 +339,10 @@ pub fn grant_story_treasure(
     }
     let mut result = Vec::new();
     let mut candidate_random = random.clone();
-    for slot in 0..20 {
-        let id = word(treasure, slot * 2)?;
+    for slot in 0..TreasureRecord::SLOTS {
+        let id = treasure.item(slot)?;
         if id > 0 {
-            let enhancement = word(treasure, 40 + slot * 2)?;
+            let enhancement = treasure.enhancement(slot)?;
             let enhancement = if enhancement == 0 {
                 0
             } else {

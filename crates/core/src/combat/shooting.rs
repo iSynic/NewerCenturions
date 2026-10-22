@@ -69,8 +69,8 @@ pub(crate) fn prepare(
         .items
         .get(ammunition.unsigned_abs() as usize)
         .ok_or_else(|| RuleError::Invalid("ammunition definition missing".into()))?;
-    let mission = content
-        .map(state.exploration.as_ref().map_or(0, |p| p.map))
+    let mission = state
+        .land(content)
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
     let attacks = &mission
         .combat
@@ -126,9 +126,7 @@ pub(crate) fn admit(
     if (dx * dx + dy * dy).sqrt().trunc() as i16 > player_psi::range(&p.packet, p.shots)? {
         return Err(refused(crate::feedback::CombatRefusal::OutOfRange));
     }
-    let mission = content
-        .map(state.exploration.as_ref().map_or(0, |p| p.map))
-        .unwrap();
+    let mission = state.land(content).unwrap();
     if !lifecycle::can_see(c, mission, start, end, 0)? {
         return Err(refused(crate::feedback::CombatRefusal::Blocked));
     }
@@ -183,9 +181,7 @@ pub(crate) fn admit_location(
     {
         Some(crate::feedback::CombatRefusal::OutOfRange)
     } else {
-        let map = state
-            .map(content, state.exploration.as_ref().map_or(0, |p| p.map))
-            .ok_or("combat map unavailable")?;
+        let map = state.land(content).ok_or("combat map unavailable")?;
         (!lifecycle::can_see(c, map, start, location, 0)?)
             .then_some(crate::feedback::CombatRefusal::Blocked)
     };

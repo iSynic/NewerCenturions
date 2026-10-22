@@ -12,26 +12,26 @@ fn initial(fixture: &Value, case: &Value) -> Session {
     let snapshot = &case["before"];
     let member = case.n::<usize>("member");
     let mut state = snapshots::helper_frame(fixture, snapshot, member);
-    state.ammunition_work = WorkBuffers {
+    state.native_work.ammunition_work = WorkBuffers {
         item: Some(bytes(fixture, &snapshot["item_work"])),
         weapon: Some(bytes(fixture, &snapshot["weapon_work"])),
         ammo: Some(bytes(fixture, &snapshot["ammo_work"])),
     };
-    let weapon = state.ammunition_work.weapon.as_ref().unwrap();
-    let ammo = state.ammunition_work.ammo.as_ref().unwrap();
-    state.weapon_work = WeaponWork {
+    let weapon = state.native_work.ammunition_work.weapon.as_ref().unwrap();
+    let ammo = state.native_work.ammunition_work.ammo.as_ref().unwrap();
+    state.native_work.weapon_work = WeaponWork {
         natural_attack_index: None,
         sound: Some(word(weapon, 14).unwrap()),
         weapon_armor_filter: Some(word(weapon, 136).unwrap()),
         ammunition_armor_filter: Some(word(ammo, 136).unwrap()),
     };
-    state.loaded_item_field32 =
-        Some(word(state.ammunition_work.item.as_ref().unwrap(), 32).unwrap());
+    state.native_work.loaded_item_field32 =
+        Some(word(state.native_work.ammunition_work.item.as_ref().unwrap(), 32).unwrap());
     let combat = state.combat.as_mut().unwrap();
     // No active NPC is established by these zeroed native helper inputs.
     combat.enemies.records.clear();
     combat.enemies.positions.clear();
-    combat.weapon_work = state.weapon_work;
+    combat.weapon_work = state.native_work.weapon_work;
     state
 }
 
@@ -44,12 +44,22 @@ fn expected(state: &Session, fixture: &Value, case: &Value, content: &Content) -
     let class = word(&definition, 26).unwrap().wrapping_abs();
     definition[26..28].copy_from_slice(&class.to_be_bytes());
     assert_eq!(definition, bytes(fixture, &after["item_work"]));
-    expected.loaded_item_field32 = Some(word(&definition, 32).unwrap());
-    expected.ammunition_work.item = Some(definition);
+    expected.native_work.loaded_item_field32 = Some(word(&definition, 32).unwrap());
+    expected.native_work.ammunition_work.item = Some(definition);
     let member = case.n::<usize>("member");
-    expected.health_context.as_mut().unwrap().affected[member] = 1;
+    expected
+        .native_work
+        .health_context
+        .as_mut()
+        .unwrap()
+        .affected[member] = 1;
     assert_eq!(
-        expected.health_context.as_ref().unwrap().affected,
+        expected
+            .native_work
+            .health_context
+            .as_ref()
+            .unwrap()
+            .affected,
         words(fixture, &after["markers"])[..6]
     );
     expected
@@ -114,8 +124,19 @@ fn four_public_removals_at_zero_ap_match_complete_native_state_and_saved_replay(
         support::same_captured_session(&resumed, &expected);
         checkpoint(&uninterrupted, &content, &format!("{index}-after"));
         if index == 0 {
-            assert_eq!(state.health_context.as_ref().unwrap().affected[0], 0);
-            assert_eq!(expected.health_context.as_ref().unwrap().affected[0], 1);
+            assert_eq!(
+                state.native_work.health_context.as_ref().unwrap().affected[0],
+                0
+            );
+            assert_eq!(
+                expected
+                    .native_work
+                    .health_context
+                    .as_ref()
+                    .unwrap()
+                    .affected[0],
+                1
+            );
         }
     }
 

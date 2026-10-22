@@ -2,8 +2,10 @@
 use super::super::{StoryBattle, begin_story_battle, finish_script, unsupported};
 use super::{Operation, ScriptStep};
 use crate::{Event, Presentation, RuleError, Session, combat, mission};
+use centurions_content::Content;
 use centurions_content::mission::OpeningMission;
-use centurions_content::{Content, span, word};
+use centurions_content::records::{AttackPacket, ExtraTable};
+use centurions_content::word;
 
 pub(super) fn execute(
     operation: Operation,
@@ -62,6 +64,37 @@ pub(super) fn execute(
                 return Ok(ScriptStep::Pause);
             }
         }
+        // newland121 destroys every NPC record, living or not, that carries each nonzero
+        // creature-category code (BYTE 0xa8 + code - 1), only during a battle. Records
+        // past the battle roster are taken as empty.
+        Operation::DestroyCategories => {
+            if state.phase == crate::Phase::Combat {
+                let extra =
+                    ExtraTable(&map.combat.as_ref().unwrap().encounters).by_magnitude(parameter)?;
+                let codes = (0..5)
+                    .map(|i| word(extra, i * 2))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let combat = state.combat.as_mut().ok_or("combat story roster missing")?;
+                if codes.iter().any(|code| !(0..=120).contains(code)) {
+                    return Err(unsupported("story.opcode", "category past the NPC record"));
+                }
+                if codes.iter().all(|&code| code == 0) && combat.enemies.records.len() < 100 {
+                    return Err(unsupported("story.opcode", "empty NPC records destroyed"));
+                }
+                for index in 0..combat.enemies.records.len() {
+                    let record = combat.enemies.records[index].record();
+                    if codes
+                        .iter()
+                        .all(|&code| code == 0 || record.has_creature_category(code as usize - 1))
+                    {
+                        combat::lifecycle::destroy_enemy(combat, index)?;
+                        effects.push(Event::CombatantRemoved {
+                            body: index as i16 + 10,
+                        });
+                    }
+                }
+            }
+        }
         Operation::ReplaceRoundScript => {
             if state.round_dispatch.is_none() {
                 return Err(unsupported("story.round_jump", "native round-slot caller"));
@@ -73,14 +106,13 @@ pub(super) fn execute(
                 .as_ref()
                 .ok_or("round program missing")?
                 .slot;
-            let extra = span(
+            let extra = ExtraTable(
                 &map.combat
                     .as_ref()
                     .ok_or("round tables missing")?
                     .encounters,
-                parameter.unsigned_abs() as usize * 10,
-                10,
-            )?;
+            )
+            .record(parameter.unsigned_abs() as usize)?;
             let Some(target) = combat::round_stories::replacement(
                 &mut arena.round_scripts,
                 slot,
@@ -94,11 +126,8 @@ pub(super) fn execute(
             script.restart_from(&map.script(target)?);
         }
         Operation::SelectedSpell | Operation::PartySpell => {
-            let extra = span(
-                &map.combat.as_ref().unwrap().encounters,
-                parameter.unsigned_abs() as usize * 10,
-                10,
-            )?;
+            let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
+                .record(parameter.unsigned_abs() as usize)?;
             effects.extend(crate::story_spell::apply(
                 state,
                 content,
@@ -106,6 +135,7 @@ pub(super) fn execute(
                 operation == Operation::PartySpell,
             )?);
             if state
+                .native_work
                 .health_context
                 .as_ref()
                 .is_some_and(|health| health.unavailable >= state.warriors.len() as i8)
@@ -115,25 +145,23 @@ pub(super) fn execute(
             }
         }
         Operation::SelectPartyBySave => {
-            let extra = span(
-                &map.combat.as_ref().unwrap().encounters,
-                parameter.unsigned_abs() as usize * 10,
-                10,
-            )?;
+            let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
+                .record(parameter.unsigned_abs() as usize)?;
             let packet = state
                 .combat
                 .as_ref()
                 .and_then(|c| c.attack_packet.as_ref())
-                .or(state.attack_packet.as_ref());
+                .or(state.native_work.attack_packet.as_ref());
             let context = crate::story_party::PartySaveContext {
                 casting: false,
-                packet_type: packet.map_or(0, |p| p[9] as i8),
-                bonus: packet.map_or(0, |p| p[6] as i8),
-                bonus_per_attack: packet.map_or(0, |p| p[8] as i8),
-                attack_count: state.attack_count,
-                mind_shield: word(&state.party_buffs, 14)? != 0,
+                packet_type: packet.map_or(0, |p| AttackPacket(p).saving_throw_mode() as i8),
+                bonus: packet.map_or(0, |p| AttackPacket(p).save_bonus()),
+                bonus_per_attack: packet
+                    .map_or(0, |p| AttackPacket(p).save_bonus_per_attack() as i8),
+                attack_count: state.native_work.attack_count,
+                mind_shield: crate::combat::party_buffs::mind_shield(&state.party_buffs)?,
             };
-            state.party_mask = crate::story_party::select_party(
+            state.native_work.party_mask = crate::story_party::select_party(
                 &state.warriors,
                 state.selected_warrior,
                 extra,
@@ -144,11 +172,7 @@ pub(super) fn execute(
         Operation::EditSchedule => {
             let extra_index = usize::try_from(parameter)
                 .map_err(|_| RuleError::Invalid("negative schedule extra index".into()))?;
-            let extra = span(
-                &map.combat.as_ref().unwrap().encounters,
-                extra_index * 10,
-                10,
-            )?;
+            let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters).record(extra_index)?;
             crate::story_schedule::edit(&mut position.schedule, extra, position.day)?;
         }
         Operation::GroupBattle => {

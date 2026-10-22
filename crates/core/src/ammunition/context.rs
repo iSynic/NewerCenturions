@@ -76,7 +76,7 @@ fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
 }
 
-pub(crate) fn definition(content: &Content, id: i16) -> Result<Vec<u8>, RuleError> {
+pub fn definition(content: &Content, id: i16) -> Result<Vec<u8>, RuleError> {
     item_definition(&content.items, id)
 }
 

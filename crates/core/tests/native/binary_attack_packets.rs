@@ -10,7 +10,7 @@ fn combat(records: &[u8], member: i16) -> Combat {
     combat.map.tiles.fill(1155);
     combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
     combat.enemies.records = support::monsters(records);
-    combat.enemies.positions = vec![(40 + member, 40); records.len() / 288];
+    combat.enemies.positions = vec![(40 + member, 40); records.len() / MONSTER_BYTES];
     combat.attack_identity = Some([2, 4, 6]);
     combat
 }

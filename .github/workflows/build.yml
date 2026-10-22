@@ -110,13 +110,13 @@ jobs:
               packages[0].rename(root / f'NewerCenturions-{tag}-{platform}{suffix}.zip')
           PY
           cat > release-notes.md <<'NOTES'
-          This beta replaces more of the active CPU-state machinery with named game logic. Attacks, reloads, Psi, equipment, shops, character development and story effects now have clearer rules and record views. The translated engine remains available as a reference; this is not a claim that every translated routine has been rewritten or every original behavior verified.
+          This beta replaces more of the active CPU-state machinery with named game logic. Attacks, reloads, Psi, equipment, shops, character development and story effects now have clearer rules and record views. Every story opcode in the original dispatch except 102 now follows the original instructions, including party picks, encounter elimination and land tile-set switches; spell-triggering melee weapons and conditions on reflected or warrior-against-warrior blows are also supported. Registration checks are not reimplemented and always pass. The public source contains the maintained game only; the instruction-level reference stays private. This is not a claim that every original behavior has been verified.
 
           ### Compatibility and verification
 
-          Save schema 13 and readers for versions 1-12 are unchanged. Keep backups when switching builds. Compatibility with populated original Mac saves remains unverified.
+          New saves use schema 15; readers for versions 1-14 are kept. Keep backups when switching builds. Compatibility with populated original Mac saves remains unverified.
 
-          Local verification passed 318 executable Rust cases, 15 Python checks and six assisted campaign routes with unchanged state, events and save/resume results. The combined local test commands reached their overall time limit; documentation checks and branch receipts completed separately. Formatting, Clippy and release compilation passed. All 293 original files and 390 native fixtures remain unchanged. Test code is 24.52% of maintained production code.
+          Local verification passed 325 executable Rust cases, 17 Python checks and six assisted campaign routes with unchanged state, events and save/resume results. Formatting, Clippy and release compilation passed. All 293 original files are unchanged, and the 378 native fixtures pass with no existing fixture altered. Maintained test code is 11.77% of maintained production code; native comparison tests add another 33.16%.
 
           ### Hive qualification
 

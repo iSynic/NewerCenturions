@@ -92,6 +92,8 @@ pub struct Application {
     pub show_hover: bool,
     pub help: crate::help::Help,
     pub squad: Vec<usize>,
+    /// Requests the diagnostic rule trace written by `--audit-log`.
+    pub trace: bool,
     characters: screen_state::CharacterScreens,
     selection: screen_state::SquadScreen,
     intro: screen_state::IntroScreen,
@@ -182,6 +184,7 @@ impl Application {
             show_hover: true,
             help: crate::help::Help::default(),
             squad: Vec::new(),
+            trace: false,
             characters: screen_state::CharacterScreens::new(),
             selection: screen_state::SquadScreen::new(),
             intro: screen_state::IntroScreen::new(now),
@@ -260,7 +263,7 @@ impl Application {
     ) -> Result<(Option<Action>, Vec<Event>), centurions_core::RuleError> {
         self.scenario_names = content.scenario_names();
         self.archives = centurions_core::reference_views::archive_entries(state, content)?;
-        if let Some(map) = state.map(content, state.exploration.as_ref().map_or(0, |p| p.map)) {
+        if let Some(map) = state.land(content) {
             self.note_labels = map.note_labels.clone();
             self.unknown_note_labels = map.unknown_note_labels.clone();
         }

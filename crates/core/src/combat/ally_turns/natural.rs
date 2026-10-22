@@ -144,9 +144,7 @@ fn natural_attack_enemy_inner(
     let victim_record = EnemyRecord::from_bytes(victim);
     let natural = source_record.natural_attack(index);
     let condition = natural.condition;
-    if source_record.melee_weapon()? != 0
-        || !matches!(condition, 0 | 1 | 2 | 4 | 5 | 6 | 9 | 10 | 11 | 14 | 17)
-    {
+    if source_record.melee_weapon()? != 0 || !matches!(condition, 0..=17 | 19) {
         return Err(RuleError::Unsupported {
             action: "combat.monster_attack",
             dependency: "monster weapon, attack condition, reflection or immunity",
@@ -215,6 +213,7 @@ fn natural_attack_enemy_inner(
             &packet,
             index,
             true,
+            None,
             random,
         )?;
         if result.killed {
@@ -258,6 +257,7 @@ fn natural_attack_enemy_inner(
                 false,
             ));
         };
+        effect.credit_attacker(&mut combat.enemies.records[attacker_index].bytes)?;
         extra_damage = effect.extra_damage;
         feedback = effect.feedback;
         if effect.applied {

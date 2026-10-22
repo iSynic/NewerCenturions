@@ -1,29 +1,26 @@
 use crate::RuleError;
-use centurions_content::{span, word};
+use centurions_content::records::{ScheduleEditExtra, ScheduleEntry, ScheduleEntryMut};
 
 pub fn edit(schedule: &mut [u8], extra: &[u8], current_day: i16) -> Result<(), RuleError> {
-    let extra = span(extra, 0, 10)?;
-    let index = usize::from(word(extra, 0)? as u16);
-    let chance = word(extra, 2)?;
-    let interval = word(extra, 4)?;
-    let reset = word(extra, 6)?;
-    let addition = word(extra, 8)?;
-    if !schedule.len().is_multiple_of(40) {
+    let extra = ScheduleEditExtra::new(extra)?;
+    let index = usize::from(extra.entry()?);
+    let chance = extra.chance()?;
+    let interval = extra.interval()?;
+    let reset = extra.reset()?;
+    let addition = extra.addition()?;
+    if !schedule.len().is_multiple_of(ScheduleEntry::BYTES) {
         return Err(RuleError::Invalid("invalid schedule record size".into()));
     }
-    let offset = index * 40;
-    let record = schedule
-        .get_mut(offset..offset + 40)
-        .ok_or(RuleError::Unsupported {
-            action: "story.schedule_edit",
-            dependency: "scheduled record outside the loaded table",
-        })?;
-    let mut day = word(record, 0)?;
+    let mut record = ScheduleEntryMut::in_table(schedule, index).ok_or(RuleError::Unsupported {
+        action: "story.schedule_edit",
+        dependency: "scheduled record outside the loaded table",
+    })?;
+    let mut day = record.due_day()?;
     if chance >= 0 {
-        record[4..6].copy_from_slice(&chance.to_be_bytes());
+        record.set_chance(chance);
     }
     if interval >= 0 {
-        record[2..4].copy_from_slice(&interval.to_be_bytes());
+        record.set_interval(interval);
     }
     if reset != 0 {
         day = current_day;
@@ -31,6 +28,6 @@ pub fn edit(schedule: &mut [u8], extra: &[u8], current_day: i16) -> Result<(), R
     if addition >= 0 {
         day = day.wrapping_add(addition);
     }
-    record[..2].copy_from_slice(&day.to_be_bytes());
+    record.set_due_day(day);
     Ok(())
 }

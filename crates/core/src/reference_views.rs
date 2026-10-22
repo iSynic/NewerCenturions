@@ -5,9 +5,7 @@ pub fn note(state: &Session, content: &Content, index: usize) -> Result<Vec<Even
     if state.notes.get(index).copied().unwrap_or(0) == 0 {
         return Err(crate::RuleError::Refused { feedback: vec![] });
     }
-    let map = state
-        .map(content, state.exploration.as_ref().map_or(0, |p| p.map))
-        .ok_or("note scenario unavailable")?;
+    let map = state.land(content).ok_or("note scenario unavailable")?;
     let record = span(&map.map_notes, index * 340, 340)?.to_vec();
     if word(&record, 66)? == 0 && state.map(content, i32::from(word(&record, 64)?)).is_none() {
         return Err("note map unavailable".into());
@@ -34,9 +32,7 @@ pub fn archive_entries(
     state: &Session,
     content: &Content,
 ) -> Result<Vec<(usize, String)>, RuleError> {
-    let map = state
-        .map(content, state.exploration.as_ref().map_or(0, |p| p.map))
-        .ok_or("archive scenario unavailable")?;
+    let map = state.land(content).ok_or("archive scenario unavailable")?;
     let records = &map
         .combat
         .as_ref()
@@ -73,9 +69,7 @@ pub fn view(
     index: usize,
     ally: bool,
 ) -> Result<Vec<Event>, RuleError> {
-    let map = state
-        .map(content, state.exploration.as_ref().map_or(0, |p| p.map))
-        .ok_or("creature scenario unavailable")?;
+    let map = state.land(content).ok_or("creature scenario unavailable")?;
     let (record, description) = if ally {
         if index >= state.ally_count {
             return Err("ally entry unavailable".into());
@@ -120,7 +114,7 @@ pub fn combat_body(state: &Session, content: &Content, body: i16) -> Result<Vec<
         .bytes
         .clone();
     let map = state
-        .map(content, state.exploration.as_ref().unwrap().map)
+        .land(content)
         .ok_or("combat description map missing")?;
     let definition = usize::try_from(word(&record, 0)?).map_err(|_| "combat definition invalid")?;
     let description = ui::pascal_text(span(&map.creature_descriptions, definition * 256, 256)?)?;

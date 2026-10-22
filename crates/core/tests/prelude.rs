@@ -1,9 +1,9 @@
 pub use crate::support::{
     NativeCase, bytes, bytes as decode, content, current_combat, data, replay_command, words,
 };
-pub use centurions_content::combat::MonsterRecord;
+pub use centurions_content::combat::{MONSTER_BYTES, MonsterRecord};
 pub use centurions_content::mission::{OpeningMission, StoryTables};
-pub use centurions_content::{Content, InventoryRecord, Warrior, digest, word};
+pub use centurions_content::{Content, InventoryRecord, WARRIOR_BYTES, Warrior, digest, word};
 pub use centurions_core::combat::attack::natural_attack;
 pub use centurions_core::combat::death_scripts::DeathQueue;
 pub use centurions_core::combat::player_psi::CastRequest;

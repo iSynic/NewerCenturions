@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-const CURRENT_SCHEMA_VERSION: u32 = 13;
+const CURRENT_SCHEMA_VERSION: u32 = 15;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Save {

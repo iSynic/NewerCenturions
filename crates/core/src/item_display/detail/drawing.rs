@@ -1,13 +1,11 @@
 //! Original panel coordinates and text formatting. Addresses in compatibility
 //! effects identify output receipts only; they are never read as machine state.
 use super::{
-    BTreeMap, BodyRect, DetailEffect, DetailPlan, DrawingEffect, NativeText, PascalString,
-    RenderingMemory, RuleError,
+    BTreeMap, BodyRect, Draw, NativeText, PanelEffect, PanelPlan, PascalString, RuleError,
 };
-use crate::recovered_drawing::DrawingServices;
 
 pub(super) struct Panel<'a> {
-    pub plan: DetailPlan,
+    pub plan: PanelPlan,
     native: &'a NativeText,
     strings: &'a BTreeMap<i16, Vec<u8>>,
 }
@@ -17,24 +15,23 @@ impl<'a> Panel<'a> {
         Self {
             native,
             strings,
-            plan: DetailPlan {
-                memory: RenderingMemory::default(),
+            plan: PanelPlan {
                 effects: vec![],
-                native_return: None,
-                arithmetic_qualification: None,
+                arithmetic: None,
+                retained_definitions: None,
             },
         }
     }
     pub fn start(&mut self, font: i16) {
-        self.draw(DrawingEffect::SetPort(0));
-        self.draw(DrawingEffect::BackPixelPattern(0));
-        self.draw(DrawingEffect::TextSize(12));
-        self.draw(DrawingEffect::ForeColor(69));
-        self.plan.effects.push(DetailEffect::TextMode(1));
-        self.plan.effects.push(DetailEffect::TextFaceSlot(0));
-        self.draw(DrawingEffect::TextFont(font));
-        self.draw(DrawingEffect::GetPicture(226));
-        self.draw(DrawingEffect::DrawPicture {
+        self.draw(Draw::SetPort(0));
+        self.draw(Draw::BackPixelPattern(0));
+        self.draw(Draw::TextSize(12));
+        self.draw(Draw::ForeColor(69));
+        self.plan.effects.push(PanelEffect::TextMode(1));
+        self.plan.effects.push(PanelEffect::TextFaceSlot(0));
+        self.draw(Draw::TextFont(font));
+        self.draw(Draw::GetPicture(226));
+        self.draw(Draw::DrawPicture {
             handle: 226,
             bounds: BodyRect {
                 top: 460,
@@ -45,28 +42,28 @@ impl<'a> Panel<'a> {
         });
     }
     pub fn finish(&mut self) {
-        self.draw(DrawingEffect::SetPort(0));
-        self.plan.effects.push(DetailEffect::RgbBackColor {
+        self.draw(Draw::SetPort(0));
+        self.plan.effects.push(PanelEffect::RgbBackColor {
             pointer: 0x7000d8,
             bytes: [0; 6],
         });
-        self.plan.effects.push(DetailEffect::RgbForeColor {
+        self.plan.effects.push(PanelEffect::RgbForeColor {
             pointer: 0x7000de,
             bytes: [0; 6],
         });
     }
-    pub fn draw(&mut self, drawing: DrawingEffect) {
-        self.plan.effects.push(DetailEffect::Drawing(drawing));
+    pub fn draw(&mut self, drawing: Draw) {
+        self.plan.effects.push(PanelEffect::Drawing(drawing));
     }
     pub fn move_to(&mut self, horizontal: i16, vertical: i16) {
-        self.draw(DrawingEffect::MoveTo {
+        self.draw(Draw::MoveTo {
             horizontal,
             vertical,
         });
     }
     pub fn convert_number(&mut self, value: i16) -> Result<PascalString, RuleError> {
         let result = PascalString::from_payload(value.to_string().as_bytes())?;
-        self.plan.effects.push(DetailEffect::NumberToString {
+        self.plan.effects.push(PanelEffect::NumberToString {
             value: i32::from(value),
             destination: 0x479ed8,
             result: result.clone(),
@@ -78,21 +75,18 @@ impl<'a> Panel<'a> {
         let text = self.convert_number(value)?;
         if value > 0 {
             if plus {
-                self.draw(DrawingEffect::DrawString(PascalString::from_payload(b"+")?));
+                self.draw(Draw::DrawString(PascalString::from_payload(b"+")?));
             }
-            self.draw(DrawingEffect::DrawString(text));
+            self.draw(Draw::DrawString(text));
         }
         Ok(())
     }
     pub fn indexed(&mut self, resource: i16, index: i16) -> Result<PascalString, RuleError> {
-        super::super::Services {
-            strings: self.strings,
-        }
-        .indexed_string(resource, index)
+        super::super::indexed_string(self.strings, resource, index)
     }
     pub fn literal(&mut self, address: u32) -> Result<(), RuleError> {
         let length = usize::from(self.native.bytes(address, 1)?[0]);
-        self.draw(DrawingEffect::DrawString(PascalString::from_raw(
+        self.draw(Draw::DrawString(PascalString::from_raw(
             self.native.bytes(address, length + 1)?,
         )?));
         Ok(())
@@ -126,7 +120,7 @@ impl<'a> Panel<'a> {
         Ok(())
     }
     pub fn text_box(&mut self, pointer: u32, bytes: Vec<u8>, rectangle: BodyRect) {
-        self.plan.effects.push(DetailEffect::TextBox {
+        self.plan.effects.push(PanelEffect::TextBox {
             pointer,
             length: bytes.len() as i32,
             bytes,
@@ -136,10 +130,10 @@ impl<'a> Panel<'a> {
         });
     }
     pub fn icon(&mut self, id: i16, left: i16) {
-        self.draw(DrawingEffect::GetColorIcon(id));
+        self.draw(Draw::GetColorIcon(id));
         let handle = u32::from(id as u16);
         if handle != 0 {
-            self.draw(DrawingEffect::PlotColorIcon {
+            self.draw(Draw::PlotColorIcon {
                 handle,
                 rect: BodyRect {
                     top: 542,
@@ -148,7 +142,7 @@ impl<'a> Panel<'a> {
                     right: left + 32,
                 },
             });
-            self.draw(DrawingEffect::DisposeColorIcon(handle));
+            self.draw(Draw::DisposeColorIcon(handle));
         }
     }
 }

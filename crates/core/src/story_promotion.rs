@@ -2,8 +2,10 @@ use crate::{Content, Event, Presentation, RuleError, Session, story_inventory};
 mod scans;
 use centurions_content::{
     Warrior,
-    records::{DevelopmentField as Field, LearnedScans, ProfessionProfile, RaceProfile},
-    span,
+    records::{
+        AttackPacket, DevelopmentField as Field, LearnedScans, ProfessionProfile,
+        PsiSelectionMemoryMut, RaceProfile,
+    },
 };
 use scans::keep_spells;
 pub use scans::{SCAN_COSTS, ScanSelection};
@@ -86,8 +88,8 @@ fn advance_statistics(
             dependency: "zero profile retains external service context",
         });
     }
-    let race = RaceProfile(span(races, (race_index as usize - 1) * 408, 408)?);
-    let profile = ProfessionProfile(span(profiles, (profile_index as usize - 1) * 576, 576)?);
+    let race = RaceProfile::from_table(races, race_index)?;
+    let profile = ProfessionProfile::from_table(profiles, profile_index)?;
     let mut points = race
         .action_points()?
         .wrapping_add(profile.action_points()?)
@@ -247,18 +249,17 @@ impl Progress {
         for adding in [false, true] {
             for row in 0..7 {
                 for column in 0..7 {
-                    let offset = 0x9f0 + row * 7 + column;
-                    let actual = self
-                        .selection
-                        .warrior
-                        .bytes
-                        .get(offset)
-                        .copied()
+                    let actual = LearnedScans(&self.selection.warrior.bytes)
+                        .scan_marker(row, column)
                         .unwrap_or(255);
                     if actual > 1 {
                         return Err(RuleError::Invalid("invalid learned scan marker".into()));
                     }
-                    if (actual != 0) == adding && expected.warrior.bytes[offset] != actual {
+                    // ScanSelection::new has already indexed every expected marker.
+                    if (actual != 0) == adding
+                        && LearnedScans(&expected.warrior.bytes).scan_marker(row, column)
+                            != Some(actual)
+                    {
                         expected.select_tier(row)?;
                         if expected.toggle(column)?.is_none() {
                             return Err(RuleError::Invalid(
@@ -432,15 +433,16 @@ pub(crate) fn cache_scans(
     member: usize,
     attacks: &[u8],
 ) -> Result<(), RuleError> {
-    if state.psi_memory.is_none() {
-        state.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
+    if state.native_work.psi_memory.is_none() {
+        state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
     }
     let record = &state.warriors[member];
-    state.psi_memory.as_mut().unwrap()[member * 80..(member + 1) * 80]
-        .copy_from_slice(LearnedScans(&record.bytes).shortcuts());
+    PsiSelectionMemoryMut(state.native_work.psi_memory.as_mut().unwrap())
+        .store_shortcuts(member, LearnedScans(&record.bytes).shortcuts());
     if let Some(index) = LearnedScans(&record.bytes).last_selected() {
         let school = record.record().psi_school()? as usize - 1;
-        state.attack_packet = Some(span(attacks, (school * 49 + index) * 58, 58)?.to_vec());
+        state.native_work.attack_packet =
+            Some(AttackPacket::scan_entry(attacks, school, index)?.0.to_vec());
     }
     Ok(())
 }

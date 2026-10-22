@@ -1,9 +1,13 @@
 use super::*;
 use crate::persistence::Save;
 use crate::test_support::decode;
-use centurions_content::Warrior;
+use centurions_content::WARRIOR_BYTES;
+use centurions_content::{Warrior, word};
 use serde::Deserialize;
 use std::fs;
+fn put(bytes: &mut [u8], offset: usize, value: i16) {
+    bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
+}
 #[derive(Deserialize)]
 struct Fixture {
     cases: Vec<Case>,
@@ -52,16 +56,8 @@ fn hourly_update_matches_original_instruction_execution() {
                 });
                 let mut record = vec![0; 42];
                 put(&mut record, 8, 69);
-                state.exploration.as_mut().unwrap().script = Some(ScriptState {
-                    record,
-                    cursor: 0,
-                    map_slot: 0,
-                    item_return: false,
-                    scheduled: true,
-                    menu: None,
-                    persist: false,
-                    origin: None,
-                });
+                state.exploration.as_mut().unwrap().script =
+                    Some(ScriptState::scheduled(record, 0));
                 state.exploration.as_mut().unwrap().presentation = Some(Presentation::Dialogue {
                     id: 0,
                     text: String::new(),
@@ -162,9 +158,9 @@ fn calendar_content(schedule: Vec<u8>) -> Content {
 fn calendar_state(content: &Content, input: &str, hour: i16, minute: i16) -> Session {
     let mut state = Session::new(content);
     // The calendar receipts predate the separately captured natural-sound context.
-    state.weapon_work.natural_attack_index = None;
+    state.native_work.weapon_work.natural_attack_index = None;
     state.warriors = decode(input)
-        .as_chunks::<3138>()
+        .as_chunks::<WARRIOR_BYTES>()
         .0
         .iter()
         .map(|r| Warrior::read(r).unwrap())
@@ -309,16 +305,11 @@ fn calendar_save_resume_and_legacy_migration_preserve_trigger_history() {
     let mut state = calendar_state(&content, case["input"].as_str().unwrap(), 23, 55);
     let path =
         std::env::temp_dir().join(format!("centurions-calendar-{}.json", std::process::id()));
-    save(&path, &state, &content).unwrap();
-    let mut resumed = load(&path, &content).unwrap();
-    let command = Command::Move { dx: 1, dy: 0 };
-    let events = apply(command.clone(), &mut state, &content).unwrap();
-    assert_eq!(apply(command, &mut resumed, &content).unwrap(), events);
-    assert_eq!(state, resumed);
+    move_resumed(&path, &mut state, &content);
     save(&path, &state, &content).unwrap();
     assert_eq!(load(&path, &content).unwrap(), state);
     let mut legacy = state.clone();
-    legacy.inventory_record = None;
+    legacy.native_work.inventory_record = None;
     legacy.exploration.as_mut().unwrap().day = 1;
     legacy.exploration.as_mut().unwrap().schedule.clear();
     fs::write(
@@ -360,26 +351,30 @@ fn hourly_party_protection_ticks_without_changing_other_rules_and_resumes() {
     let content = calendar_content(decode(case["schedule_before"].as_str().unwrap()));
     for (duration, after) in [(20_i16, 19_i16), (1, 0), (-1, -1)] {
         let mut state = calendar_state(&content, case["input"].as_str().unwrap(), 13, 55);
-        state.psi_memory = Some(crate::initial_psi_memory(&state.warriors).unwrap());
+        state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors).unwrap());
         let mut baseline = state.clone();
         state.party_buffs[4..6].copy_from_slice(&duration.to_be_bytes());
         let path = std::env::temp_dir().join(format!(
             "centurions-hourly-buff-{}-{duration}.json",
             std::process::id()
         ));
-        save(&path, &state, &content).unwrap();
-        let mut resumed = load(&path, &content).unwrap();
+        let events = move_resumed(&path, &mut state, &content);
         let command = Command::Move { dx: 1, dy: 0 };
-        let events = apply(command.clone(), &mut state, &content).unwrap();
-        assert_eq!(
-            apply(command.clone(), &mut resumed, &content).unwrap(),
-            events
-        );
-        assert_eq!(state, resumed);
         assert_eq!(apply(command, &mut baseline, &content).unwrap(), events);
         assert_eq!(word(&state.party_buffs, 4).unwrap(), after);
         baseline.party_buffs = state.party_buffs.clone();
         assert_eq!(state, baseline);
         fs::remove_file(path).unwrap();
     }
+}
+
+/// One step east from a saved copy and from the live state must agree.
+fn move_resumed(path: &std::path::Path, state: &mut Session, content: &Content) -> Vec<Event> {
+    save(path, state, content).unwrap();
+    let mut resumed = load(path, content).unwrap();
+    let command = Command::Move { dx: 1, dy: 0 };
+    let events = apply(command.clone(), state, content).unwrap();
+    assert_eq!(apply(command, &mut resumed, content).unwrap(), events);
+    assert_eq!(*state, resumed);
+    events
 }

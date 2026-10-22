@@ -141,10 +141,7 @@ fn original_reward_chain_crosses_level_thresholds_at_close() {
     {
         let mut warriors = party(&patched(baseline.clone(), &case["before_changes"]));
         let mut library = LibraryRandom { seed: 1, draws: 0 };
-        let mut random = RandomState {
-            seed: case.n::<u32>("seed_before"),
-            draws: 0,
-        };
+        let mut random = RandomState::new(case.n::<u32>("seed_before"));
         for stage in case.array("stages") {
             let n = stage.n::<u64>("stage");
             let table = stage.bytes("table");

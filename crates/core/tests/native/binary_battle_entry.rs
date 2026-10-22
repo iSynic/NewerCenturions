@@ -87,6 +87,7 @@ fn battle_state(
     position.y = case.n::<i32>("y");
     position.floor.clone_from(&map.floor);
     position.events.clone_from(&map.events);
+    crate::native_common::keep_tile_set(&mut state, content);
     state.random = RandomState::new(case.n::<u32>("seed_before"));
     begin_battle(&mut state, content, case.n::<i16>("battle"), 0).unwrap();
     state

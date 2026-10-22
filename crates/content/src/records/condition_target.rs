@@ -17,6 +17,23 @@ pub enum SavingThrow {
     Entanglement = 8,
 }
 
+impl SavingThrow {
+    pub fn from_index(index: i16) -> Option<Self> {
+        Some(match index {
+            0 => Self::Mental,
+            1 => Self::Chemical,
+            2 => Self::Heat,
+            3 => Self::Cold,
+            4 => Self::Electrical,
+            5 => Self::Psionic,
+            6 => Self::Atomic,
+            7 => Self::Biological,
+            8 => Self::Entanglement,
+            _ => return None,
+        })
+    }
+}
+
 pub struct ConditionTarget<'a> {
     bytes: &'a mut [u8],
     kind: DamageTargetKind,
@@ -59,17 +76,24 @@ impl<'a> ConditionTarget<'a> {
         }
     }
     pub fn duration(&self, condition: Condition) -> Result<i16, ContentError> {
-        if self.is_enemy() {
-            Ok(i16::from(self.bytes[0xb2 + condition as usize] as i8))
-        } else {
-            word(self.bytes, 0x5e + condition as usize * 2)
-        }
+        self.slot_duration(condition as usize)
     }
     pub fn set_duration(&mut self, condition: Condition, duration: i16) {
+        self.set_slot_duration(condition as usize, duration);
+    }
+    /// Condition slots by raw index, for data-selected slots such as weapon conditions.
+    pub fn slot_duration(&self, slot: usize) -> Result<i16, ContentError> {
         if self.is_enemy() {
-            self.bytes[0xb2 + condition as usize] = duration as u8;
+            Ok(i16::from(span(self.bytes, 0xb2 + slot, 1)?[0] as i8))
         } else {
-            put_word(self.bytes, 0x5e + condition as usize * 2, duration);
+            word(self.bytes, 0x5e + slot * 2)
+        }
+    }
+    pub fn set_slot_duration(&mut self, slot: usize, duration: i16) {
+        if self.is_enemy() {
+            self.bytes[0xb2 + slot] = duration as u8;
+        } else {
+            put_word(self.bytes, 0x5e + slot * 2, duration);
         }
     }
     pub fn halve_remaining_turn(&mut self) -> Result<(), ContentError> {
@@ -99,5 +123,22 @@ impl<'a> ConditionTarget<'a> {
         } else {
             Ok(word(self.bytes, 0x70 + element * 2)? != 0)
         }
+    }
+    pub fn psi_points(&self) -> Result<i16, ContentError> {
+        word(self.bytes, if self.is_enemy() { 0x10e } else { 0x58 })
+    }
+    pub fn set_psi_points(&mut self, points: i16) {
+        let offset = if self.is_enemy() { 0x10e } else { 0x58 };
+        put_word(self.bytes, offset, points);
+    }
+    /// Warrior experience drain: remaining experience gains what upgrade points lose.
+    pub fn shift_experience(&mut self, amount: i32) -> Result<(), ContentError> {
+        span(self.bytes, 0x9ce, 8)?;
+        for (offset, delta) in [(0x9ce, amount), (0x9d2, amount.wrapping_neg())] {
+            let value = i32::from_be_bytes(self.bytes[offset..offset + 4].try_into().unwrap());
+            self.bytes[offset..offset + 4]
+                .copy_from_slice(&value.wrapping_add(delta).to_be_bytes());
+        }
+        Ok(())
     }
 }

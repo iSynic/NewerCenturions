@@ -1,5 +1,5 @@
 use crate::{Content, Event, Phase, Presentation, RuleError, Session, combat};
-use centurions_content::{span, word};
+use centurions_content::records::ActorReplacementExtra;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -14,15 +14,18 @@ pub(crate) enum Progress {
     Stop,
 }
 
-fn extra<'a>(state: &Session, content: &'a Content, id: i16) -> Result<&'a [u8], RuleError> {
+fn extra<'a>(
+    state: &Session,
+    content: &'a Content,
+    id: i16,
+) -> Result<ActorReplacementExtra<'a>, RuleError> {
     let map = crate::exploration::active_map(state, content)?;
-    Ok(span(
+    Ok(ActorReplacementExtra::select(
         &map.combat
             .as_ref()
             .ok_or("actor tables missing")?
             .encounters,
-        usize::from(id.unsigned_abs()) * 10,
-        10,
+        id,
     )?)
 }
 
@@ -62,7 +65,7 @@ pub(crate) fn begin(
         return Err("actor replacement requires an unsuspended combat script".into());
     }
     state.actor_replacement = Some(Replacement::Before(id));
-    let introduction = word(extra(state, content, id)?, 6)?;
+    let introduction = extra(state, content, id)?.introduction()?;
     if introduction != 0 {
         return Ok((page(state, content, introduction)?, Progress::Waiting));
     }
@@ -81,7 +84,7 @@ pub(crate) fn resume(
         return Ok((vec![], Progress::Continue));
     };
     let extra = extra(state, content, id)?;
-    let replacement = word(extra, 0)?;
+    let replacement = extra.replacement()?;
     let arena = state.combat.as_mut().ok_or("actor combat missing")?;
     let selected = arena.selected_enemy;
     let mut events = vec![];
@@ -112,11 +115,11 @@ pub(crate) fn resume(
     )? {
         return Ok((events, Progress::Stop));
     }
-    let sound = word(extra, 4)?;
+    let sound = extra.sound()?;
     if sound != 0 {
         events.push(Event::Sound { resource_id: sound });
     }
-    let conclusion = word(extra, 8)?;
+    let conclusion = extra.conclusion()?;
     if conclusion != 0 {
         state.actor_replacement = Some(Replacement::After);
         events.extend(page(state, content, conclusion)?);

@@ -95,11 +95,12 @@ pub fn confirm_survivors(state: &mut Session, content: &Content) -> Result<Vec<E
     )?;
     combat.unavailable = rewards.unavailable;
     if let Some(id) = rewards.last_item_id {
-        state.loaded_item_field32 = Some(state.ammunition_work.load_item(content, id)?);
+        state.native_work.loaded_item_field32 =
+            Some(state.native_work.ammunition_work.load_item(content, id)?);
     }
     state.warriors = rewards.warriors;
     if let Some(record) = rewards.inventory_record {
-        state.inventory_record = Some(record);
+        state.native_work.inventory_record = Some(record);
     }
     combat.enemies.records = rewards.enemies;
     state.party_currency = rewards.currency;
@@ -116,24 +117,26 @@ pub fn confirm_survivors(state: &mut Session, content: &Content) -> Result<Vec<E
     }
     // booty105748 enters its reward window even when the crate is empty.
     state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
-    events.push(Event::Sound { resource_id: 20 });
-    state.attack_packet = combat.attack_packet.clone();
-    state.attack_identity = combat.attack_identity;
-    state.weapon_work = combat.weapon_work;
+    events.push(Event::Sound {
+        resource_id: crate::feedback::BOOTY_SOUND,
+    });
+    state.native_work.attack_packet = combat.attack_packet.clone();
+    state.native_work.attack_identity = combat.attack_identity;
+    state.native_work.weapon_work = combat.weapon_work;
     let mut health = crate::story_health::context(
         &state.warriors,
         state.selected_warrior,
-        state.health_context.as_ref(),
+        state.native_work.health_context.as_ref(),
     );
     health.unavailable = combat.unavailable;
     if let Some(packet) = combat.attack_packet.as_ref() {
         health.effect = packet[18] as i8;
     }
-    state.health_context = Some(health);
-    state.selected_enemy = combat.selected_enemy;
-    state.script_enemy = combat.script_enemy;
-    state.npc_backing.capture(combat);
-    state.retained_death_queue = Some(combat.death_queue.clone());
+    state.native_work.health_context = Some(health);
+    state.native_work.selected_enemy = combat.selected_enemy;
+    state.native_work.script_enemy = combat.script_enemy;
+    state.native_work.npc_backing.capture(combat);
+    state.native_work.retained_death_queue = Some(combat.death_queue.clone());
     state.combat = None;
     if !state
         .combat_story
@@ -167,9 +170,9 @@ pub(crate) fn refit_after_combat(
                     silent: true,
                     warnings: false,
                 },
-                &state.ammunition_work,
+                &state.native_work.ammunition_work,
                 &mut state.random,
-                state.inventory_record.as_ref(),
+                state.native_work.inventory_record.as_ref(),
             )?;
             events.extend(crate::ammunition::commit_result(state, member, result)?);
         }
@@ -194,9 +197,7 @@ pub(super) fn finish_battle_wrapper(
         crate::story_party::group_return(&state.warriors, false, failure_script)?.warriors;
     events.push(Event::BattleEnded { victory: true });
     if state.battle_after_message != 0 {
-        let map = content
-            .map(state.exploration.as_ref().unwrap().map)
-            .unwrap();
+        let map = state.land(content).unwrap();
         events.push(Event::Message {
             id: state.battle_after_message,
             text: map.dialogue(state.battle_after_message)?,
@@ -204,9 +205,7 @@ pub(super) fn finish_battle_wrapper(
     }
     state.battle_after_message = 0;
     if state.battle_treasure != 0 {
-        let map = content
-            .map(state.exploration.as_ref().unwrap().map)
-            .unwrap();
+        let map = state.land(content).unwrap();
         let treasure = centurions_content::span(
             &map.treasure,
             state.battle_treasure.unsigned_abs() as usize * 88,

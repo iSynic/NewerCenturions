@@ -37,13 +37,8 @@ pub fn begin(
     content: &Content,
     encounter_id: i16,
 ) -> Result<Vec<Event>, RuleError> {
-    let mission = content
-        .map(
-            state
-                .exploration
-                .as_ref()
-                .map_or(0, |position| position.map),
-        )
+    let mission = state
+        .land(content)
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
     let tables = mission
         .combat
@@ -199,13 +194,8 @@ pub(super) fn begin_battle_with_group(
     group: bool,
 ) -> Result<Vec<Event>, RuleError> {
     state.retain_npcs();
-    let mission = content
-        .map(
-            state
-                .exploration
-                .as_ref()
-                .map_or(0, |position| position.map),
-        )
+    let mission = state
+        .land(content)
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
     let tables = mission
         .combat
@@ -233,7 +223,7 @@ pub(super) fn begin_battle_with_group(
         &mut state.random,
     )?;
     let direction = state.random.bound(360);
-    state.npc_backing.rebase_origin(map.shift);
+    state.native_work.npc_backing.rebase_origin(map.shift);
     let distance = state.random.bound(i16::from(battle.distance));
     let base = direction_offset(direction, distance);
     let mut squad = place_squad(
@@ -286,7 +276,7 @@ pub(super) fn begin_battle_with_group(
             crate::story_health::context(
                 &state.warriors,
                 state.selected_warrior,
-                state.health_context.as_ref(),
+                state.native_work.health_context.as_ref(),
             )
             .unavailable
         },
@@ -306,7 +296,7 @@ pub(super) fn begin_battle_with_group(
         &map,
         &squad,
         &order,
-        &state.party_mask,
+        &state.native_work.party_mask,
         group,
     )?;
     state.warriors = setup.warriors;
@@ -319,7 +309,13 @@ pub(super) fn begin_battle_with_group(
         .combat
         .as_ref()
         .map(|combat| combat.death_queue.clone())
-        .unwrap_or_else(|| state.retained_death_queue.clone().unwrap_or_default());
+        .unwrap_or_else(|| {
+            state
+                .native_work
+                .retained_death_queue
+                .clone()
+                .unwrap_or_default()
+        });
     death_queue.reset_for_battle();
     state.handled_deaths.clear();
     state.combat_story = None;
@@ -328,22 +324,28 @@ pub(super) fn begin_battle_with_group(
     state.battle_group_script = None;
     state.battle_npc = None;
     let (attack_packet, attack_identity) = state.combat.as_ref().map_or_else(
-        || (state.attack_packet.clone(), state.attack_identity),
+        || {
+            (
+                state.native_work.attack_packet.clone(),
+                state.native_work.attack_identity,
+            )
+        },
         |combat| (combat.attack_packet.clone(), combat.attack_identity),
     );
-    let (selected_enemy, script_enemy) = state
-        .combat
-        .as_ref()
-        .map_or((state.selected_enemy, state.script_enemy), |combat| {
-            (combat.selected_enemy, combat.script_enemy)
-        });
+    let (selected_enemy, script_enemy) = state.combat.as_ref().map_or(
+        (
+            state.native_work.selected_enemy,
+            state.native_work.script_enemy,
+        ),
+        |combat| (combat.selected_enemy, combat.script_enemy),
+    );
     state.combat = Some(Combat {
         difficulty: state.difficulty,
         battle: id,
         map,
         squad,
         enemies,
-        retained_npcs: state.npc_backing.clone(),
+        retained_npcs: state.native_work.npc_backing.clone(),
         direct_deaths: false,
         direct_death: None,
         order,
@@ -362,7 +364,7 @@ pub(super) fn begin_battle_with_group(
         field_used: empty_field_used(),
         attack_packet,
         attack_identity,
-        weapon_work: state.weapon_work,
+        weapon_work: state.native_work.weapon_work,
         unavailable,
         pending_last_defeated: None,
         firearm_selection: None,
@@ -375,7 +377,7 @@ pub(super) fn begin_battle_with_group(
     }
     state.phase = Phase::Combat;
     state.bandage_ready = Some(1);
-    state.party_mask.fill(0);
+    state.native_work.party_mask.fill(0);
     effects.push(Event::CombatStarted {
         battle: id,
         enemies: count,

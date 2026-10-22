@@ -17,8 +17,9 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         let mut state = support::mission_session(&content);
         state.phase = Phase::Combat;
         state.warriors = vec![Warrior::read(&case.bytes("before")).unwrap(); 6];
-        let mut enemy =
-            content.map(0).unwrap().combat.as_ref().unwrap().monsters[13 * 288..14 * 288].to_vec();
+        let mut enemy = content.map(0).unwrap().combat.as_ref().unwrap().monsters
+            [13 * MONSTER_BYTES..14 * MONSTER_BYTES]
+            .to_vec();
         enemy[14..16].copy_from_slice(
             &word(&state.warriors[0].bytes, 0x10)
                 .unwrap()
@@ -182,15 +183,16 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         )
         .unwrap();
         let mut expected = case.bytes("after");
-        expected[actor * 3138 + 0x40..actor * 3138 + 0x42].copy_from_slice(&5_i16.to_be_bytes());
+        expected[actor * WARRIOR_BYTES + 0x40..actor * WARRIOR_BYTES + 0x42]
+            .copy_from_slice(&5_i16.to_be_bytes());
         for (offset, cost) in [(0x3c, 3), (0x40, 2)] {
-            let offset = actor * 3138 + offset;
+            let offset = actor * WARRIOR_BYTES + offset;
             let value = word(&expected, offset).unwrap().wrapping_sub(cost).max(0);
             expected[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
         }
         if case.get("actor").is_some() {
-            let weapon = word(&expected, actor * 3138 + 0xe4).unwrap();
-            let offset = actor * 3138
+            let weapon = word(&expected, actor * WARRIOR_BYTES + 0xe4).unwrap();
+            let offset = actor * WARRIOR_BYTES
                 + 0x132
                 + state.warriors[actor]
                     .inventory()
@@ -203,7 +205,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
             let rounds = word(&content.items[weapon as usize], 22).unwrap();
             let left = word(&expected, offset).unwrap().wrapping_sub(rounds);
             expected[offset..offset + 2].copy_from_slice(&left.to_be_bytes());
-            let offset = actor * 3138 + 0x9d6;
+            let offset = actor * WARRIOR_BYTES + 0x9d6;
             let weight = word(&expected, offset)
                 .unwrap()
                 .wrapping_sub(rounds * word(&content.items[weapon as usize], 36).unwrap());
@@ -302,7 +304,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         position.x = 10;
         position.y = 10;
         position.last_move = [1, 0];
-        position.script = Some(support::script_state(
+        position.script = Some(centurions_core::ScriptState::scheduled(
             content.map(0).unwrap().script(0).unwrap().to_vec(),
             0,
         ));

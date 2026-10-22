@@ -60,9 +60,7 @@ impl Inventory {
         }
         let mut rows = self.rows.borrow_mut();
         let fragments = rows.entry(key).or_insert_with(|| {
-            use centurions_core::{
-                recovered_drawing::DrawingEffect, recovered_item_ui::ItemUiEffect,
-            };
+            use centurions_core::item_display::output::{Draw, PanelEffect};
             match centurions_core::item_display::row(
                 content,
                 item,
@@ -74,8 +72,8 @@ impl Inventory {
                     let mut fragments: Vec<(i32, String)> = vec![];
                     for effect in effects {
                         match effect {
-                            ItemUiEffect::Drawing(DrawingEffect::ForeColor(value)) => color = value,
-                            ItemUiEffect::Drawing(DrawingEffect::DrawString(value)) => {
+                            PanelEffect::Drawing(Draw::ForeColor(value)) => color = value,
+                            PanelEffect::Drawing(Draw::DrawString(value)) => {
                                 let text = centurions_content::ui::pascal_text(value.raw())
                                     .unwrap_or_default();
                                 if let Some(last) =

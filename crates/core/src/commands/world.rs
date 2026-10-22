@@ -49,6 +49,9 @@ pub(super) fn execute(
                 .map(scenario.opening_map)
                 .ok_or_else(|| RuleError::Invalid("opening content unavailable".into()))?;
             state.phase = Phase::Exploration;
+            // setupnewgame re-enables random-rectangle battles and camping for each mission.
+            state.native_work.random_battles = 1;
+            state.native_work.camp_disabled = false;
             state.mission = Some(name);
             state.scenario_level = scenario.level;
             state.exploration = Some(Exploration {

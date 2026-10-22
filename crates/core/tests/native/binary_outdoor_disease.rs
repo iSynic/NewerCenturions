@@ -1,5 +1,5 @@
 use crate::{native_common, prelude::*, support};
-use native_common::patch_bytes as changes;
+use support::patch_bytes as changes;
 
 use native_common::health_event as event;
 #[test]

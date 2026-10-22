@@ -9,14 +9,8 @@ use crate::fixture_hex::decode;
 
 fn story_frame(record: Vec<u8>, cursor: u8, map_slot: usize) -> centurions_core::ScriptState {
     centurions_core::ScriptState {
-        record,
-        cursor,
         map_slot,
-        item_return: false,
-        scheduled: true,
-        menu: None,
-        persist: false,
-        origin: None,
+        ..centurions_core::ScriptState::scheduled(record, cursor)
     }
 }
 
@@ -659,12 +653,12 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     driver.act(ApplicationAction::EditorItem(4));
     assert_eq!(&driver.state.warriors[1].bytes[0x9f0..0x9f2], &[0, 1]);
     assert_eq!(
-        &driver.state.psi_memory.as_ref().unwrap()[80..160],
+        &driver.state.native_work.psi_memory.as_ref().unwrap()[80..160],
         &driver.state.warriors[1].bytes[0xa76..0xac6]
     );
     assert_eq!(
-        &driver.state.psi_memory.as_ref().unwrap()[..80],
-        &before_scans.psi_memory.as_ref().unwrap()[..80]
+        &driver.state.native_work.psi_memory.as_ref().unwrap()[..80],
+        &before_scans.native_work.psi_memory.as_ref().unwrap()[..80]
     );
     assert_eq!(driver.state.random, before_scans.random);
     assert_eq!(
@@ -920,7 +914,7 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
         };
         apply(command, &mut state, &content).unwrap();
     }
-    assert_eq!(state.inventory_record.as_ref(), Some(&record));
+    assert_eq!(state.native_work.inventory_record.as_ref(), Some(&record));
     let drag = ui.inventory.release(Some(vec2(500., 50.))).unwrap();
     let Some(Action::Command(command)) = ui
         .resolve_inventory(Some(Action::Inventory(drag)), &state, &content, 2.)
@@ -1021,15 +1015,13 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
         let mut position = (0, 0);
         let mut fields = vec![];
         for effect in plan.effects {
-            use centurions_core::{
-                recovered_detail_ui::DetailEffect, recovered_drawing::DrawingEffect,
-            };
+            use centurions_core::item_display::output::{Draw, PanelEffect};
             match effect {
-                DetailEffect::Drawing(DrawingEffect::MoveTo {
+                PanelEffect::Drawing(Draw::MoveTo {
                     horizontal,
                     vertical,
                 }) => position = (horizontal, vertical),
-                DetailEffect::NumberToString { value, .. } if fields.len() < 13 => {
+                PanelEffect::NumberToString { value, .. } if fields.len() < 13 => {
                     fields.push(serde_json::json!([position.0, position.1, value]))
                 }
                 _ => {}
@@ -1329,19 +1321,15 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
         record[8..10].copy_from_slice(&5_i16.to_be_bytes());
         record[24..26].copy_from_slice(&8_i16.to_be_bytes());
         position.script = Some(centurions_core::ScriptState {
-            record,
-            cursor: 0,
-            map_slot: 0,
             item_return: name == "encounter-script-items.json",
             scheduled: !walking,
-            menu: None,
-            persist: false,
             origin: walking.then_some(centurions_core::ScriptOrigin {
                 map: position.map,
                 x: position.x,
                 y: position.y,
                 level: restored.scenario_level,
             }),
+            ..centurions_core::ScriptState::scheduled(record, 0)
         });
         position.presentation = Some(centurions_core::Presentation::Dialogue {
             id: 0,

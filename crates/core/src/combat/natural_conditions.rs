@@ -5,7 +5,9 @@ use centurions_content::{
 };
 
 mod attack_effects;
-pub(crate) use attack_effects::{monster_attack_effect, warrior_attack_effect};
+pub(crate) use attack_effects::{
+    admit_weapon_condition, apply_weapon_condition, monster_attack_effect, warrior_attack_effect,
+};
 
 /// attack2 case 9 consumes the disease save before testing an existing permanent condition.
 pub fn disease_duration(

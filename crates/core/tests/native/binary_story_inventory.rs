@@ -93,7 +93,7 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                         &content,
                     )
                     .unwrap();
-                    assert_eq!(state.inventory_record.as_ref(), Some(&record));
+                    assert_eq!(state.native_work.inventory_record.as_ref(), Some(&record));
                     if stock {
                         apply(Command::CloseShop, &mut state, &content).unwrap();
                     }
@@ -101,13 +101,14 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                 if case["writer"] == "refit" {
                     assert_eq!(state.warriors, support::warriors(&case["before_prefix"]));
                     support::assert_bytes(
-                        state.ammunition_work.item.as_ref().unwrap(),
+                        state.native_work.ammunition_work.item.as_ref().unwrap(),
                         &case.bytes("item_before_prefix"),
                         "inspection before native refit",
                     );
                     state.ammunition = support::longs(&case.bytes("reserves_before_prefix")[..800]);
-                    state.ammunition_work.ammo = Some(case.bytes("ammo_before_prefix"));
-                    state.ammunition_work.weapon = Some(case.bytes("weapon_before_prefix"));
+                    state.native_work.ammunition_work.ammo = Some(case.bytes("ammo_before_prefix"));
+                    state.native_work.ammunition_work.weapon =
+                        Some(case.bytes("weapon_before_prefix"));
                     let random = state.random.clone();
                     let mut prefix_events = vec![];
                     for _ in 0..case["refit_rounds"].as_u64().unwrap_or(1) {
@@ -129,9 +130,9 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                         support::longs(&case.bytes("reserves_after_prefix")[..800])
                     );
                     support::native_expect! {
-                        bytes state.ammunition_work.ammo.as_ref().unwrap() => &case["prefix_ammo"], "refit ammo before consumer";
-                        bytes state.ammunition_work.item.as_ref().unwrap() => &case["prefix_item"], "refit item before consumer";
-                        bytes state.ammunition_work.weapon.as_ref().unwrap() => &case["prefix_weapon"], "refit weapon before consumer";
+                        bytes state.native_work.ammunition_work.ammo.as_ref().unwrap() => &case["prefix_ammo"], "refit ammo before consumer";
+                        bytes state.native_work.ammunition_work.item.as_ref().unwrap() => &case["prefix_item"], "refit item before consumer";
+                        bytes state.native_work.ammunition_work.weapon.as_ref().unwrap() => &case["prefix_weapon"], "refit weapon before consumer";
                     }
                     support::assert_bytes(
                         &records(&state.warriors),
@@ -146,7 +147,7 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                     id: 469,
                     text: content.map(0).unwrap().dialogue(469).unwrap(),
                 });
-                position.script = Some(support::script_state(
+                position.script = Some(centurions_core::ScriptState::scheduled(
                     content.map(0).unwrap().script(128).unwrap().to_vec(),
                     2,
                 ));
@@ -166,11 +167,14 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                 }
                 assert_eq!(state.random, random);
                 if case.get("item_after").is_some() {
-                    assert_eq!(state.ammunition_work.item, Some(case.bytes("item_after")));
+                    assert_eq!(
+                        state.native_work.ammunition_work.item,
+                        Some(case.bytes("item_after"))
+                    );
                 }
                 if case.get("selected_after").is_some() {
                     support::native_expect! {
-                        bytes &state.inventory_record.as_ref().unwrap().0 => &case.bytes("selected_after"), "retained inventory work";
+                        bytes &state.native_work.inventory_record.as_ref().unwrap().0 => &case.bytes("selected_after"), "retained inventory work";
                     };
                 }
                 support::checkpoint(&state, &content, "story-charge-after");

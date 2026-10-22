@@ -57,8 +57,8 @@ impl Application {
                         .as_ref()
                         .map_or(1000, |_| state.mission_stage.wrapping_add(1000))
                 });
-                let text = content
-                    .map(state.exploration.as_ref().map_or(0, |p| p.map))
+                let text = state
+                    .land(content)
                     .and_then(|map| map.movies.get(&id))
                     .map(String::as_str)
                     .unwrap_or("");

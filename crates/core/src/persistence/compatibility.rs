@@ -1,4 +1,4 @@
-//! Ordered compatibility pipeline for schema-13 saves and versions 1-12.
+//! Ordered compatibility pipeline for schema-15 saves and versions 1-14.
 //! Some legacy fields must be rejected, others restored; these steps must not
 //! be reordered into a blanket defaults pass followed by validation.
 use super::Save;
@@ -15,8 +15,8 @@ pub(super) fn restore(saved: &mut Save, content: &Content) -> Result<(), RuleErr
     restore_actor_defaults(saved)?;
     check_campaign_contexts(saved)?;
     restore_map_defaults(saved, content)?;
-    if saved.session.psi_memory.is_none() {
-        saved.session.psi_memory = Some(initial_psi_memory(&saved.session.warriors)?);
+    if saved.session.native_work.psi_memory.is_none() {
+        saved.session.native_work.psi_memory = Some(initial_psi_memory(&saved.session.warriors)?);
     }
     Ok(())
 }
@@ -36,7 +36,7 @@ fn read_version_and_schedule(saved: &mut Save, content: &Content) -> Result<(), 
                 .clone();
             position.region_state = content.map(0).unwrap().regions.clone();
         }
-    } else if !matches!(saved.schema_version, 2..=13) {
+    } else if !matches!(saved.schema_version, 2..=15) {
         return Err(RuleError::Invalid(format!(
             "unsupported save version {}",
             saved.schema_version
@@ -47,7 +47,12 @@ fn read_version_and_schedule(saved: &mut Save, content: &Content) -> Result<(), 
 
 fn check_control_contexts(saved: &mut Save) -> Result<(), RuleError> {
     if saved.schema_version < 13
-        && (saved.session.weapon_work.natural_attack_index.is_some()
+        && (saved
+            .session
+            .native_work
+            .weapon_work
+            .natural_attack_index
+            .is_some()
             || saved
                 .session
                 .combat
@@ -96,7 +101,7 @@ fn check_story_contexts(saved: &mut Save) -> Result<(), RuleError> {
                 _ => break,
             }
         }
-        if saved.session.retained_death_queue.is_some() {
+        if saved.session.native_work.retained_death_queue.is_some() {
             return Err("retained death queue requires save version 9".into());
         }
         let mut story = saved.session.combat_story.as_ref();
@@ -124,7 +129,7 @@ fn check_story_contexts(saved: &mut Save) -> Result<(), RuleError> {
 
 fn restore_actor_defaults(saved: &mut Save) -> Result<(), RuleError> {
     if saved.schema_version < 7 {
-        saved.session.npc_backing = Default::default();
+        saved.session.native_work.npc_backing = Default::default();
         let mut story = saved.session.combat_story.as_mut();
         while let Some(current) = story {
             if current.child_returned {
@@ -153,7 +158,7 @@ fn check_campaign_contexts(saved: &mut Save) -> Result<(), RuleError> {
             || saved.session.round_dispatch.is_some()
             || saved.session.scripted_cleanup.is_some()
             || saved.session.actor_replacement.is_some()
-            || saved.session.inventory_record.is_some()
+            || saved.session.native_work.inventory_record.is_some()
             || clinic::pending(&saved.session).is_some()
             || saved.session.psi_selection.is_some()
             || saved.session.outdoor_psi.is_some()
@@ -246,6 +251,7 @@ fn restore_map_defaults(saved: &mut Save, content: &Content) -> Result<(), RuleE
                 remaining: i16::from(map.menus[101] as i8).wrapping_sub(1),
                 original: script.record.clone(),
                 typed: false,
+                eliminated: 0,
             });
         }
     }

@@ -28,7 +28,10 @@ fn native_writer_records_import_read_only_and_resume_as_versioned_saves() {
     assert_eq!(imported.crate_items, original.crate_items);
     assert_eq!(imported.flags, original.flags);
     assert_eq!(imported.allies, original.allies);
-    assert_eq!(imported.psi_memory, original.psi_memory);
+    assert_eq!(
+        imported.native_work.psi_memory,
+        original.native_work.psi_memory
+    );
     assert_eq!(imported.random, original.random);
     assert_eq!(imported.mission_score, original.mission_score);
     let position = imported.exploration.as_ref().unwrap();

@@ -31,6 +31,7 @@ pub fn apply(
         }
         let mut candidate = state.clone();
         let previous = candidate.command_preferences.clone();
+        let _trace = crate::trace::Scope::enable(preferences.trace);
         candidate.command_preferences = preferences;
         let result = apply(*command, &mut candidate, content);
         candidate.command_preferences = previous;
@@ -192,28 +193,28 @@ fn finish_action(
         events.extend(field_controls::resume(candidate, content)?);
     }
     if kind.physical_work_input
-        && let Some(item) = candidate.ammunition_work.item.as_ref()
+        && let Some(item) = candidate.native_work.ammunition_work.item.as_ref()
     {
-        candidate.loaded_item_field32 =
+        candidate.native_work.loaded_item_field32 =
             Some(centurions_content::records::ItemDefinition(item).retained_field32()?);
     }
     combat::runtime::retain_last_defeated(candidate);
     if let Some(combat) = candidate.combat.as_ref() {
-        candidate.selected_enemy = combat.selected_enemy;
-        candidate.script_enemy = combat.script_enemy;
-        candidate.attack_packet = combat.attack_packet.clone();
-        candidate.attack_identity = combat.attack_identity;
-        candidate.weapon_work = combat.weapon_work;
+        candidate.native_work.selected_enemy = combat.selected_enemy;
+        candidate.native_work.script_enemy = combat.script_enemy;
+        candidate.native_work.attack_packet = combat.attack_packet.clone();
+        candidate.native_work.attack_identity = combat.attack_identity;
+        candidate.native_work.weapon_work = combat.weapon_work;
         let mut health = story_health::context(
             &candidate.warriors,
             candidate.selected_warrior,
-            candidate.health_context.as_ref(),
+            candidate.native_work.health_context.as_ref(),
         );
         health.unavailable = combat.unavailable;
         if let Some(packet) = combat.attack_packet.as_ref() {
             health.effect = centurions_content::records::AttackPacket(packet).health_effect();
         }
-        candidate.health_context = Some(health);
+        candidate.native_work.health_context = Some(health);
     }
     let pages: Vec<_> = events
         .iter()

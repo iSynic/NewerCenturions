@@ -18,18 +18,18 @@ fn initial(fixture: &Value, case: &Value) -> Session {
     for key in ["item_work", "weapon_work", "ammo_work"] {
         assert_eq!(bytes(fixture, &snapshot[key]), vec![0; 150]);
     }
-    state.ammunition_work = WorkBuffers::default();
-    state.weapon_work = WeaponWork {
+    state.native_work.ammunition_work = WorkBuffers::default();
+    state.native_work.weapon_work = WeaponWork {
         natural_attack_index: None,
         sound: Some(0),
         weapon_armor_filter: Some(0),
         ammunition_armor_filter: Some(0),
     };
-    state.loaded_item_field32 = Some(fixture["foundation"].n::<i16>("item_context"));
+    state.native_work.loaded_item_field32 = Some(fixture["foundation"].n::<i16>("item_context"));
     let combat = state.combat.as_mut().unwrap();
     let npcs = bytes(fixture, &snapshot["npcs"]);
-    assert_eq!(npcs.len(), 100 * 288);
-    assert!(npcs[288..].iter().all(|byte| *byte == 0));
+    assert_eq!(npcs.len(), 100 * MONSTER_BYTES);
+    assert!(npcs[MONSTER_BYTES..].iter().all(|byte| *byte == 0));
     let positions = words(fixture, &snapshot["npc_positions"]);
     assert!(positions[2..].iter().all(|word| *word == 0));
     combat.enemies.records = vec![MonsterRecord {
@@ -48,7 +48,7 @@ fn initial(fixture: &Value, case: &Value) -> Session {
             combat.map.tiles[index]
         })
         .collect();
-    combat.weapon_work = state.weapon_work;
+    combat.weapon_work = state.native_work.weapon_work;
     state
 }
 
@@ -108,7 +108,7 @@ fn compose_reaction(state: &Session, fixture: &Value, case: &Value, content: &Co
         if mode == 0 { 1 } else { 0 }
     );
     combat.enemies.records[0].bytes[0x104] = 0;
-    let mut npcs = vec![0; 100 * 288];
+    let mut npcs = vec![0; 100 * MONSTER_BYTES];
     npcs[..288].copy_from_slice(&combat.enemies.records[0].bytes);
     assert_eq!(npcs, bytes(fixture, &case["after"]["npcs"]));
     // Natural helper136398 establishes all three definitions before the miss;
@@ -119,19 +119,19 @@ fn compose_reaction(state: &Session, fixture: &Value, case: &Value, content: &Co
     assert_eq!(natural, bytes(fixture, &case["after"]["weapon_work"]));
     assert_eq!(natural, bytes(fixture, &case["after"]["ammo_work"]));
     assert_eq!(item, bytes(fixture, &case["after"]["item_work"]));
-    expected.ammunition_work = WorkBuffers {
+    expected.native_work.ammunition_work = WorkBuffers {
         item: Some(item.clone()),
         weapon: Some(natural.clone()),
         ammo: Some(natural.clone()),
     };
-    expected.loaded_item_field32 = Some(word(&item, 32).unwrap());
-    expected.weapon_work = WeaponWork {
+    expected.native_work.loaded_item_field32 = Some(word(&item, 32).unwrap());
+    expected.native_work.weapon_work = WeaponWork {
         natural_attack_index: None,
         sound: Some(word(&natural, 14).unwrap()),
         weapon_armor_filter: Some(word(&natural, 136).unwrap()),
         ammunition_armor_filter: Some(word(&natural, 136).unwrap()),
     };
-    combat.weapon_work = expected.weapon_work;
+    combat.weapon_work = expected.native_work.weapon_work;
     let attacks = &content
         .map(state.exploration.as_ref().unwrap().map)
         .unwrap()
@@ -142,10 +142,10 @@ fn compose_reaction(state: &Session, fixture: &Value, case: &Value, content: &Co
     let packet = attacks[0x21c2..0x21c2 + 58].to_vec();
     assert_eq!(packet, bytes(fixture, &case["after"]["packet"]));
     combat.attack_packet = Some(packet.clone());
-    expected.attack_packet = Some(packet.clone());
-    expected.health_context.as_mut().unwrap().effect = packet[18] as i8;
+    expected.native_work.attack_packet = Some(packet.clone());
+    expected.native_work.health_context.as_mut().unwrap().effect = packet[18] as i8;
     assert_eq!(
-        expected.health_context.as_ref().unwrap().effect,
+        expected.native_work.health_context.as_ref().unwrap().effect,
         number(&case["after"], "health_effect") as i8
     );
 

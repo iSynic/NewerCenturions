@@ -579,7 +579,10 @@ fn action_inner(
             return (is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Enter))
                 .then_some(Action::Command(Command::ClinicControl { item: 11 }));
         }
-        if matches!(p, Presentation::WarriorChoice { .. }) {
+        if matches!(
+            p,
+            Presentation::WarriorChoice { .. } | Presentation::PartyPick { .. }
+        ) {
             for (index, key) in [
                 KeyCode::Key1,
                 KeyCode::Key2,

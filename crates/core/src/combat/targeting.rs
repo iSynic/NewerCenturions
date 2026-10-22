@@ -77,13 +77,17 @@ pub(crate) fn begin_firearm(
     combat.weapon_work.prepare(weapon, ammunition)?;
     combat.attack_packet = Some(prepared.packet.clone());
     combat.attack_identity = Some(identity);
-    state.attack_packet = Some(prepared.packet);
-    state.attack_identity = Some(identity);
-    state.attack_count = prepared.shots;
-    state.weapon_work = combat.weapon_work;
-    state.ammunition_work.prepare_pair(weapon, ammunition)?;
-    state.ammunition_work.item = Some(crate::ammunition::definition(content, weapon_id)?);
-    state.loaded_item_field32 =
+    state.native_work.attack_packet = Some(prepared.packet);
+    state.native_work.attack_identity = Some(identity);
+    state.native_work.attack_count = prepared.shots;
+    state.native_work.weapon_work = combat.weapon_work;
+    state
+        .native_work
+        .ammunition_work
+        .prepare_pair(weapon, ammunition)?;
+    state.native_work.ammunition_work.item =
+        Some(crate::ammunition::definition(content, weapon_id)?);
+    state.native_work.loaded_item_field32 =
         Some(centurions_content::records::ItemDefinition(weapon).retained_field32()?);
     state.target_quantity = Some(FirearmQuantity {
         actor,
@@ -125,7 +129,7 @@ pub(crate) fn adjust(
             }
         }
         state.medical_continuation.as_mut().unwrap().power = power;
-        state.attack_count = power;
+        state.native_work.attack_count = power;
     } else if let Some(pending) = &state.psi_selection {
         pending.validate(state)?;
         let actor = pending.actor;
@@ -151,7 +155,7 @@ pub(crate) fn adjust(
             .wrapping_add(i16::from(packet[30]).wrapping_mul(if increase { -1 } else { 1 }));
         state.warriors[actor].record_mut().set_psi_points(psi);
         state.psi_selection.as_mut().unwrap().power = power;
-        state.attack_count = power;
+        state.native_work.attack_count = power;
         if let Some(choice) = &mut state.psi_menu_choices[actor] {
             choice.power = power;
         }
@@ -181,7 +185,7 @@ pub(crate) fn adjust(
             weapon,
             power,
         });
-        state.attack_count = power;
+        state.native_work.attack_count = power;
     }
     Ok(vec![Event::Sound { resource_id: -130 }])
 }

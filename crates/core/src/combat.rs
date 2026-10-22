@@ -206,9 +206,6 @@ pub fn click_command(state: &Session, x: i16, y: i16) -> Result<Option<Command>,
 #[path = "../tests/unit/combat_initial_turn_tests.rs"]
 mod initial_turn_tests;
 
-fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
-    bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
-}
 mod movement;
 pub(crate) use movement::move_controlled;
 pub use movement::move_warrior;

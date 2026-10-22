@@ -96,6 +96,7 @@ impl Application {
                 auto_refit: self.native_preferences.enabled(15),
                 suppress_round_message_sound: self.native_preferences.enabled(13),
                 animation_delay: self.speed as i16 * 5 - 5,
+                trace: self.trace,
             },
         }
     }

@@ -121,6 +121,8 @@ impl<'a> EnemyRecord<'a> {
     pub fn level_protection(&self, level: usize) -> u8 {
         self.0[0xc2 + level]
     }
+    /// Zero-based entry of Cargo Pod `STR#` 130 "Race Class": "Mechanical".
+    pub const MECHANICAL_CATEGORY: usize = 3;
     pub fn has_creature_category(&self, category: usize) -> bool {
         self.0[0xa8 + category] != 0
     }
@@ -213,6 +215,10 @@ impl<'a> EnemyRecord<'a> {
     }
     pub fn spell_chance(&self) -> Result<i16, ContentError> {
         word(self.0, 0x42)
+    }
+    /// One of the nine spell IDs an NPC chooses from (words 0x12..0x24).
+    pub fn spell_slot(&self, index: usize) -> Result<i16, ContentError> {
+        word(self.0, 0x12 + index * 2)
     }
     pub fn final_turn_mode(&self) -> Result<i16, ContentError> {
         word(self.0, 0x5e)

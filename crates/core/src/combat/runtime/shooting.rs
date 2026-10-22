@@ -119,10 +119,14 @@ pub(super) fn player_shoot_action_at(
         .inventory_ammunition(prepared.slot)?
         .unsigned_abs() as usize];
     c.weapon_work.prepare(weapon, ammunition)?;
-    state.ammunition_work.prepare_pair(weapon, ammunition)?;
-    state.ammunition_work.item = Some(crate::ammunition::definition(content, weapon_id)?);
-    state.loaded_item_field32 = Some(ItemDefinition(weapon).retained_field32()?);
-    state.attack_count = prepared.shots;
+    state
+        .native_work
+        .ammunition_work
+        .prepare_pair(weapon, ammunition)?;
+    state.native_work.ammunition_work.item =
+        Some(crate::ammunition::definition(content, weapon_id)?);
+    state.native_work.loaded_item_field32 = Some(ItemDefinition(weapon).retained_field32()?);
+    state.native_work.attack_count = prepared.shots;
     c.attack_packet = Some(prepared.packet.clone());
     c.attack_identity = Some(spell_identity(ItemDefinition(weapon).spell()?));
     if !paid {
@@ -150,9 +154,13 @@ pub(super) fn player_shoot_action_at(
         prepared.shots = 1;
     }
     let mut events = vec![];
-    let mission = content
-        .map(state.exploration.as_ref().map_or(0, |p| p.map))
-        .unwrap();
+    let mission = crate::Session::land_in(
+        content,
+        state.mission.as_deref(),
+        state.scenario_level,
+        state.exploration.as_ref(),
+    )
+    .unwrap();
     for &selected in targets {
         if !alive(c, &state.warriors, selected) {
             continue;
@@ -219,7 +227,7 @@ pub(super) fn player_shoot_action_at(
             if result.killed {
                 lifecycle::kill_body(c, &mut state.warriors, target)?;
                 // killbody12e506 retains every direct defeated body before returning.
-                if let Some(health) = state.health_context.as_mut() {
+                if let Some(health) = state.native_work.health_context.as_mut() {
                     health.last_body = target;
                 }
             }

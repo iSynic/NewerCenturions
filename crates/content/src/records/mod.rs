@@ -11,6 +11,8 @@ mod damage;
 mod development;
 mod equipment;
 mod equipment_eligibility;
+mod exploration_extras;
+mod exploration_tables;
 mod inventory_slots;
 mod item;
 mod item_panel;
@@ -22,6 +24,16 @@ mod shop;
 mod spell_field;
 mod statistics;
 mod story;
+mod story_destination;
+mod story_effects;
+mod story_inventory;
+mod story_party;
+mod story_promotion;
+mod story_schedule;
+mod story_variables;
+mod time_schedule;
+mod travel_events;
+mod typed_encounter;
 mod upgrade;
 mod warrior;
 mod weapon_attack;
@@ -36,8 +48,16 @@ pub use equipment::{
     EquipmentModifiers, EquipmentStat, InventoryModifier, ItemUpgrade, RetainedEquipmentModifiers,
 };
 pub use equipment_eligibility::{EquipmentEligibility, ProfessionEquipment, RaceEquipment};
+pub use exploration_extras::{
+    AllyClassBranchExtra, ChanceBranchExtra, ClinicExtra, ExtraTable, LimitedTreasureExtra,
+    MapEffectExtra, MapMutationExtra, PaymentBranchExtra, RandomBranchExtra, RegionChangeExtra,
+};
+pub use exploration_tables::{
+    EncounterMenu, EventHeaderTable, EventHeaderTableMut, RegionTable, RegionTableMut,
+    TreasureTable,
+};
 pub use inventory_slots::{InventorySlots, InventorySlotsMut};
-pub use item::ItemDefinition;
+pub use item::{ItemDefinition, WeaponCondition, item_class};
 pub use item_panel::ItemPanelRecord;
 pub use learned_scans::{LearnedScans, LearnedScansMut};
 pub use monster::{EnemyRecord, EnemyRecordMut, FootprintCell, NaturalAttack};
@@ -50,6 +70,17 @@ pub use story::{
     FatigueChange, ObjectRectangleExtra, RecoveryRestrictions, StoryRecord, StoryRecordMut,
     TravelExtra,
 };
+pub use story_effects::{
+    ActorReplacementExtra, NpcBattleExtra, PartyHealthExtra, RetreatClassesExtra,
+    ScriptedSpellExtra, SkillCheckExtra, TreasureRecord,
+};
+pub use story_inventory::{ItemConsumptionExtra, ItemPrerequisiteExtra};
+pub use story_party::{PartyFilterExtra, PartySelectionExtra, StatisticAdjustmentExtra};
+pub use story_schedule::ScheduleEditExtra;
+pub use story_variables::{PartyItemConditionExtra, VariablePredicateExtra, VariableUpdateExtra};
+pub use time_schedule::{ScheduleEntry, ScheduleEntryMut, ScheduleRegion, ScheduledScripts};
+pub use travel_events::{EventChanceExtra, EventReplacementExtra, TileMutationExtra};
+pub use typed_encounter::{QuestionExtra, TYPED_ENCOUNTER_BYTES, TypedEncounterRecord};
 pub use upgrade::UpgradeRecord;
 pub use warrior::{WarriorRecord, WarriorRecordMut};
 pub use weapon_attack::{WeaponAttackModifiers, WeaponAttackParameters};

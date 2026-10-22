@@ -1,10 +1,8 @@
 //! The quickinfo panel (0x132b0c): direct item calculations and drawing output.
 //! File data is already loaded by content; no emulated I/O, stack or SANE calls.
-use super::{BTreeMap, BodyRect, Content, InventoryRecord, NativeText, RenderingMemory, RuleError};
-use crate::{
-    recovered_detail_ui::{DetailEffect, DetailPlan},
-    recovered_drawing::DrawingEffect,
-    recovered_text::PascalString,
+use super::{
+    BTreeMap, BodyRect, Content, Draw, InventoryRecord, NativeText, PanelEffect, PanelPlan,
+    PascalString, RuleError,
 };
 use centurions_content::{
     mission::OpeningMission,
@@ -22,7 +20,7 @@ pub fn detail(
     stock: bool,
     native: &NativeText,
     strings: &BTreeMap<i16, Vec<u8>>,
-) -> Result<DetailPlan, RuleError> {
+) -> Result<PanelPlan, RuleError> {
     native.bytes(0x402900, 0x640)?;
     // Retain the original adapter's admission of all three records before drawing.
     for id in [0, item.id(), item.ammunition_id()?] {
@@ -129,9 +127,9 @@ pub fn detail(
         );
     }
     let damage = (f64::from(damage) * f64::from(factor)).trunc() as i32 as i16;
-    panel.draw(DrawingEffect::ForeColor(205));
+    panel.draw(Draw::ForeColor(205));
     panel.number_at(652, 479, damage.wrapping_mul(base.attack_count()?), false)?;
-    panel.draw(DrawingEffect::ForeColor(69));
+    panel.draw(Draw::ForeColor(69));
     panel.number_at(580, 479, damage, false)?;
     for (vertical, value, plus) in [
         (498, range, true),
@@ -146,13 +144,13 @@ pub fn detail(
     ] {
         panel.number_at(580, vertical, value, plus)?;
     }
-    panel.draw(DrawingEffect::TextSize(10));
-    panel.draw(DrawingEffect::TextFont(10));
-    panel.draw(DrawingEffect::ForeColor(273));
+    panel.draw(Draw::TextSize(10));
+    panel.draw(Draw::TextFont(10));
+    panel.draw(Draw::ForeColor(273));
     special_information(&mut panel, &base, &original)?;
-    panel.draw(DrawingEffect::ForeColor(69));
-    panel.draw(DrawingEffect::BackPixelPattern(0));
-    panel.draw(DrawingEffect::ForeColor(69));
+    panel.draw(Draw::ForeColor(69));
+    panel.draw(Draw::BackPixelPattern(0));
+    panel.draw(Draw::ForeColor(69));
     let mut bytes = description[1..].to_vec();
     bytes.push(0);
     panel.text_box(
@@ -190,7 +188,7 @@ pub fn detail(
         panel.indexed(-11000, base.category()?.wrapping_add(1))?
     };
     panel.move_to(168, 571);
-    panel.draw(DrawingEffect::DrawString(label));
+    panel.draw(Draw::DrawString(label));
     panel.icon(base.icon()?, 15);
     if has_ammunition {
         panel.icon(ammunition.icon()?, 65);
@@ -285,7 +283,3 @@ fn append(text: &mut Vec<u8>, suffix: &[u8]) {
     text.extend(suffix.iter().take_while(|byte| **byte != 0));
     text.push(0);
 }
-
-#[cfg(all(test, feature = "original-fixtures"))]
-#[path = "../../tests/unit/detail_reference.rs"]
-mod reference;

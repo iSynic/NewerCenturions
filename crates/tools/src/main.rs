@@ -1,14 +1,10 @@
 use centurions_content::installation::Installation;
-use centurions_core::{Command, Session, apply};
+use centurions_core::{Command, CommandPreferences, Session, apply};
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let action = args.next().unwrap_or_else(|| "inspect".into());
-    if action == "translation-report" {
-        translation_report(args.next().as_deref());
-        return Ok(());
-    }
     let root = args
         .next()
         .map(PathBuf::from)
@@ -96,13 +92,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         "replay" => {
             let path = PathBuf::from(args.next().ok_or("replay needs command JSON path")?);
+            let options: Vec<String> = args.collect();
+            let trace = options.iter().any(|arg| arg == "--trace");
             let commands: Vec<Command> = serde_json::from_slice(&std::fs::read(path)?)?;
-            let mut session = Session::new(&content);
+            // `--from <save>` starts from a saved session instead of a new game.
+            let mut session = match options.iter().position(|arg| arg == "--from") {
+                Some(index) => centurions_core::load(
+                    &PathBuf::from(options.get(index + 1).ok_or("--from needs a save path")?),
+                    &content,
+                )?,
+                None => Session::new(&content),
+            };
             for command in commands {
-                println!(
-                    "{}",
-                    serde_json::to_string(&apply(command, &mut session, &content)?)?
-                );
+                let command = if trace { traced(command) } else { command };
+                let events = apply(command, &mut session, &content);
+                for entry in centurions_core::trace::take() {
+                    println!("{}", serde_json::to_string(&entry)?);
+                }
+                println!("{}", serde_json::to_string(&events?)?);
             }
             println!("{}", serde_json::to_string(&session)?);
         }
@@ -111,47 +118,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn translation_report(filter: Option<&str>) {
-    use centurions_core::reconstruction::{ROUTINES, Translation};
-    let source_ports = ROUTINES
-        .iter()
-        .filter(|r| r.translation == Translation::SourcePort)
-        .count();
-    let partial = ROUTINES
-        .iter()
-        .filter(|r| r.translation == Translation::Partial)
-        .count();
-    println!("Recovered application routines: {}", ROUTINES.len());
-    println!(
-        "Decompiled C: {}; instruction/control-flow export: {}",
-        ROUTINES.iter().filter(|r| r.decompiled).count(),
-        ROUTINES.len()
-    );
-    println!(
-        "Source ports with explicit adapters: {source_ports}; selected Rust branches: {partial}; recovery only: {}",
-        ROUTINES.len() - source_ports - partial
-    );
-    println!(
-        "Recovered action blocks: {}; instructions: {}",
-        ROUTINES.iter().map(|r| r.blocks).sum::<usize>(),
-        ROUTINES.iter().map(|r| r.instructions).sum::<usize>()
-    );
-    println!(
-        "Recovery metadata does not count as implemented game logic. Native comparison remains separately scoped."
-    );
-    if let Some(filter) = filter {
-        for routine in ROUTINES
-            .iter()
-            .filter(|r| r.name.to_lowercase().contains(&filter.to_lowercase()))
-        {
-            println!(
-                "0x{:06x} {}: {:?}; {} blocks; Rust: {}",
-                routine.entry,
-                routine.name,
-                routine.translation,
-                routine.blocks,
-                routine.rust.join(", ")
-            );
-        }
+/// Enables the diagnostic trace through the command's preferences. A bare
+/// command already runs with default preferences, so wrapping it is neutral.
+fn traced(command: Command) -> Command {
+    let (command, mut preferences) = match command {
+        Command::WithPreferences {
+            command,
+            preferences,
+        } => (command, preferences),
+        command => (Box::new(command), CommandPreferences::default()),
+    };
+    preferences.trace = true;
+    Command::WithPreferences {
+        command,
+        preferences,
     }
 }

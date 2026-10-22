@@ -4,6 +4,25 @@ pub fn earned_receipt(name: &str, index: usize) -> Value {
     crate::support::fixture(&format!("{name}-receipt-{}.json", [12, 1][index]))
 }
 
+/// The earned receipts were recorded by an engine that let an exhausted squad
+/// move; their starting sessions sit at fatigue 135, where buttonchoice refuses
+/// every move. Starting rested keeps the recorded prefixes reachable without
+/// changing the frozen receipt bytes; no recorded event carries fatigue.
+pub fn earned_start(receipt: &Value) -> Session {
+    let mut state: Session = serde_json::from_value(receipt["starting_session"].clone()).unwrap();
+    state.exploration.as_mut().unwrap().fatigue = 4;
+    state
+}
+
+/// The recording held fatigue at its 135 clamp for the whole prefix, so the
+/// native-compared actions that follow start from the receipt's own value.
+pub fn earned_rejoin(state: &mut Session, receipt: &Value) {
+    state.exploration.as_mut().unwrap().fatigue =
+        receipt["starting_session"]["exploration"]["fatigue"]
+            .as_i64()
+            .unwrap() as i16;
+}
+
 /// Historical command recordings omitted showresults151a88 for the Shield packet.
 /// Restore that source-owned event without changing the frozen recording bytes.
 pub fn shield_result_events(events: Vec<Event>) -> Vec<Event> {
@@ -179,17 +198,22 @@ pub fn script_mission(fixture: &Value) -> OpeningMission {
     }
 }
 
-pub fn random_state(snapshot: &Value) -> RandomState {
+/// The RNG state recorded under a case's seed and draw-count keys.
+pub fn random_at(value: &Value, seed: &str, draws: &str) -> RandomState {
     RandomState {
-        seed: snapshot.n::<u32>("seed"),
-        draws: snapshot.n::<u64>("draws"),
+        seed: value.n(seed),
+        draws: value.n(draws),
     }
 }
+pub fn random_state(snapshot: &Value) -> RandomState {
+    random_at(snapshot, "seed", "draws")
+}
 pub fn original_file(name: &str) -> Vec<u8> {
-    std::fs::read(format!(
-        "{}/../../NewCenturions/TheNewCenturions/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    ))
+    std::fs::read(
+        crate::support::root()
+            .join("NewCenturions/TheNewCenturions")
+            .join(name),
+    )
     .unwrap()
 }
 pub fn body_spell_sounds(result: &BodySpellResult) -> Vec<i16> {
@@ -327,13 +351,8 @@ pub fn neighbor_combat(case: &Value, member: i16) -> Combat {
 pub fn raw_word(raw: &[u8], offset: usize) -> i16 {
     i16::from_be_bytes(raw[offset..offset + 2].try_into().unwrap())
 }
-pub fn patch_bytes(raw: &mut [u8], values: &serde_json::Value) {
-    for change in values.as_array().unwrap() {
-        raw[change[0].as_u64().unwrap() as usize] = change[1].as_u64().unwrap() as u8;
-    }
-}
 pub fn patched(mut raw: Vec<u8>, values: &serde_json::Value) -> Vec<u8> {
-    patch_bytes(&mut raw, values);
+    crate::support::patch_bytes(&mut raw, values);
     raw
 }
 pub fn health_event(event: &HealthEvent) -> serde_json::Value {
@@ -354,10 +373,7 @@ pub fn snapshot_ammunition(snapshot: &Value) -> Vec<i32> {
     crate::support::longs(&snapshot["ammunition"])
 }
 pub fn snapshot_rng(snapshot: &Value) -> RandomState {
-    RandomState {
-        seed: snapshot.n::<u32>("rng_seed"),
-        draws: snapshot.n::<u64>("rng_draws"),
-    }
+    random_at(snapshot, "rng_seed", "rng_draws")
 }
 pub use crate::support::positions as decoded_positions;
 pub fn snapshot_word(snapshot: &Value, key: &str) -> i16 {
@@ -377,7 +393,7 @@ pub fn restore_party(state: &mut Session, snapshot: &Value) {
     for (warrior, record) in state
         .warriors
         .iter_mut()
-        .zip(snapshot.bytes("party").as_chunks::<3138>().0)
+        .zip(snapshot.bytes("party").as_chunks::<WARRIOR_BYTES>().0)
     {
         warrior.bytes = Warrior::read(record).unwrap().bytes;
     }
@@ -443,8 +459,8 @@ pub fn refresh_item_work(state: &mut Session, content: &Content) {
     let mut record = content.items[usize::from(id.unsigned_abs())].clone();
     let class = word(&record, 26).unwrap().wrapping_abs();
     record[26..28].copy_from_slice(&class.to_be_bytes());
-    state.loaded_item_field32 = Some(word(&record, 32).unwrap());
-    state.ammunition_work.item = Some(record);
+    state.native_work.loaded_item_field32 = Some(word(&record, 32).unwrap());
+    state.native_work.ammunition_work.item = Some(record);
 }
 
 // Shared controlled geometry for independent movement and complete actor-decision receipts.
@@ -494,17 +510,24 @@ pub fn psi_work(snapshot: &Value) -> WeaponWork {
 pub fn psi_snapshot(content: &Content, snapshot: &Value) -> Session {
     let mut state = crate::support::mission_session(content);
     state.warriors = snapshot_party(snapshot);
-    state.psi_memory = Some(snapshot.bytes("memory"));
+    state.native_work.psi_memory = Some(snapshot.bytes("memory"));
     state.party_buffs = snapshot.bytes("party_buffs");
-    state.loaded_item_field32 = Some(snapshot.n("item_context"));
-    state.attack_count = snapshot.n("count");
-    state.weapon_work = psi_work(snapshot);
-    state.attack_packet = Some(snapshot.bytes("packet"));
-    state.attack_identity = Some(snapshot.words("identity").try_into().unwrap());
+    state.native_work.loaded_item_field32 = Some(snapshot.n("item_context"));
+    state.native_work.attack_count = snapshot.n("count");
+    state.native_work.weapon_work = psi_work(snapshot);
+    state.native_work.attack_packet = Some(snapshot.bytes("packet"));
+    state.native_work.attack_identity = Some(snapshot.words("identity").try_into().unwrap());
     state.random = random_state(snapshot);
     let mut combat = crate::support::psi_frame::combat(snapshot);
-    combat.weapon_work = state.weapon_work;
+    combat.weapon_work = state.native_work.weapon_work;
     state.combat = Some(combat);
     state.phase = Phase::Combat;
     state
+}
+
+/// A constructed region table keeps its land's authored tile set (byte 520), which
+/// selects the live tile properties.
+pub fn keep_tile_set(state: &mut Session, content: &Content) {
+    let position = state.exploration.as_mut().unwrap();
+    position.region_state[0x208] = content.map(position.map).unwrap().regions[0x208];
 }

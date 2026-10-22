@@ -137,11 +137,11 @@ pub fn edit(
             },
         )?;
     state.warriors[member] = next;
-    if state.inventory_record.is_some() {
-        state.inventory_record = Some(retained);
+    if state.native_work.inventory_record.is_some() {
+        state.native_work.inventory_record = Some(retained);
     }
     if item.id() != 0 {
-        state.loaded_item_field32 = content
+        state.native_work.loaded_item_field32 = content
             .items
             .get(usize::from(item.id().unsigned_abs()))
             .map(|definition| word(definition, 32))

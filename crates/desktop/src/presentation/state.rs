@@ -120,6 +120,14 @@ impl UiState {
                         },
                 });
             }
+            match event {
+                Event::PictureDrawn { resource_id } => self.picture = Some(*resource_id),
+                Event::ScreenRedrawn
+                | Event::Moved { .. }
+                | Event::MissionEntered { .. }
+                | Event::CombatStarted { .. } => self.picture = None,
+                _ => {}
+            }
             if let Event::CollectionRejected { warning } = event {
                 self.feedback
                     .push_back(centurions_core::feedback::NativeFeedback::Warning {

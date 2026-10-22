@@ -1,8 +1,8 @@
 use crate::{RandomState, RuleError};
 use centurions_content::{
-    Warrior,
-    records::{WarriorRecord, WarriorRecordMut},
-    span, word,
+    WARRIOR_BYTES, Warrior,
+    records::{PartyHealthExtra, WarriorRecord, WarriorRecordMut},
+    span,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -63,7 +63,7 @@ fn validate(warriors: &[Warrior]) -> Result<(), RuleError> {
         ));
     }
     for warrior in warriors {
-        span(&warrior.bytes, 0, 3138)?;
+        span(&warrior.bytes, 0, WARRIOR_BYTES)?;
     }
     Ok(())
 }
@@ -164,12 +164,12 @@ pub fn party_health(
     random: &mut RandomState,
 ) -> Result<HealthOutcome, RuleError> {
     validate(warriors)?;
-    let extra = span(extra, 0, 10)?;
-    let multiplier = word(extra, 0)?;
-    let low = word(extra, 2)?;
-    let high = word(extra, 4)?;
-    let sound = word(extra, 6)?;
-    let dialogue = word(extra, 8)?;
+    let extra = PartyHealthExtra::new(extra)?;
+    let multiplier = extra.multiplier()?;
+    let low = extra.low()?;
+    let high = extra.high()?;
+    let sound = extra.sound()?;
+    let dialogue = extra.dialogue()?;
     let mut outcome = HealthOutcome {
         warriors: warriors.to_vec(),
         context: context.clone(),

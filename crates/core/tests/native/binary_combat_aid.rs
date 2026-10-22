@@ -167,7 +167,10 @@ fn four_native_target_continuations_match_at_the_medical_boundary() {
         assert_eq!(state.ammunition, original.ammunition);
         assert_eq!(state.crate_items, original.crate_items);
         assert_eq!(state.booty_items, original.booty_items);
-        assert_eq!(state.psi_memory, original.psi_memory);
+        assert_eq!(
+            state.native_work.psi_memory,
+            original.native_work.psi_memory
+        );
     }
 }
 

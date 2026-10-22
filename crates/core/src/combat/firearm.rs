@@ -8,7 +8,16 @@ pub use reload::reload_command;
 pub use resolution::{resolve, resolve_enemy, resolve_enemy_after_duration};
 pub(crate) use resolution::{resolve_after_duration, resolve_friendly_after_duration};
 
-use crate::combat::put_word;
+/// Weapon `spell` descriptors for firearms: Cargo Pod `STR#` 4000 "Special 1st"
+/// entries 1 "Point Target" and 2 "Area Target".
+pub(crate) const POINT_TARGET_ATTACK: i16 = 4101;
+pub(crate) const AREA_TARGET_ATTACK: i16 = 4102;
+/// Data ID items whose `STR#` 601 "Devices Short" names are "Small Laser" and
+/// "Medium Laser"; the only enemy primary weapons `prepare_enemy` accepts.
+pub(crate) const SMALL_LASER: i16 = 680;
+pub(crate) const MEDIUM_LASER: i16 = 681;
+
+use crate::feedback::CLIP_SOUND_BASE;
 use crate::{RandomState, RuleError};
 use centurions_content::{Warrior, word};
 
@@ -59,9 +68,9 @@ fn fit_battery(
         || item.0[14..].iter().any(|value| *value != 0)
         || word(&item.0, 6)? != 250
         || !((loaded == 0 && ammunition == 0) || ((0..=250).contains(&loaded) && ammunition == 307))
-        || word(&warrior.bytes, 0xee)? != 637
-        || word(&warrior.bytes, 0x26)? != loaded
-        || word(&warrior.bytes, 0x28)? != 250
+        || warrior.record().equipped_battery()? != 637
+        || warrior.record().shield_points()? != loaded
+        || warrior.record().shield_capacity()? != 250
         || word(battery, 26)? != 20
         || word(battery, 32)? != 24
         || word(battery, 90)? != 250
@@ -87,19 +96,22 @@ fn fit_battery(
     };
     if reserves[107] == 0 {
         if loaded != 0 {
-            result.sounds.push(random.bound(2).wrapping_add(403));
+            result
+                .sounds
+                .push(random.bound(2).wrapping_add(CLIP_SOUND_BASE));
         }
         return Ok(result);
     }
     let amount = reserves[107].min(250) as i16;
-    let offset = 0x132 + slot * 22;
-    put_word(&mut result.warrior.bytes, offset + 2, amount);
+    let mut record = result.warrior.record_mut();
+    record.set_inventory_quantity(slot, amount);
+    record.set_loaded_ammunition(307);
+    record.set_inventory_ammunition(slot, 307);
+    record.set_shield_points(loaded.wrapping_add(amount));
     result.ammunition[107] = reserves[107].wrapping_sub(i32::from(amount));
-    for at in [0x126, offset + 4] {
-        put_word(&mut result.warrior.bytes, at, 307);
-    }
-    put_word(&mut result.warrior.bytes, 0x26, loaded.wrapping_add(amount));
-    result.sounds.push(random.bound(2).wrapping_add(403));
+    result
+        .sounds
+        .push(random.bound(2).wrapping_add(CLIP_SOUND_BASE));
     result.loaded = true;
     Ok(result)
 }
@@ -150,8 +162,8 @@ pub fn fit_ammunition(
         || word(&item.0, 6)? != capacity
         || !loaded_supported
         || warrior.record().equipped_weapon()? != item.id()
-        || warrior.bytes[0x9dd] != 1
-        || (item.id() != 2 && word(&warrior.bytes, 0x126)? != ammunition)
+        || warrior.record().firing_mode_flag() != 1
+        || (item.id() != 2 && warrior.record().loaded_ammunition()? != ammunition)
     {
         return Err(RuleError::Unsupported {
             action: "equipment.fit_ammunition",
@@ -186,7 +198,6 @@ pub fn fit_ammunition(
         return Ok(result);
     }
     let mut next_random = random.clone();
-    let offset = 0x132 + slot * 22;
     // Stored ammunition IDs differ from popup reserve indices, so unload first.
     if ammunition != 0 {
         let returned = reserves[reserve_index]
@@ -196,22 +207,25 @@ pub fn fit_ammunition(
                 dependency: "ammunition stock overflow",
             })?;
         result.ammunition[reserve_index] = returned;
-        for at in [offset + 2, offset + 4, 0x126] {
-            put_word(&mut result.warrior.bytes, at, 0);
-        }
+        let mut record = result.warrior.record_mut();
+        record.set_inventory_quantity(slot, 0);
+        record.set_inventory_ammunition(slot, 0);
+        record.set_loaded_ammunition(0);
     }
     let amount = result.ammunition[reserve_index].min(i32::from(capacity)) as i16;
     if in_combat && amount > 0 {
-        let actions = word(&result.warrior.bytes, 0x40)?.wrapping_sub(1);
-        put_word(&mut result.warrior.bytes, 0x40, actions);
+        let actions = result.warrior.record().action_points()?.wrapping_sub(1);
+        result.warrior.record_mut().set_action_points(actions);
     }
-    put_word(&mut result.warrior.bytes, offset + 2, amount);
+    let mut record = result.warrior.record_mut();
+    record.set_inventory_quantity(slot, amount);
+    record.set_loaded_ammunition(ammo_id);
+    record.set_inventory_ammunition(slot, ammo_id);
     result.ammunition[reserve_index] =
         result.ammunition[reserve_index].wrapping_sub(i32::from(amount));
-    for at in [0x126, offset + 4] {
-        put_word(&mut result.warrior.bytes, at, ammo_id);
-    }
-    result.sounds.push(next_random.bound(2).wrapping_add(403));
+    result
+        .sounds
+        .push(next_random.bound(2).wrapping_add(CLIP_SOUND_BASE));
     result.loaded = true;
     *random = next_random;
     Ok(result)
@@ -245,8 +259,8 @@ pub fn reload(
                 || word(&item.0, 4)? != 201
                 || loaded != 0
                 || warrior.record().equipped_weapon()? != 2
-                || word(&warrior.bytes, 0x126)? != 201
-                || warrior.bytes[0x9dd] != 1
+                || warrior.record().loaded_ammunition()? != 201
+                || warrior.record().firing_mode_flag() != 1
                 || !(0..=i32::from(i16::MAX)).contains(reserve)
                 || !silent)
         {
@@ -284,18 +298,16 @@ pub fn reload(
                 dependency: "partial refill with ammunition 203",
             });
         }
-        put_word(
-            &mut warrior.bytes,
-            0x132 + 22 * slot + 2,
-            loaded.wrapping_add(amount),
-        );
+        warrior
+            .record_mut()
+            .set_inventory_quantity(slot, loaded.wrapping_add(amount));
         let complete = (*reserve as i16) >= needed;
         // The original partial-refill branch leaves the stockpile unchanged.
         if complete {
             *reserve = reserve.wrapping_sub(i32::from(needed));
         }
         if !silent {
-            sounds.push(random.bound(2).wrapping_add(403));
+            sounds.push(random.bound(2).wrapping_add(CLIP_SOUND_BASE));
         }
         if complete {
             return Ok((true, sounds));

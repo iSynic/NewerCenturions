@@ -33,9 +33,9 @@ pub(super) fn execute(
                         silent: true,
                         warnings: false,
                     },
-                    &state.ammunition_work,
+                    &state.native_work.ammunition_work,
                     &mut state.random,
-                    state.inventory_record.as_ref(),
+                    state.native_work.inventory_record.as_ref(),
                 )?;
                 events.extend(ammunition::commit_result(state, member, result)?);
             }
@@ -58,8 +58,8 @@ pub(super) fn execute(
                 .warriors
                 .get_mut(warrior)
                 .ok_or("drop warrior outside squad")?;
-            if state.inventory_record.is_some() {
-                state.inventory_record = Some(
+            if state.native_work.inventory_record.is_some() {
+                state.native_work.inventory_record = Some(
                     record
                         .inventory()?
                         .get(slot)

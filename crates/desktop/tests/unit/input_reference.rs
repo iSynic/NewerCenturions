@@ -106,7 +106,7 @@ fn combat_controls_capture_cancel_and_resolve_through_apply() {
             .effects
             .iter()
             .filter_map(|effect| match effect {
-                centurions_core::recovered_detail_ui::DetailEffect::NumberToString {
+                centurions_core::item_display::output::PanelEffect::NumberToString {
                     value,
                     ..
                 } => Some(*value),
@@ -114,15 +114,14 @@ fn combat_controls_capture_cancel_and_resolve_through_apply() {
             })
             .collect();
         assert_eq!(serde_json::json!(numbers), case["numbers"]);
-        for (address, field) in [
-            (0x45363c, "item_after"),
-            (0x4536d2, "ammunition_after"),
-            (0x453768, "weapon_after"),
+        let retained = plan.retained_definitions.as_ref().unwrap();
+        for (bytes, field) in [
+            (&retained.item, "item_after"),
+            (&retained.ammo, "ammunition_after"),
+            (&retained.weapon, "weapon_after"),
         ] {
             let expected = case[field].as_str().unwrap();
-            let actual: Vec<_> = (0..150)
-                .map(|offset| plan.memory.byte(address + offset).unwrap())
-                .collect();
+            let actual = bytes.as_deref().unwrap_or(&[0; 150]);
             assert_eq!(
                 actual
                     .iter()
@@ -134,7 +133,7 @@ fn combat_controls_capture_cancel_and_resolve_through_apply() {
     }
     use centurions_core::{apply, load, save};
     let mut state = state();
-    state.psi_memory = Some(vec![0; 480]);
+    state.native_work.psi_memory = Some(vec![0; 480]);
     let actor = state.combat.as_ref().unwrap().active_body().unwrap() as usize;
     for (offset, value) in [
         (0xf4, 100_i16),
@@ -325,7 +324,7 @@ fn combat_buttons_execute_actions_and_preserve_cancelled_or_refused_state() {
     use centurions_core::{apply, combat::controls, load, save};
     let content = crate::original_content::load();
     let mut state = state();
-    state.psi_memory = Some(vec![0; 480]);
+    state.native_work.psi_memory = Some(vec![0; 480]);
     let actor = state.combat.as_ref().unwrap().active_body().unwrap() as usize;
     let key = |key, state: &Session| {
         command(crate::combat_controls::shortcut(key, state, &content, actor).unwrap())

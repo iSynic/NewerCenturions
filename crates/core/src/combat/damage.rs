@@ -6,6 +6,11 @@ use centurions_content::records::{
     DamageDefenses, DamageDefinition, DamageTargetKind, DamageTargetRecord,
 };
 
+/// resolvedamage150e7a stores the first nonzero channel's cue in WORD 0x41f710.
+/// Cargo Pod has `cicn`/`PICT` resources 157-164 and no `snd ` with these ids;
+/// the reference body calls them icons. Physical and per-attack channels share 157.
+const DAMAGE_CHANNEL_CUES: [i16; 9] = [157, 157, 159, 160, 161, 162, 163, 164, 159];
+
 #[derive(Clone, Debug)]
 pub struct DamagePacket {
     pub bytes: Vec<u8>,
@@ -61,6 +66,7 @@ pub fn resolve_damage_with_amount(
     let mut target = DamageTargetRecord::new(target, kind);
     let defenses = target.defenses()?;
     let mut components = roll_damage(&definition, packet.attack_count, &defenses, random);
+    let rolled = components;
     let armor = defenses.armor.min(95);
     if flags.armor_filter {
         defenses::filter_armor(&mut components, armor, random);
@@ -68,8 +74,10 @@ pub fn resolve_damage_with_amount(
     // Healing still rolls damage and performs the armor-filter pass, but skips
     // shields, ordinary armor, saves and the damaged marker.
     if definition.healing {
+        let total = sum(&components).wrapping_neg();
+        crate::trace::damage(&rolled, &components, total);
         return Ok(DamageResult {
-            total: sum(&components).wrapping_neg(),
+            total,
             components,
             sound: 0,
             shield_sound: false,
@@ -97,14 +105,14 @@ pub fn resolve_damage_with_amount(
         );
     }
     let first = components.iter().position(|damage| *damage != 0);
-    let sound = first.map_or(0, |channel| {
-        [157, 157, 159, 160, 161, 162, 163, 164, 159][channel]
-    });
+    let sound = first.map_or(0, |channel| DAMAGE_CHANNEL_CUES[channel]);
     if first.is_some() {
         target.mark_damaged();
     }
+    let total = sum(&components);
+    crate::trace::damage(&rolled, &components, total);
     Ok(DamageResult {
-        total: sum(&components),
+        total,
         components,
         sound,
         shield_sound,

@@ -9,6 +9,11 @@ import sys
 
 TOP_LEVEL = {".gitattributes", ".gitignore", "AGENTS.md", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "THIRD_PARTY.md"}
 PRIVATE_TOOLS = {"tools/package_local.py", "tools/registration_status.py"}
+# The instruction-level reference archive and the tooling that only serves it: probes and the
+# menu-boundary check over their fixtures, the translation generator, reference drivers and Ghidra setup.
+PRIVATE_REFERENCE = {f"tools/{name}" for name in ("plan_translation.py", "reference.py", "reference_debug.py", "capture_reference.py",
+    "oracle_cache.py", "Setup-Reference.ps1", "Analyze.ps1", "Analyze-Mapped.ps1", "Install-GhidraLanguage.ps1", "prepare_ghidra.py",
+    "decode_globals.py", "check_menu_boundary.py")} | {f"tests/python/{name}" for name in ("test_translation_plan.py", "test_reference_capture.py", "test_menu_boundary.py", "native_menu_reference.py")}
 
 
 def public_path(name: str) -> bool:
@@ -17,7 +22,9 @@ def public_path(name: str) -> bool:
         return False
     if name in TOP_LEVEL or name in {"docs/public-readme.md", "docs/installation.md", "docs/building.md", "docs/reconstruction.md", "docs/maintainability.md", ".github/workflows/build.yml", ".github/workflows/experimental.yml"}:
         return True
-    if name in PRIVATE_TOOLS:
+    if name in PRIVATE_TOOLS or name in PRIVATE_REFERENCE:
+        return False
+    if name.startswith(("archive/", "tools/ghidra/")):
         return False
     if name.startswith("crates/"):
         return path.name == "Cargo.toml" or path.suffix == ".rs"
@@ -72,7 +79,9 @@ def check_repository(root: Path) -> tuple[int, int]:
             header, name_bytes = record.split(b"\t", 1)
             mode, kind, oid = header.decode().split()
             name = name_bytes.decode("utf-8")
-            if not public_path(name) or kind != "blob" or mode not in {"100644", "100755"}:
+            # Reference tooling published before the archive split may stay in past commits;
+            # every version is still content-checked below.
+            if not (public_path(name) or name in PRIVATE_REFERENCE or name.startswith("tools/ghidra/")) or kind != "blob" or mode not in {"100644", "100755"}:
                 raise ValueError(f"Excluded public history entry: {name}")
             blobs.setdefault(oid, name)
     requests = ("\n".join(blobs) + "\n").encode()

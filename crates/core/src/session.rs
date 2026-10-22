@@ -1,14 +1,15 @@
 use crate::{
-    CommandPreferences, MedicalOrigin, Phase, Presentation, RandomState, RuleError, Session,
-    ammunition, clinic, combat, empty_allies, empty_ammunition, empty_notes, empty_party_buffs,
-    field_controls, initial_flags, menu_length, outdoor_psi, shop, story_actor, story_allies,
-    story_cleanup, typed_encounter,
+    CommandPreferences, MedicalOrigin, NativeWorkContext, Phase, Presentation, RandomState,
+    RuleError, Session, clinic, combat, empty_allies, empty_ammunition, empty_notes,
+    empty_party_buffs, field_controls, initial_flags, menu_length, outdoor_psi, shop, story_actor,
+    story_allies, story_cleanup, typed_encounter,
 };
 use centurions_content::{Content, InventoryRecord, Warrior};
 
 impl Session {
     pub(crate) fn load_item_work(&mut self, content: &Content, id: i16) -> Result<(), RuleError> {
-        self.loaded_item_field32 = Some(self.ammunition_work.load_item(content, id)?);
+        self.native_work.loaded_item_field32 =
+            Some(self.native_work.ammunition_work.load_item(content, id)?);
         Ok(())
     }
     pub fn new(content: &Content) -> Self {
@@ -39,28 +40,13 @@ impl Session {
             battle_after_message: 0,
             battle_group_script: None,
             battle_npc: None,
-            party_mask: [0; 6],
             selected_warrior: 0,
-            selected_enemy: 0,
-            script_enemy: 0,
-            loaded_item_field32: None,
-            ammunition_work: ammunition::WorkBuffers::default(),
-            inventory_record: Some(InventoryRecord([0; 22])),
-            npc_backing: combat::retained::NpcBacking::startup(),
-            retained_death_queue: None,
-            loot_quality: None,
-            attack_count: 0,
-            attack_packet: Some(vec![0; 58]),
-            attack_identity: Some([0; 3]),
-            // CODE 1 startup initializes retained work words at 453776/4537f0/45375a to zero.
-            weapon_work: combat::weapon_work::WeaponWork::zero(),
-            psi_memory: Some(vec![0; 480]),
+            native_work: NativeWorkContext::startup(),
             party_buffs: empty_party_buffs(),
             scenario_duration_tail: None,
             psi_disabled: 0,
             enemy_spell_disabled: 0,
             energy_recovery_disabled: 0,
-            health_context: None,
             party_currency: 0,
             library_random_seed: 1,
             library_random_draws: 0,
@@ -86,6 +72,7 @@ impl Session {
             mission_stage: 0,
             map_picture: 0,
             notes: empty_notes(),
+            saved_position: [0; 3],
             visited_maps: std::collections::BTreeMap::new(),
             allies: empty_allies(),
             ally_count: 0,
@@ -93,8 +80,8 @@ impl Session {
     }
 
     pub fn validate(&self, content: &Content) -> Result<(), RuleError> {
-        self.npc_backing.validate()?;
-        if let Some(queue) = &self.retained_death_queue {
+        self.native_work.npc_backing.validate()?;
+        if let Some(queue) = &self.native_work.retained_death_queue {
             queue.validate()?;
         }
         shop::validate(self, content)?;
@@ -106,9 +93,10 @@ impl Session {
         }
         let context = content.context(self.mission.as_deref(), self.scenario_level)?;
         let content = context.as_ref();
-        self.ammunition_work.validate()?;
-        self.weapon_work.validate()?;
+        self.native_work.ammunition_work.validate()?;
+        self.native_work.weapon_work.validate()?;
         if self
+            .native_work
             .loot_quality
             .as_ref()
             .is_some_and(|quality| quality.len() != 1000)
@@ -129,8 +117,8 @@ impl Session {
             || self.allies.len() != story_allies::ALLY_CAPACITY * story_allies::ALLY_BYTES
             || self.ally_count > story_allies::ALLY_CAPACITY
             || self.selected_warrior >= self.warriors.len().max(1)
-            || self.selected_enemy >= 100
-            || self.script_enemy >= 100
+            || self.native_work.selected_enemy >= 100
+            || self.native_work.script_enemy >= 100
             || self.party_buffs.len() != 20
             || self.time_continuation.as_ref().is_some_and(|pending| {
                 self.exploration
@@ -139,10 +127,12 @@ impl Session {
                     || !(0..=60).contains(&pending.minutes_per_tick)
             })
             || self
+                .native_work
                 .psi_memory
                 .as_ref()
                 .is_some_and(|memory| memory.len() != 480)
             || self
+                .native_work
                 .attack_packet
                 .as_ref()
                 .is_some_and(|packet| packet.len() != 58)
@@ -185,7 +175,7 @@ impl Session {
             self.phase != Phase::Combat
                 || pending.actor >= self.warriors.len()
                 || !valid_identity
-                || self.attack_count != pending.power
+                || self.native_work.attack_count != pending.power
                 || self.combat.as_ref().is_none_or(|arena| {
                     arena.active_body() != Some(pending.actor as i16)
                         || arena.attack_identity != Some(descriptor)
@@ -423,5 +413,65 @@ impl Session {
         index: i32,
     ) -> Option<&'a centurions_content::mission::OpeningMission> {
         content.map_at(self.mission.as_deref(), self.scenario_level, index)
+    }
+
+    /// The current land under its live tile set (region-table byte 520): loadland reloads
+    /// the tile properties with the land, so a story's tile-set switch follows it.
+    pub fn land<'a>(
+        &self,
+        content: &'a Content,
+    ) -> Option<&'a centurions_content::mission::OpeningMission> {
+        Self::land_in(
+            content,
+            self.mission.as_deref(),
+            self.scenario_level,
+            self.exploration.as_ref(),
+        )
+    }
+
+    /// loadland's loadpixmap quits when a land names a tile set the installation cannot
+    /// supply, so a land change is refused before it alters the session.
+    pub(crate) fn check_land_tile_set(
+        &self,
+        content: &Content,
+        level: u8,
+        map: i32,
+    ) -> Result<(), RuleError> {
+        let saved = if level == self.scenario_level {
+            self.visited_maps.get(&map)
+        } else {
+            self.visited_levels
+                .get(&level)
+                .and_then(|saved| saved.maps.get(&map))
+        };
+        match saved.and_then(|records| records.regions.get(0x208)) {
+            Some(&terrain)
+                if content
+                    .land_at(self.mission.as_deref(), level, map, terrain)
+                    .is_none() =>
+            {
+                Err(RuleError::Unsupported {
+                    action: "exploration.land",
+                    dependency: "land tile set outside the installed BD files",
+                })
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Session::land from its fields, for callers holding another field mutably.
+    pub fn land_in<'a>(
+        content: &'a Content,
+        mission: Option<&str>,
+        level: u8,
+        exploration: Option<&crate::Exploration>,
+    ) -> Option<&'a centurions_content::mission::OpeningMission> {
+        let Some(position) = exploration else {
+            return content.map_at(mission, level, 0);
+        };
+        match position.region_state.get(0x208) {
+            Some(&terrain) => content.land_at(mission, level, position.map, terrain),
+            None => content.map_at(mission, level, position.map),
+        }
     }
 }

@@ -135,7 +135,7 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
         weapon_armor_filter: Some(word(&startup, 0x4537f0 - 0x3fe210).unwrap()),
         ammunition_armor_filter: Some(word(&startup, 0x45375a - 0x3fe210).unwrap()),
     };
-    assert_eq!(Session::new(&content).weapon_work, retained);
+    assert_eq!(Session::new(&content).native_work.weapon_work, retained);
     let foundation = &data["route_foundation"];
     let combat: Combat = serde_json::from_value(foundation["combat"].clone()).unwrap();
     let mission = content
@@ -173,7 +173,7 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
             .map(|case| (case.n::<i16>("spell"), 1, false, Some(case))),
     ) {
         let mut state: Session = serde_json::from_value(foundation.clone()).unwrap();
-        state.psi_memory = Some(vec![0; 480]);
+        state.native_work.psi_memory = Some(vec![0; 480]);
         state.bandage_ready = Some(gate);
         let actor = 1;
         let overflow = spell == 1101;
@@ -333,7 +333,7 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
             support::native_expect! {
                 records &state.warriors => &case["warriors_after"], "movement party";
                 words combat.map.tiles => &case["map_after"], "movement terrain";
-                bytes state.psi_memory.as_ref().unwrap() => &case["memory_after"], "movement memory";
+                bytes state.native_work.psi_memory.as_ref().unwrap() => &case["memory_after"], "movement memory";
                 scalar state.bandage_ready.unwrap() => &case["gate_after"], "movement gate";
                 scalar state.random.draws => &case["draws"], "movement draws";
             }

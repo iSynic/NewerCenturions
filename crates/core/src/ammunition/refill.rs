@@ -2,20 +2,24 @@ use super::selection::validate_instance;
 use super::{
     AmmunitionOutcome, AmmunitionResult, RefitFlags, WorkBuffers, definition, initial, unsupported,
 };
+use crate::feedback::{CLIP_SOUND_BASE, ERROR_SOUND};
 use crate::{RandomState, RuleError};
-use centurions_content::records::ItemDefinition;
+use centurions_content::records::{ItemDefinition, item_class};
 use centurions_content::{Content, InventoryRecord, Warrior};
+
+/// Cargo Pod `STR#` 3 "Warnings", entry 49: the refit ran out of ammunition.
+const REFIT_INCOMPLETE_WARNING: i16 = 49;
 
 fn refill_sound(result: &mut AmmunitionResult, random: &mut RandomState, silent: bool) {
     if !silent {
-        result.sounds.push(403 + random.bound(2));
+        result.sounds.push(CLIP_SOUND_BASE + random.bound(2));
     }
 }
 
 fn partial_warning(result: &mut AmmunitionResult, enabled: bool) {
     if enabled {
-        result.warnings.push(49);
-        result.sounds.push(6000);
+        result.warnings.push(REFIT_INCOMPLETE_WARNING);
+        result.sounds.push(ERROR_SOUND);
     }
 }
 
@@ -26,7 +30,9 @@ fn refill_energy(
     amount: i16,
     remove_first: bool,
 ) -> Result<(), RuleError> {
-    if result.warrior.record().inventory_slot(slot).category_code() != 20 {
+    if i16::from(result.warrior.record().inventory_slot(slot).category_code())
+        != item_class::SHIELD_BATTERY
+    {
         return Ok(());
     }
     if result.warrior.record().inventory_quantity(slot)? > 0 {
@@ -103,7 +109,7 @@ fn admits_retained_item(
                     .ok_or_else(|| unsupported("unrepresented retained item class writer"))?
             )
             .category()?,
-            2 | 15
+            item_class::MELEE_WEAPON | item_class::MISSILE_WEAPON
         ));
     }
     Ok(true)
@@ -122,7 +128,7 @@ pub fn refit(
     let retained = warrior
         .inventory()?
         .into_iter()
-        .find(|row| row.category_code() == 20);
+        .find(|row| i16::from(row.category_code()) == item_class::SHIELD_BATTERY);
     refit_with_record(
         warrior,
         reserves,

@@ -3,13 +3,9 @@ use crate::*;
 use crate::{Event, Phase, RuleError, ScriptState, Session, TimeContinuation, story_allies};
 use centurions_content::Content;
 use centurions_content::records::{
-    Condition, EnemyRecord, EnemyRecordMut, ItemDefinition, WarriorRecord, WarriorRecordMut,
+    Condition, EnemyRecord, EnemyRecordMut, ItemDefinition, ScheduleEntry, ScheduleEntryMut,
+    ScheduleRegion, ScheduledScripts, WarriorRecord, WarriorRecordMut,
 };
-use centurions_content::word;
-
-fn put(bytes: &mut [u8], offset: usize, value: i16) {
-    bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
-}
 
 pub(crate) fn advance(
     state: &mut Session,
@@ -29,7 +25,7 @@ pub(crate) fn advance(
         let context = crate::story_health::context(
             &state.warriors,
             state.selected_warrior,
-            state.health_context.as_ref(),
+            state.native_work.health_context.as_ref(),
         );
         let reduced = crate::story_reduce::reduce_outdoors(
             &state.warriors,
@@ -42,7 +38,7 @@ pub(crate) fn advance(
             .iter()
             .any(|event| matches!(event, crate::story_health::HealthEvent::PartyLost));
         state.warriors = reduced.warriors;
-        state.health_context = Some(reduced.context);
+        state.native_work.health_context = Some(reduced.context);
         events.extend(reduced.events.into_iter().filter_map(|event| match event {
             crate::story_health::HealthEvent::Sound(resource_id) => {
                 Some(Event::Sound { resource_id })
@@ -144,22 +140,10 @@ fn scheduled_events(
                     .map,
             )
             .ok_or("schedule content unavailable")?;
-        let record = centurions_content::span(
-            &map.scheduled_scripts,
-            usize::from(script_id.unsigned_abs()) * 42,
-            42,
-        )?
-        .to_vec();
-        state.exploration.as_mut().unwrap().script = Some(ScriptState {
-            record,
-            cursor: 0,
-            map_slot: 0,
-            item_return: false,
-            scheduled: true,
-            menu: None,
-            persist: false,
-            origin: None,
-        });
+        let record = ScheduledScripts(&map.scheduled_scripts)
+            .record(script_id.unsigned_abs())?
+            .to_vec();
+        state.exploration.as_mut().unwrap().script = Some(ScriptState::scheduled(record, 0));
         events.extend(super::exploration::run_script(state, content)?);
         if state.phase != Phase::Exploration
             || state
@@ -226,7 +210,7 @@ fn recover(state: &mut Session, content: &Content) -> Result<(), RuleError> {
         let context = crate::story_health::context(
             &state.warriors,
             state.selected_warrior,
-            state.health_context.as_ref(),
+            state.native_work.health_context.as_ref(),
         );
         let healed = crate::story_health::heal_outdoors(
             &state.warriors,
@@ -243,7 +227,7 @@ fn recover(state: &mut Session, content: &Content) -> Result<(), RuleError> {
             });
         }
         state.warriors = healed.warriors;
-        state.health_context = Some(healed.context);
+        state.native_work.health_context = Some(healed.context);
     }
     Ok(())
 }
@@ -285,68 +269,65 @@ fn scan_schedule(
 ) -> Result<Option<i16>, RuleError> {
     let position = state.exploration.as_ref().unwrap();
     let day = position.day;
-    let count = position.schedule.len() / 40;
+    let count = ScheduleEntry::count(&position.schedule);
     while *cursor < count {
         let slot = *cursor;
         *cursor += 1;
-        let record =
-            state.exploration.as_ref().unwrap().schedule[slot * 40..slot * 40 + 40].to_vec();
-        let due = word(&record, 0)?;
+        let record = ScheduleEntry::at(&state.exploration.as_ref().unwrap().schedule, slot)
+            .0
+            .to_vec();
+        let entry = ScheduleEntry(&record);
+        let due = entry.due_day()?;
         if due != day {
             if due == 0 {
                 break;
             }
             continue;
         }
-        let next_day = due.wrapping_add(word(&record, 2)?);
-        let mut eligible = state.random.bound(100) <= word(&record, 4)?;
-        if eligible && word(&record, 16)? > 0 {
-            let required = word(&record, 16)?;
+        let next_day = due.wrapping_add(entry.interval()?);
+        let mut eligible = state.random.bound(100) <= entry.chance()?;
+        if eligible && entry.required_item()? > 0 {
+            let required = entry.required_item()?;
             eligible = state.warriors.iter().any(|w| {
                 w.inventory()
                     .is_ok_and(|items| items.iter().any(|item| item.id() == required))
             });
         }
-        if eligible && word(&record, 18)? >= 0 {
-            let flag = word(&record, 18)? as usize;
+        if eligible && entry.flag()? >= 0 {
+            let flag = entry.flag()? as usize;
             eligible = *state
                 .flags
                 .get(flag)
                 .ok_or("schedule flag outside mission state")?
                 != 0;
         }
-        if eligible && word(&record, 20)? > 0 {
+        if eligible && entry.location_mode()? > 0 {
             let position = state.exploration.as_ref().unwrap();
-            if word(&record, 20)? != 1 || i32::from(word(&record, 8)?) != position.map {
+            if entry.location_mode()? != 1 || i32::from(entry.map()?) != position.map {
                 continue;
             }
-            let region = word(&record, 10)?;
+            let region = entry.region()?;
             if region >= 0 {
-                let rectangle =
-                    centurions_content::span(&position.region_state, region as usize * 8, 8)?;
-                eligible = position.y >= i32::from(word(rectangle, 0)?)
-                    && position.x >= i32::from(word(rectangle, 2)?)
-                    && position.y < i32::from(word(rectangle, 4)?)
-                    && position.x < i32::from(word(rectangle, 6)?);
+                let rectangle = ScheduleRegion::read(&position.region_state, region as usize)?;
+                eligible = position.y >= i32::from(rectangle.top()?)
+                    && position.x >= i32::from(rectangle.left()?)
+                    && position.y < i32::from(rectangle.bottom()?)
+                    && position.x < i32::from(rectangle.right()?);
             }
-            let x = word(&record, 12)?;
-            if x >= 0 && (position.x != i32::from(x) || position.y != i32::from(word(&record, 14)?))
-            {
+            let x = entry.x()?;
+            if x >= 0 && (position.x != i32::from(x) || position.y != i32::from(entry.y()?)) {
                 continue;
             }
         }
-        put(
-            &mut state.exploration.as_mut().unwrap().schedule,
-            slot * 40,
-            next_day,
-        );
+        ScheduleEntryMut::at(&mut state.exploration.as_mut().unwrap().schedule, slot)
+            .set_due_day(next_day);
         events.push(Event::ScheduleRescheduled {
             slot,
             next_day,
             dispatched: eligible,
         });
         if eligible {
-            return Ok(Some(word(&record, 6)?));
+            return Ok(Some(entry.script()?));
         }
         *cursor = count;
         break;

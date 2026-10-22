@@ -56,6 +56,7 @@ fn scripted_map_mutations_match_original_complete_map_layers() {
     position.region_state.fill(0);
     position.presentation = None;
     position.event_headers = captured.bytes("headers");
+    crate::native_common::keep_tile_set(&mut state, &content);
     let mut restored = support::checkpoint(&state, &content, "header-alias");
     support::replay_command(
         Command::Move { dx: 0, dy: 1 },
@@ -93,8 +94,12 @@ fn normal_secret_search_matches_original_full_map_and_rng() {
         if case["forced_skill"].as_bool() == Some(false) {
             let mut state = support::mission_session(&content);
             let records = case.bytes("warriors");
-            state.warriors.truncate(records.len() / 3138);
-            for (warrior, record) in state.warriors.iter_mut().zip(records.as_chunks::<3138>().0) {
+            state.warriors.truncate(records.len() / WARRIOR_BYTES);
+            for (warrior, record) in state
+                .warriors
+                .iter_mut()
+                .zip(records.as_chunks::<WARRIOR_BYTES>().0)
+            {
                 for offset in [0xfc, 0xb6a] {
                     warrior.bytes[offset..offset + 2].copy_from_slice(&record[offset..offset + 2]);
                 }

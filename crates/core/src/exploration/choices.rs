@@ -4,6 +4,7 @@ use crate::{
     Event, Exploration, Phase, Presentation, RuleError, Session, mission, story, typed_encounter,
 };
 use centurions_content::mission::OpeningMission;
+use centurions_content::records::{EventHeaderTableMut, ExtraTable, StoryRecordMut};
 use centurions_content::{Content, span};
 
 pub fn choose_warrior(
@@ -11,6 +12,20 @@ pub fn choose_warrior(
     content: &Content,
     index: usize,
 ) -> Result<Vec<Event>, RuleError> {
+    if let Some(Presentation::PartyPick {
+        remaining,
+        unconscious,
+        invert,
+    }) = state
+        .exploration
+        .as_ref()
+        .and_then(|p| p.presentation.clone())
+    {
+        if index >= state.warriors.len() {
+            return Err(RuleError::Invalid("warrior unavailable".into()));
+        }
+        return pick_member(state, content, index, remaining, unconscious, invert);
+    }
     let map = active_map(state, content)?;
     let warrior = state
         .warriors
@@ -27,17 +42,14 @@ pub fn choose_warrior(
         return Err(RuleError::Invalid("no warrior choice active".into()));
     };
     let selected = crate::story_skill::single_warrior(&state.warriors, index)?;
-    state.party_mask = selected;
+    state.native_work.party_mask = selected;
     state.selected_warrior = index;
+    // Sessions saved before opcode 14 used the shared pick hold its single pick here.
     if *extra == -1 {
         position.presentation = None;
         return run_script(state, content);
     }
-    let record = span(
-        &map.combat.as_ref().unwrap().encounters,
-        *extra as usize * 10,
-        10,
-    )?;
+    let record = ExtraTable(&map.combat.as_ref().unwrap().encounters).record(*extra as usize)?;
     let plan = crate::story_skill::predicate(record, &state.warriors, &selected)?;
     let script = position
         .script
@@ -48,6 +60,58 @@ pub fn choose_warrior(
     }
     position.presentation = None;
     run_script(state, content)
+}
+
+/// getchoice125112: an unpicked member takes the next countdown number (sound 141),
+/// a picked one is released and later picks move up (sound 144); dead members are
+/// refused (sound 6000) unless the pick allows them. The script resumes when the
+/// countdown is spent, after -14's inversion.
+fn pick_member(
+    state: &mut Session,
+    content: &Content,
+    index: usize,
+    remaining: i16,
+    unconscious: bool,
+    invert: bool,
+) -> Result<Vec<Event>, RuleError> {
+    if !unconscious && state.warriors[index].stamina()? < 1 {
+        return Err(RuleError::Refused {
+            feedback: vec![crate::feedback::NativeFeedback::Sound { resource_id: 6000 }],
+        });
+    }
+    state.selected_warrior = index;
+    let mask = &mut state.native_work.party_mask;
+    let (sound, remaining) = if mask[index] == 0 {
+        mask[index] = remaining;
+        (141, remaining - 1)
+    } else {
+        let order = mask[index];
+        mask[index] = 0;
+        for pick in mask.iter_mut().take(state.warriors.len()) {
+            if *pick != 0 && *pick < order {
+                *pick += 1;
+            }
+        }
+        (144, remaining + 1)
+    };
+    let mut events = vec![Event::Sound { resource_id: sound }];
+    let position = state.exploration.as_mut().unwrap();
+    if remaining > 0 {
+        position.presentation = Some(Presentation::PartyPick {
+            remaining,
+            unconscious,
+            invert,
+        });
+        return Ok(events);
+    }
+    position.presentation = None;
+    if invert {
+        for pick in mask.iter_mut().take(state.warriors.len()) {
+            *pick = i16::from(*pick == 0);
+        }
+    }
+    events.extend(run_script(state, content)?);
+    Ok(events)
 }
 
 pub fn choose(
@@ -84,11 +148,7 @@ pub fn choose(
     let Some(Presentation::Question { extra, .. }) = position.presentation.as_ref() else {
         return Err(RuleError::Invalid("no question active".into()));
     };
-    let record = span(
-        &map.combat.as_ref().unwrap().encounters,
-        *extra as usize * 10,
-        10,
-    )?;
+    let record = ExtraTable(&map.combat.as_ref().unwrap().encounters).record(*extra as usize)?;
     match typed_encounter::question_plan(record, answer)? {
         typed_encounter::QuestionPlan::Continue => {}
         typed_encounter::QuestionPlan::MoveAway => {
@@ -124,7 +184,7 @@ pub fn choose(
             } else {
                 &state.menus
             };
-            script.record[8..40].copy_from_slice(&story::dispatch_menu_branch(
+            StoryRecordMut(&mut script.record).write_actions(&story::dispatch_menu_branch(
                 span(
                     table,
                     id as usize * story::MENU_RECORD_BYTES,
@@ -153,7 +213,7 @@ pub fn choose(
             if let typed_encounter::TypedContinuation::Branch { body, .. } =
                 typed_encounter::continuation(record, branch as i8 + 1, menu.remaining)?
             {
-                script.record[8..40].copy_from_slice(&body);
+                StoryRecordMut(&mut script.record).write_actions(&body);
                 script.cursor = 0;
             }
         }
@@ -201,9 +261,24 @@ pub fn cancel_menu(state: &mut Session, content: &Content) -> Result<Vec<Event>,
     if let Some(menu) = &script.menu
         && !script.scheduled
     {
-        position.event_headers[script.map_slot * 42..(script.map_slot + 1) * 42]
-            .copy_from_slice(&menu.original);
+        EventHeaderTableMut(&mut position.event_headers).replace(script.map_slot, &menu.original);
     }
+    // saveencounter writes the loaded complex-encounter buffer back when it is left.
+    let eliminated = (script.menu.as_ref())
+        .filter(|menu| menu.typed && menu.eliminated != 0)
+        .map(|menu| (menu.id as usize, menu.eliminated));
+    if let Some((id, eliminated)) = eliminated {
+        let map = active_map(state, content)?;
+        if state.typed_encounters.is_empty() {
+            state.typed_encounters = map.typed_encounters.clone();
+        }
+        let bytes = typed_encounter::RECORD_BYTES;
+        span(&state.typed_encounters, id * bytes, bytes)?;
+        let record = &mut state.typed_encounters[id * bytes..(id + 1) * bytes];
+        typed_encounter::eliminate_branches(record, eliminated);
+    }
+    let position = state.exploration.as_mut().unwrap();
+    let script = position.script.as_ref().unwrap();
     // buttonchoice10a5a8 marks the manual caller; newland142cca skips its menu backstep.
     let backstep =
         matches!(position.presentation, Some(Presentation::Typed { .. })) || !script.item_return;
@@ -266,20 +341,21 @@ pub(crate) fn finish_typed_selection(
     content: &Content,
     selected: i8,
 ) -> Result<Vec<Event>, RuleError> {
-    let record = typed_record(state, content)?.to_vec();
+    let mut record = typed_record(state, content)?.to_vec();
     let position = state.exploration.as_mut().unwrap();
     let script = position
         .script
         .as_mut()
         .ok_or_else(|| RuleError::Invalid("typed script missing".into()))?;
-    let remaining = script
+    let menu = script
         .menu
         .as_ref()
-        .ok_or_else(|| RuleError::Invalid("typed continuation missing".into()))?
-        .remaining;
+        .ok_or_else(|| RuleError::Invalid("typed continuation missing".into()))?;
+    typed_encounter::eliminate_branches(&mut record, menu.eliminated);
+    let remaining = menu.remaining;
     match typed_encounter::continuation(&record, selected, remaining)? {
         typed_encounter::TypedContinuation::Branch { body, .. } => {
-            script.record[8..40].copy_from_slice(&body);
+            StoryRecordMut(&mut script.record).write_actions(&body);
             script.cursor = 0;
         }
         typed_encounter::TypedContinuation::Cancel => return cancel_menu(state, content),

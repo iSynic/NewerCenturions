@@ -1,8 +1,8 @@
 use crate::{Content, Event, RuleError, Session, combat, feedback::NativeFeedback, story_health};
 use centurions_content::records::{
-    AttackPacket, AttackPacketMut, Condition, DevelopmentField, WarriorRecord, WarriorRecordMut,
+    AttackPacket, AttackPacketMut, Condition, DevelopmentField, ItemDefinition, ScriptedSpellExtra,
+    WarriorRecord, WarriorRecordMut,
 };
-use centurions_content::{span, word};
 
 /// newland 17/18: the existing selection mask is retained by 17 and replaced by 18.
 pub(crate) fn apply(
@@ -11,9 +11,9 @@ pub(crate) fn apply(
     extra: &[u8],
     all: bool,
 ) -> Result<Vec<Event>, RuleError> {
-    span(extra, 0, 10)?;
-    let id = word(extra, 0)?;
-    let count = word(extra, 2)?;
+    let extra = ScriptedSpellExtra::new(extra)?;
+    let id = extra.spell()?;
+    let count = extra.attack_count()?;
     let map = content
         .map_at(
             state.mission.as_deref(),
@@ -22,8 +22,8 @@ pub(crate) fn apply(
         )
         .ok_or_else(|| RuleError::Invalid("script spell map missing".into()))?;
     let mut packet = combat::spells::load_packet(&map.combat.as_ref().unwrap().attacks, id)?;
-    AttackPacketMut(&mut packet).add_save_bonus(word(extra, 4)?);
-    if word(extra, 6)? != 0 {
+    AttackPacketMut(&mut packet).add_save_bonus(extra.save_bonus()?);
+    if extra.overrides_saving_throw()? {
         AttackPacketMut(&mut packet).set_saving_throw_mode(3);
     }
     let effect = AttackPacket(&packet).effect()?.wrapping_abs();
@@ -35,8 +35,8 @@ pub(crate) fn apply(
         });
     }
     if all {
-        state.party_mask.fill(0);
-        state.party_mask[..state.warriors.len()].fill(1);
+        state.native_work.party_mask.fill(0);
+        state.native_work.party_mask[..state.warriors.len()].fill(1);
     }
     if let Some(combat) = state.combat.as_mut() {
         let mut mask = [0; 110];
@@ -100,10 +100,10 @@ pub(crate) fn apply(
             mask = selected.mask;
             combat.spell_fields = selected.fields;
         }
-        state.party_mask.copy_from_slice(&mask[..6]);
+        state.native_work.party_mask.copy_from_slice(&mask[..6]);
         combat.attack_packet = Some(packet.clone());
         combat.attack_identity = Some([id / 1000 - 1, id % 1000 / 100 - 1, id % 100 - 1]);
-        state.attack_count = count;
+        state.native_work.attack_count = count;
         return combat::runtime::resolve_spell_mask(
             combat,
             &mut state.warriors,
@@ -117,10 +117,11 @@ pub(crate) fn apply(
             combat::spells::RestrictionMemoryView::ordinary_startup(
                 &map.item_cache,
                 state
+                    .native_work
                     .ammunition_work
                     .item
                     .as_ref()
-                    .map(|item| word(item, 0x32))
+                    .map(|item| ItemDefinition(item).restriction_alias())
                     .transpose()?,
             ),
         );
@@ -164,7 +165,7 @@ pub(crate) fn resolve_outdoors(
         } else {
             combat::party_buffs::extend(&mut state.party_buffs, effect, duration)?;
         }
-        state.attack_packet = Some(packet.to_vec());
+        state.native_work.attack_packet = Some(packet.to_vec());
         return Ok(vec![]);
     }
     let position = state.exploration.as_ref().unwrap();
@@ -172,13 +173,13 @@ pub(crate) fn resolve_outdoors(
     let mut health = story_health::context(
         &state.warriors,
         state.selected_warrior,
-        state.health_context.as_ref(),
+        state.native_work.health_context.as_ref(),
     );
-    state.attack_packet = Some(packet.to_vec());
+    state.native_work.attack_packet = Some(packet.to_vec());
     health.effect = AttackPacket(packet).health_effect();
     let mut events = Vec::new();
     for member in 0..state.warriors.len() {
-        if state.party_mask[member] <= 0 {
+        if state.native_work.party_mask[member] <= 0 {
             continue;
         }
         let w = &mut state.warriors[member].bytes;
@@ -366,7 +367,8 @@ pub(crate) fn resolve_outdoors(
         }
     }
     // heal1287dc writes the effect byte in the retained attack packet itself.
-    AttackPacketMut(state.attack_packet.as_mut().unwrap()).set_health_effect(health.effect as u8);
-    state.health_context = Some(health);
+    AttackPacketMut(state.native_work.attack_packet.as_mut().unwrap())
+        .set_health_effect(health.effect as u8);
+    state.native_work.health_context = Some(health);
     Ok(events)
 }

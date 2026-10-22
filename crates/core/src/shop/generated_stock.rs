@@ -21,14 +21,11 @@ impl Rolls {
         if self.remaining == 0 {
             return Err(RuleError::Unsupported {
                 action: "randomitem",
-                dependency: "the supplied random-draw budget is exhausted",
+                dependency: "generated stock needs more draws than the reconstruction bound",
             });
         }
         if self.state.draws == u64::MAX {
-            return Err(RuleError::Unsupported {
-                action: "randomitem",
-                dependency: "the cumulative random-draw counter cannot represent another draw",
-            });
+            return Err(RuleError::Invalid("random-draw counter overflow".into()));
         }
         self.remaining -= 1;
         Ok(self.state.bound(bound))
@@ -65,10 +62,7 @@ pub(super) fn generate(
 ) -> Result<InventoryRecord, RuleError> {
     let bytes = items
         .get(usize::from(id.unsigned_abs()))
-        .ok_or(RuleError::Unsupported {
-            action: "installitem",
-            dependency: "a reached native memory span is unavailable",
-        })?;
+        .ok_or_else(|| RuleError::Invalid("generated stock item outside the item table".into()))?;
     let definition = ItemDefinition(bytes);
     let mut installed = InventoryRecord([0; 22]);
     definition.install_fresh_into(&mut installed)?;
@@ -143,9 +137,9 @@ fn randomize(
             // Original selection reads the ammunition table before enhancements.
             if definition.ammunition_caliber()? != 14 {
                 for index in 200..400 {
-                    let ammo = items.get(index).ok_or(RuleError::Unsupported {
-                        action: "randomitem", dependency: "a reached native table, work record, or global memory span is unavailable",
-                    })?;
+                    let ammo = items.get(index).ok_or(RuleError::Invalid(
+                        "ammunition table entry outside the item table".into(),
+                    ))?;
                     if definition.ammunition_caliber()?
                         == ItemDefinition(ammo).reserve_ammunition_kind()?
                     {

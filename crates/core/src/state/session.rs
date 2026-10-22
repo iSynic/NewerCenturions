@@ -1,9 +1,9 @@
 use crate::{
-    Exploration, LevelState, MapState, MedicalContinuation, MovementContinuation, PsiMenuChoice,
-    RandomState, TimeContinuation, ammunition, combat, confiscation, empty_allies,
-    empty_ammunition, empty_notes, empty_party_buffs, field_controls, initial_flags,
+    Exploration, LevelState, MapState, MedicalContinuation, MovementContinuation,
+    NativeWorkContext, PsiMenuChoice, RandomState, TimeContinuation, combat, confiscation,
+    empty_allies, empty_ammunition, empty_notes, empty_party_buffs, field_controls, initial_flags,
     initial_library_seed, native_save, no_notes, normal_difficulty, outdoor_psi, shop, story_actor,
-    story_cleanup, story_health, story_npc_battle, story_promotion, zero_level, zero_word,
+    story_cleanup, story_npc_battle, story_promotion, zero_level, zero_word,
 };
 use centurions_content::{InventoryRecord, Warrior};
 use serde::{Deserialize, Serialize};
@@ -105,6 +105,10 @@ pub struct Session {
     pub map_picture: i16,
     #[serde(default = "empty_notes", skip_serializing_if = "no_notes")]
     pub notes: Vec<u8>,
+    /// newland70's saved map, x and y (BYTEs 442738, 44270c and 44270d), kept in
+    /// the original save and never reset by a new mission. Omitted while zero.
+    #[serde(default, skip_serializing_if = "no_saved_position")]
+    pub saved_position: [u8; 3],
     #[serde(default)]
     pub visited_maps: std::collections::BTreeMap<i32, MapState>,
     #[serde(default = "empty_allies")]
@@ -112,36 +116,10 @@ pub struct Session {
     #[serde(default)]
     pub ally_count: usize,
     #[serde(default)]
-    pub party_mask: [i16; 6],
-    #[serde(default)]
     pub selected_warrior: usize,
-    /// Retained combat globals survive replacement of the active combat roster.
-    #[serde(default)]
-    pub selected_enemy: usize,
-    #[serde(default)]
-    pub script_enemy: usize,
-    #[serde(default)]
-    pub loaded_item_field32: Option<i16>,
-    #[serde(default)]
-    pub ammunition_work: ammunition::WorkBuffers,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inventory_record: Option<InventoryRecord>,
-    #[serde(default)]
-    pub npc_backing: combat::retained::NpcBacking,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retained_death_queue: Option<combat::death_scripts::DeathQueue>,
-    #[serde(default)]
-    pub loot_quality: Option<Vec<u8>>,
-    #[serde(default)]
-    pub attack_count: i16,
-    #[serde(default)]
-    pub attack_packet: Option<Vec<u8>>,
-    #[serde(default)]
-    pub attack_identity: Option<[i16; 3]>,
-    #[serde(default)]
-    pub weapon_work: combat::weapon_work::WeaponWork,
-    #[serde(default)]
-    pub psi_memory: Option<Vec<u8>>,
+    /// Native work globals that survive replacement of the active combat roster.
+    #[serde(flatten)]
+    pub native_work: NativeWorkContext,
     #[serde(default = "empty_party_buffs")]
     pub party_buffs: Vec<u8>,
     /// WORD44263e: effect110 aliases the unused scenario-directory tail.
@@ -153,8 +131,6 @@ pub struct Session {
     pub enemy_spell_disabled: u8,
     #[serde(default)]
     pub energy_recovery_disabled: u8,
-    #[serde(default)]
-    pub health_context: Option<story_health::HealthContext>,
     #[serde(default)]
     pub party_currency: i32,
     #[serde(default = "initial_library_seed")]
@@ -170,4 +146,11 @@ pub struct CommandPreferences {
     pub suppress_round_message_sound: bool,
     #[serde(default)]
     pub animation_delay: i16,
+    /// Records `trace` entries for this command only; never serialized.
+    #[serde(skip)]
+    pub trace: bool,
+}
+
+fn no_saved_position(position: &[u8; 3]) -> bool {
+    *position == [0; 3]
 }

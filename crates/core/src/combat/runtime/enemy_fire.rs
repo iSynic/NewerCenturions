@@ -40,7 +40,12 @@ pub(super) fn enemy_fire(
             return Err(RuleError::Unsupported {
                 action: "combat.enemy_firearm",
                 dependency: "unreconstructable legacy work-item context",
-            });
+            }
+            .with_context(|| {
+                // The guard above has already read this field successfully.
+                let ammunition = c.enemies.records[e].record().ammunition().unwrap_or(0);
+                format!("enemy body {body} weapon {weapon_id} ammunition {ammunition}")
+            }));
         }
     };
     let ammo_id = crate::combat::enemy_weapons::ammo_id(&c.enemies.records[e], item_context)?;
@@ -64,7 +69,10 @@ pub(super) fn enemy_fire(
             weight: 0,
             armor_filter: ItemDefinition(weapon).bypasses_hit_roll()?,
         }
-    } else if matches!(ItemDefinition(weapon).spell()?, 4101 | 4102) {
+    } else if matches!(
+        ItemDefinition(weapon).spell()?,
+        firearm::POINT_TARGET_ATTACK | firearm::AREA_TARGET_ATTACK
+    ) {
         crate::combat::enemy_weapons::prepare(&mut c.enemies.records[e], weapon, ammo, attacks)?
     } else {
         firearm::prepare_enemy(&mut c.enemies.records[e], weapon, attacks)?

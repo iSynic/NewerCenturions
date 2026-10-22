@@ -9,7 +9,7 @@ fn outdoor(content: &Content, case: &Value) -> Session {
         record[8..10].copy_from_slice(&5_i16.to_be_bytes());
         record[24..26].copy_from_slice(&(encounter.as_i64().unwrap() as i16).to_be_bytes());
         let position = state.exploration.as_mut().unwrap();
-        position.script = Some(support::script_state(record, 0));
+        position.script = Some(centurions_core::ScriptState::scheduled(record, 0));
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
             text: String::new(),
@@ -22,7 +22,7 @@ fn outdoor(content: &Content, case: &Value) -> Session {
         state.allies = case["before"].bytes("allies");
         state.ally_count = case.n("ally_count");
     }
-    state.psi_memory = Some(case["before"].bytes("memory"));
+    state.native_work.psi_memory = Some(case["before"].bytes("memory"));
     state.party_buffs = case["before"].bytes("party_buffs");
     if let Some(directory) = case["before"].get("scenario_directory") {
         state.scenario_duration_tail = Some(word(&support::bytes(directory), 50).unwrap());
@@ -30,19 +30,16 @@ fn outdoor(content: &Content, case: &Value) -> Session {
     if let Some(tail) = case["before"].get("scenario_duration_tail") {
         state.scenario_duration_tail = Some(tail.as_i64().unwrap() as i16);
     }
-    state.attack_packet = Some(case["before"].bytes("packet"));
-    state.attack_identity = Some(case["before"].words("identity").try_into().unwrap());
-    state.attack_count = case["before"].n::<i16>("count");
+    state.native_work.attack_packet = Some(case["before"].bytes("packet"));
+    state.native_work.attack_identity = Some(case["before"].words("identity").try_into().unwrap());
+    state.native_work.attack_count = case["before"].n::<i16>("count");
     if let Some(unavailable) = case["before"].get("unavailable") {
         let mut health = centurions_core::story_health::context(&state.warriors, 0, None);
         health.unavailable = unavailable.as_i64().unwrap() as i8;
-        state.health_context = Some(health);
+        state.native_work.health_context = Some(health);
     }
     state.random = if case.get("item").is_some() {
-        RandomState {
-            seed: case["before"].n("seed"),
-            draws: case["before"].n("draws"),
-        }
+        crate::native_common::random_at(&case["before"], "seed", "draws")
     } else {
         RandomState::new(case.n::<u32>("seed_before"))
     };
@@ -74,23 +71,25 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
         let expected = &case["after"];
         let mut expected_session = before;
         snapshots::captured_party(&mut expected_session, case, expected);
-        expected_session.psi_memory = Some(expected.bytes("memory"));
+        expected_session.native_work.psi_memory = Some(expected.bytes("memory"));
         expected_session.party_buffs = expected.bytes("party_buffs");
         if let Some(directory) = expected.get("scenario_directory") {
             expected_session.scenario_duration_tail =
                 Some(word(&support::bytes(directory), 50).unwrap());
         }
-        expected_session.attack_packet = Some(expected.bytes("packet"));
+        expected_session.native_work.attack_packet = Some(expected.bytes("packet"));
         let identity = expected.bytes("identity");
-        expected_session.attack_identity = Some(expected.words("identity").try_into().unwrap());
-        expected_session.attack_count = expected.n::<i16>("count");
+        expected_session.native_work.attack_identity =
+            Some(expected.words("identity").try_into().unwrap());
+        expected_session.native_work.attack_count = expected.n::<i16>("count");
         expected_session
+            .native_work
             .party_mask
             .copy_from_slice(&expected.words("mask")[..6]);
         expected_session.psi_menu_choices[5] = Some(centurions_core::PsiMenuChoice {
             row: centurions_content::word(&identity, 2).unwrap() as u8,
             column: centurions_content::word(&identity, 4).unwrap() as u8,
-            power: expected_session.attack_count,
+            power: expected_session.native_work.attack_count,
         });
         expected_session.random.seed = expected.n::<u32>("seed");
         expected_session.random.draws = expected.n::<u64>("draws");
@@ -110,8 +109,8 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
             std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
             let mut expected = state.clone();
             expected.scenario_duration_tail = None;
-            expected.inventory_record = None;
-            expected.npc_backing = Default::default();
+            expected.native_work.inventory_record = None;
+            expected.native_work.npc_backing = Default::default();
             support::same_captured_session(&load(&path, &content).unwrap(), &expected);
             std::fs::remove_file(path).unwrap();
         }
@@ -177,12 +176,15 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
             let mut complete = before;
             snapshots::captured_party(&mut complete, case, expected);
             complete.selected_warrior = case.n("actor");
-            complete.ammunition_work.item = Some(expected.bytes("item_work"));
-            complete.loaded_item_field32 = Some(word(&expected.bytes("item_work"), 32).unwrap());
-            complete.attack_packet = Some(expected.bytes("packet"));
-            complete.attack_identity = Some(expected.words("identity").try_into().unwrap());
-            complete.attack_count = expected.n("count");
+            complete.native_work.ammunition_work.item = Some(expected.bytes("item_work"));
+            complete.native_work.loaded_item_field32 =
+                Some(word(&expected.bytes("item_work"), 32).unwrap());
+            complete.native_work.attack_packet = Some(expected.bytes("packet"));
+            complete.native_work.attack_identity =
+                Some(expected.words("identity").try_into().unwrap());
+            complete.native_work.attack_count = expected.n("count");
             complete
+                .native_work
                 .party_mask
                 .copy_from_slice(&expected.words("mask")[..6]);
             complete.scenario_duration_tail = Some(expected.n("scenario_duration_tail"));
@@ -229,25 +231,33 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
             .any(|id| case["spell_id"] == *id)
         {
             assert_eq!(
-                state.health_context.as_ref().unwrap().unavailable,
+                state
+                    .native_work
+                    .health_context
+                    .as_ref()
+                    .unwrap()
+                    .unavailable,
                 expected.n::<i8>("unavailable")
             );
         }
         assert_eq!(
-            state.psi_memory.as_ref().unwrap(),
+            state.native_work.psi_memory.as_ref().unwrap(),
             &expected.bytes("memory")
         );
         assert_eq!(state.random.seed, expected.n::<u32>("seed"));
         assert_eq!(state.random.draws, expected.n::<u64>("draws"));
-        assert_eq!(state.party_mask.as_slice(), &expected.words("mask")[..6]);
+        assert_eq!(
+            state.native_work.party_mask.as_slice(),
+            &expected.words("mask")[..6]
+        );
         support::native_expect! {
-            bytes state.attack_packet.as_ref().unwrap() => &expected["packet"], "outdoor packet";
-            words state.attack_identity.as_ref().unwrap() => &expected["identity"], "outdoor identity";
-            scalar state.attack_count => &expected["count"], "outdoor count";
+            bytes state.native_work.attack_packet.as_ref().unwrap() => &expected["packet"], "outdoor packet";
+            words state.native_work.attack_identity.as_ref().unwrap() => &expected["identity"], "outdoor identity";
+            scalar state.native_work.attack_count => &expected["count"], "outdoor count";
         }
         if case.get("item").is_some() {
             support::native_expect! {
-                bytes state.ammunition_work.item.as_ref().unwrap() => &expected.bytes("item_work"), "outdoor item work";
+                bytes state.native_work.ammunition_work.item.as_ref().unwrap() => &expected.bytes("item_work"), "outdoor item work";
             };
         }
         assert_eq!(support::event_sounds(&events), case.n::<Vec<i16>>("sounds"));
@@ -266,7 +276,7 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
         script[8..10].copy_from_slice(&5_i16.to_be_bytes());
         script[24..26].copy_from_slice(&10_i16.to_be_bytes());
         let position = state.exploration.as_mut().unwrap();
-        position.script = Some(support::script_state(script, 0));
+        position.script = Some(centurions_core::ScriptState::scheduled(script, 0));
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
             text: String::new(),
@@ -276,7 +286,7 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
             for native in support::fixture("encounter-detox.json").array("cases") {
                 let mut indexed = state.clone();
                 indexed.warriors = support::warriors(&native["warriors_before"]);
-                indexed.psi_memory = Some(vec![0; 480]);
+                indexed.native_work.psi_memory = Some(vec![0; 480]);
                 indexed.scenario_duration_tail = Some(-1);
                 indexed.random = RandomState::new(12);
                 let events = support::saved_command(
@@ -290,7 +300,7 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
                 );
                 support::native_expect! {
                     records &indexed.warriors => &native["warriors_after"], "encounter Detox party";
-                    bytes indexed.psi_memory.as_ref().unwrap() => &native["memory_after"], "encounter Detox memory";
+                    bytes indexed.native_work.psi_memory.as_ref().unwrap() => &native["memory_after"], "encounter Detox memory";
                     scalar indexed.scenario_duration_tail.unwrap() => &native["scenario_duration_after"], "encounter Detox alias";
                     scalar indexed.random.seed => &native["seed_after"], "encounter Detox seed";
                     scalar indexed.random.draws => &native["draws"], "encounter Detox draws";
@@ -317,20 +327,23 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
             bytes &support::record_bytes(&state.warriors) => &expected.bytes("party"), "encounter spell party";
         };
         assert_eq!(
-            state.psi_memory.as_ref().unwrap(),
+            state.native_work.psi_memory.as_ref().unwrap(),
             &expected.bytes("memory")
         );
         assert_eq!(state.party_buffs, expected.bytes("party_buffs"));
-        assert_eq!(state.party_mask.as_slice(), &expected.words("mask")[..6]);
         assert_eq!(
-            state.attack_packet.as_ref().unwrap(),
+            state.native_work.party_mask.as_slice(),
+            &expected.words("mask")[..6]
+        );
+        assert_eq!(
+            state.native_work.attack_packet.as_ref().unwrap(),
             &expected.bytes("packet")
         );
         assert_eq!(
-            state.attack_identity.unwrap().as_slice(),
+            state.native_work.attack_identity.unwrap().as_slice(),
             expected.words("identity")
         );
-        assert_eq!(state.attack_count, expected.n::<i16>("count"));
+        assert_eq!(state.native_work.attack_count, expected.n::<i16>("count"));
         assert_eq!(state.random, native_common::random_state(expected));
         let mut sounds = case.n::<Vec<i16>>("sounds");
         let branch = case.n::<usize>("selector") - 1;
@@ -372,7 +385,7 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
     for case in support::fixture("outdoor-type11.json").array("cases") {
         let mut state = support::mission_session(&content);
         state.warriors = support::warriors(&case["warriors_before"]);
-        state.psi_memory = Some(vec![0; 480]);
+        state.native_work.psi_memory = Some(vec![0; 480]);
         state.random = RandomState::new(12);
         let position = state.exploration.clone();
         let events = support::saved_command(
@@ -387,10 +400,13 @@ fn outdoor_shield_matches_complete_native_records_and_exact_session_across_reloa
         assert_eq!(state.exploration, position);
         support::native_expect! {
             records &state.warriors => &case["warriors_after"], "type11 party";
-            bytes state.psi_memory.as_ref().unwrap() => &case["memory_after"], "type11 learned memory";
+            bytes state.native_work.psi_memory.as_ref().unwrap() => &case["memory_after"], "type11 learned memory";
             scalar state.random.draws => &case["draws"], "type11 RNG";
         }
-        assert_eq!(state.party_mask.as_slice(), &case.words("mask_after")[..6]);
+        assert_eq!(
+            state.native_work.party_mask.as_slice(),
+            &case.words("mask_after")[..6]
+        );
         support::expect_array(&support::event_sounds(&events), &case["sounds"]);
         checkpoint(&state, &content, "outdoor-type11-after");
     }
@@ -456,8 +472,8 @@ pub(crate) fn combat_state(content: &Content, case: &Value) -> Session {
     combat.unavailable = case["before"].n::<i8>("unavailable");
     combat.spell_fields = case["before"].bytes("fields");
     combat.field_used = case["before"].bytes("used");
-    combat.attack_packet = state.attack_packet.clone();
-    combat.attack_identity = state.attack_identity;
+    combat.attack_packet = state.native_work.attack_packet.clone();
+    combat.attack_identity = state.native_work.attack_identity;
     combat.weapon_work = centurions_core::combat::weapon_work::WeaponWork::zero();
     if case["before"].get("weapon_work").is_some() {
         combat
@@ -469,10 +485,10 @@ pub(crate) fn combat_state(content: &Content, case: &Value) -> Session {
             .load_ammunition(&case["before"].bytes("ammo_work"))
             .unwrap();
     }
-    state.weapon_work = combat.weapon_work;
+    state.native_work.weapon_work = combat.weapon_work;
     state.combat = Some(combat);
     state.phase = centurions_core::Phase::Combat;
-    state.loaded_item_field32 = Some(case["before"].n::<i16>("item_context"));
+    state.native_work.loaded_item_field32 = Some(case["before"].n::<i16>("item_context"));
     state
 }
 
@@ -595,27 +611,27 @@ fn combat_support_and_automatic_initiative_match_complete_native_suffix_and_resu
         arena.field_used = expected.bytes("used");
         arena.attack_packet = Some(expected.bytes("packet"));
         arena.attack_identity = Some(expected.words("identity").try_into().unwrap());
-        expected_session.attack_packet = arena.attack_packet.clone();
-        expected_session.attack_identity = arena.attack_identity;
-        expected_session.attack_count = expected.n::<i16>("count");
+        expected_session.native_work.attack_packet = arena.attack_packet.clone();
+        expected_session.native_work.attack_identity = arena.attack_identity;
+        expected_session.native_work.attack_count = expected.n::<i16>("count");
         let identity = expected.words("identity");
         let actor = case["before"].n::<usize>("active_member");
         expected_session.psi_menu_choices[actor] = Some(centurions_core::PsiMenuChoice {
             row: identity[1] as u8,
             column: identity[2] as u8,
-            power: expected_session.attack_count,
+            power: expected_session.native_work.attack_count,
         });
-        expected_session.loaded_item_field32 = Some(expected.n::<i16>("item_context"));
-        expected_session.psi_memory = Some(expected.bytes("memory"));
+        expected_session.native_work.loaded_item_field32 = Some(expected.n::<i16>("item_context"));
+        expected_session.native_work.psi_memory = Some(expected.bytes("memory"));
         expected_session.party_buffs = expected.bytes("party_buffs");
         let mut health = centurions_core::story_health::context(
             &expected_session.warriors,
             expected_session.selected_warrior,
-            expected_session.health_context.as_ref(),
+            expected_session.native_work.health_context.as_ref(),
         );
         health.unavailable = arena.unavailable;
         health.effect = expected.bytes("packet")[18] as i8;
-        expected_session.health_context = Some(health);
+        expected_session.native_work.health_context = Some(health);
         expected_session.bandage_ready = Some(1);
         expected_session.random.seed = expected.n::<u32>("seed");
         expected_session.random.draws = expected.n::<u64>("draws");

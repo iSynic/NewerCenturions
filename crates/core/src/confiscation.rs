@@ -1,7 +1,8 @@
 use crate::{
     Event, InventoryRecord, Presentation, RuleError, Session, equipment, feedback::NativeFeedback,
 };
-use centurions_content::{Content, Warrior, word};
+use centurions_content::records::{InventorySlots, InventorySlotsMut};
+use centurions_content::{Content, Warrior};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -57,14 +58,14 @@ pub(crate) fn apply(
         for (member, warrior) in state.warriors.iter_mut().enumerate() {
             saved.money = saved
                 .money
-                .wrapping_add(i32::from(word(&warrior.bytes, 0x9da)? as u16));
-            warrior.bytes[0x9da..0x9dc].fill(0);
+                .wrapping_add(i32::from(warrior.record().carried_credits()? as u16));
+            warrior.record_mut().set_carried_credits(0);
             let records = warrior.inventory()?;
             saved.items[member * 100..member * 100 + records.len()].clone_from_slice(&records);
             for slot in 0..100 {
                 equipment::force_drop(warrior, slot, content, mission)?;
             }
-            warrior.bytes[0x1a..0x1c].fill(0);
+            InventorySlotsMut(&mut warrior.bytes).set_count(0);
         }
         state.load_item_work(content, 0)?;
         state.confiscated = Some(saved);
@@ -73,17 +74,17 @@ pub(crate) fn apply(
     let mut saved = state.confiscated.take().unwrap();
     let mut displaced = Vec::new();
     for (member, warrior) in state.warriors.iter_mut().enumerate() {
-        warrior.bytes[0x1a..0x1c].fill(0);
+        InventorySlotsMut(&mut warrior.bytes).set_count(0);
         for slot in 0..100 {
             let record = &saved.items[member * 100 + slot];
             if record.id() == 0 {
                 continue;
             }
-            displaced.push(word(&warrior.bytes, 0x132 + slot * 22)?);
-            let count = word(&warrior.bytes, 0x1a)?.wrapping_add(1);
-            warrior.bytes[0x1a..0x1c].copy_from_slice(&count.to_be_bytes());
-            warrior.bytes[0x132 + slot * 22..0x132 + (slot + 1) * 22].copy_from_slice(&record.0);
-            if record.0[9] != 0 {
+            displaced.push(InventorySlots(&warrior.bytes).item_id(slot)?);
+            let count = InventorySlots(&warrior.bytes).count()?.wrapping_add(1);
+            InventorySlotsMut(&mut warrior.bytes).set_count(count);
+            warrior.record_mut().set_inventory_slot(slot, record);
+            if record.equipment_flag() != 0 {
                 *warrior =
                     crate::editor_items::equipment_record_restored(warrior, content, slot)?.0;
             }

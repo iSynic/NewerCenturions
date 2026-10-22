@@ -35,6 +35,11 @@ See [installation notes](docs/installation.md) if you need help getting it runni
 [Building and testing](docs/building.md) · [Code guide](docs/maintainability.md) ·
 [Recovery notes and known limitations](docs/reconstruction.md)
 
+This source contains the maintained game: content loading, the rules engine, the
+desktop app and their tests. The instruction-level reference used to check it
+against the original program, and the probes that produce that evidence, are
+private development material and are not part of this source.
+
 Built with the help of Codex Astra 6 and Sol 6.1.
 
 The reconstruction code is [MIT licensed](LICENSE). The original game belongs

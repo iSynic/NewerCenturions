@@ -1,6 +1,6 @@
 use crate::{RuleError, combat};
 use centurions_content::records::{InventorySlots, InventorySlotsMut, ItemDefinition};
-use centurions_content::{Content, InventoryRecord, Warrior, span};
+use centurions_content::{Content, InventoryRecord, WARRIOR_BYTES, Warrior, span};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScenarioItemUse {
@@ -50,7 +50,7 @@ pub fn use_scenario_item(
     let warrior = warriors
         .get(member)
         .ok_or_else(|| RuleError::Invalid("selected item warrior unavailable".into()))?;
-    let bytes = span(&warrior.bytes, 0, 3138)?;
+    let bytes = span(&warrior.bytes, 0, WARRIOR_BYTES)?;
     let count = usize::try_from(InventorySlots(bytes).count()?)
         .map_err(|_| RuleError::Invalid("selected inventory count is negative".into()))?;
     if slot >= count || count > 100 {

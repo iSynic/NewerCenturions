@@ -66,7 +66,7 @@ pub(super) fn compare(fixture: Value, elemental_audio: bool) {
                         650
                     } else {
                         let attack = case.n::<usize>("index");
-                        let base = (source - 10) as usize * 288;
+                        let base = (source - 10) as usize * MONSTER_BYTES;
                         let offset = if before_records[base + 0x93 + attack * 4] == 0 {
                             0x95
                         } else {

@@ -19,10 +19,7 @@ fn complete_original_reward_table_cash_drops_and_ordinary_close() {
         let before = patched(baseline.clone(), &case["before_changes"]);
         let enemy_bytes = case.bytes("enemies");
         let enemies: Vec<_> = support::monsters(&enemy_bytes);
-        let mut random = RandomState {
-            seed: case.n::<u32>("seed_before"),
-            draws: 0,
-        };
+        let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let result = rewards::prepare(
             &party(&before),
             &enemies,

@@ -109,8 +109,11 @@ pub(crate) fn control(
                 16 => state.random.range(3, 24),
                 _ => 5000,
             };
-            let context =
-                story_health::context(&state.warriors, member, state.health_context.as_ref());
+            let context = story_health::context(
+                &state.warriors,
+                member,
+                state.native_work.health_context.as_ref(),
+            );
             let outcome = story_health::heal_outdoors(
                 &state.warriors,
                 member,
@@ -120,7 +123,7 @@ pub(crate) fn control(
                 &mut state.random,
             )?;
             state.warriors = outcome.warriors;
-            state.health_context = Some(outcome.context);
+            state.native_work.health_context = Some(outcome.context);
             for event in outcome.events {
                 match event {
                     story_health::HealthEvent::Sound(resource_id) => {

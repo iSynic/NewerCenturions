@@ -5,7 +5,7 @@ use serde_json::Value;
 /// fields remain exact; the added word has separate original command/save controls.
 pub fn captured_session(state: &Session) -> Session {
     let mut captured = state.clone();
-    captured.weapon_work.natural_attack_index = None;
+    captured.native_work.weapon_work.natural_attack_index = None;
     if let Some(combat) = &mut captured.combat {
         combat.weapon_work.natural_attack_index = None;
     }

@@ -1,3 +1,4 @@
+use crate::native_common::raw_word;
 use crate::prelude::*;
 use crate::support::{event_sounds, monsters, positions, record_bytes, warriors};
 
@@ -8,10 +9,6 @@ pub enum Caller {
     RetainedSpell,
 }
 
-fn raw_word(bytes: &[u8], offset: usize) -> i16 {
-    i16::from_be_bytes(bytes[offset..offset + 2].try_into().unwrap())
-}
-
 pub fn compare(cases: &[Value], caller: Caller) {
     let content = content();
     let mission = content.map(0).unwrap();
@@ -19,7 +16,7 @@ pub fn compare(cases: &[Value], caller: Caller) {
         let before_records = case.bytes("records_before");
         let mut party = warriors(&case["warriors_before"]);
         let mut enemy_positions = vec![(20, 20)];
-        if before_records.len() > 288 {
+        if before_records.len() > MONSTER_BYTES {
             enemy_positions.push((24, if caller == Caller::Firearm { 20 } else { 21 }));
         }
         let mut combat = Combat {
@@ -153,14 +150,14 @@ fn expected_hits(case: &Value, enemy_count: usize, caller: Caller) -> Vec<Event>
             }
             let (before, after, hp) = if body < 6 {
                 (
-                    &party[body * 3138..(body + 1) * 3138],
-                    &after_party[body * 3138..(body + 1) * 3138],
+                    &party[body * WARRIOR_BYTES..(body + 1) * WARRIOR_BYTES],
+                    &after_party[body * WARRIOR_BYTES..(body + 1) * WARRIOR_BYTES],
                     0x50,
                 )
             } else if body >= 10 && body < 10 + enemy_count {
                 (
-                    &records[(body - 10) * 288..(body - 9) * 288],
-                    &after_records[(body - 10) * 288..(body - 9) * 288],
+                    &records[(body - 10) * MONSTER_BYTES..(body - 9) * MONSTER_BYTES],
+                    &after_records[(body - 10) * MONSTER_BYTES..(body - 9) * MONSTER_BYTES],
                     0x110,
                 )
             } else {

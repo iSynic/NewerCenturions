@@ -38,10 +38,10 @@ pub(crate) fn begin(
     let mut health = story_health::context(
         &state.warriors,
         state.selected_warrior,
-        state.health_context.as_ref(),
+        state.native_work.health_context.as_ref(),
     );
     health.unavailable = unavailable;
-    state.health_context = Some(health);
+    state.native_work.health_context = Some(health);
     let arena = state.combat.as_mut().ok_or("cleanup combat missing")?;
     arena.unavailable = unavailable;
     for record in &mut arena.enemies.records {
@@ -97,7 +97,7 @@ pub(crate) fn confirm(state: &mut Session, content: &Content) -> Result<Vec<Even
     }
     for record in state
         .allies
-        .as_chunks_mut::<288>()
+        .as_chunks_mut::<{ crate::story_allies::ALLY_BYTES }>()
         .0
         .iter_mut()
         .take(state.ally_count)
@@ -109,9 +109,9 @@ pub(crate) fn confirm(state: &mut Session, content: &Content) -> Result<Vec<Even
     }
     state.retain_npcs();
     let arena = state.combat.take().unwrap();
-    state.attack_packet = arena.attack_packet;
-    state.attack_identity = arena.attack_identity;
-    state.weapon_work = arena.weapon_work;
+    state.native_work.attack_packet = arena.attack_packet;
+    state.native_work.attack_identity = arena.attack_identity;
+    state.native_work.weapon_work = arena.weapon_work;
     state.phase = Phase::Exploration;
     state.scripted_cleanup = Some(Stage::Complete);
     state.handled_deaths.clear();

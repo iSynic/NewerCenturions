@@ -13,11 +13,11 @@ fn project(state: &mut Session, snapshot: &Value, owned: bool) {
     }
     state.ammunition = support::longs(&snapshot.bytes("ammunition"));
     state.random = native_common::snapshot_rng(snapshot);
-    state.loaded_item_field32 = Some(snapshot.n::<i16>("item_context"));
-    state.attack_count = snapshot.n::<i16>("attack_count");
-    state.psi_memory = Some(snapshot.bytes("memory"));
+    state.native_work.loaded_item_field32 = Some(snapshot.n::<i16>("item_context"));
+    state.native_work.attack_count = snapshot.n::<i16>("attack_count");
+    state.native_work.psi_memory = Some(snapshot.bytes("memory"));
     state.party_buffs = snapshot.bytes("party_buffs");
-    state.weapon_work = snapshots::weapon_work(&|key| {
+    state.native_work.weapon_work = snapshots::weapon_work(&|key| {
         snapshot.bytes(if key == "weapon_work" {
             "weapon"
         } else {
@@ -46,13 +46,13 @@ fn project(state: &mut Session, snapshot: &Value, owned: bool) {
     combat.round = snapshot.n::<i16>("round");
     combat.unavailable = snapshot.n::<i8>("unavailable");
     snapshots::spell_work(combat, &|key| snapshot.bytes(key));
-    combat.weapon_work = state.weapon_work;
-    state.attack_packet = combat.attack_packet.clone();
-    state.attack_identity = combat.attack_identity;
+    combat.weapon_work = state.native_work.weapon_work;
+    state.native_work.attack_packet = combat.attack_packet.clone();
+    state.native_work.attack_identity = combat.attack_identity;
     let mut health = centurions_core::story_health::context(
         &state.warriors,
         state.selected_warrior,
-        state.health_context.as_ref(),
+        state.native_work.health_context.as_ref(),
     );
     if owned {
         health.affected = snapshot.words("markers")[..6].try_into().unwrap();
@@ -60,7 +60,7 @@ fn project(state: &mut Session, snapshot: &Value, owned: bool) {
     } else {
         health.unavailable = combat.unavailable;
     }
-    state.health_context = Some(health);
+    state.native_work.health_context = Some(health);
 }
 
 // Independent native low-AP fit/shoot receipts protect the automatic enemy-turn boundary.
@@ -103,16 +103,16 @@ fn native_automatic_turns_preserve_complete_state_events_and_save_resume() {
             let events = replay_command(command, &mut state, &mut resumed, &content);
             let mut expected = original;
             project(&mut expected, after, owned);
-            expected.ammunition_work.item = Some(after.bytes("item_work"));
-            expected.ammunition_work.ammo = Some(after.bytes("ammo"));
+            expected.native_work.ammunition_work.item = Some(after.bytes("item_work"));
+            expected.native_work.ammunition_work.ammo = Some(after.bytes("ammo"));
             if owned {
-                expected.ammunition_work.weapon = Some(after.bytes("weapon"));
+                expected.native_work.ammunition_work.weapon = Some(after.bytes("weapon"));
             }
             expected.bandage_ready = Some(1);
-            expected.health_context = Some(centurions_core::story_health::context(
+            expected.native_work.health_context = Some(centurions_core::story_health::context(
                 &expected.warriors,
                 expected.selected_warrior,
-                expected.health_context.as_ref(),
+                expected.native_work.health_context.as_ref(),
             ));
             support::same_captured_session(&state, &expected);
             let mut expected_events: Vec<_> = after.n::<Vec<i16>>("sounds")

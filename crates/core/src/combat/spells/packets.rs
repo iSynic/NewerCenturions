@@ -1,7 +1,6 @@
 //! Packets for combat/spells.
 use super::{RandomState, RuleError};
 use centurions_content::combat::MonsterRecord;
-use centurions_content::word;
 
 pub fn load_packet(attacks: &[u8], id: i16) -> Result<Vec<u8>, RuleError> {
     if id < 1101 {
@@ -29,7 +28,7 @@ pub fn select_packet(
     let mut next_random = random.clone();
     for _ in 0..30 {
         let index = next_random.range(0, 9) as usize;
-        let id = word(&monster.bytes, 0x12 + index * 2)?;
+        let id = monster.record().spell_slot(index)?;
         if id > 1100 {
             let packet = load_packet(attacks, id)?;
             *random = next_random;

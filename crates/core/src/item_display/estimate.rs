@@ -1,11 +1,8 @@
 //! Original combat estimate panel, expressed as drawing commands rather than
 //! emulated stack and global-memory writes. No session state or RNG is changed.
-use super::{BTreeMap, BodyRect, Content, NativeText, RenderingMemory, RuleError};
-use crate::{
-    recovered_detail_ui::{DetailEffect, DetailPlan},
-    recovered_drawing::DrawingEffect,
-    recovered_economy::ArithmeticQualification,
-    recovered_text::PascalString,
+use super::{
+    BTreeMap, BodyRect, Content, Draw, NativeText, PanelEffect, PanelPlan, PascalString, RuleError,
+    output::ArithmeticQualification,
 };
 use centurions_content::records::ItemDefinition;
 
@@ -15,7 +12,7 @@ pub fn attack_estimate(
     body: i16,
     native: &NativeText,
     _strings: &BTreeMap<i16, Vec<u8>>,
-) -> Result<DetailPlan, RuleError> {
+) -> Result<PanelPlan, RuleError> {
     let combat = state.combat.as_ref().ok_or("estimate combat missing")?;
     let actor = combat
         .active_body()
@@ -60,11 +57,10 @@ pub fn attack_estimate(
         }
         crate::ammunition::definition(content, id)?;
     }
-    let mut plan = DetailPlan {
-        memory: RenderingMemory::default(),
+    let mut plan = PanelPlan {
         effects: vec![],
-        native_return: None,
-        arithmetic_qualification: None,
+        arithmetic: None,
+        retained_definitions: None,
     };
     let panel = BodyRect {
         top: 300,
@@ -74,13 +70,13 @@ pub fn attack_estimate(
     };
     draw(
         &mut plan,
-        DrawingEffect::DrawPicture {
+        Draw::DrawPicture {
             handle: if target.is_some() { 201 } else { 224 },
             bounds: panel,
         },
     );
     let Some(target) = target else {
-        retain_definition_receipt(&mut plan, &state.ammunition_work);
+        plan.retained_definitions = Some(state.native_work.ammunition_work.clone());
         return Ok(plan);
     };
     let enemy = target.record();
@@ -102,7 +98,7 @@ pub fn attack_estimate(
     }
     draw(
         &mut plan,
-        DrawingEffect::PlotColorIcon {
+        Draw::PlotColorIcon {
             handle: u32::from(icon as u16),
             rect: icon_bounds,
         },
@@ -114,7 +110,7 @@ pub fn attack_estimate(
     } else {
         None
     };
-    let mut work = state.ammunition_work.clone();
+    let mut work = state.native_work.ammunition_work.clone();
     let icon = match weapon {
         Some(id) => {
             let definition = crate::ammunition::definition(content, id)?;
@@ -126,7 +122,7 @@ pub fn attack_estimate(
     };
     draw(
         &mut plan,
-        DrawingEffect::PlotColorIcon {
+        Draw::PlotColorIcon {
             handle: u32::from(icon as u16),
             rect: BodyRect {
                 top: 375,
@@ -143,10 +139,10 @@ pub fn attack_estimate(
         &work,
         content,
     )?;
-    draw(&mut plan, DrawingEffect::TextSize(12));
-    draw(&mut plan, DrawingEffect::ForeColor(30));
-    draw(&mut plan, DrawingEffect::TextFont(font));
-    plan.effects.push(DetailEffect::TextFaceSlot(0));
+    draw(&mut plan, Draw::TextSize(12));
+    draw(&mut plan, Draw::ForeColor(30));
+    draw(&mut plan, Draw::TextFont(font));
+    plan.effects.push(PanelEffect::TextFaceSlot(0));
     for (horizontal, vertical, value) in [
         (685, 337, estimate.chance),
         (650, 375, estimate.minimum),
@@ -155,26 +151,26 @@ pub fn attack_estimate(
     ] {
         draw(
             &mut plan,
-            DrawingEffect::MoveTo {
+            Draw::MoveTo {
                 horizontal,
                 vertical,
             },
         );
         let text = PascalString::from_payload(value.to_string().as_bytes())?;
-        plan.effects.push(DetailEffect::NumberToString {
+        plan.effects.push(PanelEffect::NumberToString {
             value: i32::from(value),
             destination: 0x479ed8,
             result: text.clone(),
         });
-        draw(&mut plan, DrawingEffect::DrawString(text));
+        draw(&mut plan, Draw::DrawString(text));
     }
-    retain_definition_receipt(&mut plan, &estimate.work);
-    plan.arithmetic_qualification = Some(ArithmeticQualification::SourceDerivedBinary32);
+    plan.retained_definitions = Some(estimate.work);
+    plan.arithmetic = Some(ArithmeticQualification::SourceDerivedBinary32);
     Ok(plan)
 }
 
-fn draw(plan: &mut DetailPlan, drawing: DrawingEffect) {
-    plan.effects.push(DetailEffect::Drawing(drawing));
+fn draw(plan: &mut PanelPlan, drawing: Draw) {
+    plan.effects.push(PanelEffect::Drawing(drawing));
 }
 
 fn inset(rect: &mut BodyRect, horizontal: i16, vertical: i16) {
@@ -182,18 +178,4 @@ fn inset(rect: &mut BodyRect, horizontal: i16, vertical: i16) {
     rect.bottom -= vertical;
     rect.left += horizontal;
     rect.right -= horizontal;
-}
-
-// Legacy DetailPlan consumers and native receipts identify these three byte
-// records by their original addresses. This is an output codec only: no rule
-// reads this map, and no stack, CPU registers or SANE operations are executed.
-fn retain_definition_receipt(plan: &mut DetailPlan, work: &crate::ammunition::WorkBuffers) {
-    for (address, bytes) in [
-        (0x45363c, &work.item),
-        (0x4536d2, &work.ammo),
-        (0x453768, &work.weapon),
-    ] {
-        plan.memory
-            .insert_region(address, bytes.as_deref().unwrap_or(&[0; 150]));
-    }
 }

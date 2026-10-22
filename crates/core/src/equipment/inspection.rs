@@ -96,8 +96,8 @@ fn display_owned_row(
     if record.id() == 0 {
         definition[10..12].fill(0);
     }
-    state.loaded_item_field32 = Some(centurions_content::word(&definition, 32)?);
-    state.ammunition_work.item = Some(definition);
-    state.inventory_record = Some(record);
+    state.native_work.loaded_item_field32 = Some(centurions_content::word(&definition, 32)?);
+    state.native_work.ammunition_work.item = Some(definition);
+    state.native_work.inventory_record = Some(record);
     Ok(())
 }

@@ -1,8 +1,8 @@
 //! Movement for maintained exploration.
 use super::{Regional, active_map, apply_region, regional_selection, run_script, unsupported};
 use crate::{Event, MovementContinuation, Phase, RuleError, ScriptState, Session, travel};
+use centurions_content::Content;
 use centurions_content::mission::OpeningMission;
-use centurions_content::{Content, word};
 
 pub fn manual_encounter(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     if state.phase != Phase::Exploration
@@ -24,14 +24,8 @@ pub fn manual_encounter(state: &mut Session, content: &Content) -> Result<Vec<Ev
     )?;
     position.last_move = [0; 2];
     position.script = Some(ScriptState {
-        record: map.script(id)?.to_vec(),
-        cursor: 0,
-        map_slot: 0,
         item_return: true,
-        scheduled: true,
-        menu: None,
-        persist: false,
-        origin: None,
+        ..ScriptState::scheduled(map.script(id)?.to_vec(), 0)
     });
     run_script(state, content)
 }
@@ -53,6 +47,19 @@ pub fn move_squad(
     }
     if !crate::field_controls::free(state) {
         return Err(RuleError::Refused { feedback: vec![] });
+    }
+    // buttonchoice 0x109526 refuses any move above fatigue 134 while camping is
+    // allowed, before it breaks camp.
+    if state.exploration.as_ref().unwrap().fatigue > 134 && !state.native_work.camp_disabled {
+        return Err(RuleError::Refused {
+            feedback: vec![
+                crate::feedback::NativeFeedback::Warning { index: 54 },
+                crate::feedback::NativeFeedback::Tutorial {
+                    first: 80,
+                    last: 80,
+                },
+            ],
+        });
     }
     if let Some(events) = crate::field_controls::leave_camp(state, content, dx, dy)? {
         return Ok(events);
@@ -85,18 +92,18 @@ pub fn move_squad(
     let sound = if tile < 0 {
         82
     } else {
-        map.tile_word(tile, 0)?
+        map.movement_sound(tile)?
     };
     let mut effects = vec![Event::Sound { resource_id: sound }];
-    if map.tile_word(property, 8)? == 1 {
+    if map.boarding_field(property)? == 1 {
         return Err(unsupported(
             "exploration.move",
             "boarding choice and boat movement",
         ));
     }
     let event_branch = position.events[index] > 0;
-    let moved =
-        event_branch || (map.tile_word(property, 4)? == 0 && map.tile_word(property, 8)? != 2);
+    let moved = event_branch
+        || (map.movement_blocker(property)? == 0 && map.boarding_field(property)? != 2);
     if moved {
         position.x = x;
         position.y = y;
@@ -106,13 +113,17 @@ pub fn move_squad(
         position.facing = u8::from(dx > 0);
     }
     let ticks = if position.events[index] > 0 {
-        if tile < 0 { 1 } else { map.tile_word(tile, 2)? }
+        if tile < 0 {
+            1
+        } else {
+            map.movement_time(tile)?
+        }
     } else {
         effects.push(Event::Sound { resource_id: sound });
         if tile < 0 {
             3
         } else {
-            map.tile_word(property, 2)?
+            map.movement_time(property)?
         }
     };
     if ticks < 0 {
@@ -174,10 +185,12 @@ pub(crate) fn resume_movement(
                 } else {
                     MovementContinuation::Secrets
                 });
-                if check && word(&state.party_buffs, 14)? == 0 {
+                if check {
+                    let battles = super::regions::battles_allowed(state)?;
                     let region = regional_selection(
                         &mut state.exploration.as_mut().unwrap().region_state,
                         (x, y),
+                        battles,
                         &mut state.random,
                     )?;
                     if matches!(region, Regional::Script(_)) {
@@ -220,6 +233,8 @@ pub(crate) fn resume_movement(
                             y: position.y,
                             level: state.scenario_level,
                         }),
+                        caller_action: None,
+                        chained: false,
                     });
                     effects.extend(run_script(state, content)?);
                     if effects

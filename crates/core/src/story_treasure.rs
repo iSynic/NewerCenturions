@@ -1,5 +1,5 @@
 use crate::{RandomState, RuleError, items, story_inventory};
-use centurions_content::{Content, InventoryRecord, Warrior, mission::long, span, word};
+use centurions_content::{Content, InventoryRecord, Warrior, records::TreasureRecord};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Treasure {
@@ -17,14 +17,14 @@ pub fn prepare(
     random: &mut RandomState,
     difficulty: i16,
 ) -> Result<Treasure, RuleError> {
-    let record = span(record, 0, 88)?;
+    let record = TreasureRecord::new(record)?;
     let mut result = story_inventory::normalize_story_loot(warriors)?;
     let mut next_random = random.clone();
     let mut loot = Vec::new();
-    for slot in 0..20 {
-        let id = word(record, slot * 2)?;
+    for slot in 0..TreasureRecord::SLOTS {
+        let id = record.item(slot)?;
         if id > 0 {
-            let enhancement = word(record, 40 + slot * 2)?;
+            let enhancement = record.enhancement(slot)?;
             let enhancement = if enhancement == 0 {
                 0
             } else {
@@ -40,22 +40,21 @@ pub fn prepare(
         }
     }
     // booty105c68..105f18 randomizes items, then experience, then credits.
-    let mut award = |offset| -> Result<i32, RuleError> {
-        let amount = long(record, offset)?;
-        Ok(if amount < 0 {
+    let mut award = |amount: i32| {
+        if amount < 0 {
             i32::from(next_random.bound(((amount >> 16) as i16).wrapping_abs()))
         } else {
             amount
-        })
+        }
     };
-    let amount = award(80)?;
-    let credits = award(84)?;
+    let amount = award(record.experience()?);
+    let credits = award(record.credits()?);
     let eligible = result
         .iter()
         .filter(|warrior| {
             warrior.stamina().unwrap_or(0) > 0
-                && word(&warrior.bytes, 0x90).unwrap_or(-1) >= 0
-                && warrior.bytes[0x9df] != 0
+                && warrior.record().automatic_mode().unwrap_or(-1) >= 0
+                && warrior.record().active_flag() != 0
         })
         .count() as i32;
     let rounded = amount as f32;
@@ -71,11 +70,17 @@ pub fn prepare(
         rounded as i32 / eligible
     };
     for warrior in &mut result {
-        if warrior.stamina()? <= 0 || word(&warrior.bytes, 0x90)? < 0 || warrior.bytes[0x9df] == 0 {
+        if warrior.stamina()? <= 0
+            || warrior.record().automatic_mode()? < 0
+            || warrior.record().active_flag() == 0
+        {
             continue;
         }
+        // The active-flag byte above already bounds this unchecked read.
         let experience =
-            long(&warrior.bytes, 0x9d2)?
+            warrior
+                .record()
+                .upgrade_points()
                 .checked_add(share)
                 .ok_or(RuleError::Unsupported {
                     action: "story.treasure",
@@ -86,15 +91,16 @@ pub fn prepare(
         } else {
             experience
         };
-        let remaining =
-            long(&warrior.bytes, 0x9ce)?
-                .checked_sub(share)
-                .ok_or(RuleError::Unsupported {
-                    action: "story.treasure",
-                    dependency: "SANE experience balance overflow",
-                })?;
-        warrior.bytes[0x9d2..0x9d6].copy_from_slice(&experience.to_be_bytes());
-        warrior.bytes[0x9ce..0x9d2].copy_from_slice(&remaining.to_be_bytes());
+        let remaining = warrior
+            .record()
+            .remaining_experience()?
+            .checked_sub(share)
+            .ok_or(RuleError::Unsupported {
+                action: "story.treasure",
+                dependency: "SANE experience balance overflow",
+            })?;
+        warrior.record_mut().set_upgrade_points(experience);
+        warrior.record_mut().set_remaining_experience(remaining);
     }
     let inventory_record = items::sort_loot(&mut loot);
     *random = next_random;

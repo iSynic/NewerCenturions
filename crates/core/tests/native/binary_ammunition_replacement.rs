@@ -31,7 +31,8 @@ fn replacement_matches_native_full_warriors_retained_instances_costs_and_audio()
             "case {index}"
         );
         let mut party = bytes(&fixture, &before["party"]);
-        party[member * 3138..(member + 1) * 3138].copy_from_slice(&result.warrior.bytes);
+        party[member * WARRIOR_BYTES..(member + 1) * WARRIOR_BYTES]
+            .copy_from_slice(&result.warrior.bytes);
         assert_eq!(party, bytes(&fixture, &after["party"]), "case {index}");
         assert_eq!(
             result.changed,

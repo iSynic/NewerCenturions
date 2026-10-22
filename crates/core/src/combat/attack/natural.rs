@@ -29,10 +29,7 @@ pub(super) fn resolve(
     let weapon = attacker.record().melee_weapon()?;
     if !matches!(weapon, 0 | 9)
         || (weapon == 9 && !matches!(attacker.record().selected_item()?, 0 | 9))
-        || !matches!(
-            natural.condition,
-            0 | 1 | 2 | 4 | 5 | 6 | 9 | 10 | 11 | 14 | 17
-        )
+        || !matches!(natural.condition, 0..=17 | 19)
     {
         return Err(RuleError::Unsupported {
             action: "combat.attack",
@@ -74,8 +71,14 @@ pub(super) fn resolve(
         natural.impact_sound
     });
     if reflected {
-        let result =
-            resolve_reflected_attack(&mut attacker.bytes, &packet, attack_index, true, random)?;
+        let result = resolve_reflected_attack(
+            &mut attacker.bytes,
+            &packet,
+            attack_index,
+            true,
+            None,
+            random,
+        )?;
         return Ok((result, packet, true));
     }
     let resolved = resolve_damage(
@@ -103,6 +106,7 @@ pub(super) fn resolve(
         party_buffs::mind_shield(buffs)?,
         random,
     )?;
+    effect.credit_attacker(&mut attacker.bytes)?;
     let mut damage = resolved.total;
     let mut sounds = vec![];
     if let Some(adjusted) = party_buffs::attack2_damage(buffs, 0, damage)? {

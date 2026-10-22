@@ -3,6 +3,7 @@ mod natural;
 use natural::resolve as natural_attack_inner;
 pub(super) mod melee_accuracy;
 mod warrior_enemy;
+pub use super::warrior_attack::{WarriorMelee, warrior_melee};
 use crate::{RandomState, RuleError};
 use centurions_content::Warrior;
 use centurions_content::combat::MonsterRecord;
@@ -65,6 +66,7 @@ pub fn unarmed_attack(
         &[0; 58],
         difficulty,
         None,
+        true,
     )?
     .0)
 }
@@ -91,6 +93,7 @@ pub fn unarmed_attack_with_packet(
         retained,
         difficulty,
         None,
+        true,
     )?;
     *warrior = next_warrior;
     *enemy = next_enemy;
@@ -98,7 +101,7 @@ pub fn unarmed_attack_with_packet(
     Ok((result.0, result.1))
 }
 
-pub(crate) fn warrior_attack_with_packet(
+pub fn warrior_attack_with_packet(
     warrior: &mut Warrior,
     enemy: &mut MonsterRecord,
     random: &mut RandomState,
@@ -107,14 +110,40 @@ pub(crate) fn warrior_attack_with_packet(
     difficulty: i16,
     weapon: Option<&[u8]>,
 ) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
-    unarmed_attack_inner(
+    warrior_attack_with_base(
         warrior,
         enemy,
         random,
         attack_packet(attacks)?,
+        true,
         retained,
         difficulty,
         weapon,
+    )
+}
+
+/// attack 0x100af0 against an enemy from a prepared base packet: loadspell2's packet for
+/// a spell weapon, which may also skip the selector -10 roll.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn warrior_attack_with_base(
+    warrior: &mut Warrior,
+    enemy: &mut MonsterRecord,
+    random: &mut RandomState,
+    base: Vec<u8>,
+    rolls_condition: bool,
+    retained: &[u8],
+    difficulty: i16,
+    weapon: Option<&[u8]>,
+) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
+    unarmed_attack_inner(
+        warrior,
+        enemy,
+        random,
+        base,
+        retained,
+        difficulty,
+        weapon,
+        rolls_condition,
     )
 }
 
@@ -223,6 +252,7 @@ pub(crate) fn resolve_reflected_attack(
     packet: &[u8],
     index: usize,
     natural: bool,
+    weapon_condition: Option<centurions_content::records::WeaponCondition>,
     random: &mut RandomState,
 ) -> Result<AttackResult, RuleError> {
     let source = target.to_vec();
@@ -250,6 +280,8 @@ pub(crate) fn resolve_reflected_attack(
         if let Some(effect) =
             super::natural_conditions::monster_attack_effect(target, &source, index, random)?
         {
+            // The reflected attacker is its own target.
+            effect.credit_attacker(target)?;
             feedback = effect.feedback;
             damage = damage.wrapping_add(effect.extra_damage);
             if condition == 10 && effect.applied {
@@ -258,6 +290,15 @@ pub(crate) fn resolve_reflected_attack(
         } else {
             damage = 0;
         }
+    }
+    // attack2 applies an admitted weapon condition to the reflected attacker after
+    // nonzero damage, as it would to the original target.
+    if let Some(condition) = weapon_condition.filter(|_| damage != 0) {
+        feedback = Some(super::natural_conditions::apply_weapon_condition(
+            target,
+            centurions_content::records::DamageTargetKind::Enemy,
+            condition,
+        )?);
     }
     let health = centurions_content::records::EnemyRecord::from_bytes(target)
         .stamina()?

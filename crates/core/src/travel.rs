@@ -1,5 +1,9 @@
 use crate::{RandomState, RuleError};
-use centurions_content::{Warrior, mission::MAP_CELLS, mission::OpeningMission, span, word};
+use centurions_content::records::{
+    EventChanceExtra, EventHeaderTable, EventHeaderTableMut, EventReplacementExtra, StoryRecord,
+    TileMutationExtra,
+};
+use centurions_content::{Warrior, mission::MAP_CELLS, mission::OpeningMission, span};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TileLayer {
@@ -16,20 +20,20 @@ pub struct TileMutation {
 }
 
 pub fn tile_mutation(extra: &[u8]) -> Result<TileMutation, RuleError> {
-    let extra = span(extra, 0, 10)?;
-    let map = word(extra, 0)?;
+    let extra = TileMutationExtra(span(extra, 0, TileMutationExtra::BYTES)?);
+    let map = extra.map()?;
     if map < 0 {
         return Err(RuleError::Invalid(
             "tile mutation map is unavailable".into(),
         ));
     }
-    let index = OpeningMission::index(i32::from(word(extra, 2)?), i32::from(word(extra, 4)?))?;
-    let layer = if word(extra, 8)? == 2 {
+    let index = OpeningMission::index(i32::from(extra.x()?), i32::from(extra.y()?))?;
+    let layer = if extra.layer()? == 2 {
         TileLayer::Object
     } else {
         TileLayer::Floor
     };
-    let mut value = word(extra, 6)?;
+    let mut value = extra.tile()?;
     if layer == TileLayer::Object && value > 22999 {
         value = value.wrapping_sub(23000);
     }
@@ -60,15 +64,15 @@ pub struct EventReplacement {
 }
 
 pub fn event_replacement(extra: &[u8]) -> Result<EventReplacement, RuleError> {
-    let extra = span(extra, 0, 10)?;
-    let map = word(extra, 0)?;
+    let extra = EventReplacementExtra(span(extra, 0, EventReplacementExtra::BYTES)?);
+    let map = extra.map()?;
     if map < 0 {
         return Err(RuleError::Unsupported {
             action: "story.replace_event",
             dependency: "replacement of NPC or encounter menu branches",
         });
     }
-    let slot = word(extra, 2)?;
+    let slot = extra.slot()?;
     if !(0..100).contains(&slot) {
         return Err(RuleError::Invalid(
             "event replacement slot is unavailable".into(),
@@ -77,7 +81,7 @@ pub fn event_replacement(extra: &[u8]) -> Result<EventReplacement, RuleError> {
     Ok(EventReplacement {
         map,
         slot: slot as usize,
-        script: word(extra, 4)?,
+        script: extra.script()?,
     })
 }
 
@@ -86,26 +90,26 @@ pub fn replace_event_script(
     slot: usize,
     replacement: &[u8],
 ) -> Result<Vec<u8>, RuleError> {
-    let mut result = span(headers, 0, 4200)?.to_vec();
+    let mut result = span(headers, 0, EventHeaderTable::BYTES)?.to_vec();
     if slot >= 100 {
         return Err(RuleError::Invalid(
             "event replacement slot is unavailable".into(),
         ));
     }
-    let replacement = span(replacement, 0, 42)?;
-    result[slot * 42 + 8..slot * 42 + 41].copy_from_slice(&replacement[8..41]);
+    let replacement = span(replacement, 0, StoryRecord::BYTES)?;
+    EventHeaderTableMut(&mut result).replace_script(slot, replacement);
     Ok(result)
 }
 
 pub fn set_event_chances(headers: &[u8], extra: &[u8]) -> Result<Vec<u8>, RuleError> {
-    let extra = span(extra, 0, 10)?;
+    let extra = EventChanceExtra(span(extra, 0, EventChanceExtra::BYTES)?);
     let mut slots = Vec::new();
-    let single = word(extra, 2)?;
+    let single = extra.slot()?;
     if single != 0 {
         slots.push(single);
     }
-    let start = word(extra, 6)?;
-    let end = word(extra, 8)?;
+    let start = extra.first_slot()?;
+    let end = extra.last_slot()?;
     if start != 0 && start <= end {
         if start < 0 || end >= 100 {
             return Err(RuleError::Invalid(
@@ -119,10 +123,11 @@ pub fn set_event_chances(headers: &[u8], extra: &[u8]) -> Result<Vec<u8>, RuleEr
             "event chance slot is unavailable".into(),
         ));
     }
-    let mut result = span(headers, 0, 4200)?.to_vec();
-    let chance = word(extra, 4)? as u8;
+    let mut result = span(headers, 0, EventHeaderTable::BYTES)?.to_vec();
+    let chance = extra.chance()? as u8;
+    let mut table = EventHeaderTableMut(&mut result);
     for slot in slots {
-        result[slot as usize * 42 + 7] = chance;
+        table.set_trigger_chance(slot as usize, chance);
     }
     Ok(result)
 }
@@ -135,8 +140,12 @@ pub fn secret_search_skill(warriors: &[Warrior]) -> Result<i16, RuleError> {
     }
     let mut sum = 0_i16;
     for warrior in warriors {
-        sum = sum
-            .wrapping_add(word(&warrior.bytes, 0xfc)?.wrapping_add(word(&warrior.bytes, 0xb6a)?));
+        let record = warrior.record();
+        sum = sum.wrapping_add(
+            record
+                .special_skill(4)?
+                .wrapping_add(record.special_skill_bonus(4)?),
+        );
     }
     Ok(sum / warriors.len() as i16)
 }

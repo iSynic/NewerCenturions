@@ -1,7 +1,9 @@
 //! Death in the original combat execution order.
 use super::{alive, end_turn, finish_battle_wrapper, finish_victory, select_turn};
+use crate::exploration::Operation;
 use crate::{Event, Phase, Presentation, RuleError, ScriptState, Session};
 use centurions_content::Content;
+use centurions_content::records::EnemyRecord;
 use serde::{Deserialize, Serialize};
 
 /// killbody12e8a4 uses showresults -14 for alternate bodies; both NPC
@@ -12,7 +14,10 @@ pub(super) fn enemy_death_feedback(
 ) -> Result<Vec<Event>, RuleError> {
     centurions_content::span(&monster.bytes, 0, 288)?;
     let mut events = vec![];
-    if monster.record().has_creature_category(3) {
+    if monster
+        .record()
+        .has_creature_category(EnemyRecord::MECHANICAL_CATEGORY)
+    {
         events.push(Event::Feedback(
             crate::feedback::NativeFeedback::CombatResult {
                 body,
@@ -64,9 +69,7 @@ pub struct DeathStory {
 
 impl DeathStory {
     pub(crate) fn validate(&self, state: &Session, content: &Content) -> Result<(), RuleError> {
-        let map = state
-            .map(content, state.exploration.as_ref().map_or(0, |p| p.map))
-            .ok_or("combat story map unavailable")?;
+        let map = state.land(content).ok_or("combat story map unavailable")?;
         let mut current = Some(self);
         let mut depth = 0;
         while let Some(story) = current {
@@ -205,10 +208,10 @@ pub(crate) fn retain_last_defeated(state: &mut Session) {
     let mut context = crate::story_health::context(
         &state.warriors,
         state.selected_warrior,
-        state.health_context.as_ref(),
+        state.native_work.health_context.as_ref(),
     );
     context.last_body = body;
-    state.health_context = Some(context);
+    state.native_work.health_context = Some(context);
 }
 
 pub(crate) fn finish_death_story(
@@ -245,7 +248,7 @@ pub(crate) fn finish_death_story(
         finish_action(state, content, story.actor, story.resume_turn)
     } else {
         if !story.direct
-            && let Some(queue) = state.retained_death_queue.as_mut()
+            && let Some(queue) = state.native_work.retained_death_queue.as_mut()
         {
             if let Some(cursor) = story.queue_cursor {
                 queue.cursor = cursor;
@@ -263,7 +266,9 @@ pub(crate) fn finish_death_story(
         state.battle_npc = story.outer_npc;
         state.combat_story = story.parent.map(|parent| *parent);
         state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
-        let mut events = vec![Event::Sound { resource_id: 20 }];
+        let mut events = vec![Event::Sound {
+            resource_id: crate::feedback::BOOTY_SOUND,
+        }];
         events.extend(finish_battle_wrapper(state, content)?);
         Ok(events)
     }
@@ -284,6 +289,21 @@ pub(crate) fn retain_death_parent(state: &mut Session, parent: Option<DeathStory
 }
 
 pub fn continue_death(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+    let mut step = None;
+    run_death_story(state, content, &mut step).map_err(|error| match step {
+        Some((script, opcode, cursor)) => {
+            error.with_context(|| format!("death script {script} opcode {opcode} cursor {cursor}"))
+        }
+        None => error,
+    })
+}
+
+/// `step` names the instruction being executed when an error leaves it.
+fn run_death_story(
+    state: &mut Session,
+    content: &Content,
+    step: &mut Option<(i16, i16, usize)>,
+) -> Result<Vec<Event>, RuleError> {
     retain_last_defeated(state);
     let mut events = vec![];
     if state
@@ -313,14 +333,7 @@ pub fn continue_death(state: &mut Session, content: &Content) -> Result<Vec<Even
     {
         return crate::exploration::run_script(state, content);
     }
-    let map = content
-        .map(
-            state
-                .exploration
-                .as_ref()
-                .map_or(0, |position| position.map),
-        )
-        .unwrap();
+    let map = state.land(content).unwrap();
     if state
         .combat_story
         .as_ref()
@@ -332,16 +345,37 @@ pub fn continue_death(state: &mut Session, content: &Content) -> Result<Vec<Even
     for _ in 0..8 {
         let story = state.combat_story.as_mut().unwrap();
         if story.cursor >= 8 {
+            *step = None;
             events.extend(finish_death_story(state, content)?);
             return Ok(events);
         }
         let record = map.script(story.script)?;
         let (opcode, parameter) =
             centurions_content::records::StoryRecord(&record).instruction(story.cursor)?;
+        *step = Some((story.script, opcode, story.cursor));
+        crate::trace::story(
+            "death",
+            i32::from(story.script),
+            story.cursor,
+            opcode,
+            parameter,
+        );
         story.cursor += 1;
-        match opcode {
-            0 => {}
-            119 | 122 | 123 | 124 | 125 => {
+        match Operation::from_native(opcode) {
+            Operation::NoAction | Operation::Unarmed(_) => {}
+            Operation::ContinueIfMonster => {
+                let combat = state.combat.as_ref().ok_or("death story roster missing")?;
+                if !crate::story_combat::monster_present(combat, parameter)? {
+                    *step = None;
+                    events.extend(finish_death_story(state, content)?);
+                    return Ok(events);
+                }
+            }
+            Operation::EndCombat
+            | Operation::NeutralizeActors
+            | Operation::SetFactionCondition
+            | Operation::SummonActors
+            | Operation::RemoveActorClass => {
                 let (effects, stopped) =
                     crate::story_combat::apply(state, content, opcode, parameter)?;
                 events.extend(effects);
@@ -350,7 +384,7 @@ pub fn continue_death(state: &mut Session, content: &Content) -> Result<Vec<Even
                     return Ok(events);
                 }
             }
-            1 => {
+            Operation::Dialogue => {
                 state.exploration.as_mut().unwrap().presentation = Some(Presentation::Dialogue {
                     id: parameter,
                     text: map.dialogue(parameter)?,
@@ -358,11 +392,13 @@ pub fn continue_death(state: &mut Session, content: &Content) -> Result<Vec<Even
                 events.push(Event::StoryPresented);
                 return Ok(events);
             }
-            9 => events.push(Event::Sound {
+            Operation::Sound => events.push(Event::Sound {
                 resource_id: parameter,
             }),
-            47 => state.flags = crate::story::set_mission_flag(&state.flags, parameter)?,
-            2 => {
+            Operation::SetMissionFlag => {
+                state.flags = crate::story::set_mission_flag(&state.flags, parameter)?
+            }
+            Operation::Battle => {
                 events.extend(crate::exploration::begin_story_battle(
                     state,
                     content,
@@ -379,21 +415,14 @@ pub fn continue_death(state: &mut Session, content: &Content) -> Result<Vec<Even
                 let cursor = story.cursor - 1;
                 story.shared_dispatch = true;
                 story.suspended_script = state.exploration.as_mut().unwrap().script.take();
-                state.exploration.as_mut().unwrap().script = Some(ScriptState {
-                    record,
-                    cursor: cursor as u8,
-                    map_slot: 0,
-                    item_return: false,
-                    scheduled: true,
-                    menu: None,
-                    persist: false,
-                    origin: None,
-                });
+                state.exploration.as_mut().unwrap().script =
+                    Some(ScriptState::scheduled(record, cursor as u8));
                 events.extend(crate::exploration::run_script(state, content)?);
                 return Ok(events);
             }
         }
     }
+    *step = None;
     events.extend(finish_death_story(state, content)?);
     Ok(events)
 }

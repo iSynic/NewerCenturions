@@ -4,12 +4,13 @@ use crate::{
     combat::{
         attack,
         damage::{DamageFlags, DamagePacket, resolve_damage},
-        party_buffs,
+        natural_conditions, party_buffs,
     },
 };
 use attack::AttackResult;
 use centurions_content::records::{
-    AttackPacketMut, Condition, EnemyRecord, EnemyRecordMut, WarriorRecord, WarriorRecordMut,
+    AttackPacketMut, Condition, DamageTargetKind, EnemyRecord, EnemyRecordMut, WarriorRecord,
+    WarriorRecordMut,
 };
 use centurions_content::{Warrior, combat::MonsterRecord, records::ItemDefinition};
 #[allow(clippy::too_many_arguments)]
@@ -32,11 +33,8 @@ pub(super) fn resolve(
     }
     let id = enemy.record().melee_weapon()?;
     let loaded = enemy.record().selected_item()? != 0;
-    if !matches!(
-        enemy.record().natural_attack(index).condition,
-        0 | 1 | 2 | 4 | 5 | 6 | 9 | 10 | 11 | 14 | 17
-    ) || ItemDefinition(weapon).category()? != 2
-        || ItemDefinition(weapon).effect_selector()? != 0
+    if !matches!(enemy.record().natural_attack(index).condition, 0..=17 | 19)
+        || ItemDefinition(weapon).category()? != 2
     {
         return Err(RuleError::Unsupported {
             action: "combat.enemy_melee",
@@ -51,6 +49,17 @@ pub(super) fn resolve(
     if loaded {
         EnemyRecordMut::from_bytes(attacker_bytes).set_selected_item(id);
     }
+    let weapon_condition = if loaded {
+        natural_conditions::admit_weapon_condition(
+            weapon,
+            defender_bytes,
+            DamageTargetKind::Warrior,
+            party_buffs::mind_shield(buffs)?,
+            &mut next,
+        )?
+    } else {
+        None
+    };
     EnemyRecordMut::from_bytes(attacker_bytes).face_towards(attacker_x, target_x);
     let hit = crate::combat::attack::melee_accuracy::enemy_against_warrior(
         &EnemyRecord::from_bytes(attacker_bytes),
@@ -108,8 +117,14 @@ pub(super) fn resolve(
         );
     }
     if reflected {
-        let result =
-            attack::resolve_reflected_attack(attacker_bytes, &packet, index, !loaded, &mut next)?;
+        let result = attack::resolve_reflected_attack(
+            attacker_bytes,
+            &packet,
+            index,
+            !loaded,
+            weapon_condition,
+            &mut next,
+        )?;
         *warrior = victim;
         *enemy = attacker;
         *random = next;
@@ -158,7 +173,15 @@ pub(super) fn resolve(
             damage = adjusted;
             sounds.push(-694);
         }
+        if let Some(condition) = weapon_condition {
+            feedback = Some(natural_conditions::apply_weapon_condition(
+                defender_bytes,
+                DamageTargetKind::Warrior,
+                condition,
+            )?);
+        }
         if let Some(natural) = natural {
+            natural.credit_attacker(attacker_bytes)?;
             feedback = natural.feedback;
             damage = damage.wrapping_add(natural.extra_damage);
         }

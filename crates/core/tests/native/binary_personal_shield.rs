@@ -154,8 +154,8 @@ fn profile_gates_and_manual_and_automatic_equipment_match_native_records() {
                                 .unwrap();
                         state.warriors = warriors.clone();
                         state.ammunition = stock(before);
-                        state.ammunition_work = work(before);
-                        state.inventory_record = Some(InventoryRecord(
+                        state.native_work.ammunition_work = work(before);
+                        state.native_work.inventory_record = Some(InventoryRecord(
                             before.bytes("selected_record").try_into().unwrap(),
                         ));
                         state.random = actual;
@@ -180,7 +180,7 @@ fn profile_gates_and_manual_and_automatic_equipment_match_native_records() {
                             .collect();
                         assert_eq!(events, expected);
                         assert_eq!(state.ammunition, stock(after));
-                        assert_eq!(state.ammunition_work, work(after));
+                        assert_eq!(state.native_work.ammunition_work, work(after));
                         assert_eq!(state.random, random(after));
                         warriors = state.warriors.clone();
                         assert_party(&warriors, after);

@@ -85,8 +85,8 @@ fn editor_scan_choices_match_original_records_and_ordered_sounds() {
         let mut state = support::mission_session(&content);
         state.warriors[0] = Warrior::read(&case.bytes("before")).unwrap();
         let packet = &fixture["attack_packets"][case["case"].as_str().unwrap()];
-        state.attack_packet = Some(packet.bytes("before"));
-        state.psi_memory = Some(packet.bytes("memory_before"));
+        state.native_work.attack_packet = Some(packet.bytes("before"));
+        state.native_work.psi_memory = Some(packet.bytes("memory_before"));
         let before = state.clone();
         let controls = serde_json::from_value::<Vec<u16>>(case["controls"].clone()).unwrap();
         let events = apply(
@@ -101,8 +101,11 @@ fn editor_scan_choices_match_original_records_and_ordered_sounds() {
         support::native_expect! {
             bytes &state.warriors[0].bytes => &case.bytes("after"), case["case"].as_str().unwrap();
         };
-        assert_eq!(state.attack_packet, Some(packet.bytes("after")));
-        assert_eq!(state.psi_memory, Some(packet.bytes("memory_after")));
+        assert_eq!(state.native_work.attack_packet, Some(packet.bytes("after")));
+        assert_eq!(
+            state.native_work.psi_memory,
+            Some(packet.bytes("memory_after"))
+        );
         assert_eq!(state.random, before.random);
         assert_eq!(
             (state.library_random_seed, state.library_random_draws),

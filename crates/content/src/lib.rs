@@ -11,6 +11,7 @@ pub mod installation;
 pub mod mission;
 pub mod native_text;
 pub mod records;
+pub mod tile_sets;
 pub mod ui;
 
 pub const WARRIOR_BYTES: usize = 0xc42;
@@ -243,6 +244,20 @@ impl Content {
             .get(usize::try_from(index).ok()?)
     }
 
+    /// A map under the tile set its live region table names; see ScenarioContent::land.
+    pub fn land_at(
+        &self,
+        name: Option<&str>,
+        level: u8,
+        index: i32,
+        terrain: u8,
+    ) -> Option<&mission::OpeningMission> {
+        let current = self.scenario.as_ref()?;
+        current
+            .selection(name.unwrap_or(&current.name), level)?
+            .land(index, terrain)
+    }
+
     pub fn map(&self, index: i32) -> Option<&mission::OpeningMission> {
         self.scenario
             .as_ref()?
@@ -309,6 +324,9 @@ impl Content {
         let item_cache = item_cache
             .ok_or_else(|| ContentError::Invalid("missing original item cache".into()))?;
         let mut catalog = std::collections::BTreeMap::new();
+        let tile_sets = std::sync::Arc::new(tile_sets::read_all(|path| {
+            read_fork(originals, &manifest.forks, path)
+        }));
         for fork in manifest
             .forks
             .iter()
@@ -328,6 +346,7 @@ impl Content {
                 |path| read_fork(originals, &manifest.forks, path),
                 parts[0],
                 level,
+                tile_sets.clone(),
             )?;
             let mut tables = (*selected.maps[0].shared).clone();
             tables.item_cache = item_cache.clone();

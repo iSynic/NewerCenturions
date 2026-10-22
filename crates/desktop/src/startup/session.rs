@@ -77,6 +77,7 @@ pub(crate) async fn prepare() -> Ready {
         _ => application::Screen::Logo,
     };
     let mut application = application::Application::new(screen);
+    application.trace = audit_log.is_some();
     if let Ok(content) = &loaded
         && let Err(error) = application.load_roster(
             &option("--roster-path")

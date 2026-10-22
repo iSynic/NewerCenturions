@@ -1,6 +1,6 @@
 use crate::{RuleError, combat};
 use centurions_content::records::{InventorySlotsMut, ItemDefinition};
-use centurions_content::{Content, InventoryRecord, Warrior, span};
+use centurions_content::{Content, InventoryRecord, WARRIOR_BYTES, Warrior, span};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Collection {
@@ -17,7 +17,7 @@ pub fn collect_story_item(
     content: &Content,
     race_movement: i8,
 ) -> Result<Collection, RuleError> {
-    span(&warrior.bytes, 0, 3138)?;
+    span(&warrior.bytes, 0, WARRIOR_BYTES)?;
     let definition = content
         .items
         .get(usize::from(item.id().unsigned_abs()))

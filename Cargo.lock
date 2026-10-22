@@ -108,41 +108,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "centurions-translated"
-version = "0.2.0"
-dependencies = [
- "centurions-content",
- "centurions-core",
- "centurions-translated-application",
- "centurions-translated-gameplay",
- "centurions-translated-system",
-]
-
-[[package]]
-name = "centurions-translated-application"
-version = "0.2.0"
-dependencies = [
- "centurions-content",
- "centurions-core",
-]
-
-[[package]]
-name = "centurions-translated-gameplay"
-version = "0.2.0"
-dependencies = [
- "centurions-content",
- "centurions-core",
-]
-
-[[package]]
-name = "centurions-translated-system"
-version = "0.2.0"
-dependencies = [
- "centurions-content",
- "centurions-core",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

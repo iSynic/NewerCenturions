@@ -9,7 +9,7 @@ fn accepted_stage_restoration_matches_complete_original_warriors() {
         let parameter = case.n::<i16>("parameter");
         let before = case.bytes("before");
         let warriors: Vec<_> = before
-            .as_chunks::<3138>()
+            .as_chunks::<WARRIOR_BYTES>()
             .0
             .iter()
             .map(|record| Warrior {

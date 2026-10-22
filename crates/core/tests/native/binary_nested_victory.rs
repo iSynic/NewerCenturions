@@ -64,6 +64,7 @@ fn controlled_battle(
 
 fn backing(state: &Session) -> Vec<u8> {
     state
+        .native_work
         .npc_backing
         .slots
         .iter()
@@ -104,7 +105,10 @@ fn nested_battle_rewards_consume_count_once_and_preserve_backing_records() {
         );
         position.x = 77;
         position.y = 9;
-        position.script = Some(support::script_state(caller.bytes("script55"), 0));
+        position.script = Some(centurions_core::ScriptState::scheduled(
+            caller.bytes("script55"),
+            0,
+        ));
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
             text: String::new(),
@@ -191,7 +195,7 @@ fn nested_battle_rewards_consume_count_once_and_preserve_backing_records() {
         assert_eq!(count, case.n::<usize>("enemy_count_after"));
         assert_eq!(body(&state, &content), case.bytes("body_after"));
         assert_eq!(backing(&state), case.bytes("records_after"));
-        let queue = state.retained_death_queue.as_ref().unwrap();
+        let queue = state.native_work.retained_death_queue.as_ref().unwrap();
         assert_eq!(queue.count, case.n::<usize>("queue_count_after"));
         let bytes: Vec<_> = queue
             .entries

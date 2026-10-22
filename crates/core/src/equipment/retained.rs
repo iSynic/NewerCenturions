@@ -147,7 +147,7 @@ impl Operation<'_> {
             if remaining == 0 {
                 return Err(RuleError::Unsupported {
                     action: "equipment.processing",
-                    dependency: "the caller's bounded instruction/loop budget is exhausted",
+                    dependency: "equipment wear exceeded the reconstruction loop bound",
                 });
             }
             remaining -= 1;
@@ -188,7 +188,7 @@ impl Operation<'_> {
                     if remaining == 0 {
                         return Err(RuleError::Unsupported {
                             action: "equipment.processing",
-                            dependency: "the caller's bounded instruction/loop budget is exhausted",
+                            dependency: "equipment wear exceeded the reconstruction loop bound",
                         });
                     }
                     remaining -= 1;

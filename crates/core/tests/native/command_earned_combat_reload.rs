@@ -7,16 +7,16 @@ fn input(fixture: &Value, case: &Value) -> Session {
     .unwrap();
     if case["kind"] == "normalized_diagonal_attempt" {
         // Native display normalization reaches Getup's full item refresh before this command.
-        state.ammunition_work.item = Some(case["before_command"].bytes("item_work"));
+        state.native_work.ammunition_work.item = Some(case["before_command"].bytes("item_work"));
     }
     state
 }
 fn project(state: &mut Session, snapshot: &Value, baseline: &Value) {
     snapshots::earned_projection(state, snapshot, baseline);
     if snapshot["seed"] != baseline["seed"] || snapshot["ammunition"] != baseline["ammunition"] {
-        state.ammunition_work.item = Some(snapshot.bytes("item_work"));
-        state.ammunition_work.weapon = Some(snapshot.bytes("weapon_work"));
-        state.ammunition_work.ammo = Some(snapshot.bytes("ammo_work"));
+        state.native_work.ammunition_work.item = Some(snapshot.bytes("item_work"));
+        state.native_work.ammunition_work.weapon = Some(snapshot.bytes("weapon_work"));
+        state.native_work.ammunition_work.ammo = Some(snapshot.bytes("ammo_work"));
     }
 }
 
@@ -30,7 +30,7 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
     let commands = receipt.array("commands");
     let ordered_events = receipt.array("ordered_events");
     assert_eq!(ordered_events.len(), commands.len());
-    let mut state: Session = serde_json::from_value(receipt["starting_session"].clone()).unwrap();
+    let mut state = native_common::earned_start(&receipt);
     state.validate(content).unwrap();
     state = checkpoint(&state, content, &format!("prefix-start-{index}"));
     for (step, (command, recorded)) in commands.iter().zip(ordered_events).enumerate() {
@@ -88,12 +88,18 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
             state = checkpoint(&state, content, &format!("prefix-medical-{index}"));
         }
     }
+    native_common::earned_rejoin(&mut state, &receipt);
     let mut expected = input(fixture, case);
     // This earned battle is still inside timeclick's regional newland call.
     expected.movement_continuation =
         Some(centurions_core::MovementContinuation::RegionalReturn { header: false });
     // The recorded prefix defeats body16; native killbody retains that body.
-    expected.health_context.as_mut().unwrap().last_body = 16;
+    expected
+        .native_work
+        .health_context
+        .as_mut()
+        .unwrap()
+        .last_body = 16;
     // The seed12 receipt's last full pair writer is its real Shoot at command145.
     let mut weapon = content.items[165].clone();
     let ammo = content.items[280].clone();
@@ -103,9 +109,9 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
             weapon[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
         }
     }
-    expected.ammunition_work.weapon = Some(weapon);
-    expected.ammunition_work.ammo = Some(ammo);
-    expected.inventory_record = native_common::earned_inventory_work(index);
+    expected.native_work.ammunition_work.weapon = Some(weapon);
+    expected.native_work.ammunition_work.ammo = Some(ammo);
+    expected.native_work.inventory_record = native_common::earned_inventory_work(index);
     expected.combat.as_mut().unwrap().turn_origin =
         snapshots::recorded_turn_origin(&receipt, current_combat(&expected));
     support::same_captured_session(&state, &expected);

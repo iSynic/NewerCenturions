@@ -10,14 +10,7 @@ pub(crate) fn active_map<'a>(
     state: &Session,
     content: &'a Content,
 ) -> Result<&'a OpeningMission, RuleError> {
-    content
-        .map_at(
-            state.mission.as_deref(),
-            state.scenario_level,
-            state
-                .exploration
-                .as_ref()
-                .map_or(0, |position| position.map),
-        )
+    state
+        .land(content)
         .ok_or_else(|| RuleError::Invalid("active map unavailable".into()))
 }

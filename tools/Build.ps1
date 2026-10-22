@@ -24,7 +24,6 @@ try {
         if ($LASTEXITCODE) { throw 'Parser tests failed' }
         python -m unittest discover -s tests/python -p test_public.py
         if ($LASTEXITCODE) { throw 'Public source checks failed' }
-        python -m unittest discover -s tests/python -p test_translation_plan.py
     }
     if ($LASTEXITCODE) { throw 'Parser tests failed' }
     cargo fmt --check

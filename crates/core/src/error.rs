@@ -18,6 +18,12 @@ pub enum RuleError {
         action: &'static str,
         dependency: &'static str,
     },
+    /// Runtime detail attached to a diagnostic refusal by its owning interpreter.
+    #[error("{source} [{context}]")]
+    Context {
+        context: String,
+        source: Box<RuleError>,
+    },
     #[error("invalid session: {0}")]
     Invalid(String),
     #[error("{0}")]
@@ -26,6 +32,29 @@ pub enum RuleError {
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Json(#[from] serde_json::Error),
+}
+
+impl RuleError {
+    /// Attaches runtime detail to an unsupported-rule diagnostic. Native
+    /// refusals and other errors pass through unchanged so callers that
+    /// distinguish them keep matching the same variant.
+    pub fn with_context(self, context: impl FnOnce() -> String) -> Self {
+        match self {
+            Self::Unsupported { .. } | Self::Context { .. } => Self::Context {
+                context: context(),
+                source: Box::new(self),
+            },
+            error => error,
+        }
+    }
+
+    /// The diagnostic beneath any attached context.
+    pub fn root(&self) -> &Self {
+        match self {
+            Self::Context { source, .. } => source.root(),
+            error => error,
+        }
+    }
 }
 
 impl From<String> for RuleError {

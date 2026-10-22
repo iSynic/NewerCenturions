@@ -4,7 +4,8 @@ use crate::{
     Event, MenuContinuation, Presentation, RuleError, ScriptState, Session, story, typed_encounter,
 };
 use centurions_content::mission::OpeningMission;
-use centurions_content::{Content, ContentError, span, word};
+use centurions_content::records::{EncounterMenu, StoryRecordMut};
+use centurions_content::{Content, ContentError, span};
 
 pub(super) fn present_menu(
     map: &OpeningMission,
@@ -20,36 +21,38 @@ pub(super) fn present_menu(
         id as usize * story::MENU_RECORD_BYTES,
         story::MENU_RECORD_BYTES,
     )?;
+    let record = EncounterMenu(menu);
     if script.menu.is_none() {
         script.menu = Some(MenuContinuation {
             id,
-            remaining: i16::from(menu[101] as i8),
+            remaining: i16::from(record.initial_remaining()),
             original: script.record.clone(),
             typed: false,
+            eliminated: 0,
         });
+        script.caller_action = Some(i16::from(script.cursor).wrapping_sub(1));
     }
     let continuation = script.menu.as_mut().unwrap();
     let before = continuation.remaining;
-    if menu[96] as i8 != -4 {
+    if record.first_selector() != -4 {
         continuation.remaining = before.wrapping_sub(1);
     }
-    if menu[96] as i8 == -4 || before == 0 {
-        script.record[8..40].copy_from_slice(&story::dispatch_menu_branch(menu, 4)?);
+    if record.first_selector() == -4 || before == 0 {
+        StoryRecordMut(&mut script.record).write_actions(&story::dispatch_menu_branch(menu, 4)?);
         script.cursor = 0;
         return Ok(None);
     }
     let labels = (0..4)
         .map(|i| {
-            let label = span(menu, 106 + i * 80, 80)?;
             Ok(encoding_rs::MACINTOSH
-                .decode(span(label, 1, usize::from(label[0]))?)
+                .decode(record.label(i)?)
                 .0
                 .into_owned())
         })
         .collect::<Result<Vec<_>, ContentError>>()?;
     Ok(Some(Presentation::Menu {
         id,
-        text: map.dialogue(word(menu, 104)?.wrapping_neg())?,
+        text: map.dialogue(record.dialogue()?.wrapping_neg())?,
         labels,
     }))
 }
@@ -74,7 +77,9 @@ pub(super) fn present_typed(
             remaining: typed_encounter::attempt_count(record)?,
             original: script.record.clone(),
             typed: true,
+            eliminated: 0,
         });
+        script.caller_action = Some(i16::from(script.cursor).wrapping_sub(1));
     }
     Ok(Presentation::Typed {
         id,

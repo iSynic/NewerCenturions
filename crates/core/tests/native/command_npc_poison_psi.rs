@@ -68,7 +68,7 @@ fn authored_healer_turn_returns_through_command_and_saved_suffix() {
     let receipt = support::fixture("npc-natural-spell-audio.json");
     for case in receipt.array("cases") {
         let mut state: Session = serde_json::from_value(receipt["input"].clone()).unwrap();
-        state.weapon_work.natural_attack_index = Some(case.n("index"));
+        state.native_work.weapon_work.natural_attack_index = Some(case.n("index"));
         state
             .combat
             .as_mut()
@@ -97,7 +97,7 @@ fn authored_healer_turn_returns_through_command_and_saved_suffix() {
             save(&path, &before, &content).unwrap();
             let mut document: Value =
                 serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            assert_eq!(document["schema_version"], 13);
+            assert_eq!(document["schema_version"], 15);
             document["schema_version"] = 12.into();
             std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
             assert!(load(&path, &content).is_err());
@@ -111,6 +111,8 @@ fn authored_healer_turn_returns_through_command_and_saved_suffix() {
                 "unknown legacy audio context changed state"
             );
             document["schema_version"] = 13.into();
+            std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+            assert_eq!(load(&path, &content).unwrap(), unchanged);
             document["session"]["weapon_work"]["natural_attack_index"] = (-1).into();
             std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
             assert!(load(&path, &content).is_err());
@@ -118,7 +120,7 @@ fn authored_healer_turn_returns_through_command_and_saved_suffix() {
         }
     }
     let mut state: Session = serde_json::from_value(receipt["input"].clone()).unwrap();
-    state.weapon_work.natural_attack_index = Some(5);
+    state.native_work.weapon_work.natural_attack_index = Some(5);
     let combat = state.combat.as_mut().unwrap();
     combat.map = centurions_core::combat::footprint::restore_body(combat, 10).unwrap();
     let point = (combat.squad.positions[0].0 - 1, combat.squad.positions[0].1);
@@ -166,8 +168,8 @@ fn normalized_positions(f: &Value, snapshot: &Value, key: &str) -> Vec<(i16, i16
 
 fn project_native(state: &mut Session, f: &Value, snapshot: &Value) {
     snapshots::npc_projection(state, f, snapshot, &f["cases"][0]["before"]);
-    state.weapon_work = snapshots::weapon_work(&|key| bytes(f, &snapshot[key]));
-    state.combat.as_mut().unwrap().weapon_work = state.weapon_work;
+    state.native_work.weapon_work = snapshots::weapon_work(&|key| bytes(f, &snapshot[key]));
+    state.combat.as_mut().unwrap().weapon_work = state.native_work.weapon_work;
 }
 
 fn initial(f: &Value, content: &Content) -> Session {

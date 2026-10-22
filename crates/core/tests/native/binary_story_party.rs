@@ -56,7 +56,7 @@ fn party_selection_matches_original_masks_complete_records_and_randomness() {
         let mut state = support::mission_session(&content);
         state.warriors = warriors(&case["before"]);
         state.random = RandomState::new(12);
-        state.party_mask = case.words("mask_before").try_into().unwrap();
+        state.native_work.party_mask = case.words("mask_before").try_into().unwrap();
         let mut record = vec![0; 42];
         record[10..12].copy_from_slice(&30_i16.to_be_bytes());
         record[12..14].copy_from_slice(&1_i16.to_be_bytes());
@@ -65,9 +65,15 @@ fn party_selection_matches_original_masks_complete_records_and_randomness() {
             id: 0,
             text: String::new(),
         });
-        position.script = Some(support::script_state(record, case.n::<u8>("action")));
+        position.script = Some(centurions_core::ScriptState::scheduled(
+            record,
+            case.n::<u8>("action"),
+        ));
         apply(Command::Continue, &mut state, &content).unwrap();
-        assert_eq!(state.party_mask.as_slice(), case.words("mask_after"));
+        assert_eq!(
+            state.native_work.party_mask.as_slice(),
+            case.words("mask_after")
+        );
         assert_eq!(state.random.seed, case.n::<u32>("seed"));
         assert_eq!(state.random.draws, case.n::<u64>("draws"));
         assert_eq!(flatten(&state.warriors), case.bytes("before"));

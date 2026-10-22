@@ -1,7 +1,8 @@
 //! Loot for maintained exploration.
 use super::{continue_with_spells, needs_spell_confirmation};
 use crate::{Event, Presentation, RuleError, Session, insert, items, story_collection};
-use centurions_content::{Content, InventoryRecord, span};
+use centurions_content::records::TreasureTable;
+use centurions_content::{Content, InventoryRecord};
 
 pub fn take_loot(
     state: &mut Session,
@@ -24,7 +25,7 @@ pub fn take_loot(
         .clone();
     state.load_item_work(content, item.id())?;
     let mut effects = Vec::new();
-    if (200..400).contains(&item.id()) && item.0[10] == 26 {
+    if (200..400).contains(&item.id()) && item.category_code() == 26 {
         effects = items::add_ammunition(state, content, &item)?;
     } else if let Some(index) = warrior {
         let recipient = state
@@ -34,23 +35,31 @@ pub fn take_loot(
         let stacked =
             item.id() == 700 && recipient.inventory()?.iter().any(|owned| owned.id() == 700);
         let race = recipient.record().race()?.wrapping_sub(1);
-        let movement = *content
-            .map(state.exploration.as_ref().unwrap().map)
-            .unwrap()
-            .combat
-            .as_ref()
-            .unwrap()
-            .race_moves
-            .get(race as usize)
-            .ok_or_else(|| RuleError::Invalid("recipient race unavailable".into()))?;
-        let collected = if item.0[10] != 23 {
+        let movement = *crate::Session::land_in(
+            content,
+            state.mission.as_deref(),
+            state.scenario_level,
+            state.exploration.as_ref(),
+        )
+        .unwrap()
+        .combat
+        .as_ref()
+        .unwrap()
+        .race_moves
+        .get(race as usize)
+        .ok_or_else(|| RuleError::Invalid("recipient race unavailable".into()))?;
+        let collected = if item.category_code() != 23 {
             crate::equipment::collect_item(
                 recipient,
                 &item,
                 content,
-                content
-                    .map(state.exploration.as_ref().unwrap().map)
-                    .unwrap(),
+                crate::Session::land_in(
+                    content,
+                    state.mission.as_deref(),
+                    state.scenario_level,
+                    state.exploration.as_ref(),
+                )
+                .unwrap(),
             )?
         } else {
             story_collection::collect_story_item(recipient, &item, content, movement)?
@@ -74,7 +83,7 @@ pub fn take_loot(
         }
         if !stacked && let Some(last) = recipient.inventory()?.last() {
             let id = last.id();
-            state.inventory_record = Some(item.clone());
+            state.native_work.inventory_record = Some(item.clone());
             state.load_item_work(content, id)?;
         }
     } else {
@@ -83,7 +92,7 @@ pub fn take_loot(
             return Ok(effects);
         }
     }
-    state.booty_items[slot].0[..2].fill(0);
+    state.booty_items[slot].clear_id();
     if let Some(limit) = &mut state.loot_limit
         && *limit != 0
     {
@@ -113,7 +122,16 @@ pub(super) fn present_treasure(
     let map = state
         .map(content, position.map)
         .ok_or("treasure map unavailable")?;
-    let record = span(&map.treasure, id as usize * 88, 88)?;
+    let record = TreasureTable(&map.treasure).record(id as usize)?.to_vec();
+    present_treasure_record(state, content, &record)
+}
+
+/// booty(1, 0) on a treasure record already in the booty buffer at 0x44331c.
+pub(super) fn present_treasure_record(
+    state: &mut Session,
+    content: &Content,
+    record: &[u8],
+) -> Result<Vec<Event>, RuleError> {
     let prepared = crate::story_treasure::prepare(
         &state.warriors,
         record,
@@ -124,11 +142,16 @@ pub(super) fn present_treasure(
     state.warriors = prepared.warriors;
     state.party_currency = state.party_currency.wrapping_add(prepared.credits);
     if let Some(record) = prepared.inventory_record {
-        state.inventory_record = Some(record);
+        state.native_work.inventory_record = Some(record);
     }
     state.booty_items.fill(InventoryRecord([0; 22]));
     for (slot, item) in prepared.items.into_iter().enumerate() {
-        state.loaded_item_field32 = Some(state.ammunition_work.load_item(content, item.id())?);
+        state.native_work.loaded_item_field32 = Some(
+            state
+                .native_work
+                .ammunition_work
+                .load_item(content, item.id())?,
+        );
         state.booty_items[slot] = item;
     }
     state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);

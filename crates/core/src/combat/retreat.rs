@@ -75,9 +75,9 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
                     silent: true,
                     warnings: false,
                 },
-                &state.ammunition_work,
+                &state.native_work.ammunition_work,
                 &mut state.random,
-                state.inventory_record.as_ref(),
+                state.native_work.inventory_record.as_ref(),
             )?;
             events.extend(crate::ammunition::commit_result(state, member, result)?);
         }
@@ -88,9 +88,9 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
     }
     state.retain_npcs();
     let combat = state.combat.take().ok_or("retreat combat missing")?;
-    state.attack_packet = combat.attack_packet;
-    state.attack_identity = combat.attack_identity;
-    state.weapon_work = combat.weapon_work;
+    state.native_work.attack_packet = combat.attack_packet;
+    state.native_work.attack_identity = combat.attack_identity;
+    state.native_work.weapon_work = combat.weapon_work;
     if !state
         .combat_story
         .as_ref()
@@ -148,16 +148,7 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
             script.cursor = 0;
             script.menu = None;
         } else {
-            position.script = Some(ScriptState {
-                record,
-                cursor: 0,
-                map_slot: 0,
-                item_return: false,
-                scheduled: true,
-                menu: None,
-                persist: false,
-                origin: None,
-            });
+            position.script = Some(ScriptState::scheduled(record, 0));
         }
     }
     events.push(Event::BattleEnded { victory: false });

@@ -23,10 +23,19 @@ evidence; a structural refactor does not improve their qualification by itself.
 | Input and command presentation | desktop `input`, `targeting`, `view_actions`, `command_result` | the shared commands |
 | Native dialogs, storage discovery, windows and audio | desktop platform services | operating-system and presentation services |
 
-Desktop and replay both enter `apply`. Core and desktop do not depend on the
-complete translated registry. The composition crate combines expanded
-translations in separate production libraries; its compatibility entry points
-are not the ordinary gameplay interface. Their optimizer settings remain separate.
+Desktop and replay both enter `apply`. The preserved reference layer is a
+separate, private Cargo workspace under `archive/`, outside the public source:
+
+- **`centurions-reference`** (`archive/crates/reference`) holds the recovered
+  execution bodies (`recovered_*`) and the routine catalog (`reconstruction`). It
+  depends on core; core and desktop do not depend on it.
+- **The translated crates** (`archive/crates/translated*`) build on it. The
+  composition crate combines the expanded translations in separate production
+  libraries. Its compatibility entry points are not the ordinary gameplay interface.
+
+Tests that compare against recovered code live in `archive/crates/reference/tests` and
+reuse core's shared test helpers through `#[path]`. The archive workspace keeps the
+reference and translated crates' own optimizer settings.
 
 Public imports are forwarded from the original module paths. Internal helpers
 shared by extracted sibling modules are visible only to their owning subtree.
@@ -87,8 +96,10 @@ The following boundaries are intended editing surfaces:
 | Equip/transfer/buy/sell | equipment `transactions`, shop `transactions` | `ItemDefinition`, `ShopRecord`, equipment `record_rules` |
 | Enhanced shop stock | shop `generated_stock` | named instance modifiers and bounded RNG draws |
 | Script operation and resumption | exploration `script_execution`, `ScriptState::restart_from` | named `Operation`, `StoryRecord`, operation-specific EXTRA views |
+| Death and battle-round stories | runtime `death`, combat `round_stories` | the same `Operation` names, each interpreter's own subset |
+| Retained native work globals | state `NativeWorkContext` | each field documents its global, reason and consumers |
 | Upgrade selection and drawing | desktop editor `controls`, warrior upgrade view | original DITL IDs and base/derived/purchase fields |
-| Save acceptance and restoration | persistence `compatibility::restore` | ordered compatibility steps for versions 1-12 |
+| Save acceptance and restoration | persistence `compatibility::restore` | ordered compatibility steps for versions 1-14 |
 
 Native arithmetic is still implemented by bounded routines such as firearm
 resolution, turn initialization and equipment record rules. Their purpose is to
@@ -138,9 +149,9 @@ ordering and damage attribution. Do not unify these paths based on similarity.
 
 Attack estimates are a different original algorithm from actual resolution.
 They consume no RNG and change no session state. The desktop receives the same
-visible drawing operations through the existing `DetailPlan` interface; its
-estimate memory contains only compatibility receipts of the three retained
-definitions, encoded after calculation; it is never read to execute rules. The old memory-based estimate is retained
+visible drawing operations through `item_display::output::PanelPlan`, which also
+carries the three retained definitions after calculation; they are never read
+to execute rules. The old memory-based estimate is retained
 only in the comparison harness and reference implementation. Passing that
 comparison establishes reconstruction equivalence, not a new native receipt.
 
@@ -185,9 +196,22 @@ each child screen.
 **Saves:** keep serialized field/variant names, defaults and order stable during a
 structural refactor. The structural refactor retained schema 12 and readers for 1–11. A subsequent
 original-instruction correction introduced schema 13 for the retained natural-attack
-index, with readers for 1–12 and explicit unknown legacy context. Preserve that
-versioned boundary and the existing validation/rejection rules. Newly required persistence belongs in a separate, explicitly
-versioned feature change. A loaded session is validated before replacement;
+index, with readers for 1–12 and explicit unknown legacy context. Schema 14 moved
+`party_mask` and `health_context` into `NativeWorkContext`, changing only their
+saved key order, with readers for 1–13. Schema 15 added the random-battles flag
+`random_battles` (BYTE402f42), with readers for 1–14 defaulting it to enabled. It also carries
+`saved_position` (opcode 70), omitted while zero, and two script fields omitted
+while unset: `caller_action` (newland's encounter-caller action, used by opcode 34)
+and `chained` (an event started by opcode 20 keeps the party in place), and the
+coordinate-display word `coordinates_hidden` (WORD4354fe, opcode 71), omitted while
+zero and read from original saves. A running encounter's `eliminated` branches
+(opcode 44) are omitted while zero, and the multi-member `PartyPick` presentation
+(opcodes 14 and -14) is new. The camping flag
+(WORD4394b4) is deliberately not saved, as in the original save, so a loaded
+session allows camping. Preserve that versioned boundary and the
+existing validation/rejection rules. Newly required persistence belongs in a separate, explicitly
+versioned feature change. `NativeWorkContext` is flattened into `Session`, so its
+saved keys keep their names. A loaded session is validated before replacement;
 original assets and imported saves remain read-only.
 
 **Controls:** drawing and hit testing consume the same Control records and
@@ -214,11 +238,13 @@ creation deliberately leaves bytes 11/12 intact, and generated shop stock copies
 only the original installitem suffix, not the generated ammunition or quantity.
 
 Character information and inventory row/detail presentation calculate fields
-directly, then emit original text and drawing operations. `DetailPlan` and
-`ItemUiEffect` remain compatibility output types. Their address-labelled numeric
-receipts are not a memory executor. Attack estimates additionally retain three
-definition receipts for existing consumers. Private scratch writes and simulated
-Toolbox observations are not part of the desktop rendering contract.
+directly, then emit original text and drawing operations. Inventory panels and
+estimates emit `item_display::output` effects; `recovered_detail_ui::legacy_plan`
+and the effect conversions express them as `DetailPlan` and `ItemUiEffect` for
+reference comparison, including the three address-labelled definition receipts.
+Their address-labelled numeric receipts are not a memory executor. Private
+scratch writes and simulated Toolbox observations are not part of the desktop
+rendering contract.
 
 The expanded translations and recovered execution bodies remain available for
 reference comparisons. Do not make ordinary commands depend on them. Random
@@ -271,7 +297,103 @@ policy and live acceptance retain their existing qualifications.
   constraint. Use maintainer-facing names for ordinary workflow code.
 - Preserve independent native cases. Reuse command/replay groups for critical
   changes and keep all test helpers under test directories. Count verification
-  code in the 25% ceiling, including when production code becomes smaller.
+  code under the maintained or reference layer it serves (see `docs/building.md`).
+  Maintained test lines (excluding native-evidence comparisons) are ratcheted and
+  may not grow; their ratio against the 25% target is reported.
+
+## Diagnosing a failure
+
+Replay the commands that reach the failure with the opt-in trace:
+
+```sh
+centurions-tools replay . commands.json --from save.json --trace
+```
+
+- `--from` starts from a saved session, so a player's save can be replayed
+  directly. Without it, replay starts from a new game.
+- Each command prints its trace entries, then its events. The final session
+  follows as JSON. Trace entries are:
+  - `draw`: every RNG draw, labelled with the call site, its bound or range, and
+    the result;
+  - `story`: story instructions, with interpreter, script, cursor and opcode;
+  - `damage`: damage channels after rolling and after every defense;
+  - `declined`: original-behavior returns that produced nothing.
+- Errors carry context. Unsupported story operations name the script, cursor and
+  opcode; occupied-cell refusals name the failing predicate.
+
+The three examples below were traced from a saved state of the first Thunder
+battle (assisted campaign route 12/0, before command 10). Two of them use
+constructed states, which are labelled. Call-site line numbers change as code
+moves; follow the function names.
+
+**Occupied-cell reload refusal.** Warrior 4 is in firing mode beside the enemy,
+with an empty magazine and no reserves. It moves into the enemy's cell.
+
+- `Command::Move` reaches `combat::movement::move_warrior`. Moving into an
+  opposing occupied cell in firing mode calls
+  `occupied_cell::reload_at_occupied_cell`.
+- Eligibility failures there return `Unsupported` with the context
+  `occupied cell {target}: {predicate}`.
+- An eligible warrior with rounds left prepares its burst with
+  `firearm::prepare`. Every eligible warrior then refills through
+  `ammunition::refit_with_record`.
+- When nothing can be loaded, the original refusal is `Event::Sound { ERROR_SOUND }`
+  then `Event::CollectionRejected { OUT_OF_AMMUNITION_WARNING }`, with automatic
+  mode cleared. The trace shows no draws: the refusal consumes no RNG.
+
+```text
+[{"Sound":{"resource_id":6000}},{"CollectionRejected":{"warning":25}}]
+```
+
+**An enemy firearm damage number.** This is a constructed state: the battle's
+natural attacker is replaced by Thunder MD 7 (firearm 70), keeping the replaced
+enemy's 26/26 health because battle setup normally rolls it. After five
+`EndTurn`s, `RunEnemyTurn` acts for body 10.
+
+- `runtime::actor_turns` passes `native_work.loaded_item_field32` as the
+  work-item context. That is the last item a *player* loaded, and
+  `enemy_weapons::ammo_id` uses it to choose the enemy's ammunition.
+- `runtime::enemy_actions` draws against `firearm_chance` (`enemy_actions.rs`
+  draw, result 13 against bound 100) and calls `runtime::enemy_fire`.
+- `spells::selection` draws the target area. For each of the three shots,
+  `enemy_fire` and `firearm::resolution` draw the shot's rolls.
+- `damage::resolve_damage_with_amount` runs `roll_damage`, `filter_armor`,
+  `absorb_shield`, `absorb_armor` and `apply_resistances`. Its `damage` entry
+  shows every channel after rolling and after defenses. In this replay all of
+  them are zero.
+
+```text
+{"kind":"draw","site":"crates/core/src/combat/runtime/enemy_actions.rs:131","call":{"bound":100},"result":13}
+{"kind":"draw","site":"crates/core/src/combat/spells/selection.rs:263","call":{"bound":7},"result":7}
+{"kind":"draw","site":"crates/core/src/combat/spells/selection.rs:371","call":{"bound":11},"result":9}
+...
+{"kind":"draw","site":"crates/core/src/combat/runtime/enemy_fire.rs:186","call":{"range":[0,0]},"result":0}
+{"kind":"draw","site":"crates/core/src/combat/firearm/resolution.rs:33","call":{"bound":7},"result":6}
+{"kind":"draw","site":"crates/core/src/combat/firearm/resolution.rs:40","call":{"bound":100},"result":77}
+...
+{"kind":"damage","rolled":[0,0,0,0,0,0,0,0,0],"components":[0,0,0,0,0,0,0,0,0],"total":0}
+[{"Sound":{"resource_id":390}},{"AttackResolved":{"attacker":10,"target":2,"damage":0,"defeated":false}}, ...]
+```
+
+**A Continue that does nothing.** This is a constructed state: messages are
+pending during the combat phase.
+
+- `Command::Continue` (`commands/world.rs`) checks its owners in a fixed order:
+  1. a pending round program (`runtime::continue_round`);
+  2. loot;
+  3. survivors;
+  4. messages (`exploration::continue_messages`);
+  5. a round dispatch that owns the script;
+  6. a waiting death story (`runtime::continue_death`);
+  7. otherwise `exploration::continue_story`.
+- `continue_messages` presents the next page. When the pages run out during
+  combat, it returns nothing, as the original does. The trace names the owner
+  that declined.
+
+```text
+{"kind":"declined","site":"exploration.continue_messages","owner":"combat","reason":"messages ended during combat"}
+[]
+```
 
 ## Local acceptance
 
@@ -289,3 +411,7 @@ and handler behavior. The following checks require a user-operated desktop:
   their child dialogs, then return to gameplay.
 - Check native file panels, Alt+Enter, held movement, music and original visuals on
   each available platform. Compilation alone does not close live acceptance.
+- Changes in this cycle to check live:
+  - error messages reworded for equipment wear and generated stock;
+  - heat, cold, psionic and atomic natural attacks against warriors;
+  - the desktop `--audit-log` trace output.

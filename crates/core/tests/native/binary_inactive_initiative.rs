@@ -13,7 +13,7 @@ fn inactive_party_initiative_matches_original_records_order_and_random_consumpti
 
         for (index, case) in cases.iter().enumerate() {
             let count = case["party_count"].as_u64().unwrap_or(6) as usize;
-            let mut before = original[..count * 3138].to_vec();
+            let mut before = original[..count * WARRIOR_BYTES].to_vec();
             changes(&mut before, &case["before_changes"]);
             assert_eq!(digest(&before), case["before_sha256"], "case{index} input");
             let warriors: Vec<_> = support::warriors(&before);

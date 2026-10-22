@@ -20,7 +20,7 @@ fn enemy_health_drain_and_death_cleanup_match_complete_native_monster_slices() {
     for case in fixture.array("cases").iter() {
         if case.n::<bool>("full") {
             let raw = decode(&case["before"]["records"]);
-            let mut record = raw[288..576].to_vec();
+            let mut record = raw[MONSTER_BYTES..576].to_vec();
             decrement_conditions(&mut record);
             let tick = enemy_drain_tick(&record).unwrap();
             let native_tick = case.array("results").iter().find(|result| result[1] == 29);
@@ -28,7 +28,11 @@ fn enemy_health_drain_and_death_cleanup_match_complete_native_monster_slices() {
             if let Some(tick) = tick {
                 assert_eq!(
                     tick.health,
-                    word(&decode(&case["after"]["records"])[288..576], 0x110).unwrap()
+                    word(
+                        &decode(&case["after"]["records"])[MONSTER_BYTES..576],
+                        0x110
+                    )
+                    .unwrap()
                 );
                 assert_eq!(tick.killed, !case.array("kills").is_empty());
             }

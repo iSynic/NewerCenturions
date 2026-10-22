@@ -1,8 +1,8 @@
 //! showitemstats (0x157758) row annotations. Composition is deliberately distinct
 //! from quickinfo: only positive elemental damage contributes to this maximum.
 use super::{
-    BTreeMap, Content, DrawingEffect, DrawingServices, InventoryRecord, ItemUiEffect, NativeText,
-    PascalString, RuleError, Services,
+    BTreeMap, Content, Draw, InventoryRecord, NativeText, PanelEffect, PascalString, RuleError,
+    indexed_string,
 };
 use centurions_content::records::{InventoryModifier as Modifier, ItemDefinition, ItemPanelRecord};
 
@@ -11,7 +11,7 @@ pub fn row(
     item: &InventoryRecord,
     native: &NativeText,
     strings: &BTreeMap<i16, Vec<u8>>,
-) -> Result<Vec<ItemUiEffect>, RuleError> {
+) -> Result<Vec<PanelEffect>, RuleError> {
     native.bytes(0x400ef8, 140)?;
     let definition = crate::ammunition::definition(content, item.id())?;
     let base = ItemDefinition(&definition);
@@ -52,29 +52,29 @@ pub fn row(
         effects: vec![],
         native,
     };
-    row.draw(DrawingEffect::TextSize(10));
-    row.draw(DrawingEffect::TextFont(10));
-    row.effects.push(ItemUiEffect::TextFaceSlot(0));
-    row.draw(DrawingEffect::MoveTo {
+    row.draw(Draw::TextSize(10));
+    row.draw(Draw::TextFont(10));
+    row.effects.push(PanelEffect::TextFaceSlot(0));
+    row.draw(Draw::MoveTo {
         horizontal: 42,
         vertical: 30,
     });
-    row.draw(DrawingEffect::ForeColor(33));
-    row.draw(DrawingEffect::TextSize(10));
-    row.effects.push(ItemUiEffect::TextMode(1));
-    row.effects.push(ItemUiEffect::TextFaceSlot(0));
+    row.draw(Draw::ForeColor(33));
+    row.draw(Draw::TextSize(10));
+    row.effects.push(PanelEffect::TextMode(1));
+    row.effects.push(PanelEffect::TextFaceSlot(0));
     if panel.equipment_type() != 0 {
-        row.draw(DrawingEffect::ForeColor(409));
+        row.draw(Draw::ForeColor(409));
         row.literal(0x400f7c)?;
         let index = i16::from(panel.equipment_type()).wrapping_add(1);
-        let text = Services { strings }.indexed_string(-11000, index)?;
-        row.effects.push(ItemUiEffect::IndexedString {
+        let text = indexed_string(strings, -11000, index)?;
+        row.effects.push(PanelEffect::IndexedString {
             resource_id: -11000,
             index,
             destination: 0x479ed8,
             result: text.clone(),
         });
-        row.draw(DrawingEffect::DrawString(text));
+        row.draw(Draw::DrawString(text));
         row.literal(0x400f78)?;
     }
     for (color, prefix, value, plus, suffix) in [
@@ -155,7 +155,7 @@ pub fn row(
     }
     // Chemical reduction alone does not enable the original DRVs prefix.
     if elements[1..].iter().any(|value| *value < 0) {
-        row.draw(DrawingEffect::ForeColor(341));
+        row.draw(Draw::ForeColor(341));
         row.literal(0x400f14)?;
         for (value, label) in elements.into_iter().zip([
             0x400f10, 0x400f0c, 0x400f08, 0x400f04, 0x400f00, 0x400efc, 0x400ef8,
@@ -165,26 +165,26 @@ pub fn row(
             }
         }
     }
-    row.draw(DrawingEffect::ForeColor(33));
-    row.draw(DrawingEffect::TextFont(0));
-    row.effects.push(ItemUiEffect::TextFaceSlot(0));
-    row.draw(DrawingEffect::TextSize(0));
-    row.effects.push(ItemUiEffect::TextMode(0));
+    row.draw(Draw::ForeColor(33));
+    row.draw(Draw::TextFont(0));
+    row.effects.push(PanelEffect::TextFaceSlot(0));
+    row.draw(Draw::TextSize(0));
+    row.effects.push(PanelEffect::TextMode(0));
     Ok(row.effects)
 }
 
 struct Row<'a> {
-    effects: Vec<ItemUiEffect>,
+    effects: Vec<PanelEffect>,
     native: &'a NativeText,
 }
 
 impl Row<'_> {
-    fn draw(&mut self, effect: DrawingEffect) {
-        self.effects.push(ItemUiEffect::Drawing(effect));
+    fn draw(&mut self, effect: Draw) {
+        self.effects.push(PanelEffect::Drawing(effect));
     }
     fn literal(&mut self, address: u32) -> Result<(), RuleError> {
         let length = usize::from(self.native.bytes(address, 1)?[0]);
-        self.draw(DrawingEffect::DrawString(PascalString::from_raw(
+        self.draw(Draw::DrawString(PascalString::from_raw(
             self.native.bytes(address, length + 1)?,
         )?));
         Ok(())
@@ -197,18 +197,18 @@ impl Row<'_> {
         plus: bool,
         suffix: Option<u32>,
     ) -> Result<(), RuleError> {
-        self.draw(DrawingEffect::ForeColor(color));
+        self.draw(Draw::ForeColor(color));
         self.literal(prefix)?;
         let text = PascalString::from_payload(value.to_string().as_bytes())?;
-        self.effects.push(ItemUiEffect::NumberToString {
+        self.effects.push(PanelEffect::NumberToString {
             value: i32::from(value),
             destination: 0x479ed8,
             result: text.clone(),
         });
         if plus && value > 0 {
-            self.draw(DrawingEffect::DrawString(PascalString::from_payload(b"+")?));
+            self.draw(Draw::DrawString(PascalString::from_payload(b"+")?));
         }
-        self.draw(DrawingEffect::DrawString(text));
+        self.draw(Draw::DrawString(text));
         if let Some(suffix) = suffix {
             self.literal(suffix)?;
         }

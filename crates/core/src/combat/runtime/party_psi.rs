@@ -20,19 +20,15 @@ pub fn party_psi(
             "outdoor psi requires an unobstructed exploration turn".into(),
         ));
     }
-    let mission = content
-        .map_at(
-            state.mission.as_deref(),
-            state.scenario_level,
-            state.exploration.as_ref().unwrap().map,
-        )
+    let mission = state
+        .land(content)
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
-    if state.psi_memory.is_none() {
-        state.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
+    if state.native_work.psi_memory.is_none() {
+        state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
     }
     let result = crate::combat::player_psi::cast_party(
         &state.warriors,
-        state.psi_memory.as_ref().unwrap(),
+        state.native_work.psi_memory.as_ref().unwrap(),
         &state.party_buffs,
         mission,
         &mut state.random,
@@ -50,11 +46,11 @@ pub fn party_psi(
     let memory = result.memory;
     state.party_buffs = result.buffs;
     let packet = result.packet;
-    state.attack_packet = Some(packet.clone());
-    state.party_mask.fill(0);
+    state.native_work.attack_packet = Some(packet.clone());
+    state.native_work.party_mask.fill(0);
 
-    state.attack_identity = Some(result.identity);
-    state.attack_count = result.count;
+    state.native_work.attack_identity = Some(result.identity);
+    state.native_work.attack_count = result.count;
     state.psi_menu_choices[warrior] = Some(crate::PsiMenuChoice {
         row: result.identity[1] as u8,
         column: result.identity[2] as u8,
@@ -75,8 +71,8 @@ pub fn party_psi(
         });
         return Ok(vec![]);
     }
-    state.party_mask[..state.warriors.len()].fill(1);
-    state.psi_memory = Some(memory);
+    state.native_work.party_mask[..state.warriors.len()].fill(1);
+    state.native_work.psi_memory = Some(memory);
     let mut events = result.events;
     if packet[1] != 7 {
         events.extend(crate::story_spell::resolve_outdoors(

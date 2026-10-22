@@ -4,8 +4,8 @@ use crate::{
     Event, MovementContinuation, Phase, Presentation, RuleError, ScriptState, Session,
     typed_encounter,
 };
+use centurions_content::Content;
 use centurions_content::records::ItemDefinition;
-use centurions_content::{Content, word};
 
 pub fn use_item(
     state: &mut Session,
@@ -65,7 +65,7 @@ pub fn use_item(
         content,
         races,
         crate::story_item_use::ScriptItemContext::Exploration,
-        state.inventory_record.as_ref(),
+        state.native_work.inventory_record.as_ref(),
     )?;
     let id = state.warriors[warrior].inventory()?[slot].id();
     state.load_item_work(content, id)?;
@@ -82,16 +82,8 @@ pub fn use_item(
             .map(|resource_id| Event::Sound { resource_id }),
     );
     if let Some(id) = used.script {
-        state.exploration.as_mut().unwrap().script = Some(ScriptState {
-            record: map.script(id)?.to_vec(),
-            cursor: 0,
-            map_slot: 0,
-            item_return: false,
-            scheduled: true,
-            menu: None,
-            persist: false,
-            origin: None,
-        });
+        state.exploration.as_mut().unwrap().script =
+            Some(ScriptState::scheduled(map.script(id)?.to_vec(), 0));
         effects.extend(run_script(state, content)?);
     }
     Ok(effects)
@@ -129,7 +121,9 @@ pub(super) fn refuse_combat_script_item(
     check_item_actor(state, warrior)?;
     state.load_item_work(content, item)?;
     let mut feedback = Vec::new();
-    if !encounter && word(state.ammunition_work.item.as_ref().unwrap(), 44)? < 1100 {
+    if !encounter
+        && ItemDefinition(state.native_work.ammunition_work.item.as_ref().unwrap()).spell()? < 1100
+    {
         feedback.extend([88, 89].map(|index| crate::feedback::NativeFeedback::Warning { index }));
     }
     feedback.push(crate::feedback::NativeFeedback::Warning { index: 52 });
@@ -204,7 +198,7 @@ pub(super) fn use_encounter_item(
                 .ok_or("item movement tables unavailable")?
                 .race_moves,
             crate::story_item_use::ScriptItemContext::Encounter,
-            state.inventory_record.as_ref(),
+            state.native_work.inventory_record.as_ref(),
         )?;
         // Only manual buttonchoice10a9ee decodes the script-item return.
         let record = if manual {
@@ -218,19 +212,10 @@ pub(super) fn use_encounter_item(
         state.load_item_work(content, item.id())?;
         state.warriors = used.warriors;
         state.selected_warrior = warrior;
-        state.party_mask[warrior] = 1;
+        state.native_work.party_mask[warrior] = 1;
         let position = state.exploration.as_mut().unwrap();
         position.presentation = None;
-        position.script = record.map(|record| ScriptState {
-            record,
-            cursor: 0,
-            map_slot: 0,
-            item_return: false,
-            scheduled: true,
-            menu: None,
-            persist: false,
-            origin: None,
-        });
+        position.script = record.map(|record| ScriptState::scheduled(record, 0));
         let mut effects: Vec<_> = used
             .sounds
             .into_iter()
@@ -242,7 +227,7 @@ pub(super) fn use_encounter_item(
         return Ok(effects);
     }
     let activating = ItemDefinition(&definition).spell()? > 1100
-        && (word(&item.0, 2)? > 0 || word(&definition, 20)? < 0);
+        && (item.quantity()? > 0 || ItemDefinition(&definition).supplied_quantity()? < 0);
     if activating && class == 28 && state.combat.is_none() {
         return crate::outdoor_psi::begin_item(state, content, warrior, slot);
     }
@@ -254,8 +239,8 @@ pub(super) fn use_encounter_item(
     }
     // Items12b04a reloads the item and clears targets;12c422 selects its owner.
     state.load_item_work(content, item.id())?;
-    state.party_mask.fill(0);
-    state.party_mask[warrior] = 1;
+    state.native_work.party_mask.fill(0);
+    state.native_work.party_mask[warrior] = 1;
     state.selected_warrior = warrior;
     finish_typed_selection(state, content, selected)
 }

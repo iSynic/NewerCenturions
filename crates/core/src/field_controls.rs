@@ -111,6 +111,10 @@ pub(crate) fn start(
                 resource_id: if control.searching { 208 } else { 205 },
             });
         }
+        // buttonchoice 0x10a17c: camping can always be broken but not started while disabled.
+        Action::Camp if !control.camping && state.native_work.camp_disabled => {
+            events.push(Event::Feedback(crate::feedback::camp_flash(0x403f24)));
+        }
         Action::Camp => {
             control.camping = !control.camping;
             if control.camping {
@@ -199,8 +203,14 @@ pub(crate) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event
                 }
             }
             Step::Heal => heal(state, content, &mut events)?,
+            // buttonchoice's move loop (0x109b46) only leaves its wait to move while
+            // fatigue is below 135 or camping is disabled; it never warns here.
             Step::Move(dx, dy) => {
-                events.extend(crate::exploration::move_squad(state, content, dx, dy)?)
+                if state.exploration.as_ref().unwrap().fatigue < 135
+                    || state.native_work.camp_disabled
+                {
+                    events.extend(crate::exploration::move_squad(state, content, dx, dy)?)
+                }
             }
         }
     }
@@ -279,7 +289,7 @@ fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Resu
                 let context = crate::story_health::context(
                     &state.warriors,
                     state.selected_warrior,
-                    state.health_context.as_ref(),
+                    state.native_work.health_context.as_ref(),
                 );
                 let healed = crate::story_health::heal_outdoors(
                     &state.warriors,
@@ -290,7 +300,7 @@ fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Resu
                     &mut state.random,
                 )?;
                 state.warriors = healed.warriors;
-                state.health_context = Some(healed.context);
+                state.native_work.health_context = Some(healed.context);
                 for effect in healed.events {
                     match effect {
                         crate::story_health::HealthEvent::Sound(resource_id) => {

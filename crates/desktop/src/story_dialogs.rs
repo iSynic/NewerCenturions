@@ -33,8 +33,8 @@ pub fn menu(
     assets.wrapped_color(text, Rect::new(12., 467., 444., 82.), 12, 16., YELLOW);
     assets.draw_dialog(147);
     let table = if state.menus.is_empty() {
-        content
-            .map(state.exploration.as_ref().map_or(0, |p| p.map))
+        state
+            .land(content)
             .map(|map| map.menus.as_slice())
             .unwrap_or_default()
     } else {

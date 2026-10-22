@@ -6,9 +6,9 @@ pub(super) fn project(state: &mut Session, snapshot: &Value) {
     snapshots::carried_items(state, &read);
     state.ammunition = support::longs(&read("ammunition"));
     state.selected_warrior = snapshot.n("selected_member");
-    state.loaded_item_field32 = Some(snapshot.n("item_context"));
+    state.native_work.loaded_item_field32 = Some(snapshot.n("item_context"));
     state.bandage_ready = Some(snapshot.n("aid_gate"));
-    state.weapon_work = snapshots::weapon_work(&read);
+    state.native_work.weapon_work = snapshots::weapon_work(&read);
     let arena = state.combat.as_mut().unwrap();
     let before = (arena.cursor, arena.round);
     snapshots::records(arena, &|key| snapshot.bytes(key));
@@ -25,21 +25,21 @@ pub(super) fn project(state: &mut Session, snapshot: &Value) {
     arena.round_scripts.slots = snapshot.words("round_slots").try_into().unwrap();
     snapshots::spell_work(arena, &read);
     arena.unavailable = snapshot.n::<i8>("unavailable");
-    arena.attack_packet = state.attack_packet.clone();
-    arena.attack_identity = state.attack_identity;
-    arena.weapon_work = state.weapon_work;
+    arena.attack_packet = state.native_work.attack_packet.clone();
+    arena.attack_identity = state.native_work.attack_identity;
+    arena.weapon_work = state.native_work.weapon_work;
     let mut health = centurions_core::story_health::context(
         &state.warriors,
         state.selected_warrior,
-        state.health_context.as_ref(),
+        state.native_work.health_context.as_ref(),
     );
     health.unavailable = arena.unavailable;
     health.marks_affected = snapshot.n::<u64>("heal_marks_affected") != 0;
     health
         .affected
         .copy_from_slice(&snapshot.words("markers")[..6]);
-    health.effect = state.attack_packet.as_ref().unwrap()[18] as i8;
-    state.health_context = Some(health);
+    health.effect = state.native_work.attack_packet.as_ref().unwrap()[18] as i8;
+    state.native_work.health_context = Some(health);
     snapshots::actor_work(state, snapshot);
 }
 
@@ -265,7 +265,12 @@ fn learned_preparation_rejects_unknown_powers_and_preserves_inventory() {
     unknown.combat.as_mut().unwrap().weapon_work = WeaponWork::default();
     atomic(&unknown, &content, Command::BeginLearnedHeal { power: 1 });
     let mut marking = state.clone();
-    marking.health_context.as_mut().unwrap().marks_affected = true;
+    marking
+        .native_work
+        .health_context
+        .as_mut()
+        .unwrap()
+        .marks_affected = true;
     let mut unmarked = state.clone();
     for candidate in [&mut marking, &mut unmarked] {
         apply(Command::BeginLearnedHeal { power: 1 }, candidate, &content).unwrap();
@@ -281,7 +286,12 @@ fn learned_preparation_rejects_unknown_powers_and_preserves_inventory() {
     assert_eq!(marking.warriors, unmarked.warriors);
     assert_eq!(marking.random, unmarked.random);
     assert_eq!(
-        marking.health_context.as_ref().unwrap().affected[target],
+        marking
+            .native_work
+            .health_context
+            .as_ref()
+            .unwrap()
+            .affected[target],
         -1
     );
     let mut other_menu = state.clone();
@@ -469,7 +479,7 @@ fn higher_portrait_powers_match_native_full_session_and_saved_continuations() {
         });
         support::same_captured_session(&state, &expected);
 
-        assert_eq!(state.attack_count, power);
+        assert_eq!(state.native_work.attack_count, power);
         atomic(&state, &content, Command::EndTurn);
         atomic(
             &state,

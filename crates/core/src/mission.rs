@@ -27,6 +27,10 @@ pub(crate) fn travel(
         .ok_or_else(|| {
             RuleError::Invalid("destination scenario level or map unavailable".into())
         })?;
+    let here = state.exploration.as_ref().ok_or("no active map")?.map;
+    if target.level != state.scenario_level || target.map != here {
+        state.check_land_tile_set(content, target.level, target.map)?;
+    }
     let position = state.exploration.as_mut().ok_or("no active map")?;
     if target.level != state.scenario_level {
         state
@@ -101,6 +105,14 @@ pub(crate) fn begin_stage(
         .get(target)
         .filter(|s| !s.name.is_empty())
         .ok_or_else(|| RuleError::Invalid("stage unavailable".into()))?;
+    let here = state
+        .exploration
+        .as_ref()
+        .ok_or_else(|| RuleError::Invalid("no active map".into()))?
+        .map;
+    if here != stage.start.2 {
+        state.check_land_tile_set(content, state.scenario_level, stage.start.2)?;
+    }
     let position = state
         .exploration
         .as_mut()
@@ -128,16 +140,10 @@ pub(crate) fn begin_stage(
     state.allies = crate::story_allies::clear_stage_allies(&state.allies)?;
     state.ally_count = 0;
     position.script = if stage.start_script != 0 {
-        Some(ScriptState {
-            record: authored.script(stage.start_script)?.to_vec(),
-            cursor: 0,
-            map_slot: 0,
-            item_return: false,
-            scheduled: true,
-            menu: None,
-            persist: false,
-            origin: None,
-        })
+        Some(ScriptState::scheduled(
+            authored.script(stage.start_script)?.to_vec(),
+            0,
+        ))
     } else {
         None
     };

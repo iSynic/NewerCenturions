@@ -1,5 +1,6 @@
 //! Occupied-cell reload continuation from combatchoice.
 use crate::combat::runtime;
+use crate::feedback::{ERROR_SOUND, OUT_OF_AMMUNITION_WARNING};
 use crate::{Event, RuleError, Session};
 use centurions_content::Content;
 
@@ -11,17 +12,26 @@ pub(super) fn reload_at_occupied_cell(
     target: i16,
     dx: i8,
 ) -> Result<Vec<Event>, RuleError> {
-    let unsupported = || RuleError::Unsupported {
-        action: "combat.move",
-        dependency: "other occupied-cell attack, exchange or reload continuation",
+    let refuse = |predicate: &'static str| {
+        RuleError::Unsupported {
+            action: "combat.move",
+            dependency: "other occupied-cell attack, exchange or reload continuation",
+        }
+        .with_context(|| format!("occupied cell {target}: {predicate}"))
     };
-    let combat = state.combat.as_mut().ok_or_else(unsupported)?;
+    let combat = state
+        .combat
+        .as_mut()
+        .ok_or_else(|| refuse("no active combat"))?;
     let member = &state.warriors[actor];
-    if member.record().stamina()? <= 0
-        || member.record().active_flag() != 1
-        || member.record().action_points()? < 2
-    {
-        return Err(unsupported());
+    if member.record().stamina()? <= 0 {
+        return Err(refuse("actor has no stamina"));
+    }
+    if member.record().active_flag() != 1 {
+        return Err(refuse("actor is not active"));
+    }
+    if member.record().action_points()? < 2 {
+        return Err(refuse("actor has fewer than two action points"));
     }
     let (faction, living) = if let Some(target) = usize::try_from(target)
         .ok()
@@ -40,10 +50,13 @@ pub(super) fn reload_at_occupied_cell(
             !enemy.record().removed() && enemy.record().stamina()? > 0,
         )
     } else {
-        return Err(unsupported());
+        return Err(refuse("no body at target"));
     };
-    if !living || faction == member.record().faction()? {
-        return Err(unsupported());
+    if !living {
+        return Err(refuse("target is not living"));
+    }
+    if faction == member.record().faction()? {
+        return Err(refuse("target is friendly"));
     }
     let attacks = mission
         .combat
@@ -57,7 +70,7 @@ pub(super) fn reload_at_occupied_cell(
         &content.items,
         attacks,
         &state.party_buffs,
-        &mut state.ammunition_work,
+        &mut state.native_work.ammunition_work,
     )?;
     if state.warriors[actor].record().active_flag() == 0 {
         effects.extend(runtime::end_turn(state, content)?);
@@ -70,9 +83,9 @@ pub(super) fn reload_at_occupied_cell(
         .iter()
         .find(|item| item.id() == weapon_id && item.equipment_flag() == 1)
         .cloned()
-        .ok_or_else(unsupported)?;
+        .ok_or_else(|| refuse("no equipped weapon"))?;
     if !state.warriors[actor].record().firing_mode() {
-        return Err(unsupported());
+        return Err(refuse("actor is not in firing mode"));
     }
     let weapon = crate::ammunition::definition(content, weapon_id)?;
     if equipped.quantity()?
@@ -82,21 +95,24 @@ pub(super) fn reload_at_occupied_cell(
         effects.extend(runtime::player_shoot(state, content, target)?);
         return Ok(effects);
     }
-    state.attack_count = 0;
+    state.native_work.attack_count = 0;
     // prepattack14c7be returns before loading ammunition only for an empty
     // magazine. A partial burst retains its prepared packet even on refusal.
     if equipped.quantity()? != 0 {
         let ammunition = crate::ammunition::definition(content, equipped.ammunition_id()?)?;
         let prepared =
             crate::combat::firearm::prepare(&state.warriors[actor], &weapon, &ammunition, attacks)?;
-        state.ammunition_work.prepare_pair(&weapon, &ammunition)?;
+        state
+            .native_work
+            .ammunition_work
+            .prepare_pair(&weapon, &ammunition)?;
         combat.weapon_work.prepare(&weapon, &ammunition)?;
-        state.attack_count = prepared.shots;
-        state.attack_packet = Some(prepared.packet.clone());
+        state.native_work.attack_count = prepared.shots;
+        state.native_work.attack_packet = Some(prepared.packet.clone());
         combat.attack_packet = Some(prepared.packet);
     } else {
         combat.weapon_work.load_weapon(&weapon)?;
-        state.ammunition_work.weapon = Some(weapon);
+        state.native_work.ammunition_work.weapon = Some(weapon);
     }
     let refit = crate::ammunition::refit_with_record(
         &state.warriors[actor],
@@ -108,16 +124,20 @@ pub(super) fn reload_at_occupied_cell(
             silent: true,
             warnings: false,
         },
-        &state.ammunition_work,
+        &state.native_work.ammunition_work,
         &mut state.random,
-        state.inventory_record.as_ref(),
+        state.native_work.inventory_record.as_ref(),
     )?;
     let completed = refit.completed_refit();
     effects.extend(crate::ammunition::commit_result(state, actor, refit)?);
     if !completed {
         state.warriors[actor].record_mut().set_automatic_mode(0);
-        effects.push(Event::Sound { resource_id: 6000 });
-        effects.push(Event::CollectionRejected { warning: 25 });
+        effects.push(Event::Sound {
+            resource_id: ERROR_SOUND,
+        });
+        effects.push(Event::CollectionRejected {
+            warning: OUT_OF_AMMUNITION_WARNING,
+        });
     }
 
     Ok(effects)

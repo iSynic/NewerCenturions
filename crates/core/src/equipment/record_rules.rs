@@ -220,6 +220,64 @@ pub(crate) fn remove_inner(
     Ok(())
 }
 
+/// newland91 0x141d0e empties an inventory through removeitem on a rising slot
+/// index, worn or not, then dropitem on slot 0 with slot 1's item loaded for the
+/// weight; a worn slot 0 reloads its own definition through its removal. Each
+/// dropitem plays sound 655, and a blocked removal warns 145 and keeps the item.
+/// Returns the member and the last item loaded, if any.
+pub(crate) fn drop_all(
+    warrior: &Warrior,
+    content: &Content,
+    mission: &OpeningMission,
+    events: &mut Vec<crate::Event>,
+) -> Result<(Warrior, Option<i16>), RuleError> {
+    let mut warrior = warrior.clone();
+    let mut loaded = None;
+    let remove = |warrior: &mut Warrior, slot: usize, events: &mut Vec<crate::Event>| {
+        let record = warrior.record().inventory_slot(slot);
+        let removed =
+            crate::editor_items::retained_equipment(warrior, content, slot, false, false, &record)?;
+        *warrior = removed.warrior;
+        events.extend(removed.warnings.iter().map(|&index| {
+            crate::Event::Feedback(crate::feedback::NativeFeedback::Warning { index })
+        }));
+        Ok::<_, RuleError>((record.id(), removed.warnings.is_empty()))
+    };
+    for index in 0.. {
+        let count = InventorySlots(&warrior.bytes).count()?;
+        if count == 0 {
+            break;
+        }
+        if index >= 100 {
+            return Err(unsupported("removal past the inventory"));
+        }
+        remove(&mut warrior, index, events)?;
+        let mut item = InventorySlots(&warrior.bytes).item_id(1)?;
+        events.push(crate::Event::Sound { resource_id: 655 });
+        if warrior.record().inventory_slot(0).equipment_flag() != 0 {
+            let (worn, removed) = remove(&mut warrior, 0, events)?;
+            item = worn;
+            if !removed {
+                loaded = Some(item);
+                continue;
+            }
+        }
+        loaded = Some(item);
+        let definition = ItemDefinition(item_definition(content, item)?);
+        let quantity = warrior.record().inventory_slot(0).quantity()?;
+        let weight = definition
+            .unit_weight()?
+            .wrapping_mul(quantity)
+            .wrapping_add(definition.base_weight()?);
+        let total = warrior.record().carried_weight()?.wrapping_sub(weight);
+        InventorySlotsMut(&mut warrior.bytes).remove_dropped_slot(0, count.wrapping_sub(1));
+        warrior.record_mut().set_carried_weight(total);
+        let movement = race_movement(&warrior, mission)?;
+        combat::calculate_movement(&mut warrior, movement)?;
+    }
+    Ok((warrior, loaded))
+}
+
 /// dropitem 0x121152 retains the original 29-slot shift and empty-record fill.
 pub(crate) fn drop(
     warrior: &mut Warrior,

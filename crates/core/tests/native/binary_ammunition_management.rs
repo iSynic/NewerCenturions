@@ -27,7 +27,8 @@ fn compare(fixture: &Value, case: &Value, actual: AmmunitionResult, actual_rando
     );
     let mut party = bytes(fixture, &case["before"]["party"]);
     let member = case.n::<usize>("member");
-    party[member * 3138..(member + 1) * 3138].copy_from_slice(&actual.warrior.bytes);
+    party[member * WARRIOR_BYTES..(member + 1) * WARRIOR_BYTES]
+        .copy_from_slice(&actual.warrior.bytes);
     assert_eq!(party, bytes(fixture, &after["party"]));
     assert_eq!(actual.reserves, reserves(fixture, after));
     assert_eq!(actual.work, work(fixture, after));
@@ -84,7 +85,7 @@ fn refit_matches_original_manual_and_automatic_records_caches_returns_and_audio(
             let after = &case["after"];
             let read = |key: &str| bytes(fixture, &before[key]);
             let mut state = snapshots::helper_frame(fixture, before, case.n("member"));
-            state.ammunition_work = work(fixture, before);
+            state.native_work.ammunition_work = work(fixture, before);
             let combat = state.combat.as_mut().unwrap();
             combat.enemies.records = support::monsters(&read("npcs"));
             combat.enemies.positions = support::positions(&read("npc_positions"));
@@ -100,10 +101,16 @@ fn refit_matches_original_manual_and_automatic_records_caches_returns_and_audio(
                 bytes(fixture, &after["party"])
             );
             assert_eq!(state.ammunition, reserves(fixture, after));
-            assert_eq!(state.ammunition_work, work(fixture, after));
+            assert_eq!(state.native_work.ammunition_work, work(fixture, after));
             assert_eq!(state.random, random(after));
             assert_eq!(
-                state.inventory_record.as_ref().unwrap().0.as_slice(),
+                state
+                    .native_work
+                    .inventory_record
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .as_slice(),
                 bytes(fixture, &after["selected_record"])
             );
             let combat = current_combat(&state);
@@ -132,10 +139,10 @@ fn refit_matches_original_manual_and_automatic_records_caches_returns_and_audio(
             assert_eq!(events, expected);
             if case["expanded_caller"] == true {
                 assert_eq!(
-                    state.attack_packet.as_ref().unwrap(),
+                    state.native_work.attack_packet.as_ref().unwrap(),
                     &bytes(fixture, &after["packet"])
                 );
-                assert_eq!(state.attack_count, after.n::<i16>("count"));
+                assert_eq!(state.native_work.attack_count, after.n::<i16>("count"));
             }
         }
     }

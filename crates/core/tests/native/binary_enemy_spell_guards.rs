@@ -21,8 +21,8 @@ fn blocked_first_spell_chance_matches_six_complete_native_enemy_turns() {
         let combat = s.combat.as_mut().unwrap();
         let mut rng = RandomState::new(case.n::<u32>("seed_before"));
         let mut work = EnemyWork {
-            item_context: s.loaded_item_field32,
-            attack_count: s.attack_count,
+            item_context: s.native_work.loaded_item_field32,
+            attack_count: s.native_work.attack_count,
             packet: combat.attack_packet.clone(),
             identity: combat.attack_identity,
             spell_disabled: s.enemy_spell_disabled,

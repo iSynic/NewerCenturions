@@ -155,13 +155,13 @@ fn public_guard_preserves_complete_native_state_and_resumes_from_save() {
                 );
                 health.unavailable = combat.unavailable;
                 health.effect = case["after"].bytes("packet")[18] as i8;
-                expected.health_context = Some(health);
+                expected.native_work.health_context = Some(health);
                 support::checkpoint(&actual, &content, "guard-after");
                 events
             } else {
                 // Native AP-zero prefix starts after public admission; retain its original suffix.
                 support::reject_command(&actual, &content, Command::Guard);
-                expected.attack_packet = actual.attack_packet.clone();
+                expected.native_work.attack_packet = actual.native_work.attack_packet.clone();
                 let member = case.n::<usize>("member");
                 actual.warriors[member].bytes[0x16..0x18].copy_from_slice(&1_i16.to_be_bytes());
                 assert_party(&actual, &case["guarded"]);
@@ -235,7 +235,9 @@ fn guard_rolls_back_arming_sound_and_initiative_on_later_round_failure() {
     combat.round_scripts.slots[0] = 33;
     let before = state.clone();
     assert!(matches!(
-        apply(Command::Guard, &mut state, &content),
+        apply(Command::Guard, &mut state, &content)
+            .as_ref()
+            .map_err(centurions_core::RuleError::root),
         Err(centurions_core::RuleError::Unsupported {
             action: "combat.round_story",
             ..

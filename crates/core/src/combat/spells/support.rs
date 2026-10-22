@@ -193,9 +193,10 @@ pub(crate) fn resolve_support_for_caster(
             } else if target < result.warriors.len() {
                 spell_conditions::follow_up(&mut result.warriors[target].bytes, false, effect)?;
             } else {
+                // spelllist indexes warrior memory by body; past the party it is undefined.
                 return Err(RuleError::Unsupported {
                     action: "combat.spell.support",
-                    dependency: "revival caller outside the party",
+                    dependency: "revival reflected onto an NPC caster",
                 });
             }
             result.targets.push((
@@ -355,9 +356,10 @@ pub(crate) fn resolve_support_for_caster(
             continue;
         }
         if effect == 64 {
+            // spelllist revives warrior memory at the body index, never the NPC record.
             return Err(RuleError::Unsupported {
                 action: "combat.spell.support",
-                dependency: "revival caller outside the party",
+                dependency: "revival aimed at an NPC",
             });
         }
         if (1..=40).contains(&effect) {

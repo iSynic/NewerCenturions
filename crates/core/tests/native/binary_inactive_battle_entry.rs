@@ -11,13 +11,18 @@ fn inactive_battle_entry_matches_original_complete_records_formation_order_and_r
         let mut state = support::mission_session(&content);
         state.warriors = support::warriors(&case["warriors_before"]);
         if case["seed_before"] == 12 {
-            state.health_context = Some(centurions_core::story_health::context(
+            state.native_work.health_context = Some(centurions_core::story_health::context(
                 &state.warriors,
                 0,
                 None,
             ));
             support::expect(
-                state.health_context.as_ref().unwrap().unavailable,
+                state
+                    .native_work
+                    .health_context
+                    .as_ref()
+                    .unwrap()
+                    .unavailable,
                 &case["unavailable"],
             );
         }
@@ -28,6 +33,7 @@ fn inactive_battle_entry_matches_original_complete_records_formation_order_and_r
         position.y = case.n::<i32>("y");
         position.floor.clone_from(&map.floor);
         position.events.clone_from(&map.events);
+        crate::native_common::keep_tile_set(&mut state, &content);
         state.random = RandomState::new(case.n::<u32>("seed_before"));
         begin_battle(&mut state, &content, case.n::<i16>("battle"), 0).unwrap();
         crate::binary_battle_entry::assert_battle(&state, case);

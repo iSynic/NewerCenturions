@@ -2,15 +2,15 @@ use crate::{native_common, prelude::*, snapshots, support};
 
 use native_common::foundation_session as input;
 fn project(state: &mut Session, snapshot: &Value, baseline: &Value, prepared_pair: bool) {
-    let retained_body = state.health_context.as_ref().unwrap().last_body;
+    let retained_body = state.native_work.health_context.as_ref().unwrap().last_body;
     snapshots::earned_projection(state, snapshot, baseline);
     // Frozen probes start with old body0; an unchanged native field retains the earned origin.
     if snapshot["health_last_body"] == baseline["health_last_body"] {
-        state.health_context.as_mut().unwrap().last_body = retained_body;
+        state.native_work.health_context.as_mut().unwrap().last_body = retained_body;
     }
     if prepared_pair {
-        state.ammunition_work.weapon = Some(snapshot.bytes("weapon_work"));
-        state.ammunition_work.ammo = Some(snapshot.bytes("ammo_work"));
+        state.native_work.ammunition_work.weapon = Some(snapshot.bytes("weapon_work"));
+        state.native_work.ammunition_work.ammo = Some(snapshot.bytes("ammo_work"));
     }
 }
 
@@ -46,17 +46,20 @@ fn source_prefix_pair(state: &mut Session, content: &Content, index: usize) {
             weapon[56..58].copy_from_slice(&i16::from(ammo[57] as i8).to_be_bytes());
         }
     }
-    assert_eq!(state.weapon_work.sound, Some(word(&weapon, 14).unwrap()));
     assert_eq!(
-        state.weapon_work.weapon_armor_filter,
+        state.native_work.weapon_work.sound,
+        Some(word(&weapon, 14).unwrap())
+    );
+    assert_eq!(
+        state.native_work.weapon_work.weapon_armor_filter,
         Some(word(&weapon, 136).unwrap())
     );
     assert_eq!(
-        state.weapon_work.ammunition_armor_filter,
+        state.native_work.weapon_work.ammunition_armor_filter,
         Some(word(&ammo, 136).unwrap())
     );
-    state.ammunition_work.weapon = Some(weapon);
-    state.ammunition_work.ammo = Some(ammo);
+    state.native_work.ammunition_work.weapon = Some(weapon);
+    state.native_work.ammunition_work.ammo = Some(ammo);
 }
 use native_common::refresh_item_work as source_item_refresh;
 
@@ -71,7 +74,7 @@ fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
     let commands = receipt.array("commands");
     let ordered_events = receipt.array("ordered_events");
     assert_eq!(ordered_events.len(), commands.len());
-    let mut state: Session = serde_json::from_value(receipt["starting_session"].clone()).unwrap();
+    let mut state = native_common::earned_start(&receipt);
     state.validate(content).unwrap();
     state = checkpoint(&state, content, &format!("prefix-start-{index}"));
     for (step, (command, recorded)) in commands.iter().zip(ordered_events).enumerate() {
@@ -91,12 +94,18 @@ fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
             state = checkpoint(&state, content, &format!("prefix-medical-{index}"));
         }
     }
+    native_common::earned_rejoin(&mut state, &receipt);
     let mut expected_input = input(fixture, case);
     // This earned battle is still inside timeclick's regional newland call.
     expected_input.movement_continuation =
         Some(centurions_core::MovementContinuation::RegionalReturn { header: false });
     // The recorded prefix defeats body16; native killbody retains that body.
-    expected_input.health_context.as_mut().unwrap().last_body = 16;
+    expected_input
+        .native_work
+        .health_context
+        .as_mut()
+        .unwrap()
+        .last_body = 16;
     let last_npc = ordered_events
         .iter()
         .flat_map(|events| events.as_array().unwrap())
@@ -114,12 +123,15 @@ fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
     snapshots::actor_work(&mut expected_input, &case["before"]);
     source_item_refresh(&mut expected_input, content);
     source_prefix_pair(&mut expected_input, content, index);
-    expected_input.inventory_record = native_common::earned_inventory_work(index);
+    expected_input.native_work.inventory_record = native_common::earned_inventory_work(index);
     expected_input.combat.as_mut().unwrap().turn_origin =
         snapshots::recorded_turn_origin(&receipt, current_combat(&expected_input));
     support::same_captured_session(&state, &expected_input);
-    let effect = state.health_context.as_ref().unwrap().effect;
-    assert_eq!(state.attack_packet.as_ref().unwrap()[18] as i8, effect);
+    let effect = state.native_work.health_context.as_ref().unwrap().effect;
+    assert_eq!(
+        state.native_work.attack_packet.as_ref().unwrap()[18] as i8,
+        effect
+    );
     assert_eq!(
         current_combat(&state).attack_packet.as_ref().unwrap()[18] as i8,
         effect
@@ -196,7 +208,7 @@ fn native_events(initial: &Session, expected: &Session, case: &Value) -> Vec<Eve
 fn party_range_membership_retains_the_original_truncated_boundary() {
     let content = support::content();
     let receipt = native_common::earned_receipt("earned-loaded-shot-replay", 1);
-    let mut state: Session = serde_json::from_value(receipt["starting_session"].clone()).unwrap();
+    let mut state = native_common::earned_start(&receipt);
     for (step, (command, recorded)) in receipt
         .array("commands")
         .iter()
@@ -240,9 +252,11 @@ fn party_range_membership_retains_the_original_truncated_boundary() {
     let actor = &mut combat.enemies.records[4];
     let weapon = word(&actor.bytes, 0x26).unwrap();
     assert_eq!(weapon, 9);
-    let ammo =
-        centurions_core::combat::enemy_weapons::ammo_id(actor, state.loaded_item_field32.unwrap())
-            .unwrap();
+    let ammo = centurions_core::combat::enemy_weapons::ammo_id(
+        actor,
+        state.native_work.loaded_item_field32.unwrap(),
+    )
+    .unwrap();
     let prepared = centurions_core::combat::enemy_weapons::prepare(
         actor,
         &content.items[weapon as usize],
@@ -423,7 +437,7 @@ fn ordinary_firearm_kills_keep_native_death_feedback_and_saved_return() {
         let category = word(&expected, 26).unwrap().wrapping_abs();
         expected[26..28].copy_from_slice(&category.to_be_bytes());
         assert_eq!(
-            state.ammunition_work.item.as_ref(),
+            state.native_work.ammunition_work.item.as_ref(),
             Some(&expected),
             "next native item after weapon {weapon}"
         );

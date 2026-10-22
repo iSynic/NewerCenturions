@@ -40,7 +40,7 @@ pub(crate) fn display_record(
 ) -> Result<(), RuleError> {
     state.load_item_work(content, id)?;
     let item = crate::ammunition::definition(content, id)?;
-    let Some(record) = state.inventory_record.as_mut() else {
+    let Some(record) = state.native_work.inventory_record.as_mut() else {
         return Ok(());
     };
     Ok(ItemDefinition(&item).copy_display_stock_into(record)?)

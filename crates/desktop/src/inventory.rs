@@ -6,7 +6,7 @@ use std::{cell::RefCell, collections::BTreeMap};
 type ItemRows = BTreeMap<Vec<u8>, Vec<(i32, String)>>;
 type ItemDetail = (
     Vec<u8>,
-    Result<centurions_core::recovered_detail_ui::DetailPlan, String>,
+    Result<centurions_core::item_display::output::PanelPlan, String>,
 );
 
 #[derive(Clone, Debug)]
@@ -240,14 +240,14 @@ impl Inventory {
 }
 
 pub(crate) fn draw_detail_plan(
-    plan: &centurions_core::recovered_detail_ui::DetailPlan,
+    plan: &centurions_core::item_display::output::PanelPlan,
     assets: &Assets,
 ) {
-    use centurions_core::{recovered_detail_ui::DetailEffect, recovered_drawing::DrawingEffect};
+    use centurions_core::item_display::output::{BodyRect, Draw, PanelEffect};
     let mut color = YELLOW;
     let mut position = vec2(0., 0.);
     let mut size = 12;
-    let rectangle = |r: &centurions_core::recovered_geometry::BodyRect| {
+    let rectangle = |r: &BodyRect| {
         Rect::new(
             r.left as f32,
             r.top as f32 + 20.,
@@ -257,7 +257,7 @@ pub(crate) fn draw_detail_plan(
     };
     for effect in &plan.effects {
         match effect {
-            DetailEffect::Drawing(DrawingEffect::ForeColor(value)) => {
+            PanelEffect::Drawing(Draw::ForeColor(value)) => {
                 color = match value {
                     205 => RED,
                     273 => SKYBLUE,
@@ -267,20 +267,20 @@ pub(crate) fn draw_detail_plan(
                     _ => YELLOW,
                 }
             }
-            DetailEffect::Drawing(DrawingEffect::TextSize(value)) => size = *value as u16,
-            DetailEffect::Drawing(DrawingEffect::MoveTo {
+            PanelEffect::Drawing(Draw::TextSize(value)) => size = *value as u16,
+            PanelEffect::Drawing(Draw::MoveTo {
                 horizontal,
                 vertical,
             }) => position = vec2(*horizontal as f32, *vertical as f32 + 20.),
-            DetailEffect::Drawing(DrawingEffect::DrawString(value)) => {
+            PanelEffect::Drawing(Draw::DrawString(value)) => {
                 let text = centurions_content::ui::pascal_text(value.raw()).unwrap_or_default();
                 assets.text(&text, position.x, position.y, size, color);
                 position.x += measure_text(&text, Some(&assets.font), size, 1.).width;
             }
-            DetailEffect::Drawing(DrawingEffect::DrawPicture { handle, bounds }) => {
+            PanelEffect::Drawing(Draw::DrawPicture { handle, bounds }) => {
                 assets.panel(*handle as i16, rectangle(bounds))
             }
-            DetailEffect::Drawing(DrawingEffect::PlotColorIcon { handle, rect }) => {
+            PanelEffect::Drawing(Draw::PlotColorIcon { handle, rect }) => {
                 if let Some(image) = assets.icons.get(&(*handle as i16)) {
                     let r = rectangle(rect);
                     draw_texture_ex(
@@ -295,7 +295,7 @@ pub(crate) fn draw_detail_plan(
                     );
                 }
             }
-            DetailEffect::TextBox {
+            PanelEffect::TextBox {
                 bytes,
                 rectangle: rect,
                 ..

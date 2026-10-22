@@ -79,7 +79,7 @@ fn warmed_cast_automatic_initiative_and_field_collision_match_complete_native_ca
             &mut state.warriors,
             mission,
             &mut state.random,
-            state.psi_memory.as_mut().unwrap(),
+            state.native_work.psi_memory.as_mut().unwrap(),
             0,
             CastRequest {
                 rotation: 0,
@@ -98,7 +98,7 @@ fn warmed_cast_automatic_initiative_and_field_collision_match_complete_native_ca
                 state.combat.as_mut().unwrap(),
                 &mut state.warriors,
                 mission,
-                &mut state.attack_count,
+                &mut state.native_work.attack_count,
                 &mut state.random,
                 10,
             )

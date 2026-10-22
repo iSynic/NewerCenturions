@@ -9,10 +9,7 @@ fn install(state: &mut Session, snapshot: &Value) {
     for (warrior, native) in state.warriors.iter_mut().zip(party(&snapshot["party"])) {
         warrior.bytes = native.bytes;
     }
-    state.random = RandomState {
-        seed: snapshot.n::<u32>("seed"),
-        draws: snapshot.n::<u64>("draws"),
-    };
+    state.random = crate::native_common::random_at(snapshot, "seed", "draws");
     let combat = state.combat.as_mut().unwrap();
     snapshots::records(combat, &|key| snapshot.bytes(key));
     snapshots::geometry(combat, &|key| snapshot.bytes(key), (0, 0));
@@ -88,9 +85,9 @@ fn native_owned_needle_preparations_match_complete_party_records() {
             combat.attack_identity.unwrap(),
             case["prepared"].words("identity")[..3]
         );
-        support::expect(state.attack_count, &case["prepared"]["count"]);
+        support::expect(state.native_work.attack_count, &case["prepared"]["count"]);
         assert_eq!(
-            state.loaded_item_field32.unwrap(),
+            state.native_work.loaded_item_field32.unwrap(),
             word(&case["prepared"].bytes("item_work"), 32).unwrap()
         );
         let mut expected_work = current_combat(&state).weapon_work;
@@ -131,7 +128,7 @@ fn native_owned_needle_preparations_match_complete_party_records() {
             let mut expected = state.clone();
             crate::command_learned_portrait_heal::project(&mut expected, &case["after"]);
             expected.medical_continuation = None;
-            expected.ammunition_work = centurions_core::ammunition::WorkBuffers {
+            expected.native_work.ammunition_work = centurions_core::ammunition::WorkBuffers {
                 item: Some(case["after"].bytes("item_work")),
                 weapon: Some(case["after"].bytes("weapon_work")),
                 ammo: Some(case["after"].bytes("ammo_work")),

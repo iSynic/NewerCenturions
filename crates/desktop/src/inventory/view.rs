@@ -277,12 +277,7 @@ impl Inventory {
         }
         if let Some((side, slot)) = self.selected
             && let Ok(item) = self.record(state, content, side, slot)
-            && let Some(map) = content.map(
-                state
-                    .exploration
-                    .as_ref()
-                    .map_or(0, |position| position.map),
-            )
+            && let Some(map) = state.land(content)
         {
             self.detail(content, map, &item, side == 1 && Self::shop(state), assets);
         }

@@ -1,7 +1,7 @@
 //! Scene presentation.
 use super::{
     Action, Control, Inspection, UiState, authored_text, button, draw_clinic,
-    draw_combat_information, draw_outdoor_effect, draw_survivors, hud, map,
+    draw_combat_information, draw_outdoor_effect, draw_story_picture, draw_survivors, hud, map,
 };
 use crate::{assets::Assets, layout};
 use centurions_content::Content;
@@ -13,11 +13,12 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
     let mut controls = Vec::new();
     map(content, state, assets, ui);
     draw_outdoor_effect(state, assets, ui);
+    draw_story_picture(assets, ui);
     if let (Some((spell, power)), Some(point), Some((vx, vy))) = (
         ui.psi_pending,
         ui.psi_preview,
         crate::combat_controls::origin(state, ui),
-    ) && let Some(mission) = content.map(state.exploration.as_ref().map_or(0, |p| p.map))
+    ) && let Some(mission) = state.land(content)
         && let Some(tables) = mission.combat.as_ref()
         && let Ok(packet) = centurions_core::combat::spells::load_packet(&tables.attacks, spell)
     {
@@ -213,6 +214,22 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                             .then_some(Action::Command(Command::ChooseWarrior { index }))
                     });
                 }
+                Presentation::PartyPick { unconscious, .. } => {
+                    controls.clear();
+                    crate::story_dialogs::portraits(state, assets, &mut controls, |index| {
+                        (*unconscious || state.warriors[index].stamina().unwrap_or(0) > 0)
+                            .then_some(Action::Command(Command::ChooseWarrior { index }))
+                    });
+                    // getchoice draws each pick's countdown number, cicn 2200 + n.
+                    for (member, pick) in state.native_work.party_mask.iter().enumerate() {
+                        if let Some(icon) = (*pick > 0)
+                            .then(|| assets.icons.get(&(2200 + pick)))
+                            .flatten()
+                        {
+                            draw_texture(icon, 499., 29. + member as f32 * 50., WHITE);
+                        }
+                    }
+                }
                 Presentation::StageChange { .. } => {
                     crate::story_dialogs::question(
                         assets,
@@ -246,6 +263,7 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                     | Presentation::Typed { .. }
                     | Presentation::StageChange { .. }
                     | Presentation::WarriorChoice { .. }
+                    | Presentation::PartyPick { .. }
                     | Presentation::Clinic { .. }
                     | Presentation::Survivors
                     | Presentation::ScriptPause

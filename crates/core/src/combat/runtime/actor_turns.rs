@@ -7,13 +7,8 @@ use crate::{Event, Phase, RuleError, Session};
 use centurions_content::{Content, Warrior};
 
 pub fn enemy_turn(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
-    let mission = content
-        .map(
-            state
-                .exploration
-                .as_ref()
-                .map_or(0, |position| position.map),
-        )
+    let mission = state
+        .land(content)
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
     let mut party_hp = state
         .warriors
@@ -32,10 +27,13 @@ pub fn enemy_turn(state: &mut Session, content: &Content) -> Result<Vec<Event>, 
     let mut events = if c.enemies.records[e].record().faction()? == 0
         && c.enemies.records[e].record().primary_weapon()? == 1
     {
-        let context = state.loaded_item_field32.ok_or(RuleError::Unsupported {
-            action: "combat.scientist",
-            dependency: "unreconstructable legacy work-item context",
-        })?;
+        let context = state
+            .native_work
+            .loaded_item_field32
+            .ok_or(RuleError::Unsupported {
+                action: "combat.scientist",
+                dependency: "unreconstructable legacy work-item context",
+            })?;
         crate::combat::ally_turns::scientist_turn_with_work(
             c,
             &mut state.warriors,
@@ -44,18 +42,18 @@ pub fn enemy_turn(state: &mut Session, content: &Content) -> Result<Vec<Event>, 
             &content.items,
             context,
             &state.party_buffs,
-            &mut state.ammunition_work,
-            &mut state.attack_count,
+            &mut state.native_work.ammunition_work,
+            &mut state.native_work.attack_count,
         )?
     } else {
         let mut work = EnemyWork {
-            item_context: state.loaded_item_field32,
-            attack_count: state.attack_count,
+            item_context: state.native_work.loaded_item_field32,
+            attack_count: state.native_work.attack_count,
             packet: c.attack_packet.clone(),
             identity: c.attack_identity,
             spell_attempt: 0,
             spell_disabled: state.enemy_spell_disabled,
-            buffers: state.ammunition_work.clone(),
+            buffers: state.native_work.ammunition_work.clone(),
             display_writers: true,
         };
         let events = enemy_action_with_work_and_buffs(
@@ -67,12 +65,12 @@ pub fn enemy_turn(state: &mut Session, content: &Content) -> Result<Vec<Event>, 
             &mut work,
             &state.party_buffs,
         )?;
-        state.loaded_item_field32 = work.item_context;
-        state.attack_count = work.attack_count;
-        state.ammunition_work = work.buffers;
+        state.native_work.loaded_item_field32 = work.item_context;
+        state.native_work.attack_count = work.attack_count;
+        state.native_work.ammunition_work = work.buffers;
         events
     };
-    if let Some(health) = state.health_context.as_mut() {
+    if let Some(health) = state.native_work.health_context.as_mut() {
         for event in &events {
             match event {
                 Event::SpellResolved {

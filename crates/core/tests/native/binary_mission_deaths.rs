@@ -126,7 +126,7 @@ fn child_roster_retains_native_story_actor_and_saved_inactive_record() {
     assert_eq!(active.len(), 1);
     state.combat.as_mut().unwrap().script_enemy = 3;
     let position = state.exploration.as_mut().unwrap();
-    position.script = Some(support::script_state(
+    position.script = Some(centurions_core::ScriptState::scheduled(
         content.map(0).unwrap().script(337).unwrap().to_vec(),
         1,
     ));
@@ -140,7 +140,7 @@ fn child_roster_retains_native_story_actor_and_saved_inactive_record() {
     assert_eq!(arena.enemies.records, active);
     assert_eq!(
         arena.retained_npcs.slots[3].as_ref().unwrap().record.bytes,
-        case.bytes("records_after")[3 * 288..4 * 288]
+        case.bytes("records_after")[3 * MONSTER_BYTES..4 * MONSTER_BYTES]
     );
     support::checkpoint(&state, &content, "inactive-npc-after");
 }

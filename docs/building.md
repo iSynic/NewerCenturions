@@ -56,7 +56,6 @@ For a source-only checkout:
 ```sh
 python -m unittest discover -s tests/python -p test_extract.py
 python -m unittest discover -s tests/python -p test_public.py
-python -m unittest discover -s tests/python -p test_translation_plan.py
 cargo fmt --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -83,11 +82,62 @@ packaging with prepared originals also requires the extended campaign replays.
 These assisted replays check functionality and save/resume behavior; they do not
 establish complete original-game parity or live desktop acceptance.
 
-Preserve native fixture bytes and case identities. Keep test code and helpers at
-or below 25% of maintained production code, as counted by
-`python tools/source_audit.py`. Expanded instruction bodies and generated catalogs
-are excluded from the production denominator. Retain only distinct critical
-coverage; prefer existing command/replay groups.
+The instruction-level reference is a separate, private Cargo workspace under
+`archive/`: the routine catalog and recovered execution bodies
+(`archive/crates/reference`), the expanded translations (`archive/crates/translated*`)
+and `centurions-reference-tools`, which prints the routine catalog report. It builds
+against the maintained crates in the root workspace but is not part of the public
+source, nor are the Ghidra probes in `tools/ghidra/` and the menu-boundary check over
+their fixtures, the Ghidra project setup scripts, the translation generator or the
+original-game reference drivers. In a development checkout:
+
+```powershell
+cargo test --manifest-path archive/Cargo.toml --features original-fixtures
+cargo clippy --manifest-path archive/Cargo.toml --all-targets --features original-fixtures -- -D warnings
+cargo run --manifest-path archive/Cargo.toml -p centurions-reference-tools
+```
+
+Preserve native fixture bytes and case identities. `python tools/source_audit.py`
+counts two layers separately:
+
+- **Maintained:** maintained tests against maintained production code.
+- **Reference:** the archive's recovered execution bodies and routine catalog,
+  against the probes, harnesses and tests that compare with them or with the
+  original binary. The expanded translations are not counted.
+
+Native-evidence comparisons, which test maintained code against original-binary
+fixtures (`crates/core/tests/native/` and their dedicated helpers), are a third
+category. They are reported with the fixture count and grow with native evidence.
+The reported target for the remaining maintained test code is 25% of maintained
+production code. The gate is a ratchet on the count of maintained test code lines, which may
+not exceed `MAINTAINED_TEST_CEILING` in the tool:
+
+- Lower the ceiling whenever consolidation removes lines.
+- Never raise it to admit new tests; offset new coverage by consolidating.
+- A count rather than a ratio, so that simplifying production code never fails
+  the gate.
+
+Both ratios, and the combined historical one, are still reported. Retain only distinct critical coverage, and prefer
+the existing command/replay groups.
+
+`python tools/engine_inventory.py` regenerates `evidence/engine-inventory.json` from
+the current source, the routine catalog and the supplied data. It covers unsupported
+diagnostics, catalog routines (each binding labelled maintained or reference) and
+the dispatch-domain values the supplied scenario uses. Hand judgments live only in
+`evidence/engine-inventory-notes.json`, keyed by row id. `source_audit.py` runs the
+same check as part of the build gate, and skips it in a checkout without the private
+evidence and archive: a maintained diagnostic without a note, or a
+catalog binding to a missing file, fails the build. `--check` also reports rows
+marked `unreviewed`. A value absent from the supplied scenario is not
+evidence that the original binary cannot reach it. Regenerate after changing a
+diagnostic, a catalog binding or a dispatch arm.
+
+`python tools/original_dispatch.py` extracts the original `newland` opcode arms
+and the `attack2` natural-condition arms for warrior and NPC targets from the
+private Ghidra exports. It writes values only to `evidence/original-dispatch.json`.
+The inventory lists each original arm against the current Rust: a named story
+operation, or the admission guards for natural conditions. `resolvespell` and
+`castspell` branch on range guards and are not extracted.
 
 ## Public source and GitHub builds
 

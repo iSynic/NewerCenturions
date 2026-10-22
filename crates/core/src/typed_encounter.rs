@@ -1,7 +1,10 @@
 use crate::{Event, RuleError, Session, feedback::NativeFeedback};
-use centurions_content::{Content, span, word};
+use centurions_content::records::{
+    AttackPacket, Condition, PsiSelectionMemoryMut, QuestionExtra, TypedEncounterRecord,
+};
+use centurions_content::{Content, span};
 
-pub const RECORD_BYTES: usize = 516;
+pub use centurions_content::records::TYPED_ENCOUNTER_BYTES as RECORD_BYTES;
 
 /// Encounter2 calls castspell with an encounter active, bypassing location flags.
 pub fn validate_spell(
@@ -11,7 +14,10 @@ pub fn validate_spell(
     spell: i16,
     power: i16,
 ) -> Result<Vec<u8>, RuleError> {
-    if word(crate::exploration::typed_record(state, content)?, 106)? == 0 {
+    if TypedEncounterRecord(crate::exploration::typed_record(state, content)?)
+        .spell_alternative(0)?
+        == 0
+    {
         return Err(RuleError::Refused { feedback: vec![] });
     }
     let actor = state
@@ -21,14 +27,20 @@ pub fn validate_spell(
     if !(1..=7).contains(&power) || !actor.knows_spell(spell)? {
         return Err("encounter spell or power unavailable".into());
     }
-    if [0x98, 0xac, 0x60, 0x68, 0x90]
-        .into_iter()
-        .any(|offset| word(&actor.bytes, offset).is_ok_and(|value| value != 0))
+    let record = actor.record();
+    if [
+        Condition::Confused,
+        Condition::UnlabelledScanBlock,
+        Condition::Helpless,
+        Condition::ScanBlocked,
+        Condition::ComputerControl,
+    ]
+    .into_iter()
+    .any(|condition| record.condition(condition).is_ok_and(|value| value != 0))
         || actor.stamina()? <= 0
         || actor.psi_points()? <= 0
         || state.combat.is_some()
-            && (word(&actor.bytes, 0x14)? != 0
-                || word(&actor.bytes, 0xac8)? >= word(&actor.bytes, 0xac6)?)
+            && (record.damage_marker()? != 0 || record.scans_used()? >= record.scan_capacity()?)
         || state
             .combat
             .as_ref()
@@ -44,7 +56,8 @@ pub fn validate_spell(
             .attacks,
         spell,
     )?;
-    if packet[1] == 7 && !matches!(word(&packet, 40)?, 0..=9 | 110) {
+    let view = AttackPacket(&packet);
+    if view.targeting_mode() == 7 && !matches!(view.effect()?, 0..=9 | 110) {
         return Err(RuleError::Unsupported {
             action: "story.encounter_spell",
             dependency: "indexed global spell effect outside recovered party durations",
@@ -70,19 +83,17 @@ pub fn cast_spell(
     let remaining = actor
         .psi_points()?
         .wrapping_sub(crate::combat::player_psi::cost(&packet, power)?);
-    actor.bytes[0x58..0x5a].copy_from_slice(&remaining.to_be_bytes());
+    actor.record_mut().set_psi_points(remaining);
     if state.combat.is_some() {
-        let casts =
-            i32::from_be_bytes(actor.bytes[0xa66..0xa6a].try_into().unwrap()).wrapping_add(1);
-        actor.bytes[0xa66..0xa6a].copy_from_slice(&casts.to_be_bytes());
-        let casts = word(&actor.bytes, 0xac8)?.wrapping_add(1);
-        actor.bytes[0xac8..0xaca].copy_from_slice(&casts.to_be_bytes());
+        actor.record_mut().count_scan_cast();
+        let casts = actor.record().scans_used()?.wrapping_add(1);
+        actor.record_mut().set_scans_used(casts);
     }
     let identity = [spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1];
     state.selected_warrior = warrior;
-    state.attack_identity = Some(identity);
-    state.attack_count = power;
-    state.attack_packet = Some(packet.clone());
+    state.native_work.attack_identity = Some(identity);
+    state.native_work.attack_count = power;
+    state.native_work.attack_packet = Some(packet.clone());
     if let Some(combat) = state.combat.as_mut() {
         combat.attack_packet = Some(packet.clone());
         combat.attack_identity = Some(identity);
@@ -92,49 +103,41 @@ pub fn cast_spell(
         column: identity[2] as u8,
         power,
     });
-    state.party_mask.fill(0);
+    state.native_work.party_mask.fill(0);
+    let view = AttackPacket(&packet);
     let mut events = vec![Event::Sound {
-        resource_id: word(&packet, 38)?,
+        resource_id: view.impact_sound()?,
     }];
-    if packet[1] == 7 {
-        if state.psi_memory.is_none() {
-            state.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
+    if view.targeting_mode() == 7 {
+        if state.native_work.psi_memory.is_none() {
+            state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
         }
-        for (index, value) in identity.into_iter().chain([power]).enumerate() {
-            let offset = warrior * 80 + 72 + index * 2;
-            state.psi_memory.as_mut().unwrap()[offset..offset + 2]
-                .copy_from_slice(&value.to_be_bytes());
-        }
-        let mut duration = state
-            .random
-            .range(i16::from(packet[13] as i8), i16::from(packet[14] as i8));
-        if packet[15] != 0 {
+        PsiSelectionMemoryMut(state.native_work.psi_memory.as_mut().unwrap())
+            .remember_cast(warrior, identity, power);
+        let (minimum, maximum) = view.duration_bounds();
+        let mut duration = state.random.range(minimum, maximum);
+        let (minimum, maximum) = view.additional_duration_bounds();
+        if minimum != 0 {
             for _ in 0..power {
-                duration = duration.wrapping_add(
-                    state
-                        .random
-                        .range(i16::from(packet[15] as i8), i16::from(packet[16] as i8)),
-                );
+                duration = duration.wrapping_add(state.random.range(minimum, maximum));
             }
         }
-        if word(&packet, 40)? == 110 {
+        if view.effect()? == 110 {
             crate::combat::party_buffs::extend_scenario_tail(state, duration)?;
         } else {
-            crate::combat::party_buffs::extend(
-                &mut state.party_buffs,
-                word(&packet, 40)?,
-                duration,
-            )?;
+            crate::combat::party_buffs::extend(&mut state.party_buffs, view.effect()?, duration)?;
         }
     }
-    let record = crate::exploration::typed_record(state, content)?;
+    let record = TypedEncounterRecord(crate::exploration::typed_record(state, content)?);
     let mut selector = 4;
-    for index in 0..10 {
-        let alternative = word(record, 106 + index * 2)?;
+    for index in 0..TypedEncounterRecord::SPELL_ALTERNATIVES {
+        let alternative = record.spell_alternative(index)?;
         if alternative == spell
-            || (alternative != 0 && alternative < 7 && alternative == i16::from(packet[19] as i8))
+            || (alternative != 0
+                && alternative < 7
+                && alternative == i16::from(view.defense_category() as i8))
         {
-            selector = record[126 + index] as i8;
+            selector = record.spell_selector(index);
             break;
         }
     }
@@ -145,8 +148,8 @@ pub fn cast_spell(
 }
 
 pub fn begin_actions(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
-    let record = crate::exploration::typed_record(state, content)?;
-    if record[96] == 0 {
+    let record = TypedEncounterRecord(crate::exploration::typed_record(state, content)?);
+    if record.action_selector() == 0 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
     state.encounter_actions = Some([false; 8]);
@@ -170,8 +173,8 @@ pub fn action_control(
             Ok(vec![Event::Sound { resource_id }])
         }
         17 => {
-            let record = crate::exploration::typed_record(state, content)?;
-            let required = &record[98..106];
+            let record = TypedEncounterRecord(crate::exploration::typed_record(state, content)?);
+            let required = record.required_actions();
             let count = required.iter().filter(|value| **value != 0).count();
             if selected.iter().filter(|value| **value).count() != count {
                 return Err(RuleError::Refused {
@@ -183,7 +186,7 @@ pub fn action_control(
                     .iter()
                     .zip(selected)
                     .all(|(value, chosen)| (*value != 0) == chosen);
-            let selector = if matched { record[96] as i8 } else { 4 };
+            let selector = if matched { record.action_selector() } else { 4 };
             state.encounter_actions = None;
             crate::exploration::finish_typed_selection(state, content, selector)
         }
@@ -197,8 +200,8 @@ pub fn action_control(
 
 pub fn validate_actions(state: &Session, content: &Content) -> Result<(), RuleError> {
     if state.encounter_actions.is_some() {
-        let record = crate::exploration::typed_record(state, content)?;
-        if record[96] == 0
+        let record = TypedEncounterRecord(crate::exploration::typed_record(state, content)?);
+        if record.action_selector() == 0
             || !state
                 .exploration
                 .as_ref()
@@ -221,13 +224,13 @@ pub fn validate_actions(state: &Session, content: &Content) -> Result<(), RuleEr
 
 /// encounter2 122a1a matches the selected item against five authored alternatives.
 pub fn select_item(record: &[u8], item: i16) -> Result<i8, RuleError> {
-    span(record, 0, RECORD_BYTES)?;
-    if word(record, 136)? == 0 {
+    let record = TypedEncounterRecord(span(record, 0, RECORD_BYTES)?);
+    if record.item_alternative(0)? == 0 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
-    for index in 0..5 {
-        if word(record, 136 + index * 2)? == item {
-            return Ok(record[146 + index] as i8);
+    for index in 0..TypedEncounterRecord::ITEM_ALTERNATIVES {
+        if record.item_alternative(index)? == item {
+            return Ok(record.item_selector(index));
         }
     }
     Ok(4)
@@ -239,16 +242,27 @@ pub enum PasswordSelection {
     Selected(i8),
 }
 
+/// newland44 on the loaded buffer: each eliminated branch keeps only its last
+/// action, which becomes opcode 24 with its parameter unchanged.
+pub fn eliminate_branches(record: &mut [u8], eliminated: u8) {
+    for branch in (0..4).filter(|branch| eliminated >> branch & 1 != 0) {
+        record[branch * 8..branch * 8 + 7].fill(0);
+        record[32 + branch * 16..32 + branch * 16 + 14].fill(0);
+        record[branch * 8 + 7] = 24;
+    }
+}
+
 pub fn attempt_count(record: &[u8]) -> Result<i16, RuleError> {
-    Ok(i16::from(span(record, 0, 156)?[152] as i8))
+    let record = TypedEncounterRecord(span(record, 0, TypedEncounterRecord::HEADER_BYTES)?);
+    Ok(i16::from(record.attempts()))
 }
 
 pub fn dialogue(record: &[u8]) -> Result<i16, RuleError> {
-    Ok(word(span(record, 0, 156)?, 154)?)
+    Ok(TypedEncounterRecord(span(record, 0, TypedEncounterRecord::HEADER_BYTES)?).dialogue()?)
 }
 
 pub fn password_label(record: &[u8]) -> Result<&[u8], RuleError> {
-    let label = span(record, 156 + 8 * 40, 40)?;
+    let label = TypedEncounterRecord(record).password_label()?;
     if label[0] > 39 {
         return Err(RuleError::Invalid(
             "typed encounter label is too long".into(),
@@ -263,7 +277,8 @@ pub fn select_password(
     lowercase: &[u8],
 ) -> Result<PasswordSelection, RuleError> {
     let record = span(record, 0, RECORD_BYTES)?;
-    if record[97] == 0 {
+    let selector = TypedEncounterRecord(record).password_selector();
+    if selector == 0 {
         return Err(RuleError::Invalid("typed input is unavailable".into()));
     }
     if input.is_empty() || input[0] == 0 {
@@ -296,7 +311,7 @@ pub fn select_password(
         });
     }
     Ok(PasswordSelection::Selected(if matched {
-        record[97] as i8
+        selector
     } else {
         4
     }))
@@ -314,16 +329,17 @@ pub fn continuation(
     selected: i8,
     remaining: i16,
 ) -> Result<TypedContinuation, RuleError> {
-    let record = span(record, 0, 156)?;
+    let record = span(record, 0, TypedEncounterRecord::HEADER_BYTES)?;
     match selected {
         -1 => Ok(TypedContinuation::Abort),
         0 => Ok(TypedContinuation::Cancel),
         1..=4 => {
-            let selector = if selected == 4 && remaining == 1 && (record[152] as i8) > 1 {
-                3
-            } else {
-                selected
-            };
+            let selector =
+                if selected == 4 && remaining == 1 && TypedEncounterRecord(record).attempts() > 1 {
+                    3
+                } else {
+                    selected
+                };
             Ok(TypedContinuation::Branch {
                 selector,
                 body: crate::story::dispatch_menu_branch(record, selector)?,
@@ -351,23 +367,23 @@ pub enum QuestionPlan {
 }
 
 pub fn question_labels(extra: &[u8]) -> Result<(i16, i16), RuleError> {
-    Ok((word(extra, 6)?, word(extra, 8)?))
+    Ok(QuestionExtra(extra).labels()?)
 }
 
 pub fn question_plan(extra: &[u8], answer: bool) -> Result<QuestionPlan, RuleError> {
-    let extra = span(extra, 0, 10)?;
-    if answer != (word(extra, 0)? == 0) {
+    let extra = QuestionExtra(span(extra, 0, QuestionExtra::BYTES)?);
+    if answer != (extra.answer()? == 0) {
         return Ok(QuestionPlan::Continue);
     }
-    Ok(match word(extra, 2)? {
+    Ok(match extra.outcome()? {
         0 => QuestionPlan::MoveAway,
-        1 => QuestionPlan::ReplaceScript(word(extra, 4)?),
+        1 => QuestionPlan::ReplaceScript(extra.outcome_parameter()?),
         2 | 3 => {
-            let branch = word(extra, 4)?;
+            let branch = extra.outcome_parameter()?;
             if !(0..4).contains(&branch) {
                 return Err(RuleError::Invalid("question branch is unavailable".into()));
             }
-            if word(extra, 2)? == 2 {
+            if extra.outcome()? == 2 {
                 QuestionPlan::MenuBranch(branch as u8)
             } else {
                 QuestionPlan::TypedBranch(branch as u8)

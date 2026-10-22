@@ -108,10 +108,11 @@ pub(crate) fn begin_item(
     state.selected_warrior = actor;
     state.load_item_work(content, selected.id())?;
     let global = AttackPacket(&packet).targeting_mode() == 7;
-    state.attack_packet = Some(packet);
-    state.attack_identity = Some([spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1]);
-    state.attack_count = power;
-    state.party_mask.fill(0);
+    state.native_work.attack_packet = Some(packet);
+    state.native_work.attack_identity =
+        Some([spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1]);
+    state.native_work.attack_count = power;
+    state.native_work.party_mask.fill(0);
     state.outdoor_psi = Some(Selection {
         actor,
         spell,
@@ -120,7 +121,7 @@ pub(crate) fn begin_item(
         item: Some(selected.id()),
     });
     if global || state.warriors.len() == 1 {
-        state.party_mask[..if global { state.warriors.len() } else { 1 }].fill(1);
+        state.native_work.party_mask[..if global { state.warriors.len() } else { 1 }].fill(1);
         events.extend(finish(state, content)?);
     } else {
         events.push(Event::Sound { resource_id: 6001 });
@@ -133,6 +134,7 @@ pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleErr
         return Ok(());
     };
     let packet = state
+        .native_work
         .attack_packet
         .as_ref()
         .ok_or("outdoor Psi packet missing")?;
@@ -180,8 +182,8 @@ pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleErr
         || !combat::player_psi::OUTDOOR_TARGET_SPELLS.contains(&pending.spell)
         || !matches!(AttackPacket(packet).targeting_mode(), 0 | 1)
         || packet != &original
-        || state.attack_count != pending.power
-        || state.attack_identity
+        || state.native_work.attack_count != pending.power
+        || state.native_work.attack_identity
             != Some([
                 pending.spell / 1000 - 1,
                 pending.spell % 1000 / 100 - 1,
@@ -199,16 +201,25 @@ pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleErr
     };
     if limit >= state.warriors.len() as i16
         || !(1..=limit).contains(&pending.remaining)
-        || state.party_mask[state.warriors.len()..]
+        || state.native_work.party_mask[state.warriors.len()..]
             .iter()
             .any(|rank| *rank != 0)
         || state
+            .native_work
             .party_mask
             .iter()
             .any(|rank| *rank < 0 || *rank > limit)
-        || (pending.remaining + 1..=limit)
-            .any(|rank| state.party_mask.iter().filter(|r| **r == rank).count() != 1)
+        || (pending.remaining + 1..=limit).any(|rank| {
+            state
+                .native_work
+                .party_mask
+                .iter()
+                .filter(|r| **r == rank)
+                .count()
+                != 1
+        })
         || state
+            .native_work
             .party_mask
             .iter()
             .any(|rank| *rank > 0 && *rank <= pending.remaining)
@@ -234,14 +245,14 @@ pub(crate) fn select(
         .outdoor_psi
         .as_mut()
         .ok_or("outdoor Psi selection missing")?;
-    let old = state.party_mask[warrior];
+    let old = state.native_work.party_mask[warrior];
     let sound = if old == 0 {
-        state.party_mask[warrior] = pending.remaining;
+        state.native_work.party_mask[warrior] = pending.remaining;
         pending.remaining -= 1;
         141
     } else {
-        state.party_mask[warrior] = 0;
-        for rank in &mut state.party_mask {
+        state.native_work.party_mask[warrior] = 0;
+        for rank in &mut state.native_work.party_mask {
             if *rank > 0 && *rank < old {
                 *rank += 1;
             }
@@ -257,7 +268,7 @@ pub(crate) fn select(
 }
 
 pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
-    if !state.party_mask.iter().any(|rank| *rank > 0)
+    if !state.native_work.party_mask.iter().any(|rank| *rank > 0)
         && state
             .outdoor_psi
             .as_ref()
@@ -270,15 +281,18 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
         .take()
         .ok_or("outdoor Psi selection missing")?;
     let packet = state
+        .native_work
         .attack_packet
         .clone()
         .ok_or("outdoor Psi packet missing")?;
     let identity = state
+        .native_work
         .attack_identity
         .ok_or("outdoor Psi identity missing")?;
     let mut events = vec![];
     if pending.item.is_none() {
         let memory = state
+            .native_work
             .psi_memory
             .as_mut()
             .ok_or("outdoor Psi memory missing")?;
@@ -299,6 +313,7 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
         false,
     )?);
     if state
+        .native_work
         .health_context
         .as_ref()
         .is_some_and(|h| h.unavailable >= state.warriors.len() as i8)
@@ -312,7 +327,7 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
             .is_some_and(|p| matches!(p.presentation, Some(crate::Presentation::Typed { .. })))
     {
         // Items12c422 adds its owner after resolving the item; encounter2 matches the ID.
-        state.party_mask[pending.actor] = 1;
+        state.native_work.party_mask[pending.actor] = 1;
         let selected = crate::typed_encounter::select_item(
             crate::exploration::typed_record(state, content)?,
             item,
@@ -331,13 +346,13 @@ pub(crate) fn cancel(state: &mut Session, content: &Content) -> Result<Vec<Event
         .as_ref()
         .is_some_and(|pending| pending.item.is_some())
     {
-        state.party_mask.fill(0);
+        state.native_work.party_mask.fill(0);
         return finish(state, content);
     }
     state
         .outdoor_psi
         .take()
         .ok_or("outdoor Psi selection missing")?;
-    state.party_mask.fill(0);
+    state.native_work.party_mask.fill(0);
     Ok(vec![])
 }

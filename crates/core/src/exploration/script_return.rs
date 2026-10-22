@@ -1,6 +1,7 @@
 //! Script return for maintained exploration.
 use crate::{Event, RuleError, ScriptState, Session, combat};
-use centurions_content::mission::{OpeningMission, long};
+use centurions_content::mission::OpeningMission;
+use centurions_content::records::{EventHeaderTableMut, StoryRecord, StoryRecordMut};
 use centurions_content::{Content, Warrior};
 
 /// Derived caller ownership; no extra persistent state or new admission rule.
@@ -40,6 +41,16 @@ pub(super) fn finish_dispatch(
     }
 }
 
+/// newland's early `return 0`: the script stops without its end processing
+/// (event retirement, encounter loop or destination); battle owners still finish.
+pub(super) fn abandon_script(
+    state: &mut Session,
+    content: &Content,
+) -> Result<Vec<Event>, RuleError> {
+    state.exploration.as_mut().unwrap().script = None;
+    Ok(finish_dispatch(state, content)?.unwrap_or_default())
+}
+
 pub(super) fn finish_script(
     state: &mut Session,
     content: &Content,
@@ -50,6 +61,11 @@ pub(super) fn finish_script(
         .as_mut()
         .ok_or_else(|| RuleError::Invalid("no active map".into()))?;
     let Some(mut script) = position.script.take() else {
+        crate::trace::declined(
+            "exploration.finish_script",
+            "exploration",
+            "no active script",
+        );
         return Ok(vec![]);
     };
     if let Some(events) = finish_dispatch(state, content)? {
@@ -58,10 +74,15 @@ pub(super) fn finish_script(
     let position = state.exploration.as_mut().unwrap();
     state.scripted_cleanup = None;
     if script.scheduled {
+        crate::trace::declined(
+            "exploration.finish_script",
+            "exploration",
+            "scheduled script",
+        );
         return Ok(vec![]);
     }
     let origin = script.origin.clone().unwrap_or_else(|| {
-        let key = long(&script.record, 0).unwrap_or(0);
+        let key = StoryRecord(&script.record).location_key().unwrap_or(0);
         crate::ScriptOrigin {
             map: key / 10000,
             x: key % 100,
@@ -70,7 +91,7 @@ pub(super) fn finish_script(
         }
     });
     if exhausted && script.menu.is_none() {
-        script.record[7] = 255;
+        StoryRecordMut(&mut script.record).set_trigger_chance(255);
         let headers = if origin.level != state.scenario_level {
             &mut state
                 .visited_levels
@@ -87,7 +108,7 @@ pub(super) fn finish_script(
                 .ok_or_else(|| RuleError::Invalid("event origin map missing".into()))?
                 .event_headers
         };
-        headers[script.map_slot * 42 + 7] = 255;
+        EventHeaderTableMut(headers).set_trigger_chance(script.map_slot, 255);
     }
     let current = crate::story_destination::Location {
         map: position.map,
@@ -99,9 +120,14 @@ pub(super) fn finish_script(
         &script.record,
         current,
         state.phase == crate::Phase::Combat,
-        false,
+        script.chained,
     )?
     else {
+        crate::trace::declined(
+            "exploration.finish_script",
+            "exploration",
+            "no story destination",
+        );
         return Ok(vec![]);
     };
     OpeningMission::index(plan.target.x, plan.target.y)?;
@@ -127,7 +153,7 @@ pub(super) fn finish_script(
                 .ok_or_else(|| RuleError::Invalid("event origin map missing".into()))?
                 .event_headers
         };
-        headers[script.map_slot * 42..(script.map_slot + 1) * 42].copy_from_slice(&record);
+        EventHeaderTableMut(headers).replace(script.map_slot, &record);
     }
     crate::mission::travel(state, content, plan.target)?;
     let position = state.exploration.as_ref().unwrap();

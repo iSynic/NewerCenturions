@@ -113,8 +113,8 @@ pub(crate) fn fire_at(
     {
         return Err("multi-body scan requires selected targets".into());
     }
-    if state.psi_memory.is_none() {
-        state.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
+    if state.native_work.psi_memory.is_none() {
+        state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
     }
     let mut events = player_psi::cast_prepared_at(
         state,
@@ -156,11 +156,11 @@ pub(crate) fn fire_warrior(
     let mut health = crate::story_health::context(
         &state.warriors,
         pending.actor,
-        state.health_context.as_ref(),
+        state.native_work.health_context.as_ref(),
     );
     health.affected[pending.actor] = 1;
     health.effect = AttackPacket(packet).health_effect();
-    state.health_context = Some(health);
+    state.native_work.health_context = Some(health);
     state.medical_continuation = Some(crate::MedicalContinuation {
         origin: crate::MedicalOrigin::LearnedHeal,
         actor: pending.actor,
@@ -233,11 +233,11 @@ pub(crate) fn begin_targeting(
     let combat = state.combat.as_mut().unwrap();
     combat.attack_packet = Some(packet);
     combat.attack_identity = Some(identity);
-    state.attack_packet = combat.attack_packet.clone();
-    state.attack_identity = combat.attack_identity;
-    state.weapon_work = combat.weapon_work;
+    state.native_work.attack_packet = combat.attack_packet.clone();
+    state.native_work.attack_identity = combat.attack_identity;
+    state.native_work.weapon_work = combat.weapon_work;
     state.target_quantity = None;
-    state.attack_count = power;
+    state.native_work.attack_count = power;
     state.psi_menu_choices[actor] = Some(PsiMenuChoice {
         row: identity[1] as u8,
         column: identity[2] as u8,
@@ -321,8 +321,8 @@ pub(crate) fn fire(state: &mut Session, content: &Content) -> Result<Vec<Event>,
             }],
         });
     }
-    if state.psi_memory.is_none() {
-        state.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
+    if state.native_work.psi_memory.is_none() {
+        state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
     }
     let mut events = player_psi::cast_selection(state, mission(state, content)?, &pending)?;
     state.psi_selection = None;

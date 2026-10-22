@@ -11,8 +11,8 @@ pub(super) fn mission<'a>(
     state: &Session,
     content: &'a Content,
 ) -> Result<&'a OpeningMission, RuleError> {
-    content
-        .map(state.exploration.as_ref().map_or(0, |p| p.map))
+    state
+        .land(content)
         .ok_or_else(|| RuleError::Invalid("equipment mission missing".into()))
 }
 
@@ -79,8 +79,8 @@ pub fn transfer(
         .get(slot)
         .cloned()
         .ok_or("transfer slot missing")?;
-    if state.inventory_record.is_some() {
-        state.inventory_record = Some(item.clone());
+    if state.native_work.inventory_record.is_some() {
+        state.native_work.inventory_record = Some(item.clone());
     }
     state.load_item_work(content, item.id())?;
     if state.warriors[to].inventory()?.len() >= 30 {
@@ -141,7 +141,7 @@ pub fn take_crate(
     state.warriors[warrior] = result.warrior;
     if result.collected {
         if !stacked {
-            state.inventory_record = Some(retained);
+            state.native_work.inventory_record = Some(retained);
         }
         state.crate_items[slot] = result.item;
     }
@@ -170,8 +170,8 @@ pub fn equip(
         .cloned()
         .ok_or_else(|| RuleError::Invalid("equipment slot missing".into()))?;
     let item_id = item.id();
-    if state.inventory_record.is_some() {
-        state.inventory_record = Some(item.clone());
+    if state.native_work.inventory_record.is_some() {
+        state.native_work.inventory_record = Some(item.clone());
     }
     let mut result = wear_retained(
         &state.warriors[warrior],
@@ -179,9 +179,9 @@ pub fn equip(
         mission(state, content)?,
         slot,
         state.phase == Phase::Combat,
-        state.inventory_record.as_ref(),
+        state.native_work.inventory_record.as_ref(),
     )?;
-    state.inventory_record = result.record.take();
+    state.native_work.inventory_record = result.record.take();
     if !result.changed {
         state.warriors[warrior] = result.warrior;
         state.load_item_work(content, item_id)?;
@@ -191,13 +191,17 @@ pub fn equip(
     state.warriors[warrior] = result.warrior;
     state.load_item_work(content, item_id)?;
     let selected = state
+        .native_work
         .health_context
         .as_ref()
         .map_or(state.selected_warrior, |context| context.selected_warrior);
-    let mut health =
-        crate::story_health::context(&state.warriors, selected, state.health_context.as_ref());
+    let mut health = crate::story_health::context(
+        &state.warriors,
+        selected,
+        state.native_work.health_context.as_ref(),
+    );
     health.affected[warrior] = 1;
-    state.health_context = Some(health);
+    state.native_work.health_context = Some(health);
     Ok(events(result.sounds, result.warnings))
 }
 
@@ -214,17 +218,17 @@ pub fn unequip(
         .cloned()
         .ok_or_else(|| RuleError::Invalid("equipment slot missing".into()))?;
     let item_id = item.id();
-    if state.inventory_record.is_some() {
-        state.inventory_record = Some(item.clone());
+    if state.native_work.inventory_record.is_some() {
+        state.native_work.inventory_record = Some(item.clone());
     }
     let mut result = remove_retained(
         &state.warriors[warrior],
         content,
         mission(state, content)?,
         slot,
-        state.inventory_record.as_ref(),
+        state.native_work.inventory_record.as_ref(),
     )?;
-    state.inventory_record = result.record.take();
+    state.native_work.inventory_record = result.record.take();
     if !result.changed {
         state.warriors[warrior] = result.warrior;
         state.load_item_work(content, item_id)?;
@@ -233,7 +237,7 @@ pub fn unequip(
     items::compact(&mut result.warrior)?;
     state.warriors[warrior] = result.warrior;
     state.load_item_work(content, item_id)?;
-    if let Some(health) = state.health_context.as_mut() {
+    if let Some(health) = state.native_work.health_context.as_mut() {
         health.affected[warrior] = 1;
     }
     Ok(events(result.sounds, result.warnings))

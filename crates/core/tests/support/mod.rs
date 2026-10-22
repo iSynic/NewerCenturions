@@ -1,5 +1,7 @@
 use crate::fixture_hex as hex;
 use centurions_content::Content;
+use centurions_content::WARRIOR_BYTES;
+use centurions_content::combat::MONSTER_BYTES;
 use centurions_core::{Command, Event, Session, apply};
 use serde_json::Value;
 use std::borrow::Cow;
@@ -70,8 +72,13 @@ pub fn positions<T: BinaryInput + ?Sized>(value: &T) -> Vec<(i16, i16)> {
         .map(|pair| (pair[0], pair[1]))
         .collect()
 }
+/// The checkout root, from the maintained crates and the archive's reference tests alike.
 pub fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .find(|path| path.join("crates/core/Cargo.toml").is_file())
+        .unwrap()
+        .to_path_buf()
 }
 pub fn fixture(name: &str) -> Value {
     serde_json::from_slice(&std::fs::read(root().join("evidence/fixtures").join(name)).unwrap())
@@ -103,19 +110,6 @@ pub fn mission_session(content: &Content) -> Session {
     )
     .unwrap();
     state
-}
-
-pub fn script_state(record: Vec<u8>, cursor: u8) -> centurions_core::ScriptState {
-    centurions_core::ScriptState {
-        record,
-        cursor,
-        map_slot: 0,
-        item_return: false,
-        scheduled: true,
-        menu: None,
-        persist: false,
-        origin: None,
-    }
 }
 
 pub fn data(name: &str) -> Vec<u8> {
@@ -276,18 +270,27 @@ pub fn battle() -> centurions_core::combat::Combat {
 
 pub fn warriors<T: BinaryInput + ?Sized>(value: &T) -> Vec<centurions_content::Warrior> {
     let raw = bytes(value);
-    let (records, tail) = raw.as_chunks::<3138>();
+    let (records, tail) = raw.as_chunks::<WARRIOR_BYTES>();
     assert!(tail.is_empty());
     records
         .iter()
         .map(|record| centurions_content::Warrior::read(record).unwrap())
         .collect()
 }
+/// The warrior record at `index` in a captured party buffer.
+pub fn warrior_at(party: &[u8], index: usize) -> centurions_content::Warrior {
+    centurions_content::Warrior::read(&party[index * WARRIOR_BYTES..(index + 1) * WARRIOR_BYTES])
+        .unwrap()
+}
+/// Writes one warrior back into its slot of a captured party buffer.
+pub fn put_warrior(party: &mut [u8], index: usize, warrior: &centurions_content::Warrior) {
+    party[index * WARRIOR_BYTES..(index + 1) * WARRIOR_BYTES].copy_from_slice(&warrior.bytes);
+}
 pub fn monsters<T: BinaryInput + ?Sized>(
     value: &T,
 ) -> Vec<centurions_content::combat::MonsterRecord> {
     let raw = bytes(value);
-    let (records, tail) = raw.as_chunks::<288>();
+    let (records, tail) = raw.as_chunks::<MONSTER_BYTES>();
     assert!(tail.is_empty());
     records
         .iter()

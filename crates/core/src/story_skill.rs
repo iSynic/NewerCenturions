@@ -1,8 +1,7 @@
 use crate::RuleError;
 use centurions_content::{
     Warrior,
-    records::{Attribute, DevelopmentField as Field},
-    span, word,
+    records::{Attribute, DevelopmentField as Field, SkillCheckExtra},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,7 +36,7 @@ pub fn predicate(
     warriors: &[Warrior],
     selected: &[i16; 6],
 ) -> Result<SkillPlan, RuleError> {
-    let extra = span(extra, 0, 10)?;
+    let extra = SkillCheckExtra::new(extra)?;
     let warrior = selected
         .iter()
         .position(|value| *value != 0)
@@ -49,9 +48,9 @@ pub fn predicate(
         .get(warrior)
         .ok_or_else(|| RuleError::Invalid("selected warrior is unavailable".into()))?
         .bytes;
-    let index = word(extra, 0)?;
-    let threshold = word(extra, 2)?;
-    let success = if word(extra, 4)? == 0 {
+    let index = extra.subject()?;
+    let threshold = extra.threshold()?;
+    let success = if extra.checks_special_skill()? {
         let index = usize::try_from(index)
             .map_err(|_| RuleError::Invalid("negative story skill index".into()))?;
         Field::SpecialSkill(index)
@@ -73,6 +72,6 @@ pub fn predicate(
     Ok(SkillPlan::ReplaceScript {
         warrior,
         success,
-        script: word(extra, if success { 6 } else { 8 })?,
+        script: extra.script(success)?,
     })
 }

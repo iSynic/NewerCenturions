@@ -195,7 +195,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                     4,
                     centurions_core::MapState::authored(content.map(4).unwrap()),
                 );
-                position.script = Some(support::script_state(
+                position.script = Some(centurions_core::ScriptState::scheduled(
                     mission
                         .script(case.words("slots_before")[0])
                         .unwrap()
@@ -272,7 +272,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 state.phase = Phase::Combat;
                 let mut health = centurions_core::story_health::context(&state.warriors, 0, None);
                 health.last_body = case["last_defeated"].as_i64().unwrap_or(-1) as i16;
-                state.health_context = Some(health);
+                state.native_work.health_context = Some(health);
                 if !carried {
                     arena.order[109] = 0;
                 }
@@ -435,20 +435,7 @@ fn original_round_surrender_enters_question_then_declines_or_cleans_without_rewa
                 }
             }
             replay_command(Command::EndTurn, &mut state, &mut resumed, &content);
-            for _ in 0..30 {
-                if state.round_dispatch.is_none() {
-                    break;
-                }
-                let command = if matches!(
-                    state.exploration.as_ref().unwrap().presentation,
-                    Some(Presentation::Menu { .. })
-                ) {
-                    Command::CancelMenu
-                } else {
-                    Command::Continue
-                };
-                replay_command(command, &mut state, &mut resumed, &content);
-            }
+            advance_dispatch(&mut state, &mut resumed, &content, 30, None);
             assert!(state.round_dispatch.is_none() && state.combat.is_none());
         }
     }
@@ -487,7 +474,7 @@ fn surrender_question_cleanup_and_saved_script_return_match_native_early_exit() 
             4,
             centurions_core::MapState::authored(content.map(4).unwrap()),
         );
-        position.script = Some(support::script_state(
+        position.script = Some(centurions_core::ScriptState::scheduled(
             content.map(4).unwrap().script(11).unwrap().to_vec(),
             3,
         ));
@@ -511,7 +498,12 @@ fn surrender_question_cleanup_and_saved_script_return_match_native_early_exit() 
         );
         support::assert_rng(&state.random, &after["seed"], &after["draws"]);
         assert_eq!(
-            state.health_context.as_ref().unwrap().unavailable,
+            state
+                .native_work
+                .health_context
+                .as_ref()
+                .unwrap()
+                .unavailable,
             after.n::<i8>("unavailable")
         );
         assert!(state.combat.is_none());
@@ -521,22 +513,42 @@ fn surrender_question_cleanup_and_saved_script_return_match_native_early_exit() 
             Some(Presentation::Dialogue { id: 93, .. })
         ));
         resumed = support::checkpoint(&state, &content, "surrender-cleaned");
-        for _ in 0..40 {
-            if state.round_dispatch.is_none() {
-                break;
-            }
-            let command = if matches!(
-                state.exploration.as_ref().unwrap().presentation,
-                Some(Presentation::Menu { .. })
-            ) {
-                Command::CancelMenu
-            } else {
-                Command::Continue
-            };
-            replay_command(command, &mut state, &mut resumed, &content);
-            resumed = support::checkpoint(&state, &content, "surrender-script");
-        }
+        advance_dispatch(
+            &mut state,
+            &mut resumed,
+            &content,
+            40,
+            Some("surrender-script"),
+        );
         assert!(state.round_dispatch.is_none());
         assert!(state.scripted_cleanup.is_none());
+    }
+}
+
+/// Advances a round dispatch as the desktop does: dismiss a menu, otherwise Continue.
+fn advance_dispatch(
+    state: &mut Session,
+    resumed: &mut Session,
+    content: &Content,
+    limit: usize,
+    checkpoint: Option<&str>,
+) {
+    for _ in 0..limit {
+        if state.round_dispatch.is_none() {
+            break;
+        }
+        let menu = matches!(
+            state.exploration.as_ref().unwrap().presentation,
+            Some(Presentation::Menu { .. })
+        );
+        let command = if menu {
+            Command::CancelMenu
+        } else {
+            Command::Continue
+        };
+        replay_command(command, state, resumed, content);
+        if let Some(label) = checkpoint {
+            *resumed = support::checkpoint(state, content, label);
+        }
     }
 }

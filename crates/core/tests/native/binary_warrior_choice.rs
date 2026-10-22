@@ -12,7 +12,7 @@ fn single_living_warrior_selection_matches_original_gate_and_mask() {
             Warrior {
                 name: "Coriand".into(),
                 original_sha256: String::new(),
-                bytes: vec![0; 3138],
+                bytes: vec![0; WARRIOR_BYTES],
             };
             6
         ];

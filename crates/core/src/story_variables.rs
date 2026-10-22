@@ -1,5 +1,8 @@
 use crate::{RuleError, story_inventory::query_party_item};
-use centurions_content::{Warrior, span, word};
+use centurions_content::{
+    Warrior,
+    records::{PartyItemConditionExtra, VariablePredicateExtra, VariableUpdateExtra},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StoryContinuation {
@@ -19,8 +22,8 @@ pub(crate) fn branch(mode: i16, target: i16) -> StoryContinuation {
     }
 }
 
-fn index(flags: &[u8], extra: &[u8]) -> Result<usize, RuleError> {
-    let index = usize::try_from(word(extra, 0)?)
+fn index(flags: &[u8], variable: i16) -> Result<usize, RuleError> {
+    let index = usize::try_from(variable)
         .map_err(|_| RuleError::Invalid("story variable index is negative".into()))?;
     if index >= flags.len() {
         return Err(RuleError::Invalid("story variable is unavailable".into()));
@@ -36,16 +39,16 @@ pub struct VariableUpdate {
 
 /// newland 76 adds a signed word before clamping and storing a signed byte.
 pub fn update_variable(flags: &[u8], extra: &[u8]) -> Result<VariableUpdate, RuleError> {
-    let extra = span(extra, 0, 10)?;
-    let index = index(flags, extra)?;
+    let extra = VariableUpdateExtra::new(extra)?;
+    let index = index(flags, extra.variable()?)?;
     let mut flags = flags.to_vec();
     if index < 100 {
-        let value = i16::from(flags[index] as i8).wrapping_add(word(extra, 2)?);
+        let value = i16::from(flags[index] as i8).wrapping_add(extra.amount()?);
         flags[index] = value.clamp(-127, 127) as i8 as u8;
     }
-    let threshold = word(extra, 6)?;
+    let threshold = extra.threshold()?;
     let continuation = if threshold != 0 && i16::from(flags[index] as i8) >= threshold {
-        branch(word(extra, 4)?.wrapping_sub(1), word(extra, 8)?)
+        branch(extra.branch()?.wrapping_sub(1), extra.target()?)
     } else {
         StoryContinuation::Continue
     };
@@ -62,14 +65,14 @@ pub struct VariablePredicate {
 }
 
 pub fn variable_predicate(flags: &[u8], extra: &[u8]) -> Result<VariablePredicate, RuleError> {
-    let extra = span(extra, 0, 10)?;
-    let index = index(flags, extra)?;
-    let matched = i16::from(flags[index] as i8) >= word(extra, 2)?;
-    let target = word(extra, if matched { 8 } else { 6 })?;
+    let extra = VariablePredicateExtra::new(extra)?;
+    let index = index(flags, extra.variable()?)?;
+    let matched = i16::from(flags[index] as i8) >= extra.threshold()?;
+    let target = extra.target(matched)?;
     let continuation = if target == 0 {
         StoryContinuation::Continue
     } else {
-        branch(word(extra, 4)?, target)
+        branch(extra.branch()?, target)
     };
     Ok(VariablePredicate {
         matched,
@@ -81,12 +84,12 @@ pub fn party_item_condition(
     warriors: &[Warrior],
     extra: &[u8],
 ) -> Result<StoryContinuation, RuleError> {
-    let extra = span(extra, 0, 10)?;
-    if query_party_item(warriors, word(extra, 0)?)?.is_some() {
-        return Ok(branch(word(extra, 2)?, word(extra, 6)?));
+    let extra = PartyItemConditionExtra::new(extra)?;
+    if query_party_item(warriors, extra.item()?)?.is_some() {
+        return Ok(branch(extra.found_branch()?, extra.found_target()?));
     }
-    Ok(match word(extra, 4)? {
-        0 => StoryContinuation::ReplaceScript(word(extra, 8)?),
+    Ok(match extra.missing_action()? {
+        0 => StoryContinuation::ReplaceScript(extra.missing_script()?),
         3 => StoryContinuation::EndScript,
         _ => StoryContinuation::Continue,
     })

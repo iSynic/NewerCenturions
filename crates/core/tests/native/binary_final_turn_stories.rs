@@ -48,7 +48,7 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
                 .combat
                 .as_mut()
                 .unwrap();
-        tables.monsters[288..576].copy_from_slice(&definition);
+        tables.monsters[MONSTER_BYTES..576].copy_from_slice(&definition);
         let extra = [1_i16, 0, 655, 469, 470];
         tables.encounters[2470..2480].copy_from_slice(&support::word_bytes(&extra));
         let mut state = support::mission_session(&content);
@@ -65,7 +65,7 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
         script[8..10].copy_from_slice(&120_i16.to_be_bytes());
         script[24..26].copy_from_slice(&247_i16.to_be_bytes());
         let position = state.exploration.as_mut().unwrap();
-        position.script = Some(support::script_state(script, 0));
+        position.script = Some(centurions_core::ScriptState::scheduled(script, 0));
         position.presentation = Some(Presentation::Dialogue {
             id: 469,
             text: String::new(),

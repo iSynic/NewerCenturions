@@ -268,7 +268,7 @@ pub fn import(
     state.allies = info.bytes(0x440edc, 5760)?;
     state.ally_count = usize::try_from(info.word(0x44257c)?)
         .map_err(|_| RuleError::Invalid("invalid native ally count".into()))?;
-    state.psi_memory = Some(info.bytes(0x43788a, 480)?);
+    state.native_work.psi_memory = Some(info.bytes(0x43788a, 480)?);
     state.psi_disabled = info.byte(0x442749)?;
     state.energy_recovery_disabled = info.byte(0x44274a)?;
     state.enemy_spell_disabled = info.byte(0x44274b)?;
@@ -278,7 +278,14 @@ pub fn import(
     state.mission_score = info.word(0x435502)?;
     state.mission_stage = info.word(0x435500)?;
     state.map_picture = info.word(0x40857a)?;
+    state.native_work.random_battles = info.bytes(0x402f42, 1)?[0];
+    state.native_work.coordinates_hidden = info.word(0x4354fe)?;
     state.notes = info.bytes(0x442722, 19)?;
+    state.saved_position = [
+        info.byte(0x442738)?,
+        info.byte(0x44270c)?,
+        info.byte(0x44270d)?,
+    ];
     state.ammunition = info
         .bytes(0x42dbe4, 800)?
         .as_chunks::<4>()

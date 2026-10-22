@@ -4,7 +4,6 @@ use crate::RuleError;
 use centurions_content::{
     Warrior,
     records::{AttackPacket, LearnedScans, LearnedScansMut, ProfessionProfile, WarriorRecord},
-    span,
 };
 use serde::{Deserialize, Serialize};
 
@@ -33,8 +32,7 @@ impl ScanSelection {
         if profile < 1 {
             return Err(RuleError::Invalid("scan MOS profile is unavailable".into()));
         }
-        let profile = span(profiles, (profile as usize - 1) * 576, 576)?;
-        let highest_tier = ProfessionProfile(profile).highest_scan_tier()?;
+        let highest_tier = ProfessionProfile::from_table(profiles, profile)?.highest_scan_tier()?;
         let mut warrior = warrior.clone();
         let remaining = normalize_scans(&mut warrior)?;
         Ok(Self {
@@ -121,12 +119,8 @@ fn finish_scans(warrior: &mut Warrior, attacks: &[u8]) -> Result<(), RuleError> 
     for row in 0..7 {
         for column in 0..7 {
             if LearnedScans(bytes).selected(row, column) {
-                let spell = span(
-                    attacks,
-                    school as usize * 2842 + row * 406 + column * 58,
-                    58,
-                )?;
-                if AttackPacket(spell).effect()? == 57 {
+                let spell = AttackPacket::scan_entry(attacks, school as usize, row * 7 + column)?;
+                if spell.effect()? == 57 {
                     LearnedScansMut(bytes).set_healing_available(true);
                 }
             }

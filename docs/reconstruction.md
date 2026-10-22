@@ -2,8 +2,10 @@
 
 The maintained runtime and desktop are organized by game subsystem and screen.
 See [Maintaining the runtime](maintainability.md) for ownership, the complete
-combat-click path, save contracts and change guides. The refactor preserves
-expanded translation libraries and their existing compiler profiles.
+combat-click path, save contracts and change guides. The expanded translation
+libraries, the routine catalog and the recovered execution bodies keep their
+compiler profiles in a separate, private workspace under `archive/`; they are not
+part of the public source.
 
 Desktop integration is tracked separately from source translation. Recovered
 routine coverage does not mean that every original menu or control is connected.
@@ -18,7 +20,9 @@ their existence does not establish complete interactive or original-game parity.
 ## Local implementation checkpoint
 
 The maintained runtime keeps the compiler split and shared command boundary.
-Schema 13 saves retain readers for versions 1–12. Version 13 adds the original
+Schema 14 saves retain readers for versions 1–13. Version 14 moves the party
+mask and health context into the retained native work group, which changes only
+their saved key order. Version 13 adds the original
 retained natural-attack index used by unarmed NPC result audio. Historical saves
 leave that context unknown until an original writer establishes it; the reader
 does not guess an index. Persistent round/death caller
@@ -61,11 +65,12 @@ The two nested-caller cases compare the
 complete captured three-window sequence, retained records, queue/header bytes,
 RNG and ordered feedback. Their controlled service boundaries remain explicit.
 
-Current enforced accounting is 27,468 test code lines / 110,367 maintained
-production code lines (24.8879%, ceiling 25%). Physical totals are 28,767 test
-and 113,842 production lines. Test helpers and verification scripts are counted;
-expanded bodies, generated catalogs, fixtures, vendor code and recovery tools
-are excluded from maintained production code. All frozen native references
+At this checkpoint the single ratio was 27,468 test code lines / 110,367
+production code lines (24.8879%). That denominator included the recovered
+execution bodies. `python tools/source_audit.py` now reports the maintained and
+reference layers separately (see `docs/building.md`). Test helpers and
+verification scripts are counted; expanded bodies, generated catalogs, fixtures,
+vendor code and recovery tools are excluded. All frozen native references
 remain intact. New bounded native cases compare natural effects and all 256
 original MacRoman case-fold outputs. A complete original opcode-8 header copy
 now agrees with the actual movement/save path. Original script replacement
@@ -107,7 +112,7 @@ control flow into ordered action blocks, translate related behavior into Rust,
 and compile the batch. Native comparisons refine fidelity after implementation;
 they do not decide whether a recovered action may be implemented.
 
-The exporter `tools/ghidra/ExportActionInventory.java` processes CODE 1
+The private exporter `tools/ghidra/ExportActionInventory.java` processes CODE 1
 application routines using the existing project with `-readOnly -noanalysis`.
 It writes decompiled C, actual function ranges, direct call dependencies,
 basic blocks, ordered instructions, and width-preserving p-code to a fresh
@@ -119,10 +124,9 @@ Build the private action plan and public-safe compiled catalog with:
 
 ```powershell
 python tools/plan_translation.py analysis/reconstruction/application-actions-1/actions.json
-cargo test -p centurions-core --lib
-cargo build --workspace --release
-./target/release/centurions-tools.exe translation-report
-./target/release/centurions-tools.exe translation-report calcstats
+cargo build --manifest-path archive/Cargo.toml --release
+cargo run --manifest-path archive/Cargo.toml -p centurions-reference-tools
+cargo run --manifest-path archive/Cargo.toml -p centurions-reference-tools -- calcstats
 ```
 
 The report needs no game installation. Its generated catalog contains only
@@ -393,12 +397,12 @@ the authority for their measured behavior. No assistance enters the desktop
 runtime. Live presentation, audio and responsiveness require user observation.
 
 The combat panel uses original pictures and native hit regions. Auto (including
-per-warrior checkboxes), Delay, Escape, Undo, the weapon-name chooser and selected-
-body portrait remain missing normal-combat entry points. The first four report
-technical diagnostics without modifying the session; the latter two still lack
-control bindings. Weapon-mode W and general inventory/Archives access are distinct
-actions. Camera controls are
-source-derived; inspected-body information and original range presentation still
-require completion/comparison. The finite control audit is tracked alongside the
-private completion checklist. Version 11 retains mechanical targeting; versions
-1-10 initialize that context as inactive and cannot admit it when downgraded.
+per-warrior checkboxes), Delay, Escape, Undo, the weapon-name chooser and the
+selected-body portrait reach shared commands through `desktop/src/combat_controls.rs`
+and `core/src/combat/controls.rs`. Their whole-caller native comparison and live
+acceptance remain open. Weapon-mode W and general inventory/Archives access are
+distinct actions. Camera controls are source-derived; inspected-body information
+and original range presentation still require comparison. The finite control
+audit is tracked alongside the private completion checklist. Mechanical targeting
+has been saved since schema 11. Older saves initialize it as inactive and cannot
+admit it.

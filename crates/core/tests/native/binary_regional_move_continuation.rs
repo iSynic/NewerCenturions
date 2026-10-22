@@ -48,10 +48,7 @@ fn walking_header_lookup_matches_continuous_original_prefix_and_full_buffers() {
         let headers = before.bytes("headers");
         let original_headers = headers.clone();
         let (map, x, y) = current_position(before);
-        let mut random = RandomState {
-            seed: before.n::<u32>("seed"),
-            draws: before.n::<u64>("draws"),
-        };
+        let mut random = crate::native_common::random_at(before, "seed", "draws");
         let mut receipt = random.clone();
         for draw in case.array("rng") {
             support::native_expect! {

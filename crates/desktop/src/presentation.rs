@@ -41,6 +41,8 @@ pub struct UiState {
     pub typed_text: String,
     pub typed_entry: bool,
     pub effects: VecDeque<OutdoorAnimation>,
+    /// The PICT newland27 left over the map window.
+    pub picture: Option<i16>,
     pub delay_until: f64,
     pub psi_power: i16,
     pub psi_choice: Option<(i16, i16)>,
@@ -103,7 +105,7 @@ use panels::{draw_clinic, draw_combat_information, draw_survivors, equipped_ammu
 mod state;
 
 mod map;
-use map::{draw_outdoor_effect, map};
+use map::{draw_outdoor_effect, draw_story_picture, map};
 
 mod scene;
 pub use scene::draw;

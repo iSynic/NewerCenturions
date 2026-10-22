@@ -1,6 +1,6 @@
 use crate::{RandomState, RuleError, story_health};
 use centurions_content::{
-    Warrior,
+    WARRIOR_BYTES, Warrior,
     records::{Condition, WarriorRecord, WarriorRecordMut},
     span,
 };
@@ -17,7 +17,7 @@ pub fn reduce_outdoors(
         ));
     }
     for warrior in warriors {
-        span(&warrior.bytes, 0, 3138)?;
+        span(&warrior.bytes, 0, WARRIOR_BYTES)?;
     }
     let mut outcome = story_health::HealthOutcome {
         warriors: warriors.to_vec(),

@@ -5,7 +5,7 @@ mod refill;
 mod selection;
 
 pub use context::WorkBuffers;
-pub(crate) use context::definition;
+pub use context::definition;
 pub use fitting::fit;
 pub use refill::refit;
 pub(crate) use refill::refit_with_record;
@@ -105,12 +105,12 @@ pub(crate) fn commit_result(
     result: AmmunitionResult,
 ) -> Result<Vec<crate::Event>, RuleError> {
     if let Some(item) = result.work.item.as_deref() {
-        state.loaded_item_field32 = Some(word(item, 32)?);
+        state.native_work.loaded_item_field32 = Some(word(item, 32)?);
     }
     let projected = if let Some(combat) = state.combat.as_mut() {
         &mut combat.weapon_work
     } else {
-        &mut state.weapon_work
+        &mut state.native_work.weapon_work
     };
     if let Some(weapon) = result.work.weapon.as_deref() {
         projected.load_weapon(weapon)?;
@@ -120,9 +120,9 @@ pub(crate) fn commit_result(
     }
     state.warriors[member] = result.warrior;
     state.ammunition = result.reserves;
-    state.ammunition_work = result.work;
+    state.native_work.ammunition_work = result.work;
     if let Some(record) = result.retained_record {
-        state.inventory_record = Some(record);
+        state.native_work.inventory_record = Some(record);
     }
     Ok(result
         .sounds

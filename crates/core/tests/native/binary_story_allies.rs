@@ -10,7 +10,10 @@ fn authored_large_allies_enter_battle_and_resume_their_turns() {
     let map = content.map(9).unwrap();
     let position = state.exploration.as_mut().unwrap();
     position.restore_map(9, centurions_core::MapState::authored(map));
-    position.script = Some(support::script_state(map.script(271).unwrap().to_vec(), 3));
+    position.script = Some(centurions_core::ScriptState::scheduled(
+        map.script(271).unwrap().to_vec(),
+        3,
+    ));
     position.presentation = Some(Presentation::Dialogue {
         id: 1025,
         text: map.dialogue(1025).unwrap(),
@@ -18,7 +21,7 @@ fn authored_large_allies_enter_battle_and_resume_their_turns() {
     apply(Command::Continue, &mut state, &content).unwrap();
     assert_eq!(state.ally_count, 7);
     let position = state.exploration.as_mut().unwrap();
-    position.script = Some(support::script_state(
+    position.script = Some(centurions_core::ScriptState::scheduled(
         content.map(9).unwrap().script(55).unwrap().to_vec(),
         0,
     ));

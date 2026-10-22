@@ -45,6 +45,7 @@ pub fn fit_ammunition(
         let reserve_index = usize::try_from(ammunition.wrapping_sub(200))
             .map_err(|_| RuleError::Invalid("ammunition outside reserve table".into()))?;
         let quality = state
+            .native_work
             .loot_quality
             .as_deref()
             .map(|quality| quality[..4].try_into().unwrap());
@@ -59,7 +60,7 @@ pub fn fit_ammunition(
                 in_combat,
                 loot_quality: quality,
             },
-            &state.ammunition_work,
+            &state.native_work.ammunition_work,
             &mut state.random,
         )?;
         let mut events = if in_combat {
@@ -100,16 +101,21 @@ pub fn fit_ammunition(
     )?;
     state.warriors[warrior] = result.warrior;
     state.ammunition = result.ammunition;
-    state.loaded_item_field32 = Some(result.loaded_item_field32);
-    state.ammunition_work.load_item(content, item.id())?;
+    state.native_work.loaded_item_field32 = Some(result.loaded_item_field32);
+    state
+        .native_work
+        .ammunition_work
+        .load_item(content, item.id())?;
     if result.loaded {
-        state.ammunition_work.ammo = Some(crate::ammunition::definition(content, ammunition)?);
+        state.native_work.ammunition_work.ammo =
+            Some(crate::ammunition::definition(content, ammunition)?);
         if let Some(combat) = state.combat.as_mut() {
             combat
                 .weapon_work
                 .load_ammunition(&content.items[ammunition as usize])?;
         } else {
             state
+                .native_work
                 .weapon_work
                 .load_ammunition(&content.items[ammunition as usize])?;
         }

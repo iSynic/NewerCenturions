@@ -85,10 +85,11 @@ pub(crate) fn audit(
     {
         let hash =
             |state: &Session| centurions_content::digest(&serde_json::to_vec(state).unwrap());
+        let trace = centurions_core::trace::take();
         let _ = writeln!(
             file,
             "{}",
-            serde_json::json!({"action":label,"before":hash(before),"after":hash(after),"seed":after.random.seed,"draws":after.random.draws,"scale":canvas.scale,"offset":[canvas.offset.x,canvas.offset.y],"client":[screen_width(),screen_height()]})
+            serde_json::json!({"action":label,"before":hash(before),"after":hash(after),"seed":after.random.seed,"draws":after.random.draws,"scale":canvas.scale,"offset":[canvas.offset.x,canvas.offset.y],"client":[screen_width(),screen_height()],"trace":trace})
         );
     }
 }

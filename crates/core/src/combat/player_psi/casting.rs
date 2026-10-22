@@ -136,6 +136,7 @@ pub(crate) fn cast_prepared_at(
         mission,
         &mut state.random,
         state
+            .native_work
             .psi_memory
             .as_mut()
             .ok_or("prepared scan memory missing")?,
@@ -157,7 +158,11 @@ pub(crate) fn cast_selection(
 ) -> Result<Vec<Event>, RuleError> {
     let mut events = vec![];
     let combat = state.combat.as_mut().ok_or("psi combat missing")?;
-    let memory = state.psi_memory.as_mut().ok_or("psi memory missing")?;
+    let memory = state
+        .native_work
+        .psi_memory
+        .as_mut()
+        .ok_or("psi memory missing")?;
     for (index, body) in selection.targets.iter().copied().enumerate() {
         let target = if body < 10 {
             combat.squad.positions[body as usize]

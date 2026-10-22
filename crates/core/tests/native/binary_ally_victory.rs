@@ -34,7 +34,7 @@ fn survivor_cleanup_and_rewards_match_original_composite_execution() {
         }
         assert_eq!(
             support::record_bytes(&enemies),
-            case.bytes("enemies_after")[..count * 288]
+            case.bytes("enemies_after")[..count * MONSTER_BYTES]
         );
         assert_eq!(
             loot.iter().flat_map(|i| i.0).collect::<Vec<_>>(),

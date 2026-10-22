@@ -53,7 +53,7 @@ fn expected_events(f: &Value, case: &Value) -> Vec<Event> {
             let identity = words(f, &collision["after"]["identity"]);
             let spell = (identity[0] + 1) * 1000 + (identity[1] + 1) * 100 + identity[2] + 1;
             let npcs = bytes(f, &collision["after"]["npcs"]);
-            let health = word(&npcs[(body as usize - 10) * 288..], 0x110).unwrap();
+            let health = word(&npcs[(body as usize - 10) * MONSTER_BYTES..], 0x110).unwrap();
             // Typed outcomes are synthesized at resolution; the slice captures
             // native damage, target records and ordered audio rather than Events.
             events.push(Event::SpellResolved {
@@ -78,16 +78,16 @@ fn consume(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleErr
         &mut state.warriors,
         &mut state.random,
         content.map(2),
-        &mut state.attack_count,
-        &mut state.party_mask,
+        &mut state.native_work.attack_count,
+        &mut state.native_work.party_mask,
         state.selected_warrior,
     )?;
     // Project the typed slice outcome through the same Session bookkeeping
     // represented by the independently captured native globals.
-    state.attack_packet = combat.attack_packet.clone();
+    state.native_work.attack_packet = combat.attack_packet.clone();
     combat.pending_last_defeated = None;
-    state.attack_identity = combat.attack_identity;
-    let health = state.health_context.as_mut().unwrap();
+    state.native_work.attack_identity = combat.attack_identity;
+    let health = state.native_work.health_context.as_mut().unwrap();
     health.effect = combat.attack_packet.as_ref().unwrap()[18] as i8;
     if let Some(body) = outcome.last_defeated_body {
         health.last_body = body;
@@ -125,7 +125,15 @@ fn npc_poison_slice_matches_complete_native_records_fields_work_and_rng_for_21_c
         let combat = current_combat(&actual);
         assert!(word(&combat.enemies.records[10].bytes, 0x110).unwrap() < 1);
         assert!(!combat.order.contains(&20));
-        assert_eq!(actual.health_context.as_ref().unwrap().last_body, 20);
+        assert_eq!(
+            actual
+                .native_work
+                .health_context
+                .as_ref()
+                .unwrap()
+                .last_body,
+            20
+        );
 
         for key in ["party_positions", "npc_positions"] {
             assert_eq!(

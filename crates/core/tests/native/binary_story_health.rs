@@ -2,7 +2,7 @@ use crate::{native_common, prelude::*, support};
 
 use centurions_core::story_health::heal_outdoors;
 use centurions_core::story_health::party_health;
-use native_common::patch_bytes as changes;
+use support::patch_bytes as changes;
 
 use native_common::health_event as event;
 
@@ -16,7 +16,8 @@ fn clinic_command_treatments_and_saved_return_match_original() {
         state.warriors = support::warriors(&case.bytes("before"));
         state.party_currency = case.n("credits_before");
         state.random = RandomState::new(12);
-        state.exploration.as_mut().unwrap().script = Some(support::script_state(vec![0; 42], 8));
+        state.exploration.as_mut().unwrap().script =
+            Some(centurions_core::ScriptState::scheduled(vec![0; 42], 8));
         state.exploration.as_mut().unwrap().presentation = Some(Presentation::Clinic {
             member: 0,
             percent: case.n("percent"),
@@ -47,10 +48,7 @@ fn clinic_command_treatments_and_saved_return_match_original() {
         assert_eq!(state.party_currency, case.n::<i32>("credits_after"));
         assert_eq!(
             state.random,
-            RandomState {
-                seed: case.n("seed_after"),
-                draws: case.n("draws")
-            }
+            crate::native_common::random_at(case, "seed_after", "draws")
         );
         let random = state.random.clone();
         for item in [7, 6, 11] {
@@ -68,7 +66,7 @@ fn clinic_command_treatments_and_saved_return_match_original() {
     let mut record = vec![0; 42];
     record[8..10].copy_from_slice(&(-32_i16).to_be_bytes());
     record[24..26].copy_from_slice(&297_i16.to_be_bytes());
-    position.script = Some(support::script_state(record, 0));
+    position.script = Some(centurions_core::ScriptState::scheduled(record, 0));
     let random = state.random.clone();
     let events = apply(Command::Continue, &mut state, &content).unwrap();
     assert!(events.starts_with(&[
@@ -94,7 +92,7 @@ fn clinic_command_treatments_and_saved_return_match_original() {
         let mut record = vec![0; 42];
         record[8..10].copy_from_slice(&101_i16.to_be_bytes());
         record[5..7].fill(45);
-        position.script = Some(support::script_state(record, 0));
+        position.script = Some(centurions_core::ScriptState::scheduled(record, 0));
         let headers = position.event_headers.clone();
         apply(Command::Continue, &mut state, &content).unwrap();
         let position = state.exploration.as_ref().unwrap();

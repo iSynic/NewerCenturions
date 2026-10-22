@@ -62,6 +62,14 @@ impl<'a> WarriorRecord<'a> {
     pub fn shield_points(&self) -> Result<i16, ContentError> {
         word(self.0, 0x26)
     }
+    /// The `ShieldCapacity` equipment statistic.
+    pub fn shield_capacity(&self) -> Result<i16, ContentError> {
+        word(self.0, 0x28)
+    }
+    /// Item ID of the worn battery, cleared by `clear_equipped_battery`.
+    pub fn equipped_battery(&self) -> Result<i16, ContentError> {
+        word(self.0, 0xee)
+    }
     pub fn armor(&self) -> Result<i16, ContentError> {
         word(self.0, 0x2c)
     }
@@ -73,6 +81,10 @@ impl<'a> WarriorRecord<'a> {
     }
     pub fn condition_duration(&self, index: usize) -> Result<i16, ContentError> {
         word(self.0, 0x5e + index * 2)
+    }
+    /// A condition slot by raw index, for story data that names the slot.
+    pub fn condition_slot(&self, slot: usize) -> Result<i16, ContentError> {
+        word(self.0, 0x5e + slot * 2)
     }
     pub fn condition(&self, condition: super::Condition) -> Result<i16, ContentError> {
         self.condition_duration(condition as usize)
@@ -201,6 +213,9 @@ impl<'a> WarriorRecord<'a> {
     }
     pub fn profession(&self) -> Result<i16, ContentError> {
         word(self.0, 0x34)
+    }
+    pub fn gender(&self) -> Result<i16, ContentError> {
+        word(self.0, 0x38)
     }
     pub fn level(&self) -> Result<i16, ContentError> {
         word(self.0, 0x3a)

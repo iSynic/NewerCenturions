@@ -167,9 +167,13 @@ pub fn undo(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleEr
     c.squad.positions[member] = origin;
     let w = &mut state.warriors[member];
     w.record_mut().set_action_points(0);
-    let mission = content
-        .map(state.exploration.as_ref().unwrap().map)
-        .ok_or("undo map missing")?;
+    let mission = crate::Session::land_in(
+        content,
+        state.mission.as_deref(),
+        state.scenario_level,
+        state.exploration.as_ref(),
+    )
+    .ok_or("undo map missing")?;
     let mut effects = vec![
         Event::Sound { resource_id: 664 },
         Event::TacticalMoved {
@@ -281,15 +285,13 @@ pub fn select_weapon(
         .position(|item| *item == selected)
         .ok_or("combat weapon moved unexpectedly")?;
     state.load_item_work(content, selected.id())?;
-    if state.inventory_record.is_some() {
-        state.inventory_record = Some(selected.clone());
+    if state.native_work.inventory_record.is_some() {
+        state.native_work.inventory_record = Some(selected.clone());
     }
     let mut worn = crate::equipment::wear(
         &state.warriors[member],
         content,
-        content
-            .map(state.exploration.as_ref().unwrap().map)
-            .ok_or("weapon map missing")?,
+        state.land(content).ok_or("weapon map missing")?,
         slot,
         false,
     )?;
@@ -339,18 +341,21 @@ pub fn firearm_mode(
         .wrapping_mul(8)
         .wrapping_add(30);
     if !enabled {
+        // combatchoice 0x117fb8 stores the loaded item's word 12 (0x453648), where
+        // toweap stores its impact sound.
         let attack = if melee == 0 {
             natural
         } else {
             state.load_item_work(content, melee)?;
             ItemDefinition(
                 state
+                    .native_work
                     .ammunition_work
                     .item
                     .as_ref()
                     .ok_or("melee item work missing")?,
             )
-            .spell()?
+            .pickup_sound()?
         };
         DevelopmentField::MeleeSound.write(&mut state.warriors[member].bytes, attack);
     }

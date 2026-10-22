@@ -1,7 +1,8 @@
-use super::PreparedFirearm;
+use super::{AREA_TARGET_ATTACK, MEDIUM_LASER, POINT_TARGET_ATTACK, PreparedFirearm, SMALL_LASER};
 use crate::RuleError;
 use centurions_content::records::{
     AttackPacket, AttackPacketMut, ItemDefinition, WeaponAttackModifiers, WeaponAttackParameters,
+    item_class,
 };
 use centurions_content::{Warrior, combat::MonsterRecord, word};
 
@@ -18,7 +19,7 @@ pub fn prepare(
     if warrior.record().firing_mode_flag() != 1
         || weapon.len() != 150
         || ammo.len() != 150
-        || ItemDefinition(weapon).category()?.wrapping_abs() != 15
+        || ItemDefinition(weapon).category()?.wrapping_abs() != item_class::MISSILE_WEAPON
         || ItemDefinition(weapon).description_id()?.wrapping_abs() != id.wrapping_abs()
     {
         return Err(RuleError::Unsupported {
@@ -35,14 +36,14 @@ pub fn prepare(
     if item.ammunition_id()?.wrapping_abs() != ItemDefinition(ammo).description_id()?.wrapping_abs()
         || ItemDefinition(weapon).ammunition_caliber()?
             != ItemDefinition(ammo).reserve_ammunition_kind()?
-        || ItemDefinition(ammo).category()?.wrapping_abs() != 26
+        || ItemDefinition(ammo).category()?.wrapping_abs() != item_class::AMMUNITION
     {
         return Err(RuleError::Invalid(
             "firearm ammunition definition mismatch".into(),
         ));
     }
     let descriptor = ItemDefinition(weapon).spell()?;
-    if !matches!(descriptor, 4101 | 4102) {
+    if !matches!(descriptor, POINT_TARGET_ATTACK | AREA_TARGET_ATTACK) {
         return Err(RuleError::Unsupported {
             action: "combat.firearm.prepare",
             dependency: "other attack descriptors",
@@ -87,13 +88,13 @@ fn prepare_packet_with_enhancement(
     enhancement: i8,
 ) -> Result<Vec<u8>, RuleError> {
     let descriptor = ItemDefinition(weapon).spell()?;
-    if !matches!(descriptor, 4101 | 4102) {
+    if !matches!(descriptor, POINT_TARGET_ATTACK | AREA_TARGET_ATTACK) {
         return Err(RuleError::Unsupported {
             action: "combat.firearm.prepare",
             dependency: "other attack descriptors",
         });
     }
-    let offset = 3 * 2842 + (descriptor - 4101) as usize * 58;
+    let offset = 3 * 2842 + (descriptor - POINT_TARGET_ATTACK) as usize * 58;
     let mut p = centurions_content::span(attacks, offset, 58)?.to_vec();
     let weapon = WeaponAttackModifiers::read(weapon)?;
     let ammunition = WeaponAttackModifiers::read(ammo)?;
@@ -108,9 +109,9 @@ pub fn prepare_enemy(
     weapon: &[u8],
     attacks: &[u8],
 ) -> Result<PreparedFirearm, RuleError> {
-    if !matches!(enemy.record().primary_weapon()?, 680 | 681)
+    if !matches!(enemy.record().primary_weapon()?, SMALL_LASER | MEDIUM_LASER)
         || enemy.record().ammunition()? != 0
-        || ItemDefinition(weapon).spell()? != 4101
+        || ItemDefinition(weapon).spell()? != POINT_TARGET_ATTACK
     {
         return Err(RuleError::Unsupported {
             action: "combat.enemy_firearm",

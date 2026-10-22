@@ -90,11 +90,12 @@ pub(super) fn roster(
         controls.push(Control {
             rect,
             enabled: true,
-            action: if state
-                .exploration
-                .as_ref()
-                .is_some_and(|p| matches!(p.presentation, Some(Presentation::WarriorChoice { .. })))
-            {
+            action: if state.exploration.as_ref().is_some_and(|p| {
+                matches!(
+                    p.presentation,
+                    Some(Presentation::WarriorChoice { .. } | Presentation::PartyPick { .. })
+                )
+            }) {
                 Action::Command(Command::ChooseWarrior { index })
             } else {
                 Action::Select(index)
@@ -108,8 +109,11 @@ pub(super) fn clock(state: &Session, assets: &Assets) {
     if let Some(p) = &state.exploration {
         if state.phase == Phase::Exploration {
             // xy138a40 and updatefat160a8e; PICT199 supplies the original field labels.
-            assets.text(&p.x.to_string(), 512., 444., 12, SKYBLUE);
-            assets.text(&p.y.to_string(), 566., 444., 12, SKYBLUE);
+            let hidden = (state.native_work.coordinates_hidden != 0)
+                .then(|| assets.native_text.text(0x40226a, true).unwrap_or_default());
+            let coordinate = |value: i32| hidden.clone().unwrap_or_else(|| value.to_string());
+            assets.text(&coordinate(p.x), 512., 444., 12, SKYBLUE);
+            assets.text(&coordinate(p.y), 566., 444., 12, SKYBLUE);
             let fatigue = p.fatigue.clamp(4, 135);
             // Original solid pixel patterns131/129/130 change at70 and105.
             let color = if fatigue > 105 {

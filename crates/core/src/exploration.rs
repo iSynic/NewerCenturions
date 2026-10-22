@@ -26,15 +26,15 @@ mod menus;
 use menus::{present_menu, present_typed};
 pub use menus::{submit_text, typed_record};
 mod loot;
-use loot::present_treasure;
 pub use loot::take_loot;
+use loot::{present_treasure, present_treasure_record};
 mod script_return;
+use script_return::{abandon_script, finish_dispatch, finish_script};
 pub(crate) use script_return::{dialogue, retain_script_stamp};
-use script_return::{finish_dispatch, finish_script};
 mod battle_entry;
 pub(crate) use battle_entry::{StoryBattle, begin_story_battle};
 mod script_execution;
-pub(crate) use script_execution::run_script;
+pub(crate) use script_execution::{Operation, run_script};
 
 #[cfg(all(test, feature = "original-fixtures"))]
 use crate::*;

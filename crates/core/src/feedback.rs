@@ -2,6 +2,16 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Cargo Pod `snd ` 6000 "Error".
+pub const ERROR_SOUND: i16 = 6000;
+/// Cargo Pod `snd ` 20 "Booty", played when a battle hands over its loot.
+pub const BOOTY_SOUND: i16 = 20;
+/// Reloads add a `bound(2)` draw to this base, selecting Weapon Sounds `snd `
+/// 404 "Clip Sound 0" or 405 "Clip Sound 1".
+pub const CLIP_SOUND_BASE: i16 = 403;
+/// Cargo Pod `STR#` 3 "Warnings", entry 25: the weapon has no ammunition left.
+pub const OUT_OF_AMMUNITION_WARNING: i16 = 25;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NativeFeedback {
     Silent,
@@ -47,6 +57,17 @@ pub enum NativeFeedback {
     },
 }
 
+/// The camping flashes shared by buttonchoice and newland66: x 50, y 50, sound 6001.
+pub fn camp_flash(address: u32) -> NativeFeedback {
+    NativeFeedback::Flash {
+        address,
+        x: 50,
+        y: 50,
+        wait: 0,
+        sound: 6001,
+    }
+}
+
 /// newland144632: original Click Mouse flash before the script resumes.
 pub fn script_pause() -> NativeFeedback {
     NativeFeedback::Flash {
@@ -74,9 +95,12 @@ pub fn combat_result(code: i16) -> Option<(u32, i16)> {
         -21 => (0x400de2, 344),
         -20 => (0x400dd0, 431),
         -19 => (0x400dbe, 601),
+        -18 => (0x400dac, 693),
+        -17 => (0x400d9a, 693),
         -16 => (0x400d8a, 618),
         -15 => (0x400d76, 360),
         -14 => (0x400cc2, 0),
+        -47 => (0x400d02, 631),
         -51 => (0x400d34, 629),
         -50 => (0x400d22, 629),
         -45 => (0x400d0e, 629),

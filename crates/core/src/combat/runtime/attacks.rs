@@ -1,5 +1,6 @@
 //! Attacks in the original combat execution order.
 use super::{has_active_warrior, is_melee_weapon, load_melee_work, load_natural_work, position};
+use crate::combat::warrior_attack::{self, WarriorMelee};
 use crate::combat::{Combat, attack, lifecycle};
 use crate::{Event, RandomState, RuleError};
 use centurions_content::Warrior;
@@ -42,11 +43,9 @@ pub(super) fn resolve_attack(
     } else {
         retained_actor
     };
-    let result = if attacker < 10 && recipient >= 10 {
-        let weapon = crate::combat::warrior_attack::weapon(
-            &warriors[attacker as usize].bytes,
-            items.unwrap_or(&[]),
-        )?;
+    let result = if attacker < 10 {
+        let weapon =
+            warrior_attack::weapon(&warriors[attacker as usize].bytes, items.unwrap_or(&[]))?;
         if warriors[attacker as usize].record().attacks_used()?
             < warriors[attacker as usize].record().attack_limit()?
         {
@@ -60,34 +59,41 @@ pub(super) fn resolve_attack(
                 load_natural_work(combat, items, buffers)?;
             }
         }
-        if let Some(attacks) = attacks {
-            let copies_packet = warriors[attacker as usize].record().attacks_used()?
-                < warriors[attacker as usize].record().attack_limit()?;
-            let (result, packet, reflected) = attack::warrior_attack_with_packet(
+        match attacks {
+            None if recipient >= 10 => attack::unarmed_attack(
                 &mut warriors[attacker as usize],
                 &mut combat.enemies.records[(recipient - 10) as usize],
                 random,
-                attacks,
+                combat.difficulty,
+            )?,
+            attacks => match warrior_attack::warrior_melee(
+                combat,
+                warriors,
+                random,
+                attacker,
+                recipient,
+                items.unwrap_or(&[]),
+                attacks.ok_or("warrior melee attack table missing")?,
                 &retained,
-                combat.difficulty,
-                weapon,
-            )?;
-            if reflected {
-                recipient = attacker;
-            }
-            if copies_packet {
-                combat.attack_packet = Some(packet);
-            }
-            result
-        } else {
-            attack::unarmed_attack(
-                &mut warriors[attacker as usize],
-                &mut combat.enemies.records[(recipient - 10) as usize],
-                random,
-                combat.difficulty,
-            )?
+                buffs,
+            )? {
+                WarriorMelee::Halted { packet, warned } => {
+                    return Ok(halted_spell_weapon(combat, packet, warned));
+                }
+                WarriorMelee::Struck {
+                    result,
+                    packet,
+                    target,
+                } => {
+                    recipient = target;
+                    if packet.is_some() {
+                        combat.attack_packet = packet;
+                    }
+                    result
+                }
+            },
         }
-    } else if attacker >= 10 && recipient < 10 {
+    } else if recipient < 10 {
         let attacker_x = position(combat, attacker).0;
         let target_x = position(combat, recipient).0;
         combat.enemies.records[(attacker - 10) as usize]
@@ -139,7 +145,7 @@ pub(super) fn resolve_attack(
             combat.attack_packet = Some(packet);
             result
         }
-    } else if attacker >= 10 && recipient >= 10 {
+    } else {
         let melee_id = combat.enemies.records[(attacker - 10) as usize]
             .record()
             .melee_weapon()?;
@@ -183,38 +189,6 @@ pub(super) fn resolve_attack(
             combat.attack_packet = Some(packet);
             result
         }
-    } else {
-        let weapon = crate::combat::warrior_attack::weapon(
-            &warriors[attacker as usize].bytes,
-            items.unwrap_or(&[]),
-        )?;
-        let copies_packet = warriors[attacker as usize].record().attacks_used()?
-            < warriors[attacker as usize].record().attack_limit()?;
-        if copies_packet {
-            if let Some(weapon) = weapon {
-                combat.weapon_work.load_weapon(weapon)?;
-                buffers.load_weapon(
-                    items.unwrap(),
-                    warriors[attacker as usize].record().melee_weapon()?,
-                )?;
-            } else {
-                load_natural_work(combat, items, buffers)?;
-            }
-        }
-        let (result, packet, actual) = crate::combat::warrior_attack::attack(
-            warriors,
-            attacker as usize,
-            recipient as usize,
-            attacks.ok_or("warrior melee attack table missing")?,
-            items.unwrap_or(&[]),
-            combat.difficulty,
-            random,
-        )?;
-        if copies_packet {
-            combat.attack_packet = Some(packet);
-        }
-        recipient = actual as i16;
-        result
     };
     if let Some((member, 0)) = previous_faction
         && warriors[member].record().faction()? != 0
@@ -286,4 +260,16 @@ pub(super) fn resolve_attack(
         });
     }
     Ok(events)
+}
+
+/// A halted spell-weapon attack leaves loadspell2's packet and no strike events.
+fn halted_spell_weapon(combat: &mut Combat, packet: Vec<u8>, warned: bool) -> Vec<Event> {
+    combat.attack_packet = Some(packet);
+    if warned {
+        vec![Event::Feedback(crate::feedback::NativeFeedback::Warning {
+            index: 39,
+        })]
+    } else {
+        vec![]
+    }
 }

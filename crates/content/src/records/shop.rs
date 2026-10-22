@@ -28,6 +28,13 @@ impl ShopRecordMut<'_> {
         self.0[QUANTITIES + slot] = quantity;
     }
 
+    pub fn set_quantity(&mut self, slot: usize, quantity: u8) {
+        self.0[QUANTITIES + slot] = quantity;
+    }
+    pub fn set_price_percent(&mut self, percent: i16) {
+        put_word(self.0, QUANTITIES + SHOP_SLOTS, percent);
+    }
+
     pub fn buy_one(&mut self, slot: usize) {
         let quantity = &mut self.0[QUANTITIES + slot];
         *quantity = quantity.wrapping_sub(1);

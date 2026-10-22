@@ -176,15 +176,14 @@ fn complete_campaign_replays() {
         let resumed = replay(&route, &commands, &content, true);
         assert_eq!(state, resumed.0);
         assert_eq!(events, resumed.1);
+        // Key-sorted, so moving a field between flattened owners keeps the hash. The
+        // projection omits schema13 fields; full state and suffixes are compared above.
+        let hash = |value: serde_json::Value| digest(&serde_json::to_vec(&value).unwrap());
         assert_eq!(
-            digest(&serde_json::to_vec(&serde_json::to_value(&events).unwrap()).unwrap()),
+            hash(serde_json::to_value(&events).unwrap()),
             route.events_sha256
         );
-        assert_eq!(
-            // The accepted baseline hashes predate schema13; full current state
-            // and saved suffixes are compared above without this projection.
-            digest(&serde_json::to_vec(&crate::support::captured_session(&state)).unwrap()),
-            route.session_sha256
-        );
+        let session = serde_json::to_value(crate::support::captured_session(&state)).unwrap();
+        assert_eq!(hash(session), route.session_sha256);
     }
 }

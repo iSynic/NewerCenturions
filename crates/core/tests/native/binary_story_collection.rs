@@ -23,8 +23,8 @@ fn quest_collection_matches_original_complete_warriors_and_ordered_effects() {
         assert_eq!(result.warnings, case.n::<Vec<i16>>("warnings"), "{context}");
 
         let mut party = case.bytes("party_before");
-        let base = case.n::<usize>("member") * 3138;
-        party[base..base + 3138].copy_from_slice(&result.warrior.bytes);
+        let base = case.n::<usize>("member") * WARRIOR_BYTES;
+        party[base..base + WARRIOR_BYTES].copy_from_slice(&result.warrior.bytes);
         assert_bytes(&party, &case.bytes("party_after"), &context);
     }
 }

@@ -103,7 +103,7 @@ pub fn mission_records(state: &Session, content: &Content) -> Result<Vec<Warrior
             }
         }
         CharacterIdentityMut(&mut warrior.bytes).refresh_save_checksums()?;
-        if let Some(psi) = &state.psi_memory {
+        if let Some(psi) = &state.native_work.psi_memory {
             LearnedScansMut(&mut warrior.bytes)
                 .restore_selection_memory(&psi[member * 80..(member + 1) * 80]);
         }

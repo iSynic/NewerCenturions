@@ -71,9 +71,32 @@ pub struct ScriptState {
     pub persist: bool,
     #[serde(default)]
     pub origin: Option<ScriptOrigin>,
+    /// newland's encounter-caller action (local_4a), saved with the encounter
+    /// record; opcode 36's restore loop also counts in it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_action: Option<i16>,
+    /// An event started by the destination-tile lookup leaves the party in place
+    /// when it ends (newland's bVar6).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chained: bool,
 }
 
 impl ScriptState {
+    /// A scheduled story run from `cursor` in map slot 0, without menu or origin.
+    pub fn scheduled(record: Vec<u8>, cursor: u8) -> Self {
+        Self {
+            record,
+            cursor,
+            map_slot: 0,
+            scheduled: true,
+            item_return: false,
+            menu: None,
+            persist: false,
+            origin: None,
+            caller_action: None,
+            chained: false,
+        }
+    }
     pub(crate) fn restart_from(&mut self, replacement: &[u8]) {
         centurions_content::records::StoryRecordMut(&mut self.record).replace_body(replacement);
         self.cursor = 0;
@@ -116,6 +139,14 @@ pub struct MenuContinuation {
     pub original: Vec<u8>,
     #[serde(default)]
     pub typed: bool,
+    /// Complex-encounter branches newland44 eliminated in the loaded buffer, one bit
+    /// per branch; saveencounter writes them to the table when the encounter is left.
+    #[serde(default, skip_serializing_if = "no_branches")]
+    pub eliminated: u8,
+}
+
+fn no_branches(eliminated: &u8) -> bool {
+    *eliminated == 0
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Presentation {
@@ -160,5 +191,12 @@ pub enum Presentation {
     },
     WarriorChoice {
         extra: i16,
+    },
+    /// getchoice for newland14 and -14: `remaining` more members to pick, dead ones
+    /// too when `unconscious`; -14 inverts the finished pick mask.
+    PartyPick {
+        remaining: i16,
+        unconscious: bool,
+        invert: bool,
     },
 }

@@ -56,7 +56,7 @@ pub(super) fn firearms(fixture: &Value) {
     for (index, case) in cases.iter().enumerate() {
         let mut party = case.bytes("warriors_before");
         let member = case.n::<usize>("member");
-        let mut warrior = Warrior::read(&party[member * 3138..(member + 1) * 3138]).unwrap();
+        let mut warrior = crate::support::warrior_at(&party, member);
         let mut enemy = MonsterRecord {
             bytes: case.bytes("enemy_before"),
         };
@@ -71,7 +71,7 @@ pub(super) fn firearms(fixture: &Value) {
         let mut random = RandomState::new(case.n::<u32>("seed"));
         let result =
             enemy_weapons::resolve(&mut warrior, &mut enemy, &prepared, &mut random, 0).unwrap();
-        party[member * 3138..(member + 1) * 3138].copy_from_slice(&warrior.bytes);
+        crate::support::put_warrior(&mut party, member, &warrior);
         support::native_expect! {
             bytes party => &case["warriors_after"], &format!("case{index} full party");
             bytes enemy.bytes => &case["enemy_after"], "case{index} enemy";
@@ -87,7 +87,7 @@ pub(super) fn melee(cases: &[Value], native_audio: bool) {
     for (index, case) in cases.iter().enumerate() {
         let mut party = case.bytes("warriors_before");
         let member = case.n::<usize>("member");
-        let mut warrior = Warrior::read(&party[member * 3138..(member + 1) * 3138]).unwrap();
+        let mut warrior = crate::support::warrior_at(&party, member);
         let mut enemy = MonsterRecord {
             bytes: case.bytes("enemy_before"),
         };
@@ -113,7 +113,7 @@ pub(super) fn melee(cases: &[Value], native_audio: bool) {
         support::native_expect! {
             bytes &packet => &case.bytes("packet"), &format!("case{index} packet");
         };
-        party[member * 3138..(member + 1) * 3138].copy_from_slice(&warrior.bytes);
+        crate::support::put_warrior(&mut party, member, &warrior);
         support::native_expect! {
             bytes party => &case["warriors_after"], &format!("case{index} party");
             bytes enemy.bytes => &case["enemy_after"], &format!("case{index} attacker");
@@ -143,7 +143,13 @@ pub(super) fn neighbors(fixture: &Value, native_audio: bool) {
     for (index, case) in cases.iter().enumerate() {
         let raw = case.bytes("warriors_before");
         let mut warriors: Vec<_> = support::warriors(&raw);
-        let mut combat = native_common::neighbor_combat(case, 0);
+        // Genetic caller cases record the acting member; earlier corpora act as member 0.
+        let member = if case.get("member").is_some() {
+            case.n("member")
+        } else {
+            0
+        };
+        let mut combat = native_common::neighbor_combat(case, member);
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let events = runtime::check_neighbors_with_definitions(
             &mut combat,
@@ -227,7 +233,7 @@ fn required_endgame_ranged_to_natural_fallback_matches_original_full_records_and
     for (index, case) in cases.iter().enumerate() {
         let mut party = case.bytes("warriors_before");
         let member = case.n::<usize>("member");
-        let mut warrior = Warrior::read(&party[member * 3138..(member + 1) * 3138]).unwrap();
+        let mut warrior = crate::support::warrior_at(&party, member);
         let mut enemy = MonsterRecord {
             bytes: case.bytes("enemy_before"),
         };
@@ -243,7 +249,7 @@ fn required_endgame_ranged_to_natural_fallback_matches_original_full_records_and
         )
         .unwrap();
         assert_eq!(packet, case.bytes("packet"), "case{index} packet");
-        party[member * 3138..(member + 1) * 3138].copy_from_slice(&warrior.bytes);
+        crate::support::put_warrior(&mut party, member, &warrior);
         support::native_expect! {
             bytes party => &case["warriors_after"], "case{index} party";
             bytes enemy.bytes => &case["enemy_after"], "case{index} enemy";
@@ -275,7 +281,7 @@ fn required_endgame_firearm_whole_caller_matches_native_cast_order_records_and_w
         let before_records = case.bytes("records_before");
         let mut warriors: Vec<_> = support::warriors(&case["warriors_before"]);
         let mut positions = vec![(20, 20)];
-        if before_records.len() > 288 {
+        if before_records.len() > MONSTER_BYTES {
             positions.push((24, 20));
         }
         let mut combat = support::battle();
@@ -352,7 +358,7 @@ fn required_endgame_firearm_whole_caller_matches_native_cast_order_records_and_w
         let mut prior_records = before_records;
         for resolution in case.array("resolutions") {
             let no_human_warrior = prior_party
-                .as_chunks::<3138>()
+                .as_chunks::<WARRIOR_BYTES>()
                 .0
                 .iter()
                 .all(|warrior| warrior[0x9df] == 0 || word(warrior, 0x10) != 0);
@@ -381,14 +387,14 @@ fn required_endgame_firearm_whole_caller_matches_native_cast_order_records_and_w
                 }
                 let (before, after, hp) = if body < 6 {
                     (
-                        &prior_party[body * 3138..(body + 1) * 3138],
-                        &after_party[body * 3138..(body + 1) * 3138],
+                        &prior_party[body * WARRIOR_BYTES..(body + 1) * WARRIOR_BYTES],
+                        &after_party[body * WARRIOR_BYTES..(body + 1) * WARRIOR_BYTES],
                         0x50,
                     )
                 } else if body >= 10 && body < 10 + combat.enemies.records.len() {
                     (
-                        &prior_records[(body - 10) * 288..(body - 9) * 288],
-                        &after_records[(body - 10) * 288..(body - 9) * 288],
+                        &prior_records[(body - 10) * MONSTER_BYTES..(body - 9) * MONSTER_BYTES],
+                        &after_records[(body - 10) * MONSTER_BYTES..(body - 9) * MONSTER_BYTES],
                         0x110,
                     )
                 } else {

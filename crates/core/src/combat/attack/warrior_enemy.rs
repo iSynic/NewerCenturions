@@ -4,13 +4,15 @@ use super::AttackResult;
 use crate::{
     RandomState, RuleError,
     combat::damage::{DamageFlags, DamagePacket, resolve_damage},
+    combat::natural_conditions::{admit_weapon_condition, apply_weapon_condition},
 };
 use centurions_content::{
     Warrior,
     combat::MonsterRecord,
-    records::{Condition, ItemDefinition},
+    records::{Condition, DamageTargetKind, ItemDefinition},
 };
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn resolve(
     attacker: &mut Warrior,
     defender: &mut MonsterRecord,
@@ -19,6 +21,7 @@ pub(super) fn resolve(
     retained: &[u8],
     difficulty: i16,
     weapon: Option<&[u8]>,
+    rolls_condition: bool,
 ) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
     if attacker.record().melee_weapon()? != 0 && weapon.is_none() {
         return Err(RuleError::Unsupported {
@@ -34,6 +37,16 @@ pub(super) fn resolve(
     let mut packet = base;
     let attacks = attacker.record().attacks_used()?.wrapping_add(1);
     attacker.record_mut().set_attacks_used(attacks);
+    let weapon_condition = match weapon.filter(|_| rolls_condition) {
+        Some(weapon) => admit_weapon_condition(
+            weapon,
+            &mut defender.bytes,
+            DamageTargetKind::Enemy,
+            false,
+            random,
+        )?,
+        None => None,
+    };
     let chance = super::melee_accuracy::against_enemy(&attacker.bytes, &defender.bytes)?;
     if random.bound(100)
         > chance.clamp(
@@ -74,15 +87,9 @@ pub(super) fn resolve(
         },
         random,
     )?;
+    // attack accumulates a fifth of each creature-category bonus into the damage
+    // global, then clears it before resolvedamage; only the hit bonus survives.
     let mut damage = resolved.total;
-    if weapon.is_some() && !reflected {
-        for category in 0..8 {
-            if defender.record().has_creature_category(category) {
-                damage =
-                    damage.wrapping_add(attacker.record().creature_category_bonus(category)? / 5);
-            }
-        }
-    }
     if damage <= 0 {
         attacker.record_mut().count_miss();
         return Ok(no_damage(packet, reflected));
@@ -90,6 +97,16 @@ pub(super) fn resolve(
     if random.bound(100) <= attacker.record().major_wound_chance()? {
         damage = damage.wrapping_mul(2);
     }
+    // The condition rolled against the enemy lands on the warrior when the blow reflects.
+    let feedback = weapon_condition
+        .map(|condition| {
+            if reflected {
+                apply_weapon_condition(&mut attacker.bytes, DamageTargetKind::Warrior, condition)
+            } else {
+                apply_weapon_condition(&mut defender.bytes, DamageTargetKind::Enemy, condition)
+            }
+        })
+        .transpose()?;
     let killed;
     if reflected {
         if attacker.record().turn_skip_duration()? != 0 {
@@ -125,7 +142,7 @@ pub(super) fn resolve(
     };
     Ok((
         AttackResult {
-            feedback: None,
+            feedback,
             damage,
             killed,
             sounds: vec![sound],

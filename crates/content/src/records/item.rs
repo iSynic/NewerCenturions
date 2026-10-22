@@ -3,6 +3,26 @@ use crate::{ContentError, InventoryRecord, mission::long, word};
 // edititems 0x134034 display/control order, shared by drawing and mutation.
 const EDITOR_MODIFIERS: [usize; 10] = [13, 15, 16, 11, 17, 18, 19, 14, 21, 20];
 
+/// Item class codes: zero-based entries of Cargo Pod `STR#` -11000 "Item Classes".
+pub mod item_class {
+    /// "Melee Weapon".
+    pub const MELEE_WEAPON: i16 = 2;
+    /// "Missile Weapon".
+    pub const MISSILE_WEAPON: i16 = 15;
+    /// "Shield Battery".
+    pub const SHIELD_BATTERY: i16 = 20;
+    /// "Ammo Item".
+    pub const AMMUNITION: i16 = 26;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WeaponCondition {
+    pub mode: i16,
+    pub threshold: i16,
+    pub slot: i16,
+    pub amount: i16,
+}
+
 /// Original 150-byte definition, borrowed without eager validation. Callers
 /// keep their existing field-read order and malformed-record diagnostics.
 #[derive(Clone, Copy)]
@@ -112,6 +132,20 @@ impl ItemDefinition<'_> {
     }
     pub fn spell(&self) -> Result<i16, ContentError> {
         word(self.0, 44)
+    }
+    /// Effect selector -10 on a melee weapon: a condition admitted by mode word 44
+    /// (1 a failed saving throw indexed by word 48, 2 Rand(100) at most word 48,
+    /// otherwise always) that adds word 50 to condition slot word 46 minus 20.
+    pub fn weapon_condition(&self) -> Result<Option<WeaponCondition>, ContentError> {
+        if self.effect_selector()? != -10 {
+            return Ok(None);
+        }
+        Ok(Some(WeaponCondition {
+            mode: word(self.0, 44)?,
+            threshold: word(self.0, 48)?,
+            slot: word(self.0, 46)?.wrapping_sub(20),
+            amount: word(self.0, 50)?,
+        }))
     }
     pub fn price(&self) -> Result<i32, ContentError> {
         long(self.0, 142)

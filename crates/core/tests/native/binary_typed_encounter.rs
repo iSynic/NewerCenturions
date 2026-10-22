@@ -7,8 +7,8 @@ use centurions_core::typed_encounter::{
 
 fn item_state(state: &mut Session, case: &Value) {
     native_common::restore_party(state, &serde_json::json!({"party": case["after"]}));
-    state.ammunition_work.item = Some(case.bytes("item_work"));
-    state.loaded_item_field32 = Some(word(&case.bytes("item_work"), 32).unwrap());
+    state.native_work.ammunition_work.item = Some(case.bytes("item_work"));
+    state.native_work.loaded_item_field32 = Some(word(&case.bytes("item_work"), 32).unwrap());
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn password_prefix_and_case_selection_match_original_comparison() {
     let mut script = vec![0; 42];
     script[8..10].copy_from_slice(&5_i16.to_be_bytes());
     let position = state.exploration.as_mut().unwrap();
-    position.script = Some(support::script_state(script, 0));
+    position.script = Some(centurions_core::ScriptState::scheduled(script, 0));
     position.presentation = Some(Presentation::Dialogue {
         id: 0,
         text: String::new(),
@@ -183,6 +183,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             ] {
                 position.region_state[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
             }
+            crate::native_common::keep_tile_set(&mut state, &content);
             apply(Command::Move { dx: 1, dy: 0 }, &mut state, &content).unwrap();
             assert_eq!(
                 state.movement_continuation,
@@ -193,7 +194,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             script[8..10].copy_from_slice(&5_i16.to_be_bytes());
             script[24..26].copy_from_slice(&case.n::<i16>("encounter").to_be_bytes());
             let position = state.exploration.as_mut().unwrap();
-            let mut script = support::script_state(script, 0);
+            let mut script = centurions_core::ScriptState::scheduled(script, 0);
             script.item_return = case.get("mask_before").is_some() && !returning;
             if walking {
                 script.scheduled = false;
@@ -234,7 +235,10 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             }
         }
         if case.get("mask_before").is_some() {
-            state.party_mask.copy_from_slice(&case.words("mask_before"));
+            state
+                .native_work
+                .party_mask
+                .copy_from_slice(&case.words("mask_before"));
         }
         assert!(matches!(
             state.exploration.as_ref().unwrap().presentation,
@@ -356,8 +360,8 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             );
             std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
             let mut expected = state.clone();
-            expected.inventory_record = None;
-            expected.npc_backing = Default::default();
+            expected.native_work.inventory_record = None;
+            expected.native_work.npc_backing = Default::default();
             expected
                 .exploration
                 .as_mut()
@@ -390,9 +394,9 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             bytes &support::record_bytes(&state.warriors) => &case.bytes("after"), "encounter item party";
         };
         assert_eq!(state.random, before.random);
-        assert_eq!(state.party_mask.as_slice(), case.words("mask"));
+        assert_eq!(state.native_work.party_mask.as_slice(), case.words("mask"));
         assert_eq!(
-            state.ammunition_work.item.as_ref().unwrap(),
+            state.native_work.ammunition_work.item.as_ref().unwrap(),
             &case.bytes("item_work")
         );
         if returning {
@@ -403,7 +407,10 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             let mut expected = before;
             item_state(&mut expected, case);
             expected.selected_warrior = case.n("member");
-            expected.party_mask.copy_from_slice(&case.words("mask"));
+            expected
+                .native_work
+                .party_mask
+                .copy_from_slice(&case.words("mask"));
             if returned != 0 {
                 expected.combat_story = None;
                 expected.round_dispatch = None;
@@ -474,7 +481,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
         script[8..10].copy_from_slice(&5_i16.to_be_bytes());
         script[24..26].copy_from_slice(&case.n::<i16>("encounter").to_be_bytes());
         let position = state.exploration.as_mut().unwrap();
-        position.script = Some(support::script_state(script, 0));
+        position.script = Some(centurions_core::ScriptState::scheduled(script, 0));
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
             text: String::new(),
@@ -648,7 +655,7 @@ fn typed_cancel_and_header_persistence_preserve_original_boundaries() {
         position.x = movement.n("x");
         position.y = movement.n("y");
         position.last_move = [movement.n("dx"), movement.n("dy")];
-        let mut script = support::script_state(read("working"), 0);
+        let mut script = centurions_core::ScriptState::scheduled(read("working"), 0);
         script.scheduled = scheduled;
         script.item_return = manual;
         script.map_slot = 2;
@@ -657,6 +664,7 @@ fn typed_cancel_and_header_persistence_preserve_original_boundaries() {
             remaining: 1,
             original: read("original"),
             typed,
+            eliminated: 0,
         });
         position.event_headers[84..126].copy_from_slice(&read("working"));
         position.script = Some(script);

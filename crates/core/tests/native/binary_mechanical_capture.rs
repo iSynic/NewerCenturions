@@ -31,10 +31,7 @@ fn mechanical_transactions_match_original_records_random_and_ordered_feedback() 
         );
         assert_eq!(
             random,
-            RandomState {
-                seed: case.n("seed_after"),
-                draws: case.n("draws")
-            }
+            crate::native_common::random_at(case, "seed_after", "draws")
         );
         let actual: Vec<String> = effects
             .iter()

@@ -95,10 +95,10 @@ pub fn stop_bleeding(
     if warrior.is_some_and(|member| member >= state.warriors.len()) {
         return Err(RuleError::Invalid("bandaging target outside squad".into()));
     }
-    state.party_mask.fill(0);
+    state.native_work.party_mask.fill(0);
     let mut events = vec![Event::Sound { resource_id: 10105 }];
     if let Some(member) = warrior {
-        state.party_mask[member] = 1;
+        state.native_work.party_mask[member] = 1;
         state.warriors[member].record_mut().set_bleeding_flag(0);
         events.push(Event::Sound { resource_id: 141 });
     }
@@ -141,16 +141,20 @@ pub fn begin_medical_item(
     )?;
     state.warriors[warrior] = result.warrior;
     state.selected_warrior = warrior;
-    state.loaded_item_field32 = Some(result.loaded_item_field32);
-    state.attack_count = result.count;
-    state.ammunition_work.weapon = Some(crate::ammunition::definition(content, selected.id())?);
-    state.ammunition_work.ammo = Some(crate::ammunition::definition(content, 0)?);
-    state.party_mask.fill(0);
-    let mut health =
-        crate::story_health::context(&state.warriors, warrior, state.health_context.as_ref());
+    state.native_work.loaded_item_field32 = Some(result.loaded_item_field32);
+    state.native_work.attack_count = result.count;
+    state.native_work.ammunition_work.weapon =
+        Some(crate::ammunition::definition(content, selected.id())?);
+    state.native_work.ammunition_work.ammo = Some(crate::ammunition::definition(content, 0)?);
+    state.native_work.party_mask.fill(0);
+    let mut health = crate::story_health::context(
+        &state.warriors,
+        warrior,
+        state.native_work.health_context.as_ref(),
+    );
     health.marks_affected = false;
     health.effect = centurions_content::records::AttackPacket(&result.packet).health_effect();
-    state.health_context = Some(health);
+    state.native_work.health_context = Some(health);
     let combat = state.combat.as_mut().unwrap();
     combat.attack_packet = Some(result.packet);
     combat.attack_identity = Some(result.identity);
@@ -206,13 +210,16 @@ pub fn begin_learned_heal(
         column: 0,
         power,
     });
-    state.attack_count = result.count;
-    state.party_mask.fill(0);
-    let mut health =
-        crate::story_health::context(&state.warriors, actor, state.health_context.as_ref());
+    state.native_work.attack_count = result.count;
+    state.native_work.party_mask.fill(0);
+    let mut health = crate::story_health::context(
+        &state.warriors,
+        actor,
+        state.native_work.health_context.as_ref(),
+    );
     health.affected[actor] = 1;
     health.effect = centurions_content::records::AttackPacket(&result.packet).health_effect();
-    state.health_context = Some(health);
+    state.native_work.health_context = Some(health);
     let combat = state.combat.as_mut().unwrap();
     combat.attack_packet = Some(result.packet);
     combat.attack_identity = Some(result.identity);
@@ -238,8 +245,8 @@ pub fn select_medical_target(
         .medical_continuation
         .clone()
         .ok_or_else(|| RuleError::Invalid("no medical target selection is pending".into()))?;
-    let mission = content
-        .map(state.exploration.as_ref().unwrap().map)
+    let mission = state
+        .land(content)
         .ok_or_else(|| RuleError::Invalid("medical map missing".into()))?;
     let resolution = crate::combat::medical::resolve(
         state.combat.as_mut().unwrap(),
@@ -256,23 +263,23 @@ pub fn select_medical_target(
         .attack_packet
         .as_ref()
         .unwrap();
-    if let Some(health) = state.health_context.as_mut() {
+    if let Some(health) = state.native_work.health_context.as_mut() {
         health.effect = centurions_content::records::AttackPacket(packet).health_effect();
     }
     if pending.origin == crate::MedicalOrigin::LearnedHeal
         && matches!(selection, crate::MedicalTarget::Portrait { .. })
     {
-        if state.psi_memory.is_none() {
-            state.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
+        if state.native_work.psi_memory.is_none() {
+            state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
         }
-        let memory = state.psi_memory.as_mut().unwrap();
+        let memory = state.native_work.psi_memory.as_mut().unwrap();
         centurions_content::records::PsiSelectionMemoryMut(memory)
             .remember_portrait_heal(pending.actor, pending.power);
     }
     state.medical_continuation = None;
-    state.party_mask.fill(0);
+    state.native_work.party_mask.fill(0);
     let mut events = resolution.events;
-    if let Some(health) = state.health_context.as_mut() {
+    if let Some(health) = state.native_work.health_context.as_mut() {
         health.unavailable = state.combat.as_ref().unwrap().unavailable;
         if health.marks_affected {
             for event in &events {

@@ -28,7 +28,11 @@ pub(super) fn advance_round(
         &tables.encounters,
         crate::combat::round_stories::RoundCaller {
             active_enemy: c.script_enemy,
-            last_defeated: state.health_context.as_ref().map(|health| health.last_body),
+            last_defeated: state
+                .native_work
+                .health_context
+                .as_ref()
+                .map(|health| health.last_body),
         },
         &mut state.random,
     )?;
@@ -60,16 +64,10 @@ pub(super) fn advance_round(
                     death_depth: Some(death_depth),
                     ..Default::default()
                 });
-                position.script = Some(ScriptState {
-                    record: mission.script(script)?.to_vec(),
+                position.script = Some(ScriptState::scheduled(
+                    mission.script(script)?.to_vec(),
                     cursor,
-                    map_slot: 0,
-                    item_return: false,
-                    scheduled: true,
-                    menu: None,
-                    persist: false,
-                    origin: None,
-                });
+                ));
                 events.extend(crate::exploration::run_script(state, content)?);
                 return Ok(events);
             }
@@ -138,7 +136,9 @@ pub(crate) fn finish_round_dispatch(
         state.battle_group_script = outer.group;
         state.battle_npc = outer.npc;
         state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
-        let mut events = vec![Event::Sound { resource_id: 20 }];
+        let mut events = vec![Event::Sound {
+            resource_id: crate::feedback::BOOTY_SOUND,
+        }];
         events.extend(finish_battle_wrapper(state, content)?);
         return Ok(events);
     }
@@ -204,8 +204,8 @@ pub(super) fn reduce_and_resume_round(
         &mut state.warriors,
         &mut state.random,
         Some(mission),
-        &mut state.attack_count,
-        &mut state.party_mask,
+        &mut state.native_work.attack_count,
+        &mut state.native_work.party_mask,
         RoundContext {
             audio: true,
             selected_warrior: state.selected_warrior,
@@ -213,7 +213,7 @@ pub(super) fn reduce_and_resume_round(
         },
     )?;
     if let Some(body) = outcome.last_defeated_body
-        && let Some(health) = state.health_context.as_mut()
+        && let Some(health) = state.native_work.health_context.as_mut()
     {
         health.last_body = body;
     }

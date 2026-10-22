@@ -28,7 +28,13 @@ pub fn prepare(
         return Err(RuleError::Invalid("enemy weapon record size".into()));
     }
     let id = enemy.record().primary_weapon()?;
-    if id <= 0 || !matches!(ItemDefinition(weapon).spell()?, 4101 | 4102) {
+    if id <= 0
+        || !matches!(
+            ItemDefinition(weapon).spell()?,
+            crate::combat::firearm::POINT_TARGET_ATTACK
+                | crate::combat::firearm::AREA_TARGET_ATTACK
+        )
+    {
         return Err(RuleError::Unsupported {
             action: "combat.enemy_firearm",
             dependency: "enemy firearm outside recovered definitions",

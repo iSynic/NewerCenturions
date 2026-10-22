@@ -132,8 +132,6 @@ mod binary_monster_elemental;
 mod binary_monster_melee;
 #[path = "native/binary_move_away.rs"]
 mod binary_move_away;
-#[path = "native/binary_music.rs"]
-mod binary_music;
 #[path = "native/binary_native_save.rs"]
 mod binary_native_save;
 #[path = "native/binary_natural.rs"]
@@ -180,8 +178,6 @@ mod binary_poison_round;
 mod binary_random_items;
 #[path = "native/binary_regional_move_continuation.rs"]
 mod binary_regional_move_continuation;
-#[path = "native/binary_registration.rs"]
-mod binary_registration;
 #[path = "native/binary_remove_allies.rs"]
 mod binary_remove_allies;
 #[path = "native/binary_required_battle_entry.rs"]
@@ -234,6 +230,8 @@ mod binary_story_health;
 mod binary_story_inventory;
 #[path = "native/binary_story_item_use.rs"]
 mod binary_story_item_use;
+#[path = "native/binary_story_opcodes.rs"]
+mod binary_story_opcodes;
 #[path = "native/binary_story_party.rs"]
 mod binary_story_party;
 #[path = "native/binary_story_reduce.rs"]

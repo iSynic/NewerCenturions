@@ -273,7 +273,10 @@ pub(crate) fn add_ammunition(
     let sound = if authored != 0 {
         authored
     } else {
-        state.random.bound(2).wrapping_add(403)
+        state
+            .random
+            .bound(2)
+            .wrapping_add(crate::feedback::CLIP_SOUND_BASE)
     };
     Ok(vec![
         Event::Sound { resource_id: sound },

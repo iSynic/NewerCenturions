@@ -150,10 +150,7 @@ fn automatic_empty_refit_matches_twelve_native_direct_helper_cases() {
             ammo: Some(before.bytes("ammo")),
         };
         let stock = reserves(before);
-        let mut random = RandomState {
-            seed: before.n::<u32>("rng_seed"),
-            draws: before.n::<u64>("rng_draws"),
-        };
+        let mut random = crate::native_common::random_at(before, "rng_seed", "rng_draws");
         let original = (warriors.clone(), stock.clone(), work.clone());
         // VerifyEmptyRifleAmmunition invokes refit(0,0,1,1): audible,
         // forced, with warning49 suppressed. It never calls DoReload111.
@@ -192,10 +189,7 @@ fn automatic_empty_refit_matches_twelve_native_direct_helper_cases() {
             after.n::<Vec<i16>>("sounds")[before.n::<Vec<i16>>("sounds").len()..]
         );
         assert!(result.warnings.is_empty());
-        let mut independent = RandomState {
-            seed: before.n::<u32>("rng_seed"),
-            draws: before.n::<u64>("rng_draws"),
-        };
+        let mut independent = crate::native_common::random_at(before, "rng_seed", "rng_draws");
         support::replay_rng(
             &mut independent,
             &after.array("draws")[before.array("draws").len()..],

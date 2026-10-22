@@ -175,7 +175,8 @@ pub fn input(
         {
             return Some(Action::Command(Command::FireSelectedTargets));
         }
-        if state.outdoor_psi.is_some() && state.party_mask.iter().any(|rank| *rank > 0) {
+        if state.outdoor_psi.is_some() && state.native_work.party_mask.iter().any(|rank| *rank > 0)
+        {
             return Some(Action::Command(Command::FinishOutdoorPsi));
         }
     }
@@ -273,6 +274,7 @@ pub fn draw(
             Some(Action::Command(Command::SelectOutdoorPsiTarget { warrior }))
         });
         for (member, rank) in state
+            .native_work
             .party_mask
             .iter()
             .take(state.warriors.len())
@@ -437,7 +439,7 @@ pub fn draw(
 
 pub type EstimateCache = (
     Vec<u8>,
-    Result<centurions_core::recovered_detail_ui::DetailPlan, String>,
+    Result<centurions_core::item_display::output::PanelPlan, String>,
 );
 
 fn draw_estimate(state: &Session, content: &Content, assets: &Assets, ui: &UiState) {
@@ -464,9 +466,9 @@ fn draw_estimate(state: &Session, content: &Content, assets: &Assets, ui: &UiSta
         key.extend(&enemy.bytes);
     }
     for work in [
-        &state.ammunition_work.item,
-        &state.ammunition_work.ammo,
-        &state.ammunition_work.weapon,
+        &state.native_work.ammunition_work.item,
+        &state.native_work.ammunition_work.ammo,
+        &state.native_work.ammunition_work.weapon,
     ]
     .into_iter()
     .flatten()

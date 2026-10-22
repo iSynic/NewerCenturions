@@ -97,13 +97,8 @@ pub fn begin(
     if quantity <= 0 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
-    let mission = content
-        .map(
-            state
-                .exploration
-                .as_ref()
-                .map_or(0, |position| position.map),
-        )
+    let mission = state
+        .land(content)
         .ok_or_else(|| RuleError::Invalid("medical mission missing".into()))?;
     let definition = content
         .items
@@ -181,13 +176,8 @@ pub fn begin_learned_heal(
     if !warrior.knows_spell(1101)? {
         return Err(RuleError::Invalid("warrior has not learned Heal".into()));
     }
-    let mission = content
-        .map(
-            state
-                .exploration
-                .as_ref()
-                .map_or(0, |position| position.map),
-        )
+    let mission = state
+        .land(content)
         .ok_or_else(|| RuleError::Invalid("learned Heal mission missing".into()))?;
     let packet = learned_packet(mission, 1101)?;
     if !player_psi::mode_allowed(&packet, true)? {
@@ -220,6 +210,7 @@ pub fn begin_learned_heal(
         warrior: result,
         weapon_work: combat.weapon_work,
         loaded_item_field32: state
+            .native_work
             .loaded_item_field32
             .ok_or_else(|| unsupported("unreconstructable independent item context"))?,
         packet,

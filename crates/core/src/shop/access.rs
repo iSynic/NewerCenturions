@@ -1,7 +1,8 @@
 //! Access for shop.
 use super::RECORD;
 use crate::{Command, Event, Phase, Presentation, RuleError, Session};
-use centurions_content::records::{ShopRecord, ShopRecordMut};
+use centurions_content::mission::OpeningMission;
+use centurions_content::records::{SHOP_SLOTS, ShopRecord, ShopRecordMut};
 use centurions_content::span;
 use centurions_content::{Content, word};
 use serde::{Deserialize, Serialize};
@@ -68,6 +69,27 @@ pub(crate) fn visit(
     let id = parameter.wrapping_abs() as u8;
     state.loot_limit = None;
     let map = state.map(content, 0).ok_or("shop scenario unavailable")?;
+    load_shop(state, map, id)?;
+    state.shop_access = Some(Access {
+        level: state.scenario_level,
+        id,
+        enhancement: 0,
+        remaining: 0,
+    });
+    if parameter <= 0 {
+        show(state)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// loadshop 0x12fe54: the level's shop record with each ID family compacted in order.
+fn load_shop<'a>(
+    state: &'a mut Session,
+    map: &OpeningMission,
+    id: u8,
+) -> Result<&'a mut [u8], RuleError> {
     span(&map.shops, id as usize * RECORD, RECORD)?;
     let records = state.shops.entry(state.scenario_level).or_insert_with(|| {
         state
@@ -93,18 +115,38 @@ pub(crate) fn visit(
             ShopRecordMut(shop).set_stock(slot, 0, 0);
         }
     }
-    state.shop_access = Some(Access {
-        level: state.scenario_level,
-        id,
-        enhancement: 0,
-        remaining: 0,
-    });
-    if parameter <= 0 {
-        show(state)?;
-        Ok(true)
-    } else {
-        Ok(false)
+    Ok(shop)
+}
+
+/// newland51 0x145870: the shop's price percent changes by e2 and every slot holding
+/// item e3 changes by e4's low byte as a signed count, floored at zero. Shop zero
+/// (loadshop's current shop) and negative shop bytes are refused.
+pub(crate) fn alter(state: &mut Session, content: &Content, extra: &[u8]) -> Result<(), RuleError> {
+    let id = word(extra, 0)? as i8;
+    if id <= 0 {
+        return Err(RuleError::Unsupported {
+            action: "story.opcode",
+            dependency: "shop alteration outside the scenario shops",
+        });
     }
+    let map = state.map(content, 0).ok_or("shop scenario unavailable")?;
+    let shop = load_shop(state, map, id as u8)?;
+    let percent = ShopRecord(shop)
+        .price_percent()?
+        .wrapping_add(word(extra, 2)?);
+    ShopRecordMut(shop).set_price_percent(percent);
+    let (item, change) = (word(extra, 4)?, word(extra, 6)? as i8);
+    for slot in 0..SHOP_SLOTS {
+        if ShopRecord(shop).item(slot)? == item {
+            let count = (ShopRecord(shop).quantity(slot) as i8).wrapping_add(change);
+            ShopRecordMut(shop).set_quantity(slot, count.max(0) as u8);
+        }
+    }
+    // loadshop leaves the altered shop current.
+    if let Some(access) = state.shop_access.as_mut() {
+        access.id = id as u8;
+    }
+    Ok(())
 }
 
 pub(crate) fn visit_restricted(

@@ -1,4 +1,5 @@
 use crate::combat::Combat;
+use crate::exploration::Operation;
 mod spawning;
 use crate::{RandomState, RuleError};
 use centurions_content::{mission::OpeningMission, records::StoryRecord, span, word};
@@ -135,9 +136,7 @@ impl RoundDispatch {
                 return Err(RuleError::Invalid("invalid round caller ownership".into()));
             }
             if let Some(outer) = &frame.outer_battle {
-                let map = state
-                    .map(content, state.exploration.as_ref().map_or(0, |p| p.map))
-                    .ok_or("round caller map unavailable")?;
+                let map = state.land(content).ok_or("round caller map unavailable")?;
                 if outer.after_message != 0 {
                     map.dialogue(outer.after_message)?;
                 }
@@ -336,6 +335,37 @@ pub fn advance(
     caller: RoundCaller,
     random: &mut RandomState,
 ) -> Result<RoundOutcome, RuleError> {
+    let mut step = None;
+    let result = run(
+        combat,
+        state,
+        mission,
+        definitions,
+        extras,
+        caller,
+        random,
+        &mut step,
+    );
+    result.map_err(|error| match step {
+        Some((script, opcode, cursor)) => {
+            error.with_context(|| format!("round script {script} opcode {opcode} cursor {cursor}"))
+        }
+        None => error,
+    })
+}
+
+/// `step` names the instruction being executed when an error leaves it.
+#[allow(clippy::too_many_arguments)]
+fn run(
+    combat: &mut Combat,
+    state: &mut RoundScripts,
+    mission: &OpeningMission,
+    definitions: &[u8],
+    extras: &[u8],
+    caller: RoundCaller,
+    random: &mut RandomState,
+    step: &mut Option<(i16, i16, usize)>,
+) -> Result<RoundOutcome, RuleError> {
     if combat.enemies.records.len() > 100
         || caller.active_enemy >= 100
         || combat.enemies.positions.len() != combat.enemies.records.len()
@@ -405,17 +435,30 @@ pub fn advance(
         let record = mission.script(program.script.unwrap())?;
         let cursor = usize::from(program.cursor);
         let (opcode, value) = StoryRecord(&record).instruction(cursor)?;
+        *step = Some((program.script.unwrap(), opcode, cursor));
+        crate::trace::story(
+            "round",
+            i32::from(program.script.unwrap()),
+            cursor,
+            opcode,
+            value,
+        );
         program.cursor += 1;
-        match opcode {
-            0 => {}
-            24 => program.cursor = 8,
-            1 => {
+        match Operation::from_native(opcode) {
+            Operation::NoAction | Operation::Unarmed(_) => {}
+            Operation::EndScript => program.cursor = 8,
+            Operation::ContinueIfMonster => {
+                if !crate::story_combat::monster_present(&next, value)? {
+                    program.cursor = 8;
+                }
+            }
+            Operation::Dialogue => {
                 outcome.effects.push(RoundEffect::Text(value));
                 program.text = Some(value);
                 break;
             }
-            9 => outcome.effects.push(RoundEffect::Sound(value)),
-            3 => {
+            Operation::Sound => outcome.effects.push(RoundEffect::Sound(value)),
+            Operation::Question => {
                 program.delegated = true;
                 outcome.effects.push(RoundEffect::Dispatch {
                     script: program.script.unwrap(),
@@ -423,8 +466,8 @@ pub fn advance(
                 });
                 break;
             }
-            122 => neutralize(&mut next, extra(extras, value)?)?,
-            124 => spawn(
+            Operation::NeutralizeActors => neutralize(&mut next, extra(extras, value)?)?,
+            Operation::SummonActors => spawn(
                 &mut next,
                 mission,
                 definitions,
@@ -433,7 +476,7 @@ pub fn advance(
                 &mut next_random,
                 &mut outcome,
             )?,
-            125 => {
+            Operation::RemoveActorClass => {
                 outcome.effects.extend(
                     destroy_class(
                         &mut next,
@@ -445,7 +488,7 @@ pub fn advance(
                     .map(RoundEffect::Removed),
                 );
             }
-            126 => {
+            Operation::ReplaceRoundScript => {
                 let Some(target) = replacement(
                     &mut next_state,
                     program.slot,
@@ -459,7 +502,7 @@ pub fn advance(
                 program.script = Some(target);
                 program.cursor = 0;
             }
-            42 => {
+            Operation::ChanceBranch => {
                 let predicate = extra(extras, value)?;
                 if next_random.bound(100) <= word(predicate, 0)? {
                     match word(predicate, 2)? {
@@ -484,6 +527,7 @@ pub fn advance(
             }
         }
     }
+    *step = None;
     if !completed {
         if program.text.is_none() && !program.delegated {
             return Err(unsupported("round instruction budget exhausted"));

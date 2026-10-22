@@ -15,10 +15,7 @@ fn original_booty_recounts_unavailable_warriors_before_normalizing_and_preserves
         let before = case.bytes("before");
         let warriors: Vec<_> = support::warriors(&before);
         let enemies: Vec<_> = support::monsters(&case.bytes("enemies"));
-        let mut random = RandomState {
-            seed: case.n::<u32>("seed_before"),
-            draws: 0,
-        };
+        let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let result = rewards::prepare(&warriors, &enemies, &content, 0, 0, 37, &mut random)
             .unwrap_or_else(|error| panic!("case {index}: {error:?}"));
         support::expect(result.unavailable, &case["unavailable_prepared"]);

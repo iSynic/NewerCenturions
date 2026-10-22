@@ -2,6 +2,7 @@ use super::battle_entry::initial_cursor;
 use super::*;
 use crate::RandomState;
 use crate::test_support::{bytes, fixture};
+use centurions_content::WARRIOR_BYTES;
 use centurions_content::combat::MonsterRecord;
 #[test]
 fn sparse_initial_order_matches_original_getup_execution() {
@@ -14,7 +15,7 @@ fn sparse_initial_order_matches_original_getup_execution() {
         let cursor = initial_cursor(&order).unwrap();
         assert_eq!(cursor, case["cursor"].as_u64().unwrap() as usize);
         let mut warriors = bytes(&case["warriors"])
-            .as_chunks::<3138>()
+            .as_chunks::<WARRIOR_BYTES>()
             .0
             .iter()
             .map(|w| Warrior::read(w).unwrap())

@@ -3,7 +3,7 @@ mod access;
 mod generated_stock;
 pub use access::Access;
 use access::{active, records, refused};
-pub(crate) use access::{close, command_allowed, open, validate, visit, visit_restricted};
+pub(crate) use access::{alter, close, command_allowed, open, validate, visit, visit_restricted};
 mod catalog;
 mod pricing;
 pub(crate) use catalog::display_record;

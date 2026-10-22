@@ -1,8 +1,9 @@
 use crate::{RandomState, RuleError, character, combat, story_variables::StoryContinuation};
 use centurions_content::records::{
-    ATTRIBUTES, DevelopmentField as Field, InventorySlots, WarriorRecord, WarriorRecordMut,
+    ATTRIBUTES, DevelopmentField as Field, InventorySlots, PartyFilterExtra, PartySelectionExtra,
+    StatisticAdjustmentExtra, WarriorRecord, WarriorRecordMut,
 };
-use centurions_content::{Warrior, mission::OpeningMission, span, word};
+use centurions_content::{WARRIOR_BYTES, Warrior, mission::OpeningMission, span};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PartySaveContext {
@@ -20,16 +21,16 @@ pub fn adjust_statistics(
     mask: &[i16; 6],
     extra: &[u8],
 ) -> Result<Vec<Warrior>, RuleError> {
-    let extra = span(extra, 0, 10)?;
+    let extra = StatisticAdjustmentExtra::new(extra)?;
     if warriors.len() > mask.len() {
         return Err("party exceeds six warriors".into());
     }
-    let selector = word(extra, 0)?;
-    let amount = word(extra, 2)?;
+    let selector = extra.selector()?;
+    let amount = extra.amount()?;
     let mut result = warriors.to_vec();
     for (warrior, selected) in result.iter_mut().zip(mask) {
         let bytes = &mut warrior.bytes;
-        span(bytes, 0, 3138)?;
+        span(bytes, 0, WARRIOR_BYTES)?;
         if *selected == 0 {
             continue;
         }
@@ -78,19 +79,19 @@ pub fn filter_party(
     if warriors.len() > 6 {
         return Err("party exceeds six warriors".into());
     }
-    let extra = span(extra, 0, 10)?;
+    let extra = PartyFilterExtra::new(extra)?;
     for (member, warrior) in warriors.iter().enumerate() {
-        if word(extra, 4)? == 1 || (word(extra, 4)? == 2 && warrior.stamina()? > 0) {
+        if extra.inclusion()? == 1 || (extra.inclusion()? == 2 && warrior.stamina()? > 0) {
             mask[member] = 1;
         }
     }
-    let selector = word(extra, 0)?;
+    let selector = extra.selector()?;
     for (member, warrior) in warriors.iter().enumerate() {
         if mask[member] == 0 {
             continue;
         }
         mask[member] = 0;
-        let matched = if word(extra, 2)? == 0 {
+        let matched = if extra.test_word()? == 0 {
             let source = warriors.get(action).ok_or(RuleError::Unsupported {
                 action: "story.filter_party",
                 dependency: "native action-index skill alias beyond party records",
@@ -101,16 +102,17 @@ pub fn filter_party(
                 .record()
                 .special_skill(skill)?
                 .wrapping_add(source.record().special_skill_bonus(skill)?)
-                .wrapping_add(word(extra, 2)?);
+                .wrapping_add(extra.test_word()?);
             random.bound(100) <= chance
         } else if (0..=6).contains(&selector) {
-            Field::Attribute(ATTRIBUTES[selector as usize]).read(&warrior.bytes)? > word(extra, 8)?
+            Field::Attribute(ATTRIBUTES[selector as usize]).read(&warrior.bytes)?
+                > extra.attribute_threshold()?
         } else {
             false
         };
         mask[member] = i16::from(matched);
     }
-    if word(extra, 6)? != 0 {
+    if extra.invert()? != 0 {
         for value in mask.iter_mut().take(warriors.len()) {
             *value = i16::from(*value == 0);
         }
@@ -129,14 +131,14 @@ pub fn select_party(
     if warriors.len() > 6 {
         return Err(RuleError::Invalid("party exceeds six warriors".into()));
     }
-    let extra = span(extra, 0, 10)?;
-    let kind = word(extra, 0)?;
-    let value = word(extra, 2)?;
-    let eligible_mode = word(extra, 4)?;
+    let extra = PartySelectionExtra::new(extra)?;
+    let kind = extra.kind()?;
+    let value = extra.value()?;
+    let eligible_mode = extra.eligibility()?;
     let mut mask = [0; 6];
     let mut next_random = random.clone();
     for (member, warrior) in warriors.iter().enumerate() {
-        let bytes = span(&warrior.bytes, 0, 3138)?;
+        let bytes = span(&warrior.bytes, 0, WARRIOR_BYTES)?;
         let eligible = eligible_mode == 0
             || (eligible_mode == 1 && WarriorRecord::from_bytes(bytes).stamina()? > 0);
         if !eligible {
@@ -267,7 +269,7 @@ pub fn apply_group_mask(
     };
     for (member, mask_value) in mask.iter().take(warriors.len()).enumerate() {
         let bytes = &mut result.warriors[member].bytes;
-        span(bytes, 0, 3138)?;
+        span(bytes, 0, WARRIOR_BYTES)?;
         WarriorRecordMut::from_bytes(bytes).set_active_flag(1);
         if WarriorRecord::from_bytes(bytes).stamina()? > 0 && (!group || *mask_value != 0) {
             continue;
@@ -313,7 +315,7 @@ pub fn group_return(
 ) -> Result<GroupReturn, RuleError> {
     let mut warriors = warriors.to_vec();
     for warrior in &mut warriors {
-        span(&warrior.bytes, 0, 3138)?;
+        span(&warrior.bytes, 0, WARRIOR_BYTES)?;
         warrior.record_mut().set_active_flag(1);
     }
     Ok(GroupReturn {

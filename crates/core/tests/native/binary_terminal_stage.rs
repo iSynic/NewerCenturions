@@ -14,12 +14,20 @@ fn authored_terminal_choice_matches_native_records_and_resumes() {
     state.mission_score = 17;
     state.allies = fixture.bytes("menu_before");
     state.ally_count = fixture.n::<usize>("menu_count_before");
-    state.health_context = Some(centurions_core::story_health::context(
+    state.native_work.health_context = Some(centurions_core::story_health::context(
         &state.warriors,
         0,
         None,
     ));
-    assert_eq!(state.health_context.as_ref().unwrap().unavailable, 1);
+    assert_eq!(
+        state
+            .native_work
+            .health_context
+            .as_ref()
+            .unwrap()
+            .unavailable,
+        1
+    );
     let position = state.exploration.as_mut().unwrap();
     position.restore_map(
         9,
@@ -27,7 +35,10 @@ fn authored_terminal_choice_matches_native_records_and_resumes() {
     );
     position.x = 40;
     position.y = 80;
-    position.script = Some(support::script_state(fixture.bytes("script"), 0));
+    position.script = Some(centurions_core::ScriptState::scheduled(
+        fixture.bytes("script"),
+        0,
+    ));
     position.presentation = Some(Presentation::Dialogue {
         id: 0,
         text: String::new(),
@@ -70,7 +81,15 @@ fn authored_terminal_choice_matches_native_records_and_resumes() {
         bytes state.allies => &fixture["menu_after"], "binary_terminal_stage";
     }
     assert_eq!(state.ally_count, 0);
-    assert_eq!(state.health_context.as_ref().unwrap().unavailable, 1);
+    assert_eq!(
+        state
+            .native_work
+            .health_context
+            .as_ref()
+            .unwrap()
+            .unavailable,
+        1
+    );
     assert_eq!(
         support::record_bytes(&state.warriors),
         fixture.bytes("warriors_after")

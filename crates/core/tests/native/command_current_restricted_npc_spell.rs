@@ -20,7 +20,7 @@ fn projected(before: &Session, fixture: &Value, snapshot: &Value, baseline: &Val
     );
     snapshots::carried_items(&mut expected, &read);
     if snapshot["draws"] != baseline["draws"] {
-        expected.ammunition_work.item = Some(bytes(fixture, &snapshot["item_work"]));
+        expected.native_work.ammunition_work.item = Some(bytes(fixture, &snapshot["item_work"]));
     }
     expected.psi_disabled = number(snapshot, "psi_disabled") as u8;
     expected.enemy_spell_disabled = number(snapshot, "enemy_spell_disabled") as u8;
@@ -42,9 +42,9 @@ fn projected(before: &Session, fixture: &Value, snapshot: &Value, baseline: &Val
     combat.unavailable = number(snapshot, "unavailable") as i8;
 
     combat.weapon_work = snapshots::weapon_work(&read);
-    expected.attack_packet = combat.attack_packet.clone();
-    expected.attack_identity = combat.attack_identity;
-    expected.weapon_work = combat.weapon_work;
+    expected.native_work.attack_packet = combat.attack_packet.clone();
+    expected.native_work.attack_identity = combat.attack_identity;
+    expected.native_work.weapon_work = combat.weapon_work;
     snapshots::health(&mut expected, snapshot, &read);
     snapshots::actor_work(&mut expected, snapshot);
     expected
@@ -56,7 +56,7 @@ fn full_native_slots(state: &Session, fixture: &Value, snapshot: &Value, baselin
     let combat = current_combat(state);
     let mut records = bytes(fixture, &baseline["all_records"]);
     for (index, record) in combat.enemies.records.iter().enumerate() {
-        records[index * 288..(index + 1) * 288].copy_from_slice(&record.bytes);
+        records[index * MONSTER_BYTES..(index + 1) * MONSTER_BYTES].copy_from_slice(&record.bytes);
     }
     assert_eq!(records, bytes(fixture, &snapshot["all_records"]));
     let mut positions = words(fixture, &baseline["all_monster_positions"]);
@@ -125,9 +125,9 @@ fn native_events(fixture: &Value, case: &Value) -> Vec<Event> {
             }));
             audio_cursor = end;
             let (before, after, offset) = if *body < 6 {
-                (&previous_party, &party, body * 3138 + 0x50)
+                (&previous_party, &party, body * WARRIOR_BYTES + 0x50)
             } else {
-                (&previous_npcs, &npcs, (body - 10) * 288 + 0x110)
+                (&previous_npcs, &npcs, (body - 10) * MONSTER_BYTES + 0x110)
             };
             let damage = number(phase, "d0_return_word");
             assert_eq!(
@@ -293,7 +293,7 @@ fn each_captured_resolution_matches_native_targets_damage_and_rng_interval() {
         for (index, resolution) in case.array("resolutions").iter().enumerate() {
             let warriors: Vec<_> = support::warriors(&before_party);
             let enemies: Vec<_> = before_npcs
-                .as_chunks::<288>()
+                .as_chunks::<MONSTER_BYTES>()
                 .0
                 .iter()
                 .map(|record| centurions_content::combat::MonsterRecord {
@@ -351,9 +351,13 @@ fn each_captured_resolution_matches_native_targets_damage_and_rng_interval() {
                 .filter(|(_, flag)| **flag > 0)
                 .map(|(body, _)| {
                     let (before, after, offset) = if body < 6 {
-                        (&before_party, &expected_party, body * 3138 + 0x50)
+                        (&before_party, &expected_party, body * WARRIOR_BYTES + 0x50)
                     } else {
-                        (&before_npcs, &expected_npcs, (body - 10) * 288 + 0x110)
+                        (
+                            &before_npcs,
+                            &expected_npcs,
+                            (body - 10) * MONSTER_BYTES + 0x110,
+                        )
                     };
                     let damage = word(before, offset)
                         .unwrap()

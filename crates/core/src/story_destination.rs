@@ -1,5 +1,8 @@
 use crate::RuleError;
-use centurions_content::span;
+use centurions_content::{
+    records::{StoryRecord, StoryRecordMut},
+    span,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Location {
@@ -21,19 +24,19 @@ pub fn destination(
     combat: bool,
     chained: bool,
 ) -> Result<Option<DestinationPlan>, RuleError> {
-    let record = span(record, 0, 42)?;
+    let record = StoryRecord(span(record, 0, StoryRecord::BYTES)?);
     if combat || chained {
         return Ok(None);
     }
     let target = Location {
-        map: i32::from(record[4] as i8),
-        x: i32::from(record[5] as i8),
-        y: i32::from(record[6] as i8),
-        level: record[40],
+        map: i32::from(record.destination_map()),
+        x: i32::from(record.destination_x()),
+        y: i32::from(record.destination_y()),
+        level: record.destination_level(),
     };
     // The original compares the destination level as signed and the current level as unsigned.
-    let reload =
-        target.map != current.map || i16::from(record[40] as i8) != i16::from(current.level);
+    let reload = target.map != current.map
+        || i16::from(record.destination_level() as i8) != i16::from(current.level);
     Ok((reload || target.x != current.x || target.y != current.y)
         .then_some(DestinationPlan { target, reload }))
 }
@@ -42,10 +45,10 @@ pub fn persistent_record(
     record: &[u8],
     origin_x: i32,
     origin_y: i32,
-) -> Result<[u8; 42], RuleError> {
-    let mut result: [u8; 42] = span(record, 0, 42)?.try_into().unwrap();
-    result[5] = origin_x as u8;
-    result[6] = origin_y as u8;
+) -> Result<[u8; StoryRecord::BYTES], RuleError> {
+    let mut result: [u8; StoryRecord::BYTES] =
+        span(record, 0, StoryRecord::BYTES)?.try_into().unwrap();
+    StoryRecordMut(&mut result).set_destination_position(origin_x, origin_y);
     Ok(result)
 }
 

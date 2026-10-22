@@ -101,7 +101,7 @@ impl<'a> RestrictionMemoryView<'a> {
         item_work_alias: Option<i16>,
         backup: &'a [u8],
     ) -> Result<Self, RuleError> {
-        if backup.len() != 18_828 {
+        if backup.len() != EDITOR_BACKUP_BYTES {
             return Err(RuleError::Invalid("editor backup record size".into()));
         }
         Ok(Self {
@@ -113,36 +113,69 @@ impl<'a> RestrictionMemoryView<'a> {
     }
 
     fn race_word(self, body: usize) -> Result<i16, RuleError> {
-        let address = body
-            .checked_mul(3138)
-            .and_then(|stride| 0x448aa0_usize.checked_add(stride))
-            .and_then(|address| address.checked_add(0x32))
-            .ok_or_else(|| RuleError::Invalid("restriction alias address overflow".into()))?;
-        if self.ordinary_backup && (0x44ecb0..0x45363b).contains(&address) {
-            return Ok(0);
-        }
-        if let Some(backup) = self.editor_backup
-            && let Some(offset) = address
-                .checked_sub(0x44ecb0)
-                .filter(|offset| *offset <= backup.len() - 2)
-        {
-            return Ok(word(backup, offset)?);
-        }
-        if address == 0x45366e
-            && let Some(alias) = self.item_work_alias
-        {
-            return Ok(alias);
-        }
-        if self.item_cache.len() == 30_000
-            && let Some(offset) = address
-                .checked_sub(0x4537fe)
-                .filter(|offset| *offset <= self.item_cache.len() - 2)
-        {
-            return Ok(word(self.item_cache, offset)?);
-        }
-        Err(RuleError::Unsupported {
+        let unrepresented = || RuleError::Unsupported {
             action: "combat.spell",
             dependency: "restricted monster race alias outside the represented memory owners",
-        })
+        };
+        match RaceAlias::of(body)? {
+            RaceAlias::EditorBackup { .. } if self.ordinary_backup => Ok(0),
+            RaceAlias::EditorBackup { offset } => match self.editor_backup {
+                Some(backup) => Ok(word(backup, offset)?),
+                None => Err(unrepresented()),
+            },
+            RaceAlias::ItemWorkAlias => self.item_work_alias.ok_or_else(unrepresented),
+            RaceAlias::ItemCache { offset } if self.item_cache.len() == ITEM_CACHE_BYTES => {
+                Ok(word(self.item_cache, offset)?)
+            }
+            RaceAlias::ItemCache { .. } | RaceAlias::Unrepresented => Err(unrepresented()),
+        }
+    }
+}
+
+/// Party race reads use the warrior table at 0x448aa0 (3138-byte records, race
+/// WORD 0x32). An enemy body index runs past that table into these owners.
+const WARRIOR_TABLE: usize = 0x448aa0;
+const WARRIOR_BYTES: usize = 3138;
+const RACE_WORD: usize = 0x32;
+/// Startup editor backup; `with_editor_backup` checks the same size.
+const EDITOR_BACKUP: usize = 0x44ecb0;
+const EDITOR_BACKUP_BYTES: usize = 18_828;
+/// WORD 0x32 of the item work record that follows the editor backup at 0x45363c.
+const ITEM_WORK_ALIAS: usize = 0x45366e;
+/// The first 200 item definitions, cached after the item work records.
+const ITEM_CACHE: usize = 0x4537fe;
+const ITEM_CACHE_BYTES: usize = 30_000;
+
+/// The memory owner, and the WORD offset inside it, that a race read reaches.
+enum RaceAlias {
+    EditorBackup { offset: usize },
+    ItemWorkAlias,
+    ItemCache { offset: usize },
+    Unrepresented,
+}
+
+impl RaceAlias {
+    fn of(body: usize) -> Result<Self, RuleError> {
+        let address = body
+            .checked_mul(WARRIOR_BYTES)
+            .and_then(|stride| WARRIOR_TABLE.checked_add(stride))
+            .and_then(|address| address.checked_add(RACE_WORD))
+            .ok_or_else(|| RuleError::Invalid("restriction alias address overflow".into()))?;
+        let word_within = |base: usize, bytes: usize| {
+            address
+                .checked_sub(base)
+                .filter(|offset| *offset <= bytes - 2)
+        };
+        Ok(
+            if let Some(offset) = word_within(EDITOR_BACKUP, EDITOR_BACKUP_BYTES) {
+                Self::EditorBackup { offset }
+            } else if address == ITEM_WORK_ALIAS {
+                Self::ItemWorkAlias
+            } else if let Some(offset) = word_within(ITEM_CACHE, ITEM_CACHE_BYTES) {
+                Self::ItemCache { offset }
+            } else {
+                Self::Unrepresented
+            },
+        )
     }
 }

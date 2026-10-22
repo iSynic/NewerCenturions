@@ -15,7 +15,7 @@ fn path(name: &str) -> PathBuf {
 
 fn stage_choice(state: &mut Session, parameter: i16) {
     let position = state.exploration.as_mut().unwrap();
-    position.script = Some(support::script_state(vec![0; 42], 1));
+    position.script = Some(centurions_core::ScriptState::scheduled(vec![0; 42], 1));
     position.presentation = Some(Presentation::StageChange { parameter });
 }
 
@@ -43,13 +43,13 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         }
         let mut adjusted = support::mission_session(&content);
         adjusted.warriors = warriors;
-        adjusted.party_mask = mask;
+        adjusted.native_work.party_mask = mask;
         let position = adjusted.exploration.as_mut().unwrap();
         let mut record = position.event_headers[..42].to_vec();
         record[8..40].fill(0);
         record[8..10].copy_from_slice(&108_i16.to_be_bytes());
         record[24..26].copy_from_slice(&parameter.to_be_bytes());
-        position.script = Some(support::script_state(record, 0));
+        position.script = Some(centurions_core::ScriptState::scheduled(record, 0));
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
             text: String::new(),
@@ -71,6 +71,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         position.events.fill(0);
         position.event_headers.fill(0);
         position.region_state = case.bytes("region");
+        crate::native_common::keep_tile_set(&mut walking, &content);
         walking.random = RandomState::new(12);
         apply(Command::Move { dx: 1, dy: 0 }, &mut walking, &content).unwrap();
         assert!(matches!(
@@ -109,10 +110,10 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     }
     let position = state.exploration.as_mut().unwrap();
     let mut record = vec![0; 42];
-    for (offset, value) in [(8, 47_i16), (10, 9), (12, 200), (24, 2), (26, 6000)] {
+    for (offset, value) in [(8, 47_i16), (10, 9), (12, 63), (24, 2), (26, 6000)] {
         record[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
     }
-    position.script = Some(support::script_state(record, 0));
+    position.script = Some(centurions_core::ScriptState::scheduled(record, 0));
     position.presentation = Some(Presentation::Dialogue {
         id: 0,
         text: String::new(),
@@ -126,9 +127,9 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         let mut casting = support::mission_session(&content);
         casting.warriors = support::warriors(&case.bytes("before"));
         casting.random = RandomState::new(12);
-        casting.party_mask = case.n::<Vec<i16>>("mask").try_into().unwrap();
+        casting.native_work.party_mask = case.n::<Vec<i16>>("mask").try_into().unwrap();
         let position = casting.exploration.as_mut().unwrap();
-        position.script = Some(support::script_state(
+        position.script = Some(centurions_core::ScriptState::scheduled(
             content.map(0).unwrap().script(176).unwrap().to_vec(),
             1,
         ));
@@ -239,7 +240,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     let position = survivor.exploration.as_mut().unwrap();
     let mut record = vec![0; 42];
     record[8..10].copy_from_slice(&119_i16.to_be_bytes());
-    position.script = Some(support::script_state(record, 0));
+    position.script = Some(centurions_core::ScriptState::scheduled(record, 0));
     position.presentation = Some(Presentation::Dialogue {
         id: 0,
         text: String::new(),
@@ -286,7 +287,10 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         case.bytes("enemy_after")
     );
     assert_eq!(current_combat(&curse).spell_fields, case.bytes("fields"));
-    assert_eq!(curse.party_mask.as_slice(), &case.words("mask")[..6]);
+    assert_eq!(
+        curse.native_work.party_mask.as_slice(),
+        &case.words("mask")[..6]
+    );
     support::assert_rng(&curse.random, &case["seed"], &case["draws"]);
     // A queued original question must return through the shared dispatcher after reload.
     curse.warriors[0].bytes[0x40..0x42].copy_from_slice(&5_i16.to_be_bytes());
@@ -344,7 +348,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             )
             .unwrap();
             // getup clears affected markers after the independently captured reduce call.
-            for bytes in expected.as_chunks_mut::<3138>().0 {
+            for bytes in expected.as_chunks_mut::<WARRIOR_BYTES>().0 {
                 bytes[0x14..0x16].fill(0);
             }
         }
@@ -416,10 +420,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             support::positions(&case.bytes("position"))[0]
         );
         // The native receipt stops before the caller's survivor dialog entry.
-        let mut expected_random = RandomState {
-            seed: case.n("seed"),
-            draws: case.n("draws"),
-        };
+        let mut expected_random = crate::native_common::random_at(case, "seed", "draws");
         if summoning.survivors.is_some() {
             expected_random.bound(4);
         }
@@ -436,7 +437,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             id: 0,
             text: String::new(),
         });
-        position.script = Some(support::script_state(
+        position.script = Some(centurions_core::ScriptState::scheduled(
             content.map(0).unwrap().script(308).unwrap().to_vec(),
             1,
         ));
@@ -465,7 +466,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     record[20..24].fill(0); // Bound this caller after taking equipment, before its battle.
     let stage = |state: &mut Session, record, cursor| {
         let position = state.exploration.as_mut().unwrap();
-        position.script = Some(support::script_state(record, cursor));
+        position.script = Some(centurions_core::ScriptState::scheduled(record, cursor));
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
             text: String::new(),
@@ -510,7 +511,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     ));
     let mut resumed = checkpoint(&captive, &content, "confiscated");
     let mut skirmish = captive.clone();
-    skirmish.party_mask.fill(1);
+    skirmish.native_work.party_mask.fill(1);
     stage(
         &mut skirmish,
         content.map(0).unwrap().script(282).unwrap().to_vec(),
@@ -646,6 +647,8 @@ fn visited_map_consequences_and_pending_choices_survive_v3_reload() {
             menu: None,
             persist: false,
             origin: None,
+            caller_action: None,
+            chained: false,
         });
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
@@ -717,7 +720,10 @@ fn shared_direct_death_child_preserves_original_header_and_saved_dialogue_return
     position.presentation = None;
     position.script = Some(ScriptState {
         map_slot: 8,
-        ..support::script_state(content.map(1).unwrap().script(55).unwrap().to_vec(), 1)
+        ..centurions_core::ScriptState::scheduled(
+            content.map(1).unwrap().script(55).unwrap().to_vec(),
+            1,
+        )
     });
     combat::begin_battle(&mut state, &content, 14, 0).unwrap();
     // Controlled defeat is the same boundary used by the native nested-caller fixture.
