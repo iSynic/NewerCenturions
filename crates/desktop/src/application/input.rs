@@ -122,15 +122,9 @@ impl Application {
             }
             let wheel = mouse_wheel().1;
             if wheel != 0. {
-                self.selection.roster_page = if wheel > 0. {
-                    self.selection.roster_page.saturating_sub(1)
-                } else {
-                    (self.selection.roster_page + 1).min(
-                        self.roster
-                            .as_ref()
-                            .map_or(0, |r| r.warriors.len().saturating_sub(1) / 13),
-                    )
-                };
+                return Some(Action::Application(ApplicationAction::RosterScroll(
+                    wheel < 0.,
+                )));
             }
         }
         if self.help.page.is_some() {

@@ -196,24 +196,8 @@ fn collision_race_gate_precedes_usage_and_unsupported_restrictions_remain_atomic
     assert_eq!(prefix.bound(receipt.n::<i16>("bound")), 1);
     assert_eq!(actual_random, prefix);
 
-    for restriction in [0x4000_i16, i16::MIN, -1] {
-        let mut unsupported = packet.clone();
-        unsupported[50..52].copy_from_slice(&restriction.to_be_bytes());
-        let mut actual_random = random(before);
-        let result = resolve_bodies(
-            &warriors,
-            &monsters,
-            &mask,
-            &DirectSpell {
-                packet: &unsupported,
-                ..context
-            },
-            &mut actual_random,
-        );
-        assert!(matches!(result, Err(RuleError::Unsupported { .. })));
-        assert_eq!(actual_random, random(before));
-    }
-    for race in [0i16, 17, -1] {
+    // BitTst(443780, race-1) leaves the 58-byte packet only past these races.
+    for race in [65i16, -401] {
         let mut unsupported = warriors.clone();
         unsupported[3].bytes[0x32..0x34].copy_from_slice(&race.to_be_bytes());
         let mut actual_random = random(before);

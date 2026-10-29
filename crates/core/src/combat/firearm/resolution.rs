@@ -39,6 +39,7 @@ pub fn resolve_enemy_after_duration(
             );
         if random.bound(100) > hit.clamp(15 - difficulty * 5, 90 - difficulty * 5) {
             return Ok(AttackResult {
+                icon: 0,
                 feedback: None,
                 damage: 0,
                 killed: false,
@@ -76,6 +77,7 @@ pub fn resolve_enemy_after_duration(
         }
     }
     Ok(AttackResult {
+        icon: result.sound,
         feedback: None,
         damage: result.total,
         killed: warrior.record().stamina()? <= 0,
@@ -134,6 +136,7 @@ pub(crate) fn resolve_friendly_after_duration(
             );
         if random.bound(100) > crate::rules::pin(hit, 15 - difficulty * 5, 90 - difficulty * 5) {
             return Ok(AttackResult {
+                icon: 0,
                 feedback: None,
                 damage: 0,
                 killed: false,
@@ -163,6 +166,7 @@ pub(crate) fn resolve_friendly_after_duration(
             .set_stamina(previous.wrapping_sub(result.total));
     }
     Ok(AttackResult {
+        icon: result.sound,
         feedback: None,
         damage: result.total,
         killed: previous > 0 && target.record().stamina()? < 1,
@@ -213,6 +217,7 @@ pub(crate) fn resolve_after_duration(
         let maximum = 90_i16.wrapping_sub(difficulty.wrapping_mul(5));
         if random.bound(100) > hit.clamp(minimum, maximum) {
             return Ok(AttackResult {
+                icon: 0,
                 feedback: None,
                 damage: 0,
                 killed: false,
@@ -252,6 +257,7 @@ pub(crate) fn resolve_after_duration(
         }
     }
     Ok(AttackResult {
+        icon: result.sound,
         feedback: None,
         damage,
         killed: enemy.record().stamina()? <= 0,

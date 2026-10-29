@@ -1,10 +1,11 @@
 //! BD tile-property files. loadland 0x13107a calls loadpixmap 0x131182 with the land's
 //! tile-set byte (region-table offset 520); when it differs from the loaded set, loadpixmap
-//! reads the file's default tile and tick flag, 60 further bytes, and 16000 bytes of tile
-//! properties, of which the 300 recovered 40-byte records are kept.
+//! reads the file's default tile and tick flag, 60 further bytes, and up to 16000 bytes of
+//! 40-byte tile properties. Supplied sets hold 300 records (12064 bytes); a shorter read
+//! leaves the rest of the native buffer as an earlier land left it.
 use crate::{ContentError, span, word};
 
-/// Tile sets 1 to 9; loadpixmap names custom files for 15 and above.
+/// The installation-wide standard sets. Custom sets belong to a scenario level.
 pub const TILE_SETS: usize = 9;
 
 #[derive(Clone, Debug)]
@@ -26,6 +27,7 @@ pub fn file_name(terrain: u8) -> Option<&'static str> {
         7 => "Data Castle BD",
         8 => "Data Techno BD",
         9 => "Data Biologic BD",
+        15..=19 => " BD",
         _ => return None,
     })
 }
@@ -36,13 +38,25 @@ pub fn read(
 ) -> Result<TileSet, ContentError> {
     let name = file_name(terrain)
         .ok_or_else(|| ContentError::Invalid(format!("unknown terrain {terrain}")))?;
-    let bytes = read(&format!("TheNewCenturions/Data Files/{name}"))?;
+    let path = if terrain >= 15 {
+        format!("{}{name}", crate::mission::SCENARIO)
+    } else {
+        format!("TheNewCenturions/Data Files/{name}")
+    };
+    let bytes = read(&path)?;
+    let properties = span(&bytes, 64, bytes.len().saturating_sub(64).min(16000))?;
     Ok(TileSet {
         terrain,
-        properties: span(&bytes, 64, 12000)?.to_vec(),
+        properties: properties.to_vec(),
         default_tile: word(&bytes, 0)?,
         minutes_per_tick: if word(&bytes, 2)? == 0 { 5 } else { 1 },
     })
+}
+
+/// loadpixmap asks GetPicture for the terrain WORD plus299.
+pub fn picture_terrain(id: i16) -> Option<u8> {
+    let terrain = u8::try_from(id.checked_sub(299)?).ok()?;
+    file_name(terrain).map(|_| terrain)
 }
 
 /// Every tile set the installation supplies; a missing file is left out, so only a land

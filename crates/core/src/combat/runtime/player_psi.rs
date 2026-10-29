@@ -73,15 +73,17 @@ pub(super) fn player_psi_target(
     let mission = state
         .land(content)
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
-    if state.native_work.psi_memory.is_none() {
-        state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
+    crate::combat::player_psi::select_native_caster(state);
+    // cast's loop over castspell's single triple.
+    if let Some(combat) = state.combat.as_mut() {
+        combat.target_work.enter(0, 1);
     }
     let mut events = crate::combat::player_psi::cast_with_buffs(
         state.combat.as_mut().unwrap(),
         &mut state.warriors,
         mission,
         &mut state.random,
-        state.native_work.psi_memory.as_mut().unwrap(),
+        &mut state.native_work.psi_memory,
         &mut state.party_buffs,
         state.psi_disabled,
         crate::combat::player_psi::CastRequest {
@@ -94,24 +96,39 @@ pub(super) fn player_psi_target(
             movement_gate: state.bandage_ready,
             body,
             animation_delay: state.command_preferences.animation_delay,
+            item_work_alias: crate::combat::spells::retained_item_alias(
+                &state.native_work.ammunition_work,
+            )?,
+            owners: crate::combat::warrior_alias::Owners::new(
+                None,
+                &state.native_work.shop_work,
+                state
+                    .exploration
+                    .as_ref()
+                    .map(|position| position.event_headers.as_slice()),
+            )
+            .with_backup(&state.native_work.warrior_table),
+            land: crate::combat::map_alias::session_map_aliases!(state),
+            refresh: Some((&content.items, &mut state.native_work.ammunition_work)),
         },
     )?;
+    state.commit_alias_writes()?;
+    // castspell clears the mask at entry; cast and the global arm clear it afterwards.
+    if let Some(combat) = state.combat.as_mut() {
+        combat.clear_target_tail();
+        // cast's last increment and closing cleartarget (10e658..10e678).
+        combat.target_work.leave();
+    }
     if matches!(
-        centurions_content::records::AttackPacket(
-            state
-                .combat
-                .as_ref()
-                .unwrap()
-                .attack_packet
-                .as_ref()
-                .unwrap()
-        )
-        .effect()?,
+        centurions_content::records::AttackPacket(&state.combat.as_ref().unwrap().attack_packet)
+            .effect()?,
         55 | 56
     ) {
-        state.bandage_ready = Some(0);
+        state.bandage_ready = 0;
     }
     state.native_work.attack_count = power;
+    // castspell 0x10d328 stores the cast power in WORD 0x437a7a + 2 * member.
+    state.native_work.psi_powers[actor as usize] = None;
     state.psi_menu_choices[actor as usize] = Some(crate::PsiMenuChoice {
         row: (spell % 1000 / 100 - 1) as u8,
         column: (spell % 100 - 1) as u8,

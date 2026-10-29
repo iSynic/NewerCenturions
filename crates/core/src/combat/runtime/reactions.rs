@@ -1,6 +1,10 @@
 //! Reactions in the original combat execution order.
-use super::{alive, has_active_warrior, neighbors, refresh_body_item, resolve_attack};
-use crate::combat::Combat;
+use super::reaction_calls::{self, AttackCall, ReactionContext, ReactionResult};
+use super::{has_active_warrior, neighbors, refresh_body_item};
+use crate::combat::{
+    Combat,
+    neighbor_work::{self, NativeNeighbors},
+};
 use crate::{Event, RandomState, RuleError};
 use centurions_content::Warrior;
 
@@ -21,7 +25,9 @@ pub fn check_neighbors(
         &[0; 20],
         &mut Default::default(),
         false,
+        None,
     )
+    .map(|result| result.events)
 }
 
 pub fn check_neighbors_with_definitions(
@@ -42,7 +48,9 @@ pub fn check_neighbors_with_definitions(
         &[0; 20],
         &mut Default::default(),
         false,
+        None,
     )
+    .map(|result| result.events)
 }
 
 pub fn check_neighbors_with_context(
@@ -76,7 +84,9 @@ pub fn check_neighbors_with_buffs(
         buffs,
         &mut Default::default(),
         false,
+        None,
     )
+    .map(|result| result.events)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -89,7 +99,8 @@ pub(crate) fn check_neighbors_with_work(
     attacks: &[u8],
     buffs: &[u8],
     buffers: &mut crate::ammunition::WorkBuffers,
-) -> Result<Vec<Event>, RuleError> {
+    native: Option<NativeNeighbors<'_>>,
+) -> Result<ReactionResult, RuleError> {
     check_neighbors_with_items(
         c,
         w,
@@ -101,6 +112,7 @@ pub(crate) fn check_neighbors_with_work(
         buffs,
         buffers,
         true,
+        native,
     )
 }
 
@@ -116,92 +128,115 @@ pub(super) fn check_neighbors_with_items(
     buffs: &[u8],
     buffers: &mut crate::ammunition::WorkBuffers,
     display_writers: bool,
-) -> Result<Vec<Event>, RuleError> {
-    let mut events = vec![];
+    mut native: Option<NativeNeighbors<'_>>,
+) -> Result<ReactionResult, RuleError> {
+    let mut result = ReactionResult::default();
+    let mut context = ReactionContext {
+        items,
+        attacks,
+        buffs,
+        buffers,
+        display_writers,
+        native: native.as_mut().map(|native| NativeNeighbors {
+            selected_warrior: native.selected_warrior,
+            party_mask: &mut *native.party_mask,
+            aliases: native.aliases,
+            table: native.table,
+        }),
+    };
+    if context.native.is_some() {
+        neighbor_work::begin(c);
+    }
+    // bVar2 belongs to the invocation, not to an individual rescan.
+    let mut changed = false;
     for _ in 0..110 {
         if *stopped {
-            return Ok(events);
+            return Ok(result);
         }
-        let list = neighbors(c, w, body)?;
-        let mut changed = false;
-        for &other in &list {
-            let guard = if other < 10 {
-                w[other as usize].record().guarding()? != 0
-                    && w[other as usize].record().turn_skip_duration()? == 0
-            } else {
-                let m = c.enemies.records[(other - 10) as usize].record();
-                m.guarding() != 0
-                    && m.turn_skip_duration() == 0
-                    && !m.removed()
-                    && (body >= 10 || !matches!(w[body as usize].record().profession()?, 4 | 5))
-            };
-            if guard {
-                if display_writers {
-                    refresh_body_item(c, w, items.unwrap(), other, buffers)?;
-                }
-                changed = true;
-                if other < 10 {
-                    w[other as usize].record_mut().set_guarding(0);
-                } else {
-                    c.enemies.records[(other - 10) as usize]
-                        .record_mut()
-                        .set_reaction_ready(false);
-                }
-                if other >= 10 {
-                    c.weapon_work.natural_attack_index = Some(0);
-                }
-                events.extend(resolve_attack(
-                    c, w, random, other, body, 0, body, items, attacks, buffs, buffers,
-                )?);
-                if other >= 10 && !has_active_warrior(w) {
-                    *stopped = true;
-                }
-                if !alive(c, w, body) {
-                    return Ok(events);
-                }
+        let list = if let Some(native) = context.native.as_mut() {
+            neighbor_work::scan(c, w, 0, (0, 0), native)?
+        } else {
+            neighbors(c, w, body)?
+        };
+        let guards =
+            reaction_calls::guards(c, w, random, body, false, &list, &mut changed, &mut context)?;
+        result.events.extend(guards.events);
+        if guards.interrupted {
+            if !has_active_warrior(w) {
+                *stopped = true;
             }
+            result.interrupted = true;
+            return Ok(result);
         }
-        if changed && display_writers {
-            refresh_body_item(c, w, items.unwrap(), body, buffers)?;
+        let actor = context.actor(c, body);
+        if changed && context.display_writers {
+            refresh_body_item(c, w, context.items.unwrap(), actor, context.buffers)?;
         }
-        if list.is_empty() || body < 10 {
-            return Ok(events);
+        if list.is_empty() || actor < 10 {
+            return Ok(result);
         }
-        let target = list[(random.bound(list.len() as i16) - 1) as usize];
-        let e = (body - 10) as usize;
-        c.enemies.records[e].record_mut().set_target_body(target);
-        let count = c.enemies.records[e].record().actions_per_round() / 2;
-        let mut killed = false;
-        c.weapon_work.natural_attack_index = Some(0);
-        for index in 0..count.max(0) as usize {
-            let actor = &mut c.enemies.records[e];
+        let target_index = (random.bound(list.len() as i16) - 1) as usize;
+        let target = context.body(c, &list, target_index)?;
+        let enemy = if context.native.is_some() {
+            c.selected_enemy
+        } else {
+            (body - 10) as usize
+        };
+        neighbor_work::require_roster_body(c, w, enemy as i16 + 10)?;
+        c.enemies.records[enemy]
+            .record_mut()
+            .set_target_body(target);
+        c.weapon_work.natural_attack_index = 0;
+        loop {
+            let enemy = if context.native.is_some() {
+                c.selected_enemy
+            } else {
+                (body - 10) as usize
+            };
+            neighbor_work::require_roster_body(c, w, enemy as i16 + 10)?;
+            let index = c.weapon_work.natural_attack_index;
+            if index >= i16::from(c.enemies.records[enemy].record().actions_per_round() / 2) {
+                return Ok(result);
+            }
+            let actor = &mut c.enemies.records[enemy];
             let actions = actor.record().action_points().wrapping_sub(2);
             actor.record_mut().set_action_points(actions);
             if actions < 0 {
                 if actions == -1 {
                     actor.record_mut().set_reaction_ready(true);
                 }
-                return Ok(events);
+                return Ok(result);
             }
             let movement = actor.record().movement_points().wrapping_sub(3);
             actor.record_mut().set_movement_points(movement);
             if actions < 2 {
                 actor.record_mut().set_reaction_ready(actions >= 1);
             }
-            events.extend(resolve_attack(
-                c, w, random, body, target, index, body, items, attacks, buffs, buffers,
-            )?);
+            let target = actor.record().target_body()?;
+            neighbor_work::require_roster_body(c, w, target)?;
+            let index = usize::try_from(index)
+                .map_err(|_| RuleError::Invalid("negative natural-attack index".into()))?;
+            let outcome = reaction_calls::attack(
+                c,
+                w,
+                random,
+                AttackCall {
+                    attacker: enemy as i16 + 10,
+                    recipient: target,
+                    index,
+                    retained_actor: context.actor(c, body),
+                },
+                &mut context,
+            )?;
+            result.events.extend(outcome.events);
             if !has_active_warrior(w) {
                 *stopped = true;
             }
-            if !alive(c, w, target) {
-                killed = true;
+            if outcome.returned {
                 break;
             }
-            c.weapon_work.natural_attack_index = Some(index as i16 + 1);
-        }
-        if !killed {
-            return Ok(events);
+            let index = c.weapon_work.natural_attack_index;
+            c.weapon_work.natural_attack_index = index.wrapping_add(1);
         }
     }
     Err(RuleError::Invalid(

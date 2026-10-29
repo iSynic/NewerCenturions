@@ -6,6 +6,8 @@ fn state(f: &Value, c: &Value) -> Session {
     let combat = s.combat.as_mut().unwrap();
     combat.enemies.records = support::monsters(&c["records_before"]);
     s.enemy_spell_disabled = u8::from(c["variant"] == 6);
+    // The probe writes447196=5; this full command also supplies Getup's zero WORDs.
+    crate::native_common::npc_command_input(&mut s, c.n::<usize>("actor") - 10, [0, 0]);
     s
 }
 #[test]
@@ -58,11 +60,11 @@ fn blocked_first_spell_chance_matches_six_complete_native_enemy_turns() {
         assert_eq!(combat.spell_fields, case.bytes("fields_after"));
         assert_eq!(combat.field_used, case.bytes("used_after"));
         assert_eq!(
-            combat.attack_packet.as_ref().unwrap(),
-            &case.bytes("packet_after"),
+            combat.attack_packet,
+            case.bytes("packet_after"),
             "{context} packet"
         );
-        assert_eq!(work.item_context, Some(case.n::<i16>("context_after")));
+        assert_eq!(work.item_context, case.n::<i16>("context_after"));
         support::native_expect! {
             scalar work.attack_count => &case["attack_count_after"], "binary_enemy_spell_guards";
             rng rng => (&case["seed_after"], &case["rng_draws"]), "binary_enemy_spell_guards";
@@ -72,7 +74,7 @@ fn blocked_first_spell_chance_matches_six_complete_native_enemy_turns() {
     }
 }
 #[test]
-fn reached_disabled_spell_turn_resumes_and_uncovered_spell_is_atomic() {
+fn reached_disabled_spell_turn_resumes() {
     let f = support::fixture("reached-guardian-spell.json");
     let content = content();
     let mut s = state(&f, &f["cases"][0]);
@@ -90,12 +92,5 @@ fn reached_disabled_spell_turn_resumes_and_uncovered_spell_is_atomic() {
     assert_eq!(resumed, s);
     save(&path, &s, &content).unwrap();
     assert_eq!(load(&path, &content).unwrap(), s);
-    let mut unsupported = state(&f, &f["cases"][1]);
-    let before = unsupported.clone();
-    assert!(matches!(
-        apply(Command::RunEnemyTurn, &mut unsupported, &content),
-        Err(RuleError::Unsupported { .. })
-    ));
-    assert_eq!(unsupported, before);
     std::fs::remove_file(path).unwrap();
 }

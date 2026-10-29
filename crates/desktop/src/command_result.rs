@@ -19,6 +19,8 @@ pub fn execute(
 ) -> bool {
     let input = InputEffects::of(&command);
     let previous_round = state.combat.as_ref().map(|c| c.round);
+    let previous_session = state.combat.is_some().then(|| state.clone());
+    let previous_view = crate::combat_controls::origin(state, ui);
     match apply(application.command(command), state, content) {
         Ok(mut events) => {
             present_success(
@@ -27,7 +29,7 @@ pub fn execute(
                 application,
                 ui,
                 audio,
-                previous_round,
+                (previous_round, previous_session, previous_view),
                 &mut events,
             );
             false
@@ -48,7 +50,11 @@ fn present_success(
     application: &mut Application,
     ui: &mut UiState,
     audio: Option<&Audio>,
-    previous_round: Option<i16>,
+    (previous_round, previous_session, previous_view): (
+        Option<i16>,
+        Option<Session>,
+        Option<(i16, i16)>,
+    ),
     events: &mut Vec<Event>,
 ) {
     if input.text_entry {
@@ -98,12 +104,42 @@ fn present_success(
     if input.weapon {
         ui.inspection = None;
     }
-    ui.events(events);
-    application.observe(events);
-    if events
+    let ended = events
         .iter()
-        .any(|event| matches!(event, Event::MissionEnded { .. }))
-    {
+        .any(|event| matches!(event, Event::MissionEnded { .. }));
+    // The field shown is the one before the command until its steps have played.
+    let playback = previous_session
+        .filter(|_| !ended && state.combat.is_some())
+        .and_then(|session| {
+            crate::combat_playback::Playback::build(
+                session,
+                events,
+                &crate::combat_playback::Settings {
+                    speed: application.speed as i16,
+                    effect: state.native_work.health_context.effect,
+                    targeting: state
+                        .combat
+                        .as_ref()
+                        .and_then(|combat| combat.attack_packet.get(1).copied())
+                        .unwrap_or(0),
+                    short_walks: ui.preferences.enabled(9),
+                    batched_effects: ui.preferences.enabled(10),
+                    item_value: state
+                        .native_work
+                        .ammunition_work
+                        .item
+                        .as_deref()
+                        .and_then(|item| item.get(0x30..0x32))
+                        .map_or(0, |word| i16::from_be_bytes([word[0], word[1]])),
+                },
+            )
+        });
+    let presented: &[Event] = playback
+        .as_ref()
+        .map_or(events.as_slice(), |(_, immediate)| immediate);
+    ui.events(presented);
+    application.observe(events);
+    if ended {
         ui.selected = 0;
         ui.inspection = None;
         ui.effects.clear();
@@ -114,7 +150,7 @@ fn present_success(
     if let Some(audio) = audio {
         if input.field_control.is_some() && ui.field_repeating {
             // buttonchoice plays the loop's entry sound once per held gesture.
-            audio.play(events.iter().filter(|event| {
+            audio.play(presented.iter().filter(|event| {
                 !matches!(
                     event,
                     Event::Sound {
@@ -123,8 +159,12 @@ fn present_success(
                 )
             }));
         } else {
-            audio.play(events.iter());
+            audio.play(presented.iter());
         }
+    }
+    if let Some((mut playback, _)) = playback {
+        playback.view = previous_view;
+        ui.playback = Some(playback);
     }
 }
 

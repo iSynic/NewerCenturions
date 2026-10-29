@@ -1,11 +1,11 @@
 //! Ordered equipment effects. Removal is intentionally not the inverse of wear.
+use super::globals::GlobalWrite;
 use super::record_rules::unsupported;
 use crate::{RuleError, combat};
 use centurions_content::records::{
     EquipmentModifiers, EquipmentStat as Stat, RetainedEquipmentModifiers,
 };
 use centurions_content::{Content, InventoryRecord, Warrior};
-use std::collections::BTreeMap;
 
 pub(super) fn change(
     warrior: &mut Warrior,
@@ -33,29 +33,13 @@ pub(super) fn movement(warrior: &mut Warrior, content: &Content) -> Result<(), R
         .race_moves;
     // The silent caller initializes unused race-table entries to zero.
     let speed = table.get(race as usize).copied().unwrap_or(0);
-    combat::calculate_movement(warrior, speed).map_err(|error| match error {
-        RuleError::Unsupported {
-            dependency: "SANE division by zero",
-            ..
-        } => RuleError::Unsupported {
-            action: "navigation.movecalc",
-            dependency: "original SANE division by zero is unavailable",
-        },
-        RuleError::Unsupported {
-            dependency: "SANE integer overflow",
-            ..
-        } => RuleError::Unsupported {
-            action: "navigation.movecalc",
-            dependency: "original SANE exceptional or overflowing LONG conversion is unavailable",
-        },
-        error => error,
-    })
+    combat::calculate_movement(warrior, speed)
 }
 
 pub(super) fn attributes(
     warrior: &mut Warrior,
     definition: &EquipmentModifiers,
-    globals: &mut BTreeMap<i16, i16>,
+    globals: &mut Vec<GlobalWrite>,
     removing: bool,
 ) -> Result<(), RuleError> {
     for selector in definition.attributes {
@@ -75,29 +59,14 @@ pub(super) fn attributes(
                 removing,
                 false,
             )?,
-            _ => {
-                let previous = globals.entry(selector).or_default();
-                *previous = if removing {
-                    0
-                } else {
-                    previous.wrapping_sub(definition.attribute_amount.wrapping_abs())
-                };
-            }
+            _ if removing => globals.push(GlobalWrite::Clear { selector }),
+            // Wearing a zero amount subtracts nothing and needs no prior value.
+            _ if definition.attribute_amount == 0 => (),
+            _ => globals.push(GlobalWrite::Subtract {
+                selector,
+                amount: definition.attribute_amount.wrapping_abs(),
+            }),
         }
-    }
-    Ok(())
-}
-
-pub(super) fn verify_globals(globals: &BTreeMap<i16, i16>) -> Result<(), RuleError> {
-    // The existing silent adapter rejects changes to this original global-rule
-    // range, except selector 40 (difficulty), whose local value is discarded.
-    if globals
-        .iter()
-        .any(|(selector, value)| (30..57).contains(selector) && *selector != 40 && *value != 0)
-    {
-        return Err(unsupported(
-            "item changes global rules outside the warrior record",
-        ));
     }
     Ok(())
 }

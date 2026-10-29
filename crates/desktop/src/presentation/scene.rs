@@ -121,8 +121,23 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                     }
                 }
             }
+            // The combat and combatchoice handlers call downbutton(1) over the
+            // clicked button's hit rectangle (for example 0x115d26..0x115d5c) and
+            // upbutton(1) once its action ends.
+            if let Some(point) = ui.held_pointer
+                && let Some(button) = buttons
+                    .iter()
+                    .find(|button| button.enabled && button.rect.contains(point))
+            {
+                super::bevel::draw_pressed(assets, button.rect);
+            }
             controls.extend(buttons);
             crate::combat_controls::draw_automatic(state, assets, &mut controls);
+            // The controls sit 20 pixels lower here than in window 128 (combat
+            // 0x11617a's Guard at 526, 436 is drawn at 526, 456).
+            if let Some(playback) = &ui.playback {
+                super::spell_panel::draw(assets, playback);
+            }
         }
         if state.phase == Phase::Exploration {
             let context = assets.main_controls[&301];
@@ -196,6 +211,15 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                         &mut controls,
                     );
                 }
+                Presentation::BoatQuestion { boarding } => {
+                    crate::story_dialogs::question(
+                        assets,
+                        &assets.questions[if *boarding { 14 } else { 13 }],
+                        Action::Command(Command::Choose { answer: true }),
+                        Action::Command(Command::Choose { answer: false }),
+                        &mut controls,
+                    );
+                }
                 Presentation::Menu { id, text, labels } => {
                     crate::story_dialogs::menu(
                         content,
@@ -251,11 +275,14 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
                     );
                 }
                 Presentation::Loot | Presentation::Shop | Presentation::Clinic { .. } => {}
-                Presentation::Survivors | Presentation::ScriptPause => {}
+                Presentation::Survivors
+                | Presentation::ScriptPause
+                | Presentation::ClinicEntry { .. } => {}
             }
             if !matches!(
                 p,
                 Presentation::Question { .. }
+                    | Presentation::BoatQuestion { .. }
                     | Presentation::Dialogue { .. }
                     | Presentation::Messages { .. }
                     | Presentation::Avoidance { .. }
@@ -295,6 +322,10 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
     }
     if crate::collection::active(state, ui) && state.promotion.is_none() {
         crate::collection::draw(content, state, assets, ui, &mut controls);
+        if ui.inventory.loot_information_open() {
+            ui.inventory
+                .draw_loot_information(content, state, assets, &mut controls);
+        }
         return controls;
     }
     if let Some(Presentation::Clinic { member, percent }) = state
@@ -385,6 +416,7 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
     if crate::targeting::active(state, ui) {
         crate::targeting::draw(content, state, assets, ui, &mut controls);
     }
+    super::range_lines::draw_reveal(state, ui);
     for control in &mut controls {
         control.enabled &= crate::input::available(state, ui.selected, &control.action);
     }

@@ -5,6 +5,7 @@
 *.md text eol=lf
 *.toml text eol=lf
 *.json text eol=lf
+tools/ghidra/patches/*.patch text eol=lf
 vendor/** -whitespace
 # Oracle provenance binds these files to their exact recorded bytes.
 tools/ghidra/VerifyEarnedLoadedShot.java -text whitespace=cr-at-eol

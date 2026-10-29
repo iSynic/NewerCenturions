@@ -156,7 +156,7 @@ impl Application {
                     }
                     (130, 1) => {
                         self.selection.modify_squad = false;
-                        self.selection.roster_page = 0;
+                        self.selection.roster_top = 0;
                         self.selection.difficulty = state.difficulty;
                         self.screen = Screen::Squad;
                         self.squad.clear();

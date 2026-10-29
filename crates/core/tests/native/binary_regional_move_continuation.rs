@@ -57,7 +57,7 @@ fn walking_header_lookup_matches_continuous_original_prefix_and_full_buffers() {
                 scalar receipt.seed => &draw["seed_after"], "binary_regional_move_continuation";
             }
         }
-        let selected = lookup(&headers, map, x, y, &mut random).unwrap();
+        let selected = lookup(&headers, map, x, y, &mut random).unwrap().header;
         assert_eq!(headers, original_headers);
         assert_eq!(random, receipt);
         support::assert_rng(&random, &after["seed"], &after["draws"]);
@@ -92,27 +92,22 @@ fn source_boundaries_preserve_first_match_signed_chance_and_atomic_validation() 
     headers[42 + 7] = 100;
     let mut random = RandomState::new(12);
     let original_random = random.clone();
-    assert!(lookup(&headers, 1, 7, 3, &mut random).unwrap().is_none());
+    assert!(lookup(&headers, 1, 7, 3, &mut random).unwrap().header.is_none());
     assert_eq!(random, original_random);
     headers[7] = 255;
-    assert!(lookup(&headers, 1, 7, 3, &mut random).unwrap().is_none());
+    assert!(lookup(&headers, 1, 7, 3, &mut random).unwrap().header.is_none());
     assert_eq!(random, original_random);
-    assert!(lookup(&headers, 2, 7, 3, &mut random).unwrap().is_none());
+    assert!(lookup(&headers, 2, 7, 3, &mut random).unwrap().header.is_none());
     assert_eq!(random, original_random);
     assert!(lookup(&headers[..4199], 1, 7, 3, &mut random).is_err());
     assert_eq!(random, original_random);
 
     let roll = random.clone().bound(100);
     headers[7] = roll as u8;
-    assert_eq!(
-        lookup(&headers, 1, 7, 3, &mut random)
-            .unwrap()
-            .unwrap()
-            .slot,
-        0
-    );
+    let found = lookup(&headers, 1, 7, 3, &mut random).unwrap().header;
+    assert_eq!(found.unwrap().slot, 0);
     random = original_random;
     headers[7] = (roll - 1) as u8;
-    assert!(lookup(&headers, 1, 7, 3, &mut random).unwrap().is_none());
+    assert!(lookup(&headers, 1, 7, 3, &mut random).unwrap().header.is_none());
     assert_eq!(random.draws, 1);
 }

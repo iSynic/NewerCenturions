@@ -13,10 +13,15 @@ pub struct Selection {
     pub spell: i16,
     pub power: i16,
     pub targets: Vec<i16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<i16>,
 }
 
 impl Selection {
     pub fn validate(&self, state: &Session) -> Result<(), RuleError> {
+        if self.item.is_some() {
+            return crate::combat::item_activation::ordinary::validate(self, state);
+        }
         let combat = state.combat.as_ref().ok_or("pending Psi combat missing")?;
         if state.phase != Phase::Combat
             || combat.active_body() != Some(self.actor as i16)
@@ -27,16 +32,14 @@ impl Selection {
             || state.medical_continuation.is_some()
             || combat.firearm_selection.is_some()
             || combat.attack_identity
-                != Some([
+                != [
                     self.spell / 1000 - 1,
                     self.spell % 1000 / 100 - 1,
                     self.spell % 100 - 1,
-                ])
-            || combat.attack_packet.as_ref().is_none_or(|packet| {
-                packet.len() != 58
-                    || AttackPacket(packet).targeting_mode() > 6
-                    || AttackPacket(packet).targeting_mode() != 0 && !self.targets.is_empty()
-            })
+                ]
+            || combat.attack_packet.len() != 58
+            || AttackPacket(&combat.attack_packet).targeting_mode() > 6
+            || AttackPacket(&combat.attack_packet).targeting_mode() != 0 && !self.targets.is_empty()
             || self.targets.iter().any(|body| {
                 *body < 0
                     || (*body >= state.warriors.len() as i16 && *body < 10)
@@ -102,23 +105,22 @@ pub(crate) fn fire_at(
 ) -> Result<Vec<Event>, RuleError> {
     let pending = state.psi_selection.clone().ok_or("no pending Psi target")?;
     pending.validate(state)?;
-    if state
-        .combat
-        .as_ref()
-        .unwrap()
-        .attack_packet
-        .as_ref()
-        .unwrap()[1]
-        == 0
-    {
+    if pending.item.is_some() {
+        return crate::combat::item_activation::ordinary::fire_at(state, content, point, rotation);
+    }
+    if state.combat.as_ref().unwrap().attack_packet[1] == 0 {
         return Err("multi-body scan requires selected targets".into());
     }
-    if state.native_work.psi_memory.is_none() {
-        state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
-    }
+    // combatchoice 11b164..11b1b8 stores the cursor cell plus the map origin LONGs.
+    let combat = state.combat.as_ref().unwrap();
+    let cell = (
+        point.0 + combat.map.shift.0 + 5,
+        point.1 + combat.map.shift.1 + 5,
+    );
+    state.target_work_mut().select(Some(cell.0), Some(cell.1));
     let mut events = player_psi::cast_prepared_at(
         state,
-        mission(state, content)?,
+        (mission(state, content)?, &content.items),
         &pending,
         point,
         rotation,
@@ -143,8 +145,11 @@ pub(crate) fn fire_warrior(
         .clone()
         .ok_or("no pending portrait scan")?;
     pending.validate(state)?;
+    if pending.item.is_some() {
+        return crate::combat::item_activation::ordinary::portrait(state, content, warrior);
+    }
     let combat = state.combat.as_ref().unwrap();
-    let packet = combat.attack_packet.as_ref().unwrap();
+    let packet = &combat.attack_packet;
     // combatchoice119dd2 accepts the healing effect57, not revival effect64.
     if AttackPacket(packet).targeting_mode() != 1 || AttackPacket(packet).effect()? != 57 {
         return Err(RuleError::Refused {
@@ -153,14 +158,11 @@ pub(crate) fn fire_warrior(
     }
     state.psi_selection = None;
     state.selected_warrior = pending.actor;
-    let mut health = crate::story_health::context(
-        &state.warriors,
-        pending.actor,
-        state.native_work.health_context.as_ref(),
-    );
+    let mut health =
+        crate::story_health::retained_context(pending.actor, &state.native_work.health_context);
     health.affected[pending.actor] = 1;
     health.effect = AttackPacket(packet).health_effect();
-    state.native_work.health_context = Some(health);
+    state.native_work.health_context = health;
     state.medical_continuation = Some(crate::MedicalContinuation {
         origin: crate::MedicalOrigin::LearnedHeal,
         actor: pending.actor,
@@ -219,7 +221,8 @@ pub(crate) fn begin_targeting(
     if AttackPacket(&packet).targeting_mode() > 6 {
         return Err("scan has no point-target continuation".into());
     }
-    combat.weapon_work.armor_filter()?;
+    combat.weapon_work.armor_filter();
+    player_psi::select_native_caster(state);
     let w = &mut state.warriors[actor];
     let points = w
         .record()
@@ -231,23 +234,29 @@ pub(crate) fn begin_targeting(
     CharacterStatisticsMut(&mut w.bytes).add(Statistic::ScansCast, 1);
     let identity = [spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1];
     let combat = state.combat.as_mut().unwrap();
-    combat.attack_packet = Some(packet);
-    combat.attack_identity = Some(identity);
+    combat.attack_packet = packet;
+    combat.attack_identity = identity;
     state.native_work.attack_packet = combat.attack_packet.clone();
     state.native_work.attack_identity = combat.attack_identity;
     state.native_work.weapon_work = combat.weapon_work;
     state.target_quantity = None;
     state.native_work.attack_count = power;
+    // combatchoice 11acf6 zeroes WORD4435c0 once the spell is drawn.
+    state.target_work_mut().count = 0;
+    // castspell 0x10d328 stores the cast power in WORD 0x437a7a + 2 * member.
+    state.native_work.psi_powers[actor] = None;
     state.psi_menu_choices[actor] = Some(PsiMenuChoice {
         row: identity[1] as u8,
         column: identity[2] as u8,
         power,
     });
+    state.set_ready(1);
     state.psi_selection = Some(Selection {
         actor,
         spell,
         power,
         targets: vec![],
+        item: None,
     });
     Ok(vec![])
 }
@@ -262,6 +271,25 @@ pub fn admit_target(
         .as_ref()
         .ok_or("no pending Psi selection")?;
     pending.validate(state)?;
+    if pending.item.is_some() {
+        if state.combat.as_ref().unwrap().attack_packet[1] != 0 {
+            return Err("item target list requires point targeting mode".into());
+        }
+        if pending.targets.len() as i32 >= i32::from(pending.power) {
+            return Err(RuleError::Refused {
+                feedback: vec![crate::feedback::NativeFeedback::Combat {
+                    kind: crate::feedback::CombatRefusal::TooManyTargets,
+                }],
+            });
+        }
+        if pending.targets.len() >= 7 {
+            return Err(RuleError::Unsupported {
+                action: "combat.item_activation",
+                dependency: "eighth prepared item target aliases unrecorded native work",
+            });
+        }
+        return crate::combat::item_activation::ordinary::admit(state, content, pending, point);
+    }
     if pending.targets.len() >= pending.power as usize {
         return Err(RuleError::Refused {
             feedback: vec![crate::feedback::NativeFeedback::Combat {
@@ -270,7 +298,7 @@ pub fn admit_target(
         });
     }
     let combat = state.combat.as_ref().unwrap();
-    let packet = combat.attack_packet.as_ref().unwrap();
+    let packet = &combat.attack_packet;
     if AttackPacket(packet).targeting_mode() != 0 {
         return Err("point scan requires a point-target command".into());
     }
@@ -304,7 +332,15 @@ pub(crate) fn select(
     point: (i16, i16),
 ) -> Result<Vec<Event>, RuleError> {
     let body = admit_target(state, content, point)?;
-    state.psi_selection.as_mut().unwrap().targets.push(body);
+    let pending = state.psi_selection.as_mut().unwrap();
+    pending.targets.push(body);
+    if pending.item.is_none() {
+        // combatchoice 11b300..11b33c / 11b3ec..11b414: a party body's first WORD is
+        // written only while packet byte 31 is 0 or 1; an NPC body's always is.
+        let byte = state.combat.as_ref().unwrap().attack_packet[31];
+        let first = (body >= 9 || byte <= 1).then_some(body);
+        state.target_work_mut().select(first, None);
+    }
     Ok(vec![Event::Sound { resource_id: 145 }])
 }
 
@@ -314,6 +350,9 @@ pub(crate) fn fire(state: &mut Session, content: &Content) -> Result<Vec<Event>,
         .clone()
         .ok_or("no pending Psi selection")?;
     pending.validate(state)?;
+    if pending.item.is_some() {
+        return crate::combat::item_activation::ordinary::fire_targets(state, content);
+    }
     if pending.targets.is_empty() {
         return Err(RuleError::Refused {
             feedback: vec![crate::feedback::NativeFeedback::Combat {
@@ -321,10 +360,8 @@ pub(crate) fn fire(state: &mut Session, content: &Content) -> Result<Vec<Event>,
             }],
         });
     }
-    if state.native_work.psi_memory.is_none() {
-        state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
-    }
-    let mut events = player_psi::cast_selection(state, mission(state, content)?, &pending)?;
+    let mut events =
+        player_psi::cast_selection(state, (mission(state, content)?, &content.items), &pending)?;
     state.psi_selection = None;
     events.extend(runtime::finish_player_action(
         state,
@@ -341,6 +378,11 @@ pub(crate) fn clear(state: &mut Session) -> Result<Vec<Event>, RuleError> {
         .as_ref()
         .ok_or("no pending Psi selection")?;
     pending.validate(state)?;
+    if pending.item.is_some() {
+        state.clear_targets();
+    } else {
+        state.target_work_mut().clear();
+    }
     state.psi_selection.as_mut().unwrap().targets.clear();
     Ok(vec![])
 }
@@ -351,14 +393,11 @@ pub(crate) fn cancel(state: &mut Session, content: &Content) -> Result<Vec<Event
         .as_ref()
         .ok_or("no pending Psi selection")?;
     pending.validate(state)?;
+    if pending.item.is_some() {
+        return crate::combat::item_activation::ordinary::cancel(state, content);
+    }
     let actor = pending.actor;
-    let packet = state
-        .combat
-        .as_ref()
-        .unwrap()
-        .attack_packet
-        .as_ref()
-        .unwrap();
+    let packet = &state.combat.as_ref().unwrap().attack_packet;
     let refund = i32::from(player_psi::cost(packet, pending.power)?) * 66 / 100;
     let w = &mut state.warriors[actor];
     let points = w.record().psi_points()?.wrapping_add(refund as i16);
@@ -367,6 +406,7 @@ pub(crate) fn cancel(state: &mut Session, content: &Content) -> Result<Vec<Event
     w.record_mut().set_scans_used(count);
     let movement = w.record().movement_points()?.wrapping_sub(3).max(0);
     w.record_mut().set_movement_points(movement);
+    state.set_ready(0);
     state.psi_selection = None;
     runtime::refresh_active_item_context(state, content)?;
     Ok(vec![

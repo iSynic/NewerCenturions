@@ -91,7 +91,7 @@ impl Application {
                         break;
                     }
                 }
-            } else if let Event::Sound { resource_id } = event {
+            } else if let Some(resource_id) = event.sound() {
                 events.push(Event::Feedback(
                     centurions_core::feedback::NativeFeedback::Sound { resource_id },
                 ));

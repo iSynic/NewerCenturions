@@ -1,9 +1,6 @@
 //! Item use for maintained exploration.
-use super::{active_map, finish_typed_selection, run_script, typed_record, unsupported};
-use crate::{
-    Event, MovementContinuation, Phase, Presentation, RuleError, ScriptState, Session,
-    typed_encounter,
-};
+use super::{active_map, finish_typed_selection, run_script};
+use crate::{Event, Phase, Presentation, RuleError, ScriptState, Session};
 use centurions_content::Content;
 use centurions_content::records::ItemDefinition;
 
@@ -13,6 +10,7 @@ pub fn use_item(
     warrior: usize,
     slot: usize,
 ) -> Result<Vec<Event>, RuleError> {
+    crate::combat::item_activation::check_selected_slot(slot)?;
     if state
         .exploration
         .as_ref()
@@ -33,13 +31,22 @@ pub fn use_item(
     }
     let definition = crate::ammunition::definition(content, item.id())?;
     if state.combat.is_none()
-        && ItemDefinition(&definition).category()? == 28
+        && !matches!(
+            ItemDefinition(&definition).category()?.wrapping_abs(),
+            23 | 27
+        )
         && ItemDefinition(&definition).spell()? > 1100
     {
         return crate::outdoor_psi::begin_item(state, content, warrior, slot);
     }
     if ItemDefinition(&definition).category()? == 27 {
         return crate::item_modifiers::use_item(state, content, warrior, slot);
+    }
+    if state.combat.is_some()
+        && ItemDefinition(&definition).spell()? > 1100
+        && ItemDefinition(&definition).category()?.wrapping_abs() != 23
+    {
+        return crate::combat::runtime::begin_medical_item(state, content, warrior, slot);
     }
     crate::story_item_use::reject_inert_item(&definition)?;
     if state.phase == Phase::Combat && ItemDefinition(&definition).category()?.wrapping_abs() == 23
@@ -58,6 +65,7 @@ pub fn use_item(
     }
     let map = active_map(state, content)?;
     let races = &map.combat.as_ref().unwrap().race_moves;
+    state.set_warrior_selector(warrior);
     let used = crate::story_item_use::use_scenario_item(
         &state.warriors,
         warrior,
@@ -65,12 +73,19 @@ pub fn use_item(
         content,
         races,
         crate::story_item_use::ScriptItemContext::Exploration,
-        state.native_work.inventory_record.as_ref(),
+        Some(&state.native_work.inventory_record),
     )?;
+    state.apply_equipment_globals(&used.global_writes)?;
     let id = state.warriors[warrior].inventory()?[slot].id();
     state.load_item_work(content, id)?;
     state.warriors = used.warriors;
-    state.selected_warrior = warrior;
+    crate::combat::item_activation::finish_return(
+        state,
+        warrior,
+        crate::combat::item_activation::Caller::Ordinary,
+    );
+    // buttonchoice10a9e6 refreshes selection before decoding the script return.
+    crate::combat::item_activation::clear_active_affected(state);
     let mut effects: Vec<Event> = used
         .warnings
         .into_iter()
@@ -142,16 +157,32 @@ pub(super) fn use_encounter_item(
         .get(slot)
         .cloned()
         .ok_or("inventory item unavailable")?;
-    let selected = typed_encounter::select_item(typed_record(state, content)?, item.id())?;
     let definition = crate::ammunition::definition(content, item.id())?;
     let class = ItemDefinition(&definition).category()?.wrapping_abs();
     if ItemDefinition(&definition).category()? == 27 {
         return crate::item_modifiers::use_item(state, content, warrior, slot);
     }
-    if class == 23 {
-        if state.combat.is_some() {
-            return refuse_combat_script_item(state, content, warrior, item.id(), true);
+    if state.combat.is_some() && class == 23 {
+        return refuse_combat_script_item(state, content, warrior, item.id(), true);
+    }
+    if state.combat.is_some() {
+        let used = crate::combat::item_activation::activate(
+            state,
+            content,
+            warrior,
+            slot,
+            crate::combat::item_activation::Caller::Encounter,
+        )?;
+        let mut events = used.events;
+        if let Some(selected) =
+            crate::combat::item_activation::encounter_return(state, content, used.item)?
+        {
+            events.extend(finish_typed_selection(state, content, selected)?);
         }
+        return Ok(events);
+    }
+    if class == 23 {
+        state.set_warrior_selector(warrior);
         let frame = state
             .exploration
             .as_ref()
@@ -160,33 +191,6 @@ pub(super) fn use_encounter_item(
             .as_ref()
             .ok_or("typed item caller missing")?;
         let manual = frame.item_return;
-        let walking =
-            !frame.scheduled && frame.origin.is_some() && state.time_continuation.is_none();
-        let calendar = frame.scheduled
-            && state.time_continuation.is_some()
-            && state.combat_story.is_none()
-            && state.round_dispatch.is_none();
-        let regional = frame.scheduled
-            && frame.origin.is_none()
-            && state.time_continuation.is_none()
-            && state.combat_story.is_none()
-            && state.round_dispatch.is_none()
-            && matches!(
-                state.movement_continuation,
-                Some(MovementContinuation::RegionalReturn { .. })
-            );
-        let shared_death = state
-            .combat_story
-            .as_ref()
-            .is_some_and(|story| story.shared_dispatch);
-        let completed_round = state.round_dispatch.is_some()
-            && state.scripted_cleanup == Some(crate::story_cleanup::Stage::Complete);
-        if !manual && !walking && !calendar && !regional && !shared_death && !completed_round {
-            return Err(unsupported(
-                "story.encounter_item",
-                "script-item return caller",
-            ));
-        }
         let map = active_map(state, content)?;
         let used = crate::story_item_use::use_scenario_item(
             &state.warriors,
@@ -198,8 +202,11 @@ pub(super) fn use_encounter_item(
                 .ok_or("item movement tables unavailable")?
                 .race_moves,
             crate::story_item_use::ScriptItemContext::Encounter,
-            state.native_work.inventory_record.as_ref(),
+            Some(&state.native_work.inventory_record),
         )?;
+        state.apply_equipment_globals(&used.global_writes)?;
+        // Items 12ad2e and encounter2 1229de leave the script return in WORD44719a.
+        state.native_work.fire_item = used.return_code;
         // Only manual buttonchoice10a9ee decodes the script-item return.
         let record = if manual {
             Some(
@@ -211,8 +218,12 @@ pub(super) fn use_encounter_item(
         };
         state.load_item_work(content, item.id())?;
         state.warriors = used.warriors;
-        state.selected_warrior = warrior;
-        state.native_work.party_mask[warrior] = 1;
+        crate::combat::item_activation::finish_return(
+            state,
+            warrior,
+            crate::combat::item_activation::Caller::Encounter,
+        );
+        crate::combat::item_activation::clear_active_affected(state);
         let position = state.exploration.as_mut().unwrap();
         position.presentation = None;
         position.script = record.map(|record| ScriptState::scheduled(record, 0));
@@ -221,26 +232,26 @@ pub(super) fn use_encounter_item(
             .into_iter()
             .map(|resource_id| Event::Sound { resource_id })
             .collect();
-        if manual || shared_death || completed_round {
-            effects.extend(run_script(state, content)?);
-        }
+        effects.extend(run_script(state, content)?);
         return Ok(effects);
     }
     let activating = ItemDefinition(&definition).spell()? > 1100
         && (item.quantity()? > 0 || ItemDefinition(&definition).supplied_quantity()? < 0);
-    if activating && class == 28 && state.combat.is_none() {
+    if activating && state.combat.is_none() {
         return crate::outdoor_psi::begin_item(state, content, warrior, slot);
     }
-    if class == 27 || activating {
-        return Err(unsupported(
-            "story.encounter_item",
-            "activating item encounter caller",
-        ));
+    let used = crate::combat::item_activation::activate(
+        state,
+        content,
+        warrior,
+        slot,
+        crate::combat::item_activation::Caller::Encounter,
+    )?;
+    let mut events = used.events;
+    if let Some(selected) =
+        crate::combat::item_activation::encounter_return(state, content, used.item)?
+    {
+        events.extend(finish_typed_selection(state, content, selected)?);
     }
-    // Items12b04a reloads the item and clears targets;12c422 selects its owner.
-    state.load_item_work(content, item.id())?;
-    state.native_work.party_mask.fill(0);
-    state.native_work.party_mask[warrior] = 1;
-    state.selected_warrior = warrior;
-    finish_typed_selection(state, content, selected)
+    Ok(events)
 }

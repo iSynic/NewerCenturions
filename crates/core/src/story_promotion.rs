@@ -34,24 +34,13 @@ pub struct Promotion {
 }
 
 pub fn experience_threshold(level: i16) -> Result<i32, RuleError> {
-    if level > 64 {
-        return Err(RuleError::Unsupported {
-            action: "story.promotion",
-            dependency: "high-level SANE experience conversion",
-        });
-    }
     let mut running = 714.0_f32;
     let mut total = 0_i32;
     for index in 0..level {
         let factor = ((1.45_f64 - 0.01 * f64::from(index)) as f32).max(1.15_f32);
+        // Past level 64 the SINGLE product exceeds a LONG and later becomes infinite.
         running = (f64::from(running) * f64::from(factor)) as f32;
-        if f64::from(running) > f64::from(i32::MAX) {
-            return Err(RuleError::Unsupported {
-                action: "story.promotion",
-                dependency: "SANE threshold overflow",
-            });
-        }
-        total = total.wrapping_add(running as i32);
+        total = total.wrapping_add(crate::rules::sane_long(f64::from(running)));
     }
     Ok(total)
 }
@@ -134,12 +123,55 @@ pub fn close(
     registered: bool,
     library_random: &mut LibraryRandom,
 ) -> Result<Promotion, RuleError> {
+    close_with_preparation(
+        warriors,
+        races,
+        profiles,
+        attacks,
+        registered,
+        library_random,
+        true,
+    )
+}
+
+pub(crate) fn close_recovery(
+    warriors: &[Warrior],
+    races: &[u8],
+    profiles: &[u8],
+    attacks: &[u8],
+    registered: bool,
+    library_random: &mut LibraryRandom,
+) -> Result<Promotion, RuleError> {
+    close_with_preparation(
+        warriors,
+        races,
+        profiles,
+        attacks,
+        registered,
+        library_random,
+        false,
+    )
+}
+
+fn close_with_preparation(
+    warriors: &[Warrior],
+    races: &[u8],
+    profiles: &[u8],
+    attacks: &[u8],
+    registered: bool,
+    library_random: &mut LibraryRandom,
+    normalize: bool,
+) -> Result<Promotion, RuleError> {
     if !(1..=6).contains(&warriors.len()) {
         return Err(RuleError::Invalid(
             "promotion requires one to six warrior records".into(),
         ));
     }
-    let mut warriors = story_inventory::normalize_story_loot(warriors)?;
+    let mut warriors = if normalize {
+        story_inventory::normalize_story_loot(warriors)?
+    } else {
+        warriors.to_vec()
+    };
     let mut next_library = library_random.clone();
     let mut promoted = vec![];
     let mut spell_confirmation = vec![];
@@ -290,7 +322,9 @@ pub fn begin(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleE
     {
         return Err(RuleError::Refused { feedback: vec![] });
     }
-    state.warriors = story_inventory::normalize_story_loot(&state.warriors)?;
+    if state.recovery_return.is_none() {
+        state.warriors = story_inventory::normalize_story_loot(&state.warriors)?;
+    }
     let mut events = vec![Event::Sound { resource_id: 20 }];
     events.extend(advance(state, content, 0)?);
     Ok(events)
@@ -324,6 +358,8 @@ fn advance(state: &mut Session, content: &Content, first: usize) -> Result<Vec<E
                 .map(|warning| Event::CollectionRejected { warning }),
         );
         if result.promoted {
+            state.native_work.character_bare_hand_bonus =
+                state.warriors[member].record().bare_hand_bonus()?;
             events.push(Event::LevelAdvanced {
                 warrior: member,
                 level: state.warriors[member].record().level()?,
@@ -425,6 +461,8 @@ fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleErro
         .attacks;
     state.warriors[pending.member] = pending.selection.finish(attacks)?;
     cache_scans(state, pending.member, attacks)?;
+    state.native_work.character_bare_hand_bonus =
+        state.warriors[pending.member].record().bare_hand_bonus()?;
     advance(state, content, pending.member + 1)
 }
 
@@ -433,16 +471,13 @@ pub(crate) fn cache_scans(
     member: usize,
     attacks: &[u8],
 ) -> Result<(), RuleError> {
-    if state.native_work.psi_memory.is_none() {
-        state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
-    }
     let record = &state.warriors[member];
-    PsiSelectionMemoryMut(state.native_work.psi_memory.as_mut().unwrap())
+    PsiSelectionMemoryMut(&mut state.native_work.psi_memory)
         .store_shortcuts(member, LearnedScans(&record.bytes).shortcuts());
     if let Some(index) = LearnedScans(&record.bytes).last_selected() {
         let school = record.record().psi_school()? as usize - 1;
         state.native_work.attack_packet =
-            Some(AttackPacket::scan_entry(attacks, school, index)?.0.to_vec());
+            AttackPacket::scan_entry(attacks, school, index)?.0.to_vec();
     }
     Ok(())
 }

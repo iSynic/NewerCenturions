@@ -43,16 +43,14 @@ pub fn compare(cases: &[Value], caller: Caller) {
         }
         let mut random = RandomState::new(case.n("seed_before"));
         let mut work = EnemyWork {
-            item_context: Some(case.n("item_context_before")),
+            item_context: case.n("item_context_before"),
             attack_count: case.n("attack_count_before"),
             ..EnemyWork::default()
         };
         if caller == Caller::RetainedSpell {
             let spell: i16 = case.n("retained_spell");
-            work.packet = Some(case.bytes("packet_before"));
-            work.identity = Some([spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1]);
-            work.spell_attempt = 0;
-            work.spell_disabled = 0;
+            work.packet = case.bytes("packet_before");
+            work.identity = [spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1];
         }
         let result = enemy_action_with_work(
             &mut combat,
@@ -103,7 +101,7 @@ pub fn compare(cases: &[Value], caller: Caller) {
                 32,
             );
         }
-        assert_eq!(work.item_context, Some(item_context));
+        assert_eq!(work.item_context, item_context);
         if caller != Caller::Firearm {
             crate::support::native_expect! {
                 bytes combat.spell_fields => &case["fields_after"], format!("case {index} fields");
@@ -112,8 +110,8 @@ pub fn compare(cases: &[Value], caller: Caller) {
         }
         if caller == Caller::RetainedSpell {
             crate::support::native_expect! {
-                bytes work.packet.as_ref().unwrap() => &case["packet_after"], format!("case {index} packet");
-                words work.identity.unwrap() => &case["spell_registers_after"], format!("case {index} identity");
+                bytes &work.packet => &case["packet_after"], format!("case {index} packet");
+                words work.identity => &case["spell_registers_after"], format!("case {index} identity");
             }
         }
         let expected = expected_hits(case, combat.enemies.records.len(), caller);
@@ -173,12 +171,16 @@ fn expected_hits(case: &Value, enemy_count: usize, caller: Caller) -> Vec<Event>
                     target: body as i16,
                     damage,
                     defeated: after_hp < 1 && before_hp != after_hp,
+                    icon: Default::default(),
+                    flight: Default::default(),
                 },
                 None => Event::AttackResolved {
                     attacker: 10,
                     target: body as i16,
                     damage,
                     defeated: after_hp < 1,
+                    icon: Default::default(),
+                    flight: Default::default(),
                 },
             });
         }

@@ -12,15 +12,15 @@ pub(super) fn present_menu(
     table: &[u8],
     script: &mut ScriptState,
     id: i16,
+    work: &mut story::EncounterWork,
+    reload: bool,
 ) -> Result<Option<Presentation>, RuleError> {
-    if id < 0 {
-        return Err(RuleError::Invalid("negative encounter menu".into()));
+    if reload {
+        work.load(table, id, false)?;
     }
-    let menu = span(
-        table,
-        id as usize * story::MENU_RECORD_BYTES,
-        story::MENU_RECORD_BYTES,
-    )?;
+    work.clear_disabled_labels()?;
+    let bytes = work.record(false)?;
+    let menu = bytes.as_slice();
     let record = EncounterMenu(menu);
     if script.menu.is_none() {
         script.menu = Some(MenuContinuation {
@@ -33,6 +33,12 @@ pub(super) fn present_menu(
         script.caller_action = Some(i16::from(script.cursor).wrapping_sub(1));
     }
     let continuation = script.menu.as_mut().unwrap();
+    if reload {
+        continuation.id = id;
+        continuation.typed = false;
+        continuation.remaining = i16::from(record.initial_remaining());
+        continuation.eliminated = 0;
+    }
     let before = continuation.remaining;
     if record.first_selector() != -4 {
         continuation.remaining = before.wrapping_sub(1);
@@ -62,15 +68,14 @@ pub(super) fn present_typed(
     table: &[u8],
     script: &mut ScriptState,
     id: i16,
+    work: &mut story::EncounterWork,
+    reload: bool,
 ) -> Result<Presentation, RuleError> {
-    if id < 0 {
-        return Err(RuleError::Invalid("negative typed encounter".into()));
+    if reload {
+        work.load(table, id, true)?;
     }
-    let record = span(
-        table,
-        id as usize * typed_encounter::RECORD_BYTES,
-        typed_encounter::RECORD_BYTES,
-    )?;
+    let bytes = work.record(true)?;
+    let record = bytes.as_slice();
     if script.menu.is_none() {
         script.menu = Some(MenuContinuation {
             id,
@@ -80,6 +85,13 @@ pub(super) fn present_typed(
             eliminated: 0,
         });
         script.caller_action = Some(i16::from(script.cursor).wrapping_sub(1));
+    }
+    if reload {
+        let continuation = script.menu.as_mut().unwrap();
+        continuation.id = id;
+        continuation.typed = true;
+        continuation.remaining = typed_encounter::attempt_count(record)?;
+        continuation.eliminated = 0;
     }
     Ok(Presentation::Typed {
         id,
@@ -105,29 +117,59 @@ pub fn submit_text(
     let native =
         centurions_content::native_text::NativeText::load(content, std::path::Path::new("."))?;
     let typed_encounter::PasswordSelection::Selected(selected) =
-        typed_encounter::select_password(record, &input, native.bytes(0x3ffc50, 256)?)?
+        typed_encounter::select_password(&record, &input, native.bytes(0x3ffc50, 256)?)?
     else {
         return Ok(vec![]);
     };
     finish_typed_selection(state, content, selected)
 }
 
-pub fn typed_record<'a>(state: &'a Session, content: &'a Content) -> Result<&'a [u8], RuleError> {
-    let map = active_map(state, content)?;
-    let position = state
-        .exploration
-        .as_ref()
-        .ok_or_else(|| RuleError::Invalid("no active mission".into()))?;
-    let Some(Presentation::Typed { id, .. }) = position.presentation.as_ref() else {
+pub fn typed_record(state: &Session, _content: &Content) -> Result<Vec<u8>, RuleError> {
+    if !matches!(
+        state
+            .exploration
+            .as_ref()
+            .and_then(|p| p.presentation.as_ref()),
+        Some(Presentation::Typed { .. })
+    ) {
         return Err(RuleError::Invalid("no typed encounter active".into()));
+    }
+    state.native_work.encounter_work.record(true)
+}
+
+/// saveencounter writes the current header, leaving the file labels untouched.
+pub(super) fn save_encounter(
+    state: &mut Session,
+    content: &Content,
+    id: i16,
+    typed: bool,
+) -> Result<(), RuleError> {
+    let header = state.native_work.encounter_work.header(typed).to_vec();
+    let map = active_map(state, content)?;
+    let authored = if typed {
+        &map.typed_encounters
+    } else {
+        &map.menus
     };
-    Ok(span(
-        if state.typed_encounters.is_empty() {
-            &map.typed_encounters
-        } else {
-            &state.typed_encounters
-        },
-        *id as usize * typed_encounter::RECORD_BYTES,
-        typed_encounter::RECORD_BYTES,
-    )?)
+    let saved = if typed {
+        &mut state.typed_encounters
+    } else {
+        &mut state.menus
+    };
+    let stride = if typed {
+        typed_encounter::RECORD_BYTES
+    } else {
+        story::MENU_RECORD_BYTES
+    };
+    let offset =
+        usize::try_from(id).map_err(|_| RuleError::Invalid("negative encounter".into()))? * stride;
+    let previous = if saved.is_empty() { authored } else { &*saved };
+    if span(previous, offset, header.len())? == header {
+        return Ok(());
+    }
+    if saved.is_empty() {
+        *saved = authored.clone();
+    }
+    saved[offset..offset + header.len()].copy_from_slice(&header);
+    Ok(())
 }

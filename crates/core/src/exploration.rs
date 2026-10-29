@@ -2,6 +2,7 @@
 mod map_context;
 pub(crate) use map_context::active_map;
 use map_context::unsupported;
+pub(crate) mod boat;
 mod movement;
 pub(crate) use movement::resume_movement;
 pub use movement::{manual_encounter, move_squad};
@@ -26,11 +27,12 @@ mod menus;
 use menus::{present_menu, present_typed};
 pub use menus::{submit_text, typed_record};
 mod loot;
-pub use loot::take_loot;
-use loot::{present_treasure, present_treasure_record};
+pub(crate) use loot::present_treasure;
+use loot::present_treasure_record;
+pub use loot::{BootyTally, take_loot};
 mod script_return;
 use script_return::{abandon_script, finish_dispatch, finish_script};
-pub(crate) use script_return::{dialogue, retain_script_stamp};
+pub(crate) use script_return::{dialogue, retain_script_stamp, retain_turn_header};
 mod battle_entry;
 pub(crate) use battle_entry::{StoryBattle, begin_story_battle};
 mod script_execution;
@@ -40,5 +42,5 @@ pub(crate) use script_execution::{Operation, run_script};
 use crate::*;
 
 #[cfg(all(test, feature = "original-fixtures"))]
-#[path = "../tests/unit/exploration_reference.rs"]
+#[path = "../tests/native/regional_reference.rs"]
 mod tests;

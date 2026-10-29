@@ -4,12 +4,13 @@ use crate::{
     empty_party_buffs, field_controls, initial_flags, menu_length, outdoor_psi, shop, story_actor,
     story_allies, story_cleanup, typed_encounter,
 };
+use centurions_content::records::{AttackPacket, ItemDefinition};
 use centurions_content::{Content, InventoryRecord, Warrior};
 
 impl Session {
     pub(crate) fn load_item_work(&mut self, content: &Content, id: i16) -> Result<(), RuleError> {
         self.native_work.loaded_item_field32 =
-            Some(self.native_work.ammunition_work.load_item(content, id)?);
+            self.native_work.ammunition_work.load_item(content, id)?;
         Ok(())
     }
     pub fn new(content: &Content) -> Self {
@@ -17,6 +18,7 @@ impl Session {
             content_identity: content.identity.clone(),
             difficulty: 0,
             command_preferences: CommandPreferences::default(),
+            command_return: false,
             warriors: vec![],
             phase: Phase::SquadSelection,
             mission: None,
@@ -27,6 +29,7 @@ impl Session {
             shop_access: None,
             field_controls: None,
             confiscated: None,
+            recovery_return: None,
             suppress_allies: 0,
             loot_limit: None,
             typed_encounters: vec![],
@@ -37,6 +40,8 @@ impl Session {
             ammunition: empty_ammunition(),
             combat: None,
             battle_treasure: 0,
+            ordinary_battle_rewards: None,
+            selected_battle_treasure: None,
             battle_after_message: 0,
             battle_group_script: None,
             battle_npc: None,
@@ -51,12 +56,18 @@ impl Session {
             library_random_seed: 1,
             library_random_draws: 0,
             combat_story: None,
+            retained_walk_choice: None,
+            npc_action: None,
             survivors: None,
             round_dispatch: None,
+            turn_dispatch: None,
             scripted_cleanup: None,
             actor_replacement: None,
             movement_continuation: None,
             time_continuation: None,
+            zero_time: None,
+            deferred_getup: false,
+            booty_tally: crate::BootyTally::default(),
             psi_selection: None,
             target_quantity: None,
             outdoor_psi: None,
@@ -64,7 +75,8 @@ impl Session {
             promotion: None,
             medical_continuation: None,
             psi_menu_choices: Default::default(),
-            bandage_ready: None,
+            // WORD438786 is zero in the startup image.
+            bandage_ready: 0,
             handled_deaths: vec![],
             menus: vec![],
             flags: initial_flags(),
@@ -80,7 +92,22 @@ impl Session {
     }
 
     pub fn validate(&self, content: &Content) -> Result<(), RuleError> {
+        crate::exploration::boat::validate(self)?;
+        crate::loot_recovery::validate(self)?;
+        if self.native_work.treasure_record.len() != 88 || self.native_work.extra_record.len() != 10
+        {
+            return Err("invalid retained reward records".into());
+        }
         self.native_work.npc_backing.validate()?;
+        self.native_work.monster_work.validate()?;
+        self.native_work.bestiary.validate()?;
+        if self.native_work.spell_target_tail.len() != 104 {
+            return Err("invalid retained spell target mask".into());
+        }
+        self.native_work.tactical_work.validate()?;
+        self.native_work.neighbor_work.validate()?;
+        self.native_work.encounter_work.validate()?;
+        self.native_work.initiative_work.validate()?;
         if let Some(queue) = &self.native_work.retained_death_queue {
             queue.validate()?;
         }
@@ -94,6 +121,11 @@ impl Session {
         let context = content.context(self.mission.as_deref(), self.scenario_level)?;
         let content = context.as_ref();
         self.native_work.ammunition_work.validate()?;
+        crate::time::validate_zero(self, content)?;
+        crate::combat::runtime::validate_deferred_getup(self)?;
+        if !(0..100).contains(&self.native_work.header_row) {
+            return Err("invalid map header row WORD4427c2".into());
+        }
         self.native_work.weapon_work.validate()?;
         if self
             .native_work
@@ -119,6 +151,13 @@ impl Session {
             || self.selected_warrior >= self.warriors.len().max(1)
             || self.native_work.selected_enemy >= 100
             || self.native_work.script_enemy >= 100
+            || self.native_work.inventory_scroll > 30
+            // Getup's loop is the only writer of round slot WORD 0x408576.
+            || self
+                .native_work
+                .round_work
+                .slot
+                .is_some_and(|slot| !(0..=5).contains(&slot))
             || self.party_buffs.len() != 20
             || self.time_continuation.as_ref().is_some_and(|pending| {
                 self.exploration
@@ -126,16 +165,8 @@ impl Session {
                     .is_none_or(|position| pending.schedule_cursor > position.schedule.len() / 40)
                     || !(0..=60).contains(&pending.minutes_per_tick)
             })
-            || self
-                .native_work
-                .psi_memory
-                .as_ref()
-                .is_some_and(|memory| memory.len() != 480)
-            || self
-                .native_work
-                .attack_packet
-                .as_ref()
-                .is_some_and(|packet| packet.len() != 58)
+            || self.native_work.psi_memory.len() != 480
+            || self.native_work.attack_packet.len() != 58
             || (!self.menus.is_empty()
                 && !menu_length(
                     self.menus.len(),
@@ -157,10 +188,36 @@ impl Session {
             }
             warrior.inventory()?;
         }
+        if self
+            .combat
+            .as_ref()
+            .is_some_and(|combat| combat.item_condition_caller.is_some())
+        {
+            return Err("item spell caller escaped its command scope".into());
+        }
+        if self
+            .combat
+            .as_ref()
+            .is_some_and(|combat| combat.monster_work_written)
+        {
+            return Err("monster work copy escaped its command scope".into());
+        }
+        if self
+            .combat
+            .as_ref()
+            .is_some_and(|c| c.npc_inhibit_write.is_some())
+        {
+            return Err("NPC inhibit writer escaped its command scope".into());
+        }
         if self.medical_continuation.as_ref().is_some_and(|pending| {
             let descriptor = match pending.origin {
                 MedicalOrigin::OwnedNeedle => [0, 3, 0],
                 MedicalOrigin::LearnedHeal => [0, 0, 0],
+                MedicalOrigin::OwnedItem => [
+                    pending.spell / 1000 - 1,
+                    pending.spell % 1000 / 100 - 1,
+                    pending.spell % 100 - 1,
+                ],
             };
             let valid_identity = match pending.origin {
                 MedicalOrigin::OwnedNeedle => {
@@ -171,18 +228,44 @@ impl Session {
                 MedicalOrigin::LearnedHeal => {
                     pending.item == 0 && pending.spell == 1101 && (1..=7).contains(&pending.power)
                 }
+                MedicalOrigin::OwnedItem => {
+                    pending.item > 0
+                        && pending.spell > 1100
+                        && content
+                            .items
+                            .get(pending.item as usize)
+                            .is_some_and(|definition| {
+                                ItemDefinition(definition).spell().ok() == Some(pending.spell)
+                            })
+                }
             };
             self.phase != Phase::Combat
                 || pending.actor >= self.warriors.len()
                 || !valid_identity
                 || self.native_work.attack_count != pending.power
                 || self.combat.as_ref().is_none_or(|arena| {
-                    arena.active_body() != Some(pending.actor as i16)
-                        || arena.attack_identity != Some(descriptor)
-                        || arena.attack_packet.as_ref().is_none_or(|packet| {
+                    (match pending.origin {
+                        MedicalOrigin::OwnedItem => {
+                            pending.actor != self.selected_warrior
+                                || arena.active_body().is_none_or(|body| {
+                                    body < 0 || body >= self.warriors.len() as i16
+                                })
+                        }
+                        _ => arena.active_body() != Some(pending.actor as i16),
+                    }) || arena.attack_identity != descriptor
+                        || {
+                            let packet = &arena.attack_packet;
                             packet.len() != 58
-                                || centurions_content::word(packet, 40).ok() != Some(57)
-                        })
+                                || match pending.origin {
+                                    MedicalOrigin::OwnedItem => {
+                                        AttackPacket(packet).targeting_mode() != 1
+                                            || centurions_content::word(packet, 40)
+                                                .ok()
+                                                .is_none_or(|effect| effect != 57)
+                                    }
+                                    _ => centurions_content::word(packet, 40).ok() != Some(57),
+                                }
+                        }
                 })
         }) {
             return Err(RuleError::Invalid("invalid medical continuation".into()));
@@ -199,6 +282,11 @@ impl Session {
         }
         if let Some(story) = &self.combat_story {
             story.validate(self, content)?;
+        }
+        if self.retained_walk_choice.as_ref().is_some_and(|choice| {
+            !(0..110).contains(&choice.body) || self.combat.is_some() || self.exploration.is_none()
+        }) {
+            return Err("invalid retained occupied-cell choice".into());
         }
         if self.handled_deaths.iter().any(|i| {
             self.combat
@@ -226,25 +314,50 @@ impl Session {
                 "combat state present outside battle".into(),
             ));
         }
+        self.native_work
+            .warrior_table
+            .validate(self.warriors.len())?;
         if let Some(pending) = &self.promotion {
             pending.validate(self, content)?;
         }
         clinic::validate(self)?;
         field_controls::validate(self)?;
         story_cleanup::validate(self)?;
+        if let Some(pending) = &self.ordinary_battle_rewards {
+            pending.validate(self)?;
+        }
+        if let Some(pending) = &self.selected_battle_treasure {
+            pending.validate(self)?;
+        }
         story_actor::validate(self, content)?;
+        if let Some(frame) = &self.turn_dispatch {
+            frame.validate(self, content)?;
+        }
+        if let Some(frame) = &self.npc_action {
+            frame.validate()?;
+            if !frame.waiting_getup() || self.exploration.is_none() {
+                return Err("pending NPC action has no Getup return owner".into());
+            }
+        }
         if let Some(frame) = &self.round_dispatch {
             frame.validate(self, content)?;
         }
         if let Some(selection) = &self.survivors {
-            selection.validate(
-                &self
-                    .combat
-                    .as_ref()
-                    .ok_or("survivor roster missing")?
-                    .enemies
-                    .records,
-            )?;
+            if let Some(combat) = &self.combat {
+                selection.validate(&combat.enemies.records)?;
+            } else {
+                selection.validate(&self.native_work.npc_backing.active_records()?)?;
+                if !matches!(
+                    self.scripted_cleanup,
+                    Some(
+                        crate::story_cleanup::Stage::RetainedSurvivors { .. }
+                            | crate::story_cleanup::Stage::RetainedSelectedSurvivors { .. }
+                            | crate::story_cleanup::Stage::RetainedGetupSurvivors { .. }
+                    )
+                ) {
+                    return Err("retained survivor owner missing".into());
+                }
+            }
             if !matches!(
                 self.exploration
                     .as_ref()
@@ -305,6 +418,13 @@ impl Session {
         }
         if let Some(pending) = &self.psi_selection {
             pending.validate(self)?;
+            if pending.item.is_some_and(|item| {
+                content.items.get(item as usize).is_none_or(|definition| {
+                    ItemDefinition(definition).spell().ok() != Some(pending.spell)
+                })
+            }) {
+                return Err("prepared item selection definition differs from its spell".into());
+            }
         }
         for (index, records) in &self.visited_maps {
             records.validate(
@@ -337,10 +457,7 @@ impl Session {
                 || self.mission.as_deref() != content.scenario.as_ref().map(|s| s.name.as_str())
                 || !(0..90).contains(&position.x)
                 || !(0..90).contains(&position.y)
-                || !(0..24).contains(&position.hour)
-                || !(0..60).contains(&position.minute)
-                || position.day < 1
-                || !(4..=135).contains(&position.fatigue)
+                || !(position.fatigue == 1 || (4..=135).contains(&position.fatigue))
                 || position.facing > 1
                 || position
                     .script
@@ -362,6 +479,7 @@ impl Session {
                                 | Presentation::Survivors
                                 | Presentation::Loot
                                 | Presentation::Avoidance { .. }
+                                | Presentation::BoatQuestion { .. }
                                 | Presentation::Shop
                                 | Presentation::Clinic { .. }
                         )
@@ -452,7 +570,7 @@ impl Session {
             {
                 Err(RuleError::Unsupported {
                     action: "exploration.land",
-                    dependency: "land tile set outside the installed BD files",
+                    dependency: "land tile set without an installed BD file quits the original",
                 })
             }
             _ => Ok(()),

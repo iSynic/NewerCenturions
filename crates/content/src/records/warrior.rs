@@ -56,6 +56,11 @@ impl<'a> WarriorRecord<'a> {
     pub fn level_protection(&self, level: usize) -> Result<i16, ContentError> {
         self.condition_duration(level + 16)
     }
+    /// resist uses a signed field-level WORD before walking through level6.
+    pub fn signed_level_protection(&self, level: i16) -> Result<i16, ContentError> {
+        let offset = usize::try_from(0x7e + i32::from(level) * 2).unwrap_or(usize::MAX);
+        word(self.0, offset)
+    }
     pub fn shield_chance(&self) -> Result<i16, ContentError> {
         word(self.0, 0x24)
     }
@@ -79,6 +84,10 @@ impl<'a> WarriorRecord<'a> {
     pub fn tactical_icon(&self) -> Result<i16, ContentError> {
         word(self.0, 0x56)
     }
+    /// BYTE 0x9e0, which a leftward step sets and a rightward step clears.
+    pub fn horizontal_facing(&self) -> u8 {
+        self.0.get(0x9e0).copied().unwrap_or(0)
+    }
     pub fn condition_duration(&self, index: usize) -> Result<i16, ContentError> {
         word(self.0, 0x5e + index * 2)
     }
@@ -88,6 +97,31 @@ impl<'a> WarriorRecord<'a> {
     }
     pub fn condition(&self, condition: super::Condition) -> Result<i16, ContentError> {
         self.condition_duration(condition as usize)
+    }
+    /// plotportrait 0x14a5a2..0x14a6f0: the condition cicns in drawing order.
+    /// `automatic` is the member's BYTE at 0x442742.
+    pub fn portrait_condition_icons(&self, automatic: bool) -> Result<Vec<i16>, ContentError> {
+        let any = |slots: &[usize]| -> Result<bool, ContentError> {
+            for slot in slots {
+                if self.condition_slot(*slot)? != 0 {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        };
+        let controlled = self.condition_slot(25)? < 0 || automatic || self.faction()? != 0;
+        Ok([
+            (any(&[0, 2, 6])?, 0xb4),
+            (any(&[1, 26, 27])?, 0xb7),
+            (any(&[3, 28, 2])?, 0xb5),
+            (controlled, 0xb6),
+            (any(&[36, 37])?, 0xb9),
+            (any(&[5, 29, 39])?, 0xb8),
+        ]
+        .into_iter()
+        .filter(|(shown, _)| *shown)
+        .map(|(_, icon)| icon)
+        .collect())
     }
     pub fn melee_accuracy(&self) -> Result<i16, ContentError> {
         Ok(word(self.0, 6)?.wrapping_add(word(self.0, 0xb5a)?))
@@ -399,6 +433,12 @@ impl WarriorRecordMut<'_> {
     }
     pub fn set_psi_points(&mut self, value: i16) {
         put_word(self.0, 0x58, value);
+    }
+    /// resolvespell15134c counts a signed selector into the WORDs from 0x9e2 (selector1).
+    pub fn train_attribute(&mut self, selector: i8) {
+        let offset = (0x9e2 + 2 * (isize::from(selector) - 1)) as usize;
+        let value = i16::from_be_bytes([self.0[offset], self.0[offset + 1]]).wrapping_add(1);
+        put_word(self.0, offset, value);
     }
     pub fn set_maximum_stamina(&mut self, value: i16) {
         put_word(self.0, 0x52, value);

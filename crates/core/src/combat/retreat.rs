@@ -55,6 +55,7 @@ pub(crate) fn leave(
     {
         events.extend(runtime::end_turn(state, content)?);
     } else {
+        state.native_work.early_booty = 1;
         events.extend(finish(state, content)?);
     }
     Ok(events)
@@ -62,6 +63,9 @@ pub(crate) fn leave(
 
 /// Retreated booty takes its early return before loot, cash or promotion.
 pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+    if state.selected_battle_treasure.is_some() {
+        return runtime::retreat_selected_rewards(state, content);
+    }
     let mut events = vec![];
     if state.command_preferences.auto_refit {
         for member in 0..state.warriors.len() {
@@ -77,7 +81,7 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
                 },
                 &state.native_work.ammunition_work,
                 &mut state.random,
-                state.native_work.inventory_record.as_ref(),
+                Some(&state.native_work.inventory_record),
             )?;
             events.extend(crate::ammunition::commit_result(state, member, result)?);
         }
@@ -86,11 +90,15 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
         crate::story_inventory::normalize_warrior_after_battle(warrior)?;
         warrior.record_mut().set_active_flag(1);
     }
+    state.clear_tactical_fields();
     state.retain_npcs();
+    state.store_spell_fatigue();
     let combat = state.combat.take().ok_or("retreat combat missing")?;
+    state.native_work.ready = combat.ready;
     state.native_work.attack_packet = combat.attack_packet;
     state.native_work.attack_identity = combat.attack_identity;
     state.native_work.weapon_work = combat.weapon_work;
+    state.reload_battle_land()?;
     if !state
         .combat_story
         .as_ref()
@@ -101,6 +109,8 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
     state.handled_deaths.clear();
     state.phase = Phase::Exploration;
     state.battle_treasure = 0;
+    state.ordinary_battle_rewards = None;
+    state.selected_battle_treasure = None;
     state.battle_after_message = 0;
     for item in &mut state.booty_items {
         item.0.fill(0);

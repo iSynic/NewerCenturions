@@ -360,15 +360,12 @@ impl Content {
                 if bytes.len() != 502 {
                     return Err(ContentError::Invalid("invalid bestiary order table".into()));
                 }
-                tables.archive_order = Some(
+                tables.archive_table = Some(
                     bytes
                         .as_chunks::<2>()
                         .0
                         .iter()
-                        .filter_map(|bytes| {
-                            let index = u16::from_be_bytes(*bytes);
-                            (index != 0).then(|| usize::from(index) - 1)
-                        })
+                        .map(|bytes| u16::from_be_bytes(*bytes))
                         .collect(),
                 );
             }

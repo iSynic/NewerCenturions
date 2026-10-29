@@ -444,3 +444,86 @@ fn unpack_bits(packed: &[u8], expected: usize) -> Result<Vec<u8>, ContentError> 
     }
     Ok(output)
 }
+
+/// A colour cursor ('crsr', type 0x8001) with its hotspot as (h, v).
+#[derive(Debug)]
+pub struct Cursor {
+    pub image: Image,
+    pub hotspot: (i16, i16),
+}
+
+/// Decodes a 16x16 colour cursor: CCrsr header, PixMap, indexed pixels and colour
+/// table. Pixels outside the mask are transparent; where the 1-bit data is set
+/// outside the mask, the original inverts the screen, which is drawn black here.
+pub fn decode_crsr(bytes: &[u8]) -> Result<Cursor, ContentError> {
+    span(bytes, 0, 96)?;
+    if word(bytes, 0)? as u16 != 0x8001 {
+        return Err(ContentError::Invalid("unsupported cursor type".into()));
+    }
+    let long = |offset: usize| -> Result<usize, ContentError> {
+        let raw = span(bytes, offset, 4)?;
+        Ok(u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize)
+    };
+    let map = long(2)?;
+    let data = long(6)?;
+    let one_bit = span(bytes, 20, 32)?;
+    let mask = span(bytes, 52, 32)?;
+    let hotspot = (word(bytes, 86)?, word(bytes, 84)?);
+    span(bytes, map, 50)?;
+    let row = (word(bytes, map + 4)? as u16 & 0x3fff) as usize;
+    let (width, height) = bounds(bytes, map + 6)?;
+    let bits = word(bytes, map + 32)? as usize;
+    if (width, height) != (16, 16) || ![1, 2, 4, 8].contains(&bits) || row * 8 < width * bits {
+        return Err(ContentError::Invalid("unsupported cursor pixel map".into()));
+    }
+    let table = long(map + 42)?;
+    span(bytes, table, 8)?;
+    let count = word(bytes, table + 6)?;
+    if !(0..=255).contains(&count) {
+        return Err(ContentError::Invalid("invalid cursor palette size".into()));
+    }
+    let flags = word(bytes, table + 4)? as u16;
+    let entries = span(bytes, table + 8, (count as usize + 1) * 8)?;
+    let mut palette = [None; 256];
+    for (i, entry) in entries.as_chunks::<8>().0.iter().enumerate() {
+        let id = if flags & 0x8000 != 0 {
+            i
+        } else {
+            u16::from_be_bytes([entry[0], entry[1]]) as usize
+        };
+        if id >= 256 {
+            return Err(ContentError::Invalid("invalid cursor palette index".into()));
+        }
+        palette[id] = Some([
+            (u16::from_be_bytes([entry[2], entry[3]]) / 257) as u8,
+            (u16::from_be_bytes([entry[4], entry[5]]) / 257) as u8,
+            (u16::from_be_bytes([entry[6], entry[7]]) / 257) as u8,
+        ]);
+    }
+    let pixels = span(bytes, data, row * height)?;
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let masked = mask[y * 2 + x / 8] & (0x80 >> (x % 8)) != 0;
+            let set = one_bit[y * 2 + x / 8] & (0x80 >> (x % 8)) != 0;
+            if !masked {
+                rgba.extend_from_slice(if set { &[0, 0, 0, 255] } else { &[0, 0, 0, 0] });
+                continue;
+            }
+            let bit = x * bits;
+            let index = ((pixels[y * row + bit / 8] >> (8 - bits - bit % 8))
+                & ((1u16 << bits) - 1) as u8) as usize;
+            let [r, g, b] = palette[index]
+                .ok_or_else(|| ContentError::Invalid("cursor pixel outside palette".into()))?;
+            rgba.extend_from_slice(&[r, g, b, 255]);
+        }
+    }
+    Ok(Cursor {
+        image: Image {
+            width: width as u16,
+            height: height as u16,
+            rgba,
+        },
+        hotspot,
+    })
+}

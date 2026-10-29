@@ -1,4 +1,4 @@
-use crate::tile_sets::{self, TILE_SETS, TileSet};
+use crate::tile_sets::{self, TileSet};
 use crate::{ContentError, span, word};
 use std::{
     ops::Deref,
@@ -7,7 +7,7 @@ use std::{
 
 pub const MAP_SIDE: usize = 90;
 pub const MAP_CELLS: usize = MAP_SIDE * MAP_SIDE;
-const SCENARIO: &str = "TheNewCenturions/Scenarios/The Thunder of Guns/0/";
+pub(crate) const SCENARIO: &str = "TheNewCenturions/Scenarios/The Thunder of Guns/0/";
 
 #[derive(Clone, Debug)]
 pub struct OpeningMission {
@@ -28,6 +28,8 @@ pub struct OpeningMission {
 #[derive(Clone, Debug, Default)]
 pub struct StoryTables {
     pub areas: Vec<u8>,
+    /// ToolBoxInit13273e..132758 loads the immutable tutorial rectangle table.
+    pub tutorial_rectangles: Option<Vec<u8>>,
     pub item_cache: Vec<u8>,
     pub races: Vec<u8>,
     pub profiles: Vec<u8>,
@@ -46,7 +48,8 @@ pub struct StoryTables {
     pub movies: std::collections::BTreeMap<i16, String>,
     pub combat: Option<crate::combat::CombatContent>,
     pub creature_descriptions: Vec<u8>,
-    pub archive_order: Option<Vec<usize>>,
+    /// The scenario's Data MENU: 251 big-endian WORD record numbers, one-based.
+    pub archive_table: Option<Vec<u16>>,
     pub map_notes: Vec<u8>,
     pub note_labels: Vec<String>,
     pub unknown_note_labels: Vec<String>,
@@ -75,6 +78,12 @@ pub struct ScenarioContent {
     pub level: u8,
     pub opening_map: i32,
     pub items: Vec<Vec<u8>>,
+    /// partyselect 0x1478b6 reads the first LONG of the level's file named after
+    /// the scenario as "Recommended Levels". Absent when that file is.
+    pub recommended_levels: Option<i32>,
+    /// The 0x140-byte party restrictions "Data RI" (partyselect 0x147d3a). Its
+    /// presence shows View Restrictions.
+    pub restrictions: Option<Vec<u8>>,
     pub catalog: Arc<std::collections::BTreeMap<(String, u8), ScenarioContent>>,
     /// The installation's tile sets, shared by every level.
     pub tile_sets: Arc<Vec<TileSet>>,
@@ -84,7 +93,7 @@ pub struct ScenarioContent {
 /// Each map under another tile set, made when a land first switches to it. A clone
 /// starts empty, since the clone's maps may then be edited.
 #[derive(Debug)]
-struct SwitchedMaps(Vec<[OnceLock<OpeningMission>; TILE_SETS]>);
+struct SwitchedMaps(Vec<[OnceLock<OpeningMission>; 20]>);
 
 impl Clone for SwitchedMaps {
     fn clone(&self) -> Self {
@@ -109,6 +118,8 @@ impl ScenarioContent {
             level: 0,
             opening_map: 0,
             items: vec![],
+            recommended_levels: None,
+            restrictions: None,
             catalog: Default::default(),
             tile_sets: Default::default(),
             switched: switch_slots(1),
@@ -132,6 +143,11 @@ impl ScenarioContent {
         let mut selected = |path: &str| read(&path.replace(SCENARIO, &directory));
         let read = &mut selected;
         let opening = OpeningMission::read(&mut *read)?;
+        let mut level_sets = tile_sets.as_ref().clone();
+        if let Ok(custom) = tile_sets::read(read, 15) {
+            level_sets.push(custom);
+        }
+        let tile_sets = Arc::new(level_sets);
         let land = read(&format!("{SCENARIO}Data LD"))?;
         let headers = read(&format!("{SCENARIO}Data DD"))?;
         let regions = read(&format!("{SCENARIO}Data RD"))?;
@@ -145,7 +161,9 @@ impl ScenarioContent {
         for index in 0..land.len() / (MAP_CELLS * 8) {
             let region = span(&regions, index * 644, 644)?.to_vec();
             let terrain = region[0x208];
-            let set = match tile_sets.iter().find(|set| set.terrain == terrain) {
+            let set = match tile_sets.iter().find(|set| {
+                set.terrain == terrain || (15..20).contains(&terrain) && set.terrain == 15
+            }) {
                 Some(set) => set.clone(),
                 None => tile_sets::read(read, terrain)?,
             };
@@ -219,6 +237,13 @@ impl ScenarioContent {
         .iter()
         .map(|row| row.to_vec())
         .collect();
+        let recommended_levels = read(&format!("{SCENARIO}{name}"))
+            .ok()
+            .and_then(|bytes| long(&bytes, 0).ok());
+        let restrictions = read(&format!("{SCENARIO}Data RI")).ok().map(|mut bytes| {
+            bytes.resize(crate::records::PartyRestrictions::BYTES, 0);
+            bytes
+        });
         Ok(Self {
             switched: switch_slots(maps.len()),
             maps,
@@ -227,6 +252,8 @@ impl ScenarioContent {
             level,
             opening_map,
             items,
+            recommended_levels,
+            restrictions,
             catalog: Default::default(),
             tile_sets,
         })
@@ -241,8 +268,10 @@ impl ScenarioContent {
         if map.terrain == terrain || map.regions.get(520) == Some(&terrain) {
             return Some(map);
         }
-        let set = self.tile_sets.iter().find(|set| set.terrain == terrain)?;
-        let slot = self.switched.0.get(index)?.get(usize::from(terrain) - 1)?;
+        let set = self.tile_sets.iter().find(|set| {
+            set.terrain == terrain || (15..20).contains(&terrain) && set.terrain == 15
+        })?;
+        let slot = self.switched.0.get(index)?.get(usize::from(terrain))?;
         Some(slot.get_or_init(|| OpeningMission {
             tile_properties: set.properties.clone(),
             terrain,
@@ -324,6 +353,9 @@ impl OpeningMission {
             minutes_per_tick: set.minutes_per_tick,
             shared: Arc::new(StoryTables {
                 areas: read("TheNewCenturions/Data Files/Data AD")?,
+                tutorial_rectangles: read("TheNewCenturions/Data Files/Tutorial")
+                    .ok()
+                    .and_then(|bytes| span(&bytes, 1000, 16000).ok().map(<[u8]>::to_vec)),
                 item_cache: Vec::new(),
                 races: read("TheNewCenturions/Data Files/Data Race")?,
                 profiles: read("TheNewCenturions/Data Files/Data MOS")?,
@@ -353,7 +385,7 @@ impl OpeningMission {
                     },
                 }),
                 creature_descriptions: read(&format!("{SCENARIO}Data DES"))?,
-                archive_order: None,
+                archive_table: None,
                 map_notes: read(&format!("{SCENARIO}Data MD2"))?,
                 note_labels: vec![],
                 unknown_note_labels: vec![],
@@ -369,10 +401,17 @@ impl OpeningMission {
         }
         Ok(x as usize * MAP_SIDE + y as usize)
     }
+    /// A tile past the loaded file reads bytes an earlier land left in the
+    /// 16000-byte native buffer; that retained tail is not represented.
     pub fn tile_word(&self, tile: i16, field: usize) -> Result<i16, ContentError> {
-        if !(0..300).contains(&tile) || field >= 40 || !field.is_multiple_of(2) {
+        if !(0..400).contains(&tile) || field >= 40 || !field.is_multiple_of(2) {
             return Err(ContentError::Invalid(
                 "tile property outside recovered table".into(),
+            ));
+        }
+        if (tile as usize + 1) * 40 > self.tile_properties.len() {
+            return Err(ContentError::Invalid(
+                "tile property retained from an earlier land's tile set".into(),
             ));
         }
         word(&self.tile_properties, tile as usize * 40 + field)
@@ -402,6 +441,16 @@ impl OpeningMission {
 }
 
 impl StoryTables {
+    /// Zero-based Data MD records in Data MENU order; zero WORDs are skipped.
+    pub fn archive_order(&self) -> Option<Vec<usize>> {
+        self.archive_table.as_ref().map(|table| {
+            table
+                .iter()
+                .filter(|&&index| index != 0)
+                .map(|&index| usize::from(index) - 1)
+                .collect()
+        })
+    }
     pub fn dialogue(&self, id: i16) -> Result<String, ContentError> {
         let record = span(&self.dialogue, usize::from(id.unsigned_abs()) * 256, 256)?;
         Ok(encoding_rs::MACINTOSH

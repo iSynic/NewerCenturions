@@ -44,21 +44,17 @@ fn upgrade_price(
         RuleError::Invalid("upgrade selector is outside the original table".into())
     })?;
     let percent = ProfessionProfile(profile).upgrade_percent(selector)?;
-    if percent < 0 {
-        return Err(RuleError::Unsupported {
-            action: "character.upgrade_cost",
-            dependency: "negative MOS upgrade percentages are not recovered",
-        });
-    }
     let count = warrior.record().upgrade(selector).purchases()?;
+    // Percentages below -100 give a negative factor, so the cost alternates sign.
     let factor = (f64::from((100. + f64::from(percent)) as f32) / 100.) as f32;
     let mut cost = f32::from(base);
     for _ in 0..count.max(0) {
         cost = (f64::from(cost) * f64::from(factor)) as f32;
-        if cost >= 50_000_000. {
-            // Nonnegative percentages cannot fall back below the original final cap.
-            return Ok((50_000_000., i32::from(percent)));
-        }
+    }
+    // The original caps only after the loop (0x4c3ebc20). For nonnegative
+    // percentages this equals stopping at the first cost above the cap.
+    if cost >= 50_000_000. {
+        cost = 50_000_000.;
     }
     Ok((cost, i32::from(percent)))
 }

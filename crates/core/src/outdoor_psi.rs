@@ -1,6 +1,7 @@
 use crate::{Content, Event, Phase, RuleError, Session, combat, story_spell};
-use centurions_content::records::{AttackPacket, Condition, ItemDefinition};
+use centurions_content::records::{AttackPacket, ItemDefinition};
 use serde::{Deserialize, Serialize};
+mod ranks;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Selection {
@@ -12,132 +13,26 @@ pub struct Selection {
     pub item: Option<i16>,
 }
 
-/// Items12ae48 charges its item before getchoice, including cancellation.
-pub(crate) fn begin_item(
-    state: &mut Session,
-    content: &Content,
-    actor: usize,
-    slot: usize,
-) -> Result<Vec<Event>, RuleError> {
-    if state.phase != Phase::Exploration
-        || state.combat.is_some()
-        || state.exploration.as_ref().is_none_or(|p| {
-            (p.presentation.is_some() || p.script.is_some())
-                && !matches!(p.presentation, Some(crate::Presentation::Typed { .. }))
-        })
-    {
-        return Err(RuleError::Invalid(
-            "item use requires free exploration".into(),
-        ));
-    }
-    let selected = state
-        .warriors
-        .get(actor)
-        .ok_or("item warrior missing")?
-        .inventory()?
-        .get(slot)
-        .cloned()
-        .ok_or("inventory item missing")?;
-    let definition = crate::ammunition::definition(content, selected.id())?;
-    if ItemDefinition(&definition).category()? != 28 || selected.equipment_flag() != 0 {
-        return Err(RuleError::Unsupported {
-            action: "item.use",
-            dependency: "other outdoor item context",
-        });
-    }
-    let map = crate::exploration::active_map(state, content)?;
-    let encounter = matches!(
-        state.exploration.as_ref().unwrap().presentation,
-        Some(crate::Presentation::Typed { .. })
-    );
-    if !encounter && !crate::equipment::can_use(&state.warriors[actor], &definition, map)? {
-        return Err(RuleError::Refused { feedback: vec![] });
-    }
-    let spell = ItemDefinition(&definition).spell()?;
-    let power = ItemDefinition(&definition)
-        .effect_selector()?
-        .wrapping_abs();
-    let packet = combat::spells::load_packet(
-        &map.combat
-            .as_ref()
-            .ok_or("medical attack content missing")?
-            .attacks,
-        spell,
-    )?;
-    if !(spell == 1401 && AttackPacket(&packet).targeting_mode() == 1)
-        && !(AttackPacket(&packet).targeting_mode() == 7
-            && matches!(AttackPacket(&packet).effect()?, 0..=9 | 110))
-    {
-        return Err(RuleError::Unsupported {
-            action: "item.use",
-            dependency: "other outdoor item targeting context",
-        });
-    }
-    if !encounter && !combat::player_psi::mode_allowed(&packet, false)? {
-        return Err(RuleError::Refused { feedback: vec![] });
-    }
-    let quantity = selected.quantity()?;
-    if quantity <= 0 {
-        return Err(RuleError::Refused { feedback: vec![] });
-    }
-    crate::items::compact(&mut state.warriors[actor])?;
-    if state.warriors[actor].inventory()?.get(slot) != Some(&selected) {
-        return Err(RuleError::Unsupported {
-            action: "item.use",
-            dependency: "inventory selection moved during item pane initialization",
-        });
-    }
-    crate::equipment::calculate_weight(&mut state.warriors[actor], content)?;
-    for warrior in &mut state.warriors {
-        warrior.record_mut().set_condition(Condition::Helpless, 0);
-    }
-    let warrior = &mut state.warriors[actor];
-    warrior
-        .record_mut()
-        .set_inventory_quantity(slot, quantity.wrapping_sub(1));
-    let weight = warrior
-        .record()
-        .carried_weight()?
-        .wrapping_sub(ItemDefinition(&definition).unit_weight()?);
-    warrior.record_mut().set_carried_weight(weight);
-    let mut events = vec![];
-    if quantity == 1 && ItemDefinition(&definition).discarded_when_empty()? != 0 {
-        crate::items::remove_inventory_slot(warrior, slot)?;
-        events.push(Event::Sound { resource_id: 655 });
-    }
-    state.selected_warrior = actor;
-    state.load_item_work(content, selected.id())?;
-    let global = AttackPacket(&packet).targeting_mode() == 7;
-    state.native_work.attack_packet = Some(packet);
-    state.native_work.attack_identity =
-        Some([spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1]);
-    state.native_work.attack_count = power;
-    state.native_work.party_mask.fill(0);
-    state.outdoor_psi = Some(Selection {
-        actor,
-        spell,
-        power,
-        remaining: 1,
-        item: Some(selected.id()),
-    });
-    if global || state.warriors.len() == 1 {
-        state.native_work.party_mask[..if global { state.warriors.len() } else { 1 }].fill(1);
-        events.extend(finish(state, content)?);
+mod item;
+pub(crate) use item::begin_item;
+pub(crate) use item::begin_selected as begin_item_selected;
+
+// Items12b0e4..12b0f6 compares the wrapped choice argument with partyLast.
+fn choice_limit(mode: u8, power: i16, members: usize) -> i16 {
+    let last = members as i16 - 1;
+    let argument = if mode == 0 { power.wrapping_sub(1) } else { 0 };
+    if argument >= last {
+        last + 1
     } else {
-        events.push(Event::Sound { resource_id: 6001 });
+        argument.wrapping_add(1)
     }
-    Ok(events)
 }
 
 pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleError> {
     let Some(pending) = &state.outdoor_psi else {
         return Ok(());
     };
-    let packet = state
-        .native_work
-        .attack_packet
-        .as_ref()
-        .ok_or("outdoor Psi packet missing")?;
+    let packet = &state.native_work.attack_packet;
     centurions_content::span(packet, 0, 58)?;
     let map = state
         .map(
@@ -169,61 +64,52 @@ pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleErr
         || pending.actor >= state.warriors.len()
         || pending.item.is_some_and(|item| {
             !crate::ammunition::definition(content, item).is_ok_and(|definition| {
-                ItemDefinition(&definition).category().ok() == Some(28)
-                    && ItemDefinition(&definition).spell().ok() == Some(pending.spell)
+                ItemDefinition(&definition).spell().ok() == Some(pending.spell)
                     && ItemDefinition(&definition)
                         .effect_selector()
                         .map(i16::wrapping_abs)
                         .ok()
-                        == Some(pending.power)
+                        .is_some_and(|value| {
+                            if value == 8 {
+                                (1..=7).contains(&pending.power)
+                            } else {
+                                value == pending.power
+                            }
+                        })
             })
         })
-        || !(1..=7).contains(&pending.power)
-        || !combat::player_psi::OUTDOOR_TARGET_SPELLS.contains(&pending.spell)
-        || !matches!(AttackPacket(packet).targeting_mode(), 0 | 1)
+        || (pending.item.is_none() && !(1..=7).contains(&pending.power))
+        || (pending.item.is_none()
+            && !combat::player_psi::OUTDOOR_TARGET_SPELLS.contains(&pending.spell))
+        || !(if pending.item.is_some() {
+            (AttackPacket(packet).targeting_mode() as i8) <= 2
+        } else {
+            matches!(AttackPacket(packet).targeting_mode(), 0 | 1)
+        })
         || packet != &original
         || state.native_work.attack_count != pending.power
         || state.native_work.attack_identity
-            != Some([
+            != [
                 pending.spell / 1000 - 1,
                 pending.spell % 1000 / 100 - 1,
                 pending.spell % 100 - 1,
-            ])
+            ]
     {
         return Err(RuleError::Invalid(
             "invalid outdoor Psi continuation".into(),
         ));
     }
-    let limit = if AttackPacket(packet).targeting_mode() == 0 {
-        pending.power.min(state.warriors.len() as i16)
-    } else {
-        1
-    };
-    if limit >= state.warriors.len() as i16
-        || !(1..=limit).contains(&pending.remaining)
-        || state.native_work.party_mask[state.warriors.len()..]
-            .iter()
-            .any(|rank| *rank != 0)
-        || state
-            .native_work
-            .party_mask
-            .iter()
-            .any(|rank| *rank < 0 || *rank > limit)
-        || (pending.remaining + 1..=limit).any(|rank| {
-            state
-                .native_work
-                .party_mask
-                .iter()
-                .filter(|r| **r == rank)
-                .count()
-                != 1
-        })
-        || state
-            .native_work
-            .party_mask
-            .iter()
-            .any(|rank| *rank > 0 && *rank <= pending.remaining)
-    {
+    let limit = choice_limit(
+        AttackPacket(packet).targeting_mode(),
+        pending.power,
+        state.warriors.len(),
+    );
+    if !ranks::valid(
+        &state.native_work.party_mask,
+        state.warriors.len(),
+        limit,
+        pending.remaining,
+    ) {
         return Err(RuleError::Invalid(
             "invalid outdoor Psi selection ranks".into(),
         ));
@@ -245,109 +131,74 @@ pub(crate) fn select(
         .outdoor_psi
         .as_mut()
         .ok_or("outdoor Psi selection missing")?;
-    let old = state.native_work.party_mask[warrior];
-    let sound = if old == 0 {
-        state.native_work.party_mask[warrior] = pending.remaining;
-        pending.remaining -= 1;
-        141
-    } else {
-        state.native_work.party_mask[warrior] = 0;
-        for rank in &mut state.native_work.party_mask {
-            if *rank > 0 && *rank < old {
-                *rank += 1;
-            }
-        }
-        pending.remaining += 1;
-        144
-    };
+    let sound = ranks::toggle(
+        &mut state.native_work.party_mask[..state.warriors.len()],
+        &mut pending.remaining,
+        warrior,
+    );
     let mut events = vec![Event::Sound { resource_id: sound }];
     if pending.remaining == 0 {
-        events.extend(finish(state, content)?);
+        events.extend(resolve(state, content)?);
     }
     Ok(events)
 }
 
+/// getchoice125264 accepts Enter/Space only while the shared Ready WORD is nonzero.
+pub fn can_finish(state: &Session) -> bool {
+    state.outdoor_psi.is_some() && state.native_work.ready != 0
+}
+
 pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
-    if !state.native_work.party_mask.iter().any(|rank| *rank > 0)
-        && state
-            .outdoor_psi
-            .as_ref()
-            .is_none_or(|pending| pending.item.is_none())
-    {
+    if state.native_work.ready == 0 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
+    resolve(state, content)
+}
+
+fn resolve(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let pending = state
         .outdoor_psi
         .take()
         .ok_or("outdoor Psi selection missing")?;
-    let packet = state
-        .native_work
-        .attack_packet
-        .clone()
-        .ok_or("outdoor Psi packet missing")?;
-    let identity = state
-        .native_work
-        .attack_identity
-        .ok_or("outdoor Psi identity missing")?;
+    let packet = state.native_work.attack_packet.clone();
+    let identity = state.native_work.attack_identity;
     let mut events = vec![];
     if pending.item.is_none() {
-        let memory = state
-            .native_work
-            .psi_memory
-            .as_mut()
-            .ok_or("outdoor Psi memory missing")?;
+        let memory = &mut state.native_work.psi_memory;
         for (index, value) in identity.into_iter().chain([pending.power]).enumerate() {
             let offset = pending.actor * 80 + 72 + index * 2;
             memory[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
         }
-        events.push(Event::Sound {
-            resource_id: AttackPacket(&packet).launch_sound()?.wrapping_neg(),
-        });
+        return Ok(story_spell::resolve_party_outdoors(
+            state,
+            content,
+            &packet,
+            pending.spell,
+            pending.power,
+        )?
+        .events);
     }
-    events.extend(story_spell::resolve_outdoors(
-        state,
-        &packet,
-        pending.spell,
-        pending.power,
-        pending.actor,
-        false,
-    )?);
-    if state
-        .native_work
-        .health_context
-        .as_ref()
-        .is_some_and(|h| h.unavailable >= state.warriors.len() as i8)
-    {
-        events.extend(crate::mission::defeat(state, content));
+    let outcome =
+        story_spell::resolve_outdoors(state, content, &packet, pending.spell, pending.power)?;
+    events.extend(outcome.events);
+    if outcome.flow == combat::runtime::TurnFlow::Terminated {
+        return Ok(events);
     }
-    if let Some(item) = pending.item
-        && state
-            .exploration
-            .as_ref()
-            .is_some_and(|p| matches!(p.presentation, Some(crate::Presentation::Typed { .. })))
-    {
-        // Items12c422 adds its owner after resolving the item; encounter2 matches the ID.
-        state.native_work.party_mask[pending.actor] = 1;
-        let selected = crate::typed_encounter::select_item(
-            crate::exploration::typed_record(state, content)?,
-            item,
-        )?;
-        events.extend(crate::exploration::finish_typed_selection(
-            state, content, selected,
-        )?);
-    }
+    events.extend(item::finish_return(state, content, &pending)?);
     Ok(events)
 }
 
 /// buttonchoice10ad22 returns after the charge, without the combat cancellation refund.
 pub(crate) fn cancel(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+    // buttonchoice10ae52 and getchoice12524c.
+    state.set_ready(0);
     if state
         .outdoor_psi
         .as_ref()
         .is_some_and(|pending| pending.item.is_some())
     {
         state.native_work.party_mask.fill(0);
-        return finish(state, content);
+        return resolve(state, content);
     }
     state
         .outdoor_psi

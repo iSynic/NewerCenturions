@@ -23,15 +23,11 @@ pub fn party_psi(
     let mission = state
         .land(content)
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
-    if state.native_work.psi_memory.is_none() {
-        state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
-    }
-    let result = crate::combat::player_psi::cast_party(
+    let result = crate::combat::player_psi::prepare_party(
         &state.warriors,
-        state.native_work.psi_memory.as_ref().unwrap(),
+        &state.native_work.psi_memory,
         &state.party_buffs,
         mission,
-        &mut state.random,
         state.psi_disabled,
         crate::combat::player_psi::PartyCastRequest {
             warrior,
@@ -39,6 +35,8 @@ pub fn party_psi(
             power,
         },
     )?;
+    // castspell10b9bc; mode-seven resolvespell1512b8/151316 clears it.
+    state.native_work.ready = 1;
     if let Some(duration) = result.scenario_duration {
         crate::combat::party_buffs::extend_scenario_tail(state, duration)?;
     }
@@ -46,11 +44,14 @@ pub fn party_psi(
     let memory = result.memory;
     state.party_buffs = result.buffs;
     let packet = result.packet;
-    state.native_work.attack_packet = Some(packet.clone());
-    state.native_work.party_mask.fill(0);
+    state.native_work.attack_packet = packet.clone();
+    // buttonchoice 10ac9a calls cleartarget after castspell returns.
+    state.clear_targets();
 
-    state.native_work.attack_identity = Some(result.identity);
+    state.native_work.attack_identity = result.identity;
     state.native_work.attack_count = result.count;
+    // castspell 0x10d328 stores the cast power in WORD 0x437a7a + 2 * member.
+    state.native_work.psi_powers[warrior] = None;
     state.psi_menu_choices[warrior] = Some(crate::PsiMenuChoice {
         row: result.identity[1] as u8,
         column: result.identity[2] as u8,
@@ -72,22 +73,8 @@ pub fn party_psi(
         return Ok(vec![]);
     }
     state.native_work.party_mask[..state.warriors.len()].fill(1);
-    state.native_work.psi_memory = Some(memory);
-    let mut events = result.events;
-    if packet[1] != 7 {
-        events.extend(crate::story_spell::resolve_outdoors(
-            state,
-            &packet,
-            spell,
-            power,
-            warrior,
-            matches!(packet[1], 3 | 9) || (packet[1] == 0 && power > state.warriors.len() as i16),
-        )?);
-    }
-    if packet[1] == 11 {
-        events.push(Event::Sound {
-            resource_id: centurions_content::records::AttackPacket(&packet).impact_sound()?,
-        });
-    }
-    Ok(events)
+    state.native_work.psi_memory = memory;
+    let outcome =
+        crate::story_spell::resolve_party_outdoors(state, content, &packet, spell, power)?;
+    Ok(outcome.events)
 }

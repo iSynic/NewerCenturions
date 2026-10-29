@@ -1,6 +1,7 @@
 use crate::combat::damage;
 mod natural;
 use natural::resolve as natural_attack_inner;
+pub(crate) use natural::resolve_prepared as natural_attack_prepared;
 pub(super) mod melee_accuracy;
 mod warrior_enemy;
 pub use super::warrior_attack::{WarriorMelee, warrior_melee};
@@ -9,6 +10,7 @@ use centurions_content::Warrior;
 use centurions_content::combat::MonsterRecord;
 use damage::{DamageFlags, DamagePacket, resolve_damage};
 use warrior_enemy::resolve as unarmed_attack_inner;
+pub(crate) use warrior_enemy::resolve_prepared as warrior_attack_prepared;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct AttackResult {
@@ -16,6 +18,9 @@ pub struct AttackResult {
     pub damage: i16,
     pub killed: bool,
     pub sounds: Vec<i16>,
+    /// WORD 0x41f710 after resolvedamage, which showresults 0x159124 passes to
+    /// showdamage as icon -1 for a code-0 hit; 0 when no damage was resolved.
+    pub icon: i16,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -198,7 +203,7 @@ pub fn natural_attack_with_buffs(
     buffs: &[u8],
     difficulty: i16,
 ) -> Result<(AttackResult, Vec<u8>), RuleError> {
-    let (result, packet, _) = natural_attack_with_target(
+    let (result, packet, _, _) = natural_attack_with_target(
         warrior,
         enemy,
         attack_index,
@@ -221,7 +226,7 @@ pub(crate) fn natural_attack_with_target(
     retained: &[u8],
     buffs: &[u8],
     difficulty: i16,
-) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
+) -> Result<(AttackResult, Vec<u8>, bool, i16), RuleError> {
     super::party_buffs::validate(buffs)?;
     if retained.len() != 58 {
         return Err(RuleError::Invalid("retained attack packet size".into()));
@@ -255,6 +260,18 @@ pub(crate) fn resolve_reflected_attack(
     weapon_condition: Option<centurions_content::records::WeaponCondition>,
     random: &mut RandomState,
 ) -> Result<AttackResult, RuleError> {
+    resolve_reflected_attack_with_victory(target, packet, index, natural, weapon_condition, random)
+        .map(|(result, _)| result)
+}
+
+pub(crate) fn resolve_reflected_attack_with_victory(
+    target: &mut [u8],
+    packet: &[u8],
+    index: usize,
+    natural: bool,
+    weapon_condition: Option<centurions_content::records::WeaponCondition>,
+    random: &mut RandomState,
+) -> Result<(AttackResult, i16), RuleError> {
     let source = target.to_vec();
     centurions_content::records::EnemyRecordMut::from_bytes(target).mark_damaged();
     let resolved = resolve_damage(
@@ -276,6 +293,7 @@ pub(crate) fn resolve_reflected_attack(
         .condition;
     let mut damage = resolved.total;
     let mut feedback = None;
+    let mut total_delta = 0;
     if damage != 0 && natural {
         if let Some(effect) =
             super::natural_conditions::monster_attack_effect(target, &source, index, random)?
@@ -285,6 +303,10 @@ pub(crate) fn resolve_reflected_attack(
             feedback = effect.feedback;
             damage = damage.wrapping_add(effect.extra_damage);
             if condition == 10 && effect.applied {
+                // attack2's reflected NPC source is its own faction-zero target.
+                if centurions_content::records::EnemyRecord::from_bytes(&source).faction()? == 0 {
+                    total_delta = -1;
+                }
                 centurions_content::records::EnemyRecordMut::from_bytes(target).set_target_body(-1);
             }
         } else {
@@ -304,10 +326,14 @@ pub(crate) fn resolve_reflected_attack(
         .stamina()?
         .wrapping_sub(damage);
     centurions_content::records::EnemyRecordMut::from_bytes(target).set_stamina(health);
-    Ok(AttackResult {
-        feedback,
-        damage,
-        killed: health < 1,
-        sounds: vec![],
-    })
+    Ok((
+        AttackResult {
+            icon: resolved.sound,
+            feedback,
+            damage,
+            killed: health < 1,
+            sounds: vec![],
+        },
+        total_delta,
+    ))
 }

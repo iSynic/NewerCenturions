@@ -1,121 +1,12 @@
 //! Actor turns in the original combat execution order.
 use super::{
-    EnemyWork, alive, end_turn, enemy_action_with_work_and_buffs, finish_player_action, hostile,
-    neighbors, player_shoot_action, position, refresh_active_item_context,
+    alive, end_turn, finish_player_action, hostile, neighbors, player_shoot_action, position,
 };
 use crate::{Event, Phase, RuleError, Session};
-use centurions_content::{Content, Warrior};
+use centurions_content::Content;
 
 pub fn enemy_turn(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
-    let mission = state
-        .land(content)
-        .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
-    let mut party_hp = state
-        .warriors
-        .iter()
-        .map(Warrior::stamina)
-        .collect::<Result<Vec<_>, _>>()?;
-    let c = state
-        .combat
-        .as_mut()
-        .ok_or_else(|| RuleError::Invalid("combat missing".into()))?;
-    let actor = c
-        .active_body()
-        .ok_or_else(|| RuleError::Invalid("active enemy missing".into()))?;
-    let e = usize::try_from(actor - 10)
-        .map_err(|_| RuleError::Invalid("active body is not an enemy".into()))?;
-    let mut events = if c.enemies.records[e].record().faction()? == 0
-        && c.enemies.records[e].record().primary_weapon()? == 1
-    {
-        let context = state
-            .native_work
-            .loaded_item_field32
-            .ok_or(RuleError::Unsupported {
-                action: "combat.scientist",
-                dependency: "unreconstructable legacy work-item context",
-            })?;
-        crate::combat::ally_turns::scientist_turn_with_work(
-            c,
-            &mut state.warriors,
-            mission,
-            &mut state.random,
-            &content.items,
-            context,
-            &state.party_buffs,
-            &mut state.native_work.ammunition_work,
-            &mut state.native_work.attack_count,
-        )?
-    } else {
-        let mut work = EnemyWork {
-            item_context: state.native_work.loaded_item_field32,
-            attack_count: state.native_work.attack_count,
-            packet: c.attack_packet.clone(),
-            identity: c.attack_identity,
-            spell_attempt: 0,
-            spell_disabled: state.enemy_spell_disabled,
-            buffers: state.native_work.ammunition_work.clone(),
-            display_writers: true,
-        };
-        let events = enemy_action_with_work_and_buffs(
-            c,
-            &mut state.warriors,
-            mission,
-            &mut state.random,
-            &content.items,
-            &mut work,
-            &state.party_buffs,
-        )?;
-        state.native_work.loaded_item_field32 = work.item_context;
-        state.native_work.attack_count = work.attack_count;
-        state.native_work.ammunition_work = work.buffers;
-        events
-    };
-    if let Some(health) = state.native_work.health_context.as_mut() {
-        for event in &events {
-            match event {
-                Event::SpellResolved {
-                    target,
-                    damage,
-                    defeated,
-                    ..
-                } => {
-                    if let Some(hp) = usize::try_from(*target)
-                        .ok()
-                        .and_then(|body| party_hp.get_mut(body))
-                        && *damage > 0
-                        && *hp >= 0
-                    {
-                        health.affected[*target as usize] = -1;
-                        *hp = hp.wrapping_sub(*damage);
-                    }
-                    if *defeated {
-                        health.last_body = *target;
-                    }
-                }
-                Event::AttackResolved {
-                    target,
-                    damage,
-                    defeated,
-                    ..
-                } => {
-                    if let Some(hp) = usize::try_from(*target)
-                        .ok()
-                        .and_then(|body| party_hp.get_mut(body))
-                        && *damage > 0
-                    {
-                        *hp = hp.wrapping_sub(*damage);
-                    }
-                    if *defeated {
-                        health.last_body = *target;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    events.extend(finish_player_action(state, content, actor)?);
-    refresh_active_item_context(state, content)?;
-    Ok(events)
+    super::npc_return::begin(state, content)
 }
 
 pub fn controlled_warrior(state: &Session) -> Option<usize> {
@@ -126,6 +17,7 @@ pub fn controlled_warrior(state: &Session) -> Option<usize> {
         && warrior.record().active_flag() != 0
         && warrior.stamina().ok()? > 0
         && (state.combat.as_ref()?.automatic[member]
+            || state.native_work.walking_confusion != 0
             || warrior
                 .record()
                 .automatic_mode()
@@ -152,6 +44,8 @@ pub fn controlled_turn(state: &mut Session, content: &Content) -> Result<Vec<Eve
     {
         return Err(RuleError::Refused { feedback: vec![] });
     }
+    state.native_work.walking_confusion = 1;
+    state.warriors[member].record_mut().set_automatic_mode(1);
     let combat = state.combat.as_ref().unwrap();
     let edge_point = combat.squad.positions[member];
     let absolute = (
@@ -205,7 +99,6 @@ pub fn controlled_turn(state: &mut Session, content: &Content) -> Result<Vec<Eve
         direction = (-direction.0, -direction.1);
     }
     state.warriors[member].record_mut().set_target_body(target);
-    state.warriors[member].record_mut().set_automatic_mode(1);
     if !fleeing && state.warriors[member].record().firing_mode() {
         match player_shoot_action(state, content, target) {
             Ok(mut events) => {

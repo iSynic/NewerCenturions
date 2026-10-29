@@ -30,16 +30,8 @@ fn authored_pack_collection_matches_live_records_reserve_and_rng() {
     }
     state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
     state.exploration.as_mut().unwrap().script = Some(centurions_core::ScriptState {
-        record: vec![0; 42],
-        cursor: 0,
-        map_slot: 0,
-        item_return: false,
         scheduled: false,
-        menu: None,
-        persist: false,
-        origin: None,
-        caller_action: None,
-        chained: false,
+        ..centurions_core::ScriptState::scheduled(vec![0; 42], 0)
     });
     apply(
         Command::TakeLoot {

@@ -3,9 +3,9 @@ use super::{active_map, choose_avoidance, finish_dispatch, run_script, typed_rec
 use crate::{
     Event, Exploration, Phase, Presentation, RuleError, Session, mission, story, typed_encounter,
 };
+use centurions_content::Content;
 use centurions_content::mission::OpeningMission;
 use centurions_content::records::{EventHeaderTableMut, ExtraTable, StoryRecordMut};
-use centurions_content::{Content, span};
 
 pub fn choose_warrior(
     state: &mut Session,
@@ -50,6 +50,7 @@ pub fn choose_warrior(
         return run_script(state, content);
     }
     let record = ExtraTable(&map.combat.as_ref().unwrap().encounters).record(*extra as usize)?;
+    state.native_work.extra_record = record.to_vec();
     let plan = crate::story_skill::predicate(record, &state.warriors, &selected)?;
     let script = position
         .script
@@ -119,6 +120,15 @@ pub fn choose(
     content: &Content,
     answer: bool,
 ) -> Result<Vec<Event>, RuleError> {
+    if matches!(
+        state
+            .exploration
+            .as_ref()
+            .and_then(|p| p.presentation.as_ref()),
+        Some(Presentation::BoatQuestion { .. })
+    ) {
+        return super::boat::answer(state, answer);
+    }
     if let Some(Presentation::Avoidance { region, .. }) = state
         .exploration
         .as_ref()
@@ -149,6 +159,7 @@ pub fn choose(
         return Err(RuleError::Invalid("no question active".into()));
     };
     let record = ExtraTable(&map.combat.as_ref().unwrap().encounters).record(*extra as usize)?;
+    state.native_work.extra_record = record.to_vec();
     match typed_encounter::question_plan(record, answer)? {
         typed_encounter::QuestionPlan::Continue => {}
         typed_encounter::QuestionPlan::MoveAway => {
@@ -174,48 +185,18 @@ pub fn choose(
                 .script
                 .as_mut()
                 .ok_or_else(|| RuleError::Invalid("question script missing".into()))?;
-            let id = script
-                .menu
-                .as_ref()
-                .ok_or_else(|| RuleError::Invalid("question menu missing".into()))?
-                .id;
-            let table = if state.menus.is_empty() {
-                &map.menus
-            } else {
-                &state.menus
-            };
             StoryRecordMut(&mut script.record).write_actions(&story::dispatch_menu_branch(
-                span(
-                    table,
-                    id as usize * story::MENU_RECORD_BYTES,
-                    story::MENU_RECORD_BYTES,
-                )?,
+                state.native_work.encounter_work.header(false),
                 branch as i8 + 1,
             )?);
             script.cursor = 0;
         }
         typed_encounter::QuestionPlan::TypedBranch(branch) => {
             let script = position.script.as_mut().ok_or("question script missing")?;
-            let menu = script
-                .menu
-                .as_ref()
-                .filter(|m| m.typed)
-                .ok_or("question typed continuation missing")?;
-            let record = span(
-                if state.typed_encounters.is_empty() {
-                    &map.typed_encounters
-                } else {
-                    &state.typed_encounters
-                },
-                menu.id as usize * typed_encounter::RECORD_BYTES,
-                typed_encounter::RECORD_BYTES,
-            )?;
-            if let typed_encounter::TypedContinuation::Branch { body, .. } =
-                typed_encounter::continuation(record, branch as i8 + 1, menu.remaining)?
-            {
-                StoryRecordMut(&mut script.record).write_actions(&body);
-                script.cursor = 0;
-            }
+            let record = state.native_work.encounter_work.header(true);
+            StoryRecordMut(&mut script.record)
+                .write_actions(&story::dispatch_menu_branch(record, branch as i8 + 1)?);
+            script.cursor = 0;
         }
         typed_encounter::QuestionPlan::EndScript => position.script = None,
     }
@@ -263,19 +244,9 @@ pub fn cancel_menu(state: &mut Session, content: &Content) -> Result<Vec<Event>,
     {
         EventHeaderTableMut(&mut position.event_headers).replace(script.map_slot, &menu.original);
     }
-    // saveencounter writes the loaded complex-encounter buffer back when it is left.
-    let eliminated = (script.menu.as_ref())
-        .filter(|menu| menu.typed && menu.eliminated != 0)
-        .map(|menu| (menu.id as usize, menu.eliminated));
-    if let Some((id, eliminated)) = eliminated {
-        let map = active_map(state, content)?;
-        if state.typed_encounters.is_empty() {
-            state.typed_encounters = map.typed_encounters.clone();
-        }
-        let bytes = typed_encounter::RECORD_BYTES;
-        span(&state.typed_encounters, id * bytes, bytes)?;
-        let record = &mut state.typed_encounters[id * bytes..(id + 1) * bytes];
-        typed_encounter::eliminate_branches(record, eliminated);
+    if let Some(menu) = &script.menu {
+        let (id, typed) = (menu.id, menu.typed);
+        super::menus::save_encounter(state, content, id, typed)?;
     }
     let position = state.exploration.as_mut().unwrap();
     let script = position.script.as_ref().unwrap();
@@ -301,25 +272,15 @@ pub fn select_menu(
     content: &Content,
     index: usize,
 ) -> Result<Vec<Event>, RuleError> {
-    let map = active_map(state, content)?;
     let position = state
         .exploration
         .as_mut()
         .ok_or_else(|| RuleError::Invalid("no active mission".into()))?;
-    let Some(Presentation::Menu { id, .. }) = position.presentation.as_ref() else {
+    let Some(Presentation::Menu { .. }) = position.presentation.as_ref() else {
         return Err(RuleError::Invalid("no menu active".into()));
     };
-    let table = if state.menus.is_empty() {
-        &map.menus
-    } else {
-        &state.menus
-    };
-    let record = span(
-        table,
-        *id as usize * story::MENU_RECORD_BYTES,
-        story::MENU_RECORD_BYTES,
-    )?;
-    let selection = story::select_menu_entry(record, index)?;
+    let record = state.native_work.encounter_work.record(false)?;
+    let selection = story::select_menu_entry(&record, index)?;
     let script = position
         .script
         .as_mut()
@@ -341,7 +302,7 @@ pub(crate) fn finish_typed_selection(
     content: &Content,
     selected: i8,
 ) -> Result<Vec<Event>, RuleError> {
-    let mut record = typed_record(state, content)?.to_vec();
+    let record = typed_record(state, content)?;
     let position = state.exploration.as_mut().unwrap();
     let script = position
         .script
@@ -351,7 +312,6 @@ pub(crate) fn finish_typed_selection(
         .menu
         .as_ref()
         .ok_or_else(|| RuleError::Invalid("typed continuation missing".into()))?;
-    typed_encounter::eliminate_branches(&mut record, menu.eliminated);
     let remaining = menu.remaining;
     match typed_encounter::continuation(&record, selected, remaining)? {
         typed_encounter::TypedContinuation::Branch { body, .. } => {

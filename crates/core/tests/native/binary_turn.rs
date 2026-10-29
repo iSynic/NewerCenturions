@@ -32,6 +32,11 @@ fn first_turn_matches_whole_records_and_random_draws() {
         position.presentation = None;
         position.script = None;
         let mut c = support::battle();
+        // VerifyTurnContexts writes total6/defeated0 before the captured entry.
+        c.victory_work = centurions_core::combat::victory_work::VictoryWork {
+            total: 6,
+            defeated: 0,
+        };
         c.enemies.records = vec![MonsterRecord {
             bytes: case.bytes("enemy"),
         }];
@@ -49,5 +54,82 @@ fn first_turn_matches_whole_records_and_random_draws() {
             scalar state.selected_warrior => &case["selected_warrior"], "conditioned Getup selection";
             scalar support::event_sounds(&events) => &case["sounds"], "conditioned Getup sounds";
         }
+    }
+}
+
+#[test]
+fn map_edge_turn_exit_matches_original_caller_and_cursor() {
+    let content = content();
+    let fixture = support::fixture("enemy-turn-exit.json");
+    for (index, case) in fixture.array("cases").iter().enumerate() {
+        let mut state: Session = serde_json::from_value(
+            fixture[if index == 0 {
+                "command_input_session"
+            } else {
+                "input_session"
+            }]
+            .clone(),
+        )
+        .unwrap();
+        // VerifyEnemyTurnExit's input control writes total7 and the captured
+        // defeated prefix. These are harness writes, not a live roster recount.
+        state.combat.as_mut().unwrap().victory_work =
+            centurions_core::combat::victory_work::VictoryWork {
+                total: 7,
+                defeated: case.n("removed_before"),
+            };
+        // VerifyEnemyTurnExit's loaded A5 image has zero438780/43877e.
+        crate::native_common::npc_command_input(&mut state, fixture.n("enemy_index"), [0, 0]);
+        let queue = current_combat(&state).death_queue.clone();
+        if index != 0 {
+            state.combat.as_mut().unwrap().enemies.records[fixture.n::<usize>("enemy_index")]
+                .bytes = case.bytes("enemy_before");
+        }
+        let events = if index == 0 {
+            support::saved_command(Command::RunEnemyTurn, &mut state, &content)
+        } else {
+            // The guest controls start inside the caller, after public EndTurn's
+            // movement/guard reset. Enter that same runtime boundary directly.
+            runtime::end_turn(&mut state, &content).unwrap()
+        };
+        // The native capture begins after the command's movement prefix.
+        let start = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    Event::Feedback(centurions_core::feedback::NativeFeedback::CombatResult {
+                        code: -5,
+                        ..
+                    })
+                )
+            })
+            .unwrap();
+        let events = &events[start..];
+        let combat = current_combat(&state);
+        assert_eq!(combat.victory_work.defeated, case.n::<i16>("removed_after"));
+        assert_eq!(combat.victory_work.total, 7);
+        support::native_expect! {
+            records &state.warriors => &case["warriors_after"], "Getup exit party";
+            records &combat.enemies.records => &case["records_after"], "Getup exit enemies";
+            bytes support::word_bytes(&combat.map.tiles) => &case["map_after"], "Getup exit footprint";
+            bytes support::word_bytes(&combat.order) => &case["order_after"], "Getup exit order";
+            scalar combat.cursor => &case["cursor"], "Getup exit cursor";
+            rng state.random => (&case["seed"], &case["total_draws_after"]), "Getup exit RNG";
+            scalar support::event_sounds(events) => &case["sounds"], "Getup exit sounds";
+        }
+        let results: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Feedback(centurions_core::feedback::NativeFeedback::CombatResult {
+                    body,
+                    code,
+                    ..
+                }) => Some(json!({"body": body,"code": code})),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(json!(results), case["results"]);
+        assert_eq!(combat.death_queue, queue);
     }
 }

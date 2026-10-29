@@ -3,16 +3,18 @@ use macroquad::prelude::*;
 use std::{collections::HashMap, path::Path};
 
 const APPLICATION_PICTURES: &[i16] = &[
-    1, 2, 4, 7, 19, 128, 130, 131, 132, 142, 149, 151, 154, 158, 159, 160, 162, 165, 168, 173, 179,
-    180, 181, 182, 183, 187, 195, 203, 204, 214, 215, 216, 221, 222, 233, 234, 235, 15, 16, 133,
-    134, 136, 137, 138, 144, 147, 148, 150, 152, 153, 156, 167, 170, 175, 190, 191, 202, 193, 194,
-    145, 201, 161, 176, 184, 198, 207, 230, 232, 212, 213, 226, 227,
+    1, 2, 4, 6, 7, 19, 128, 130, 131, 132, 142, 149, 151, 154, 158, 159, 160, 162, 165, 168, 173,
+    179, 180, 181, 182, 183, 187, 195, 203, 204, 214, 215, 216, 221, 222, 233, 234, 235, 15, 16,
+    133, 134, 136, 137, 138, 144, 147, 148, 150, 152, 153, 156, 167, 170, 175, 190, 191, 202, 193,
+    194, 145, 201, 161, 176, 184, 198, 207, 230, 232, 212, 213, 226, 227, 216, 402, 403, 163, 229,
+    231, 401,
 ];
 
 pub struct Assets {
     pub reference_strings: HashMap<i16, Vec<String>>,
     pub native_text: centurions_content::native_text::NativeText,
     pub terrain: HashMap<u8, Texture2D>,
+    base_terrain: HashMap<u8, Texture2D>,
     pub icons: HashMap<i16, Texture2D>,
     target_patterns: HashMap<i16, Texture2D>,
     target_material: Material,
@@ -21,6 +23,9 @@ pub struct Assets {
     base_panels: HashMap<i16, Texture2D>,
     base_icons: HashMap<i16, Texture2D>,
     pub movie_background: Texture2D,
+    /// 'ppat' 133 and 136, which ToolBoxInit 0x1318e0..0x13191a loads into the
+    /// button pens 0x4358e2 (light) and 0x4358de (dark).
+    pub button_pens: [Option<graphics::Image>; 2],
     pub menus: HashMap<i16, ui::Menu>,
     pub menu_bar: Vec<i16>,
     pub font: Font,
@@ -47,6 +52,8 @@ pub struct Assets {
     pub dialog_sizes: HashMap<i16, Vec2>,
     pub preference_descriptions: Vec<String>,
     pub executable_version: String,
+    /// Pictures with white keyed out, for CopyBits' transparent mode.
+    transparent: std::cell::RefCell<HashMap<i16, Texture2D>>,
 }
 impl Assets {
     pub fn target_pattern(&self, shape: i16, point: Vec2, clip: Rect) {
@@ -91,6 +98,7 @@ impl Assets {
         let mut menu_bar = None;
         let mut font = None;
         let mut movie_background = None;
+        let mut button_pens = [None, None];
         let mut names = HashMap::new();
         let mut spell_names = HashMap::new();
         let mut warnings = Vec::new();
@@ -144,8 +152,10 @@ impl Assets {
                         | 136
                         | 137
                         | 144
+                        | 145
                         | 147
                         | 148
+                        | 149
                         | 153
                         | 157
                         | 158
@@ -182,6 +192,7 @@ impl Assets {
                         | 144
                         | 147
                         | 148
+                        | 149
                         | 153
                         | 157
                         | 158
@@ -247,6 +258,11 @@ impl Assets {
                     resource.id,
                     Rect::new(left + dx, top + dy, right - left, bottom - top),
                 );
+            }
+            if cargo && resource.r#type == "ppat" && matches!(resource.id, 133 | 136) {
+                button_pens[usize::from(resource.id == 136)] = Some(graphics::decode_pattern(
+                    &read_resource(extracted, resource)?,
+                )?);
             }
             if cargo && resource.r#type == "ppat" && resource.id == 131 {
                 let image = graphics::decode_pattern(&read_resource(extracted, resource)?)?;
@@ -324,7 +340,7 @@ impl Assets {
             }
             let picture = cargo
                 && resource.r#type == "PICT"
-                && ((300..=308).contains(&resource.id)
+                && (centurions_content::tile_sets::picture_terrain(resource.id).is_some()
                     || ui::PANEL_PICTURES.contains(&resource.id)
                     || APPLICATION_PICTURES.contains(&resource.id)
                     || dialog_pictures.contains(&resource.id));
@@ -350,8 +366,10 @@ impl Assets {
             };
             let texture = Texture2D::from_rgba8(decoded.width, decoded.height, &decoded.rgba);
             texture.set_filter(FilterMode::Nearest);
-            if picture && (300..=308).contains(&resource.id) {
-                terrain.insert((resource.id - 299) as u8, texture);
+            if picture
+                && let Some(set) = centurions_content::tile_sets::picture_terrain(resource.id)
+            {
+                terrain.insert(set, texture);
             } else if picture {
                 panels.insert(resource.id, texture);
             } else if portrait {
@@ -431,6 +449,7 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
         )
         .map_err(|error| ContentError::Invalid(format!("target overlay: {error}")))?;
         let mut assets = Self {
+            base_terrain: terrain.clone(),
             base_panels: panels.clone(),
             base_icons: icons.clone(),
             reference_strings,
@@ -443,6 +462,7 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
             panels,
             movie_background: movie_background
                 .ok_or_else(|| ContentError::Invalid("movie pixel pattern 131 missing".into()))?,
+            button_pens,
             menus,
             menu_bar,
             symbol_font: font.clone(),
@@ -477,6 +497,7 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
             dialog_sizes,
             preference_descriptions,
             executable_version,
+            transparent: Default::default(),
         };
         let characters = Font::ascii_character_list();
         for size in [12, 14, 24] {
@@ -499,6 +520,7 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
         strings.remove(&801);
         let mut panels = self.base_panels.clone();
         let mut icons = self.base_icons.clone();
+        let mut terrain = self.base_terrain.clone();
         if let Some(scenario) = &content.scenario {
             let owner = format!(
                 "TheNewCenturions/Scenarios/{}/{}/Scenario",
@@ -531,6 +553,9 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
                 let texture = Texture2D::from_rgba8(decoded.width, decoded.height, &decoded.rgba);
                 texture.set_filter(FilterMode::Nearest);
                 if resource.r#type == "PICT" {
+                    if let Some(set) = centurions_content::tile_sets::picture_terrain(resource.id) {
+                        terrain.insert(set, texture.clone());
+                    }
                     panels.insert(resource.id, texture);
                 } else {
                     icons.insert(resource.id, texture);
@@ -540,6 +565,8 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
         self.names = names;
         self.character_strings = strings;
         self.panels = panels;
+        self.transparent.borrow_mut().clear();
+        self.terrain = terrain;
         self.icons = icons;
         Ok(())
     }
@@ -550,6 +577,44 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
     }
     pub fn name(&self, id: i16) -> String {
         self.names.get(&id).cloned().unwrap_or_default()
+    }
+    /// Draws `source`, in picture pixels, of a PICT at `dest`.
+    pub fn panel_part(&self, id: i16, source: Rect, dest: Rect) {
+        if let Some(texture) = self.panels.get(&id) {
+            draw_texture_ex(
+                texture,
+                dest.x,
+                dest.y,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(vec2(dest.w, dest.h)),
+                    source: Some(source),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    /// Draws with the inverting blend of a black pattern in QuickDraw's patXor.
+    pub fn inverted(&self, draw: impl FnOnce()) {
+        gl_use_material(&self.target_material);
+        draw();
+        gl_use_default_material();
+    }
+    /// A picture whose white pixels CopyBits' transparent mode (36) leaves out.
+    pub fn transparent_picture(&self, id: i16) -> Option<Texture2D> {
+        if let Some(texture) = self.transparent.borrow().get(&id) {
+            return Some(texture.clone());
+        }
+        let mut image = self.panels.get(&id)?.get_texture_data();
+        for pixel in image.get_image_data_mut() {
+            if pixel[..3] == [255, 255, 255] {
+                *pixel = [0, 0, 0, 0];
+            }
+        }
+        let texture = Texture2D::from_image(&image);
+        texture.set_filter(FilterMode::Nearest);
+        self.transparent.borrow_mut().insert(id, texture.clone());
+        Some(texture)
     }
     pub fn panel(&self, id: i16, rect: Rect) {
         if let Some(texture) = self.panels.get(&id) {
@@ -633,6 +698,9 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
     }
     pub fn text(&self, text: &str, x: f32, y: f32, size: u16, color: Color) {
         self.draw_text(text, x, y, size, color, &self.font);
+    }
+    pub fn text_width(&self, text: &str, size: u16) -> f32 {
+        measure_text(text, Some(&self.font), size, 1.).width
     }
     pub fn menu_text(&self, text: &str, x: f32, y: f32, size: u16, color: Color) {
         self.draw_text(text, x, y, size, color, &self.menu_font);

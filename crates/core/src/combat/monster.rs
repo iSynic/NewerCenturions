@@ -48,12 +48,7 @@ pub fn summon(
 ) -> Result<MonsterRecord, RuleError> {
     let bytes = &mut monster.bytes;
     let level = EnemyRecord::from_bytes(bytes).level()?;
-    if !(0..=127).contains(&level) || EnemyRecord::from_bytes(bytes).selected_item()? < 0 {
-        return Err(RuleError::Unsupported {
-            action: "combat.summon",
-            dependency: "summoned level or random weapon tables",
-        });
-    }
+    super::monster_weapons::validate(bytes)?;
     let mut hp = EnemyRecord::from_bytes(bytes).base_stamina()?;
     for _ in 0..level {
         hp = hp.wrapping_add(random.bound(8));
@@ -84,5 +79,6 @@ pub fn summon(
     record.set_psi_points(scaled(psi));
     record.set_stamina(scaled(hp).max(1));
     record.set_maximum_stamina(scaled(hp).max(1));
+    super::monster_weapons::initialize(bytes, random, super::monster_weapons::MatchOrder::First)?;
     Ok(monster)
 }

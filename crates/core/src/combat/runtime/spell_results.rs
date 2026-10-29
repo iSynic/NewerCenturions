@@ -17,6 +17,7 @@ pub(crate) fn append_spell_outcomes(
 ) -> Result<(), RuleError> {
     let mut excluded = race_excluded.into_iter().peekable();
     for (target, outcome) in targets {
+        c.neighbor_work.departure = 0;
         while excluded.peek().is_some_and(|body| *body < target) {
             excluded.next();
             events.push(Event::Sound { resource_id: 651 });
@@ -39,7 +40,7 @@ pub(crate) fn append_spell_outcomes(
             let sound = if caster >= 10 {
                 let enemy = &c.enemies.records[(caster - 10) as usize].bytes;
                 if EnemyRecord::from_bytes(enemy).selected_item()? != 0 {
-                    c.weapon_work.sound()?
+                    c.weapon_work.sound()
                 } else {
                     c.weapon_work.natural_result_sound(enemy)?
                 }
@@ -59,7 +60,7 @@ pub(crate) fn append_spell_outcomes(
         }
         // resolvespell151a88 presents successful zero-damage spelllist results.
         // showresults clears the interaction gate even when its code has no label.
-        let effect = AttackPacket(identity.2).effect()?;
+        let effect = AttackPacket(identity.2).effect()?.wrapping_abs();
         if matches!(effect, 1..=41 | 51 | 64) && outcome.damage == 0 {
             events.push(Event::Feedback(
                 crate::feedback::NativeFeedback::CombatResult {
@@ -76,6 +77,8 @@ pub(crate) fn append_spell_outcomes(
             target: target as i16,
             damage: outcome.damage,
             defeated: outcome.killed,
+            icon: crate::event::PresentationIcon(outcome.icon),
+            flight: Default::default(),
         });
     }
     events.extend(excluded.map(|_| Event::Sound { resource_id: 651 }));
@@ -92,8 +95,12 @@ pub(crate) fn resolve_spell_mask(
     memory: crate::combat::spells::RestrictionMemoryView<'_>,
 ) -> Result<Vec<Event>, RuleError> {
     let (id, packet, count) = spell;
+    c.mark_monster_spell_work(packet, mask);
+    if AttackPacket(packet).targeting_mode() == 7 {
+        c.ready = 0;
+    }
     c.inactive_rounds = 0;
-    if id == 1703 {
+    if id == 1703 && count > 0 && crate::combat::spell_conditions::is_1703_packet(packet)? {
         let result = crate::combat::spell_conditions::resolve_1703(
             w,
             &c.enemies.records,
@@ -122,6 +129,8 @@ pub(crate) fn resolve_spell_mask(
                     target: target as i16,
                     damage: 0,
                     defeated: false,
+                    icon: crate::event::PresentationIcon(0),
+                    flight: Default::default(),
                 }),
         );
         return Ok(events);
@@ -130,8 +139,9 @@ pub(crate) fn resolve_spell_mask(
         .iter()
         .map(Warrior::stamina)
         .collect::<Result<Vec<_>, _>>()?;
-    // Authored NPC112 uses the same resolvespell healing branch as party casts.
-    if AttackPacket(packet).effect()? == 57 {
+    // NPC casts enter the same ordered condition/healing resolver as party casts.
+    if crate::combat::spells::is_support(packet)? {
+        let pending = std::mem::take(&mut c.alias_writes);
         let result = crate::combat::spells::resolve_support_for_caster(
             w,
             &c.enemies.records,
@@ -141,17 +151,24 @@ pub(crate) fn resolve_spell_mask(
                 packet,
                 level: id % 1000 / 100 - 1,
                 count,
-                armor_filter: c.weapon_work.armor_filter()?,
-                weapon_sound: c.weapon_work.sound()?,
+                armor_filter: c.weapon_work.armor_filter(),
+                weapon_sound: c.weapon_work.sound(),
             },
-            (Some(caster), Some(memory)),
+            (Some(caster), Some(memory.with_pending(&pending))),
             random,
         )?;
+        c.alias_writes = pending;
+        c.alias_writes.extend(result.alias_writes);
         w.clone_from_slice(&result.warriors);
+        c.fatigue_reset |= result.fatigue_reset;
+        if let Some(shape) = result.area_shape {
+            AttackPacketMut(&mut c.attack_packet).set_area_shape(shape);
+        }
+        c.victory_work.add_total(result.total_delta);
         c.enemies.records = result.enemies;
         c.unavailable = c.unavailable.wrapping_sub(result.recovered as i8);
         if result.healed {
-            AttackPacketMut(c.attack_packet.as_mut().unwrap()).set_health_effect(4);
+            AttackPacketMut(&mut c.attack_packet).set_health_effect(4);
         }
         if !result.targets.is_empty() {
             c.field_used[0] = 1;
@@ -165,28 +182,46 @@ pub(crate) fn resolve_spell_mask(
             c,
             w,
             result.targets,
-            vec![],
+            result.race_excluded,
             (Some(caster), id, packet, &previous_hp),
             false,
             &mut events,
         )?;
         return Ok(events);
     }
-    let result = crate::combat::spells::resolve_bodies_with_memory(
-        w,
-        &c.enemies.records,
-        mask,
-        &crate::combat::spells::DirectSpell {
-            packet,
-            level: id % 1000 / 100 - 1,
-            count,
-            armor_filter: c.weapon_work.armor_filter()?,
-            weapon_sound: c.weapon_work.sound()?,
-        },
-        memory,
-        random,
-    )?;
+    let direct = crate::combat::spells::DirectSpell {
+        packet,
+        level: id % 1000 / 100 - 1,
+        count,
+        armor_filter: c.weapon_work.armor_filter(),
+        weapon_sound: c.weapon_work.sound(),
+    };
+    // resolvespell's body loop has no category test; a category-5 drain reaches
+    // spelllist 15ba5a through the drain resolver the party caster uses.
+    let result = if matches!(AttackPacket(packet).effect()?, 60 | 61)
+        && AttackPacket(packet).defense_category() == 5
+    {
+        crate::combat::spells::resolve_psi_drain(
+            w,
+            &c.enemies.records,
+            mask,
+            &direct,
+            caster,
+            (memory, None),
+            random,
+        )?
+    } else {
+        crate::combat::spells::resolve_bodies_with_memory(
+            w,
+            &c.enemies.records,
+            mask,
+            &direct,
+            memory,
+            random,
+        )?
+    };
     w.clone_from_slice(&result.warriors);
+    c.victory_work.add_total(result.total_delta);
     c.enemies.records = result.enemies;
     if !result.targets.is_empty() {
         c.field_used[0] = 1;

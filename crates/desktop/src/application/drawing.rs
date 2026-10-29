@@ -27,7 +27,7 @@ impl Application {
                 clear_background(BLACK);
                 assets.panel(187, Rect::new(80., 80., 640., 460.));
             }
-            Screen::Squad => self.draw_squad(content, assets, &mut controls),
+            Screen::Squad => self.draw_squad(content, state, assets, &mut controls),
             Screen::Intro => {
                 clear_background(BLACK);
                 let rect = Rect::new(160., 92., 480., 416.);
@@ -205,10 +205,14 @@ impl Application {
                 action: Action::Application(ApplicationAction::CloseAbout),
             });
         }
-        if self.exchange_offer.is_some() {
+        if self.exchange_offer.is_some() || state.retained_walk_choice.is_some() {
             controls.clear();
             assets.draw_dialog(136);
-            let choices = if self.exchange_swap {
+            let choices = if state
+                .retained_walk_choice
+                .as_ref()
+                .map_or(self.exchange_swap, |choice| choice.exchange)
+            {
                 [(2, 0x403bfa, Some(false)), (1, 0x403c08, Some(true))]
             } else {
                 [(2, 0x403bd8, Some(false)), (1, 0x403be6, None)]

@@ -29,6 +29,7 @@ fn walking_matches_instruction_state_and_effects() {
         combat.squad.positions = vec![(20, 20); 6];
         combat.order = vec![-1, 0];
         state.combat = Some(combat);
+        crate::native_common::source_victory_context(&mut state);
         let events = move_warrior(&mut state, &content, dx, dy).unwrap();
         assert_eq!(state.warriors[0].bytes, case.bytes("after"));
         let combat = state.combat.unwrap();

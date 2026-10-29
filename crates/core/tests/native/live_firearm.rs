@@ -1,7 +1,5 @@
 use crate::{prelude::*, support};
 
-use centurions_core::combat::*;
-
 use support::positions;
 fn origin(c: &serde_json::Value) -> (i16, i16) {
     let b = c.bytes("origin");
@@ -40,6 +38,7 @@ fn composed_shot_matches_live_original_records_rng_and_next_turn() {
     combat.order = words(hex("order"));
     combat.cursor = words(hex("cursor_enemy_index"))[0] as usize;
     state.combat = Some(combat);
+    crate::native_common::source_victory_context(&mut state);
     let events = apply(Command::ShootEnemy { body: 12 }, &mut state, &content).unwrap();
     assert!(events.iter().any(|e| matches!(
         e,
@@ -47,7 +46,8 @@ fn composed_shot_matches_live_original_records_rng_and_next_turn() {
             attacker: 3,
             target: 12,
             damage: 2,
-            defeated: false
+            defeated: false,
+            ..
         }
     )));
     support::expect(state.random.seed, &after["random_seed"]);

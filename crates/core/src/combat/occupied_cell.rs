@@ -7,10 +7,10 @@ use centurions_content::Content;
 pub(super) fn reload_at_occupied_cell(
     state: &mut Session,
     content: &Content,
-    mission: &centurions_content::mission::OpeningMission,
     actor: usize,
     target: i16,
     dx: i8,
+    dy: i8,
 ) -> Result<Vec<Event>, RuleError> {
     let refuse = |predicate: &'static str| {
         RuleError::Unsupported {
@@ -58,24 +58,39 @@ pub(super) fn reload_at_occupied_cell(
     if faction == member.record().faction()? {
         return Err(refuse("target is friendly"));
     }
+    runtime::begin_move(
+        state,
+        content,
+        actor,
+        (dx, dy),
+        runtime::MovePlan::Occupied { tile: target },
+    )
+}
+
+pub(super) fn resume_reload(
+    state: &mut Session,
+    content: &Content,
+    mission: &centurions_content::mission::OpeningMission,
+    actor: usize,
+    target: i16,
+    dx: i8,
+) -> Result<Vec<Event>, RuleError> {
+    let refuse = |predicate: &'static str| {
+        RuleError::Unsupported {
+            action: "combat.move",
+            dependency: "other occupied-cell attack, exchange or reload continuation",
+        }
+        .with_context(|| format!("occupied cell {target}: {predicate}"))
+    };
     let attacks = mission
         .combat
         .as_ref()
         .map_or(&[][..], |tables| &tables.attacks);
-    let mut effects = runtime::check_neighbors_with_work(
-        combat,
-        &mut state.warriors,
-        &mut state.random,
-        actor as i16,
-        &content.items,
-        attacks,
-        &state.party_buffs,
-        &mut state.native_work.ammunition_work,
-    )?;
-    if state.warriors[actor].record().active_flag() == 0 {
-        effects.extend(runtime::end_turn(state, content)?);
-        return Ok(effects);
-    }
+    let combat = state
+        .combat
+        .as_mut()
+        .ok_or_else(|| refuse("no active combat"))?;
+    let mut effects = vec![];
     state.warriors[actor].record_mut().face_horizontal_step(dx);
     let weapon_id = state.warriors[actor].record().equipped_weapon()?;
     let equipped = state.warriors[actor]
@@ -108,8 +123,8 @@ pub(super) fn reload_at_occupied_cell(
             .prepare_pair(&weapon, &ammunition)?;
         combat.weapon_work.prepare(&weapon, &ammunition)?;
         state.native_work.attack_count = prepared.shots;
-        state.native_work.attack_packet = Some(prepared.packet.clone());
-        combat.attack_packet = Some(prepared.packet);
+        state.native_work.attack_packet = prepared.packet.clone();
+        combat.attack_packet = prepared.packet;
     } else {
         combat.weapon_work.load_weapon(&weapon)?;
         state.native_work.ammunition_work.weapon = Some(weapon);
@@ -126,11 +141,13 @@ pub(super) fn reload_at_occupied_cell(
         },
         &state.native_work.ammunition_work,
         &mut state.random,
-        state.native_work.inventory_record.as_ref(),
+        Some(&state.native_work.inventory_record),
     )?;
     let completed = refit.completed_refit();
     effects.extend(crate::ammunition::commit_result(state, actor, refit)?);
     if !completed {
+        state.set_ready(0);
+        state.native_work.walking_confusion = 0;
         state.warriors[actor].record_mut().set_automatic_mode(0);
         effects.push(Event::Sound {
             resource_id: ERROR_SOUND,

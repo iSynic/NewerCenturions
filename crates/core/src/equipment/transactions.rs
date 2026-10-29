@@ -79,9 +79,7 @@ pub fn transfer(
         .get(slot)
         .cloned()
         .ok_or("transfer slot missing")?;
-    if state.native_work.inventory_record.is_some() {
-        state.native_work.inventory_record = Some(item.clone());
-    }
+    state.native_work.inventory_record = item.clone();
     state.load_item_work(content, item.id())?;
     if state.warriors[to].inventory()?.len() >= 30 {
         return Ok(vec![Event::Feedback(
@@ -127,11 +125,7 @@ pub fn take_crate(
         .ok_or_else(|| RuleError::Invalid("crate slot missing".into()))?;
     let item_id = item.id();
     let retained = item.clone();
-    let stacked = item_id == 700
-        && state.warriors[warrior]
-            .inventory()?
-            .iter()
-            .any(|owned| owned.id() == 700);
+    let prior_count = state.warriors[warrior].inventory()?.len();
     let result = collect_item(
         &state.warriors[warrior],
         item,
@@ -140,8 +134,8 @@ pub fn take_crate(
     )?;
     state.warriors[warrior] = result.warrior;
     if result.collected {
-        if !stacked {
-            state.native_work.inventory_record = Some(retained);
+        if state.warriors[warrior].inventory()?.len() > prior_count {
+            state.native_work.inventory_record = retained;
         }
         state.crate_items[slot] = result.item;
     }
@@ -170,18 +164,19 @@ pub fn equip(
         .cloned()
         .ok_or_else(|| RuleError::Invalid("equipment slot missing".into()))?;
     let item_id = item.id();
-    if state.native_work.inventory_record.is_some() {
-        state.native_work.inventory_record = Some(item.clone());
-    }
+    state.native_work.inventory_record = item.clone();
     let mut result = wear_retained(
         &state.warriors[warrior],
         content,
         mission(state, content)?,
         slot,
         state.phase == Phase::Combat,
-        state.native_work.inventory_record.as_ref(),
+        Some(&state.native_work.inventory_record),
     )?;
-    state.native_work.inventory_record = result.record.take();
+    state.apply_equipment_globals(&result.global_writes)?;
+    if let Some(record) = result.record.take() {
+        state.native_work.inventory_record = record;
+    }
     if !result.changed {
         state.warriors[warrior] = result.warrior;
         state.load_item_work(content, item_id)?;
@@ -190,18 +185,11 @@ pub fn equip(
     items::compact(&mut result.warrior)?;
     state.warriors[warrior] = result.warrior;
     state.load_item_work(content, item_id)?;
-    let selected = state
-        .native_work
-        .health_context
-        .as_ref()
-        .map_or(state.selected_warrior, |context| context.selected_warrior);
-    let mut health = crate::story_health::context(
-        &state.warriors,
-        selected,
-        state.native_work.health_context.as_ref(),
-    );
+    let selected = state.native_work.health_context.selected_warrior;
+    let mut health =
+        crate::story_health::retained_context(selected, &state.native_work.health_context);
     health.affected[warrior] = 1;
-    state.native_work.health_context = Some(health);
+    state.native_work.health_context = health;
     Ok(events(result.sounds, result.warnings))
 }
 
@@ -218,17 +206,18 @@ pub fn unequip(
         .cloned()
         .ok_or_else(|| RuleError::Invalid("equipment slot missing".into()))?;
     let item_id = item.id();
-    if state.native_work.inventory_record.is_some() {
-        state.native_work.inventory_record = Some(item.clone());
-    }
+    state.native_work.inventory_record = item.clone();
     let mut result = remove_retained(
         &state.warriors[warrior],
         content,
         mission(state, content)?,
         slot,
-        state.native_work.inventory_record.as_ref(),
+        Some(&state.native_work.inventory_record),
     )?;
-    state.native_work.inventory_record = result.record.take();
+    state.apply_equipment_globals(&result.global_writes)?;
+    if let Some(record) = result.record.take() {
+        state.native_work.inventory_record = record;
+    }
     if !result.changed {
         state.warriors[warrior] = result.warrior;
         state.load_item_work(content, item_id)?;
@@ -237,8 +226,7 @@ pub fn unequip(
     items::compact(&mut result.warrior)?;
     state.warriors[warrior] = result.warrior;
     state.load_item_work(content, item_id)?;
-    if let Some(health) = state.native_work.health_context.as_mut() {
-        health.affected[warrior] = 1;
-    }
+    let health = &mut state.native_work.health_context;
+    health.affected[warrior] = 1;
     Ok(events(result.sounds, result.warnings))
 }

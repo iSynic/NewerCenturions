@@ -80,7 +80,7 @@ impl Application {
         self.speed = settings["speed"]
             .as_u64()
             .filter(|v| (1..=11).contains(v))
-            .unwrap_or(6) as usize;
+            .unwrap_or(5) as usize;
         self.music_enabled = settings["music_enabled"].as_bool().unwrap_or(true);
         if let Some(values) = settings["playlist"].as_array().filter(|v| v.len() == 13) {
             for (target, value) in self.playlist.iter_mut().zip(values) {
@@ -96,6 +96,7 @@ impl Application {
                 auto_refit: self.native_preferences.enabled(15),
                 suppress_round_message_sound: self.native_preferences.enabled(13),
                 animation_delay: self.speed as i16 * 5 - 5,
+                small_combat_field: !self.native_preferences.enabled(22),
                 trace: self.trace,
             },
         }

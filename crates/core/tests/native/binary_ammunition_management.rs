@@ -94,6 +94,7 @@ fn refit_matches_original_manual_and_automatic_records_caches_returns_and_audio(
             let mut expected_npcs = bytes(fixture, &after["npcs"]);
             expected_npcs[0x110..0x112].copy_from_slice(&100_i16.to_be_bytes());
             combat.weapon_work = snapshots::weapon_work(&read);
+            native_common::source_victory_context(&mut state);
             let events =
                 support::saved_command(Command::Move { dx: 1, dy: 1 }, &mut state, &content);
             assert_eq!(
@@ -107,8 +108,7 @@ fn refit_matches_original_manual_and_automatic_records_caches_returns_and_audio(
                 state
                     .native_work
                     .inventory_record
-                    .as_ref()
-                    .unwrap()
+                    
                     .0
                     .as_slice(),
                 bytes(fixture, &after["selected_record"])
@@ -139,8 +139,8 @@ fn refit_matches_original_manual_and_automatic_records_caches_returns_and_audio(
             assert_eq!(events, expected);
             if case["expanded_caller"] == true {
                 assert_eq!(
-                    state.native_work.attack_packet.as_ref().unwrap(),
-                    &bytes(fixture, &after["packet"])
+                    state.native_work.attack_packet,
+                    bytes(fixture, &after["packet"])
                 );
                 assert_eq!(state.native_work.attack_count, after.n::<i16>("count"));
             }

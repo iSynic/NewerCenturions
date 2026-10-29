@@ -55,6 +55,9 @@ fn controlled_battle(
         .unwrap();
     }
     let generated = record_bytes(&arena.enemies.records);
+    // This outer command control acknowledges the skipped child combat as won;
+    // native booty itself is entered directly by the independent receipt.
+    arena.victory_work.defeated = arena.victory_work.total;
     for record in &mut arena.enemies.records {
         record.bytes[0x110..0x112].fill(0);
     }

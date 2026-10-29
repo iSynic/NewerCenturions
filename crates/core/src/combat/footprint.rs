@@ -92,13 +92,7 @@ pub fn restore_body(combat: &combat::Combat, body: i16) -> Result<combat::Tactic
         let under = *combat.squad.under_tiles.get(index).ok_or_else(|| {
             RuleError::Invalid("body-field warrior under-tile unavailable".into())
         })?;
-        let cell = self::index(&combat.map, position, 0, 0)?;
-        let mut result = combat.map.clone();
-        *result
-            .tiles
-            .get_mut(cell)
-            .ok_or_else(|| RuleError::Invalid("body-field map cell unavailable".into()))? = under;
-        Ok(result)
+        restore_warrior(&combat.map, position, under)
     } else {
         let index = (body - 10) as usize;
         let monster = combat
@@ -112,6 +106,21 @@ pub fn restore_body(combat: &combat::Combat, body: i16) -> Result<combat::Tactic
             })?;
         restore(&combat.map, monster, position)
     }
+}
+
+/// bodyfield's warrior arm: the cell under a party body gets its saved tile back.
+pub(crate) fn restore_warrior(
+    map: &combat::TacticalMap,
+    position: (i16, i16),
+    under: i16,
+) -> Result<combat::TacticalMap, RuleError> {
+    let cell = index(map, position, 0, 0)?;
+    let mut result = map.clone();
+    *result
+        .tiles
+        .get_mut(cell)
+        .ok_or_else(|| RuleError::Invalid("body-field map cell unavailable".into()))? = under;
+    Ok(result)
 }
 
 /// Original bodyfield enemy suffix; signed sizes have no eligibility gate.
@@ -242,7 +251,7 @@ pub fn neighbor_scan(monster: &MonsterRecord) -> Result<(i16, i16), RuleError> {
     ))
 }
 
-fn shift_direction(
+pub(crate) fn shift_direction(
     position: (i16, i16),
     target: (i16, i16),
     dx: &mut i8,
@@ -295,7 +304,39 @@ pub fn move_enemy(
     enemy_index: usize,
     random: &mut RandomState,
 ) -> Result<BodyMovement, RuleError> {
-    move_enemy_before_place(combat, mission, enemy_index, random, &mut |_, _, _| Ok(()))
+    move_enemy_before_place(
+        combat,
+        (mission, super::map_alias::MapAliases::of_mission(mission)),
+        enemy_index,
+        random,
+        &mut |_, _, _| Ok(()),
+    )
+}
+
+/// The position slot movemonster13e276 reads for a target body.
+pub(crate) enum TargetSlot {
+    Npc(usize),
+    Party(usize),
+}
+
+/// Targets below 9 index the party positions 0x44709a and others the NPC positions
+/// 0x446f0a, four bytes a slot. The NPC array's 100 slots end at 0x44709a, so targets
+/// -100..-1 alias NPC slots 0..99 and targets from 110 the party slots.
+pub(crate) fn target_slot(target: i16) -> Option<TargetSlot> {
+    const NPCS: i32 = 0x446f0a;
+    const PARTY: i32 = 0x44709a;
+    let address = if target < 9 {
+        PARTY + 4 * i32::from(target)
+    } else {
+        NPCS + 4 * (i32::from(target) - 10)
+    };
+    if (NPCS..PARTY).contains(&address) {
+        Some(TargetSlot::Npc(((address - NPCS) / 4) as usize))
+    } else if address >= PARTY {
+        Some(TargetSlot::Party(((address - PARTY) / 4) as usize))
+    } else {
+        None
+    }
 }
 
 type DepartureReaction<'a> =
@@ -303,7 +344,7 @@ type DepartureReaction<'a> =
 
 pub(crate) fn move_enemy_before_place(
     combat: &combat::Combat,
-    mission: &OpeningMission,
+    (mission, aliases): (&OpeningMission, super::map_alias::MapAliases<'_>),
     enemy_index: usize,
     random: &mut RandomState,
     before_place: &mut DepartureReaction<'_>,
@@ -316,24 +357,14 @@ pub(crate) fn move_enemy_before_place(
     let size = size(monster)?;
     let fleeing = monster.record().fleeing_duration() != 0;
     let target = monster.record().target_body()?;
-    // movemonster13e2b6 indexes the native party-coordinate array with -1.
-    // 44709a - 4 is retained NPC99 at 446f0a + 99*4, not a zero default.
-    let retained_position = if target == -1 {
-        Some(combat.story_position(99)?)
-    } else if target >= 10 {
-        Some(combat.story_position((target - 10) as usize)?)
-    } else {
-        None
+    let outside = || RuleError::Unsupported {
+        action: "combat.move",
+        dependency: "NPC movement target outside the represented position arrays",
     };
-    let target_position = if let Some(position) = retained_position.as_ref() {
-        Some(position)
-    } else if (0..6).contains(&target) {
-        combat.squad.positions.get(target as usize)
-    } else {
-        None
-    }
-    .copied()
-    .ok_or_else(|| RuleError::Invalid("enemy movement target unavailable".into()))?;
+    let target_position = match target_slot(target).ok_or_else(outside)? {
+        TargetSlot::Npc(slot) => combat.story_position(slot)?,
+        TargetSlot::Party(slot) => *combat.squad.positions.get(slot).ok_or_else(outside)?,
+    };
     let position = *combat
         .enemies
         .positions
@@ -371,11 +402,7 @@ pub(crate) fn move_enemy_before_place(
             if !occupied || blocked {
                 continue;
             }
-            let cell = index(&combat.map, next, ox, oy)?;
-            let mut tile =
-                *combat.map.tiles.get(cell).ok_or_else(|| {
-                    RuleError::Invalid("movement footprint tile unavailable".into())
-                })?;
+            let mut tile = super::map::movement_tile(&combat.map, aliases, next, (ox, oy))?;
             tile = tile.wrapping_abs();
             if tile == body {
                 tile = mission.default_tile.wrapping_add(1000);

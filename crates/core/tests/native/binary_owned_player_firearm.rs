@@ -19,10 +19,10 @@ fn work(snapshot: &Value) -> WeaponWork {
     let weapon = snapshot.bytes("weapon");
     let ammo = snapshot.bytes("ammo");
     WeaponWork {
-        natural_attack_index: None,
-        sound: Some(word(&weapon, 14).unwrap()),
-        weapon_armor_filter: Some(word(&weapon, 136).unwrap()),
-        ammunition_armor_filter: Some(word(&ammo, 136).unwrap()),
+        natural_attack_index: 0,
+        sound: word(&weapon, 14).unwrap(),
+        weapon_armor_filter: word(&weapon, 136).unwrap(),
+        ammunition_armor_filter: word(&ammo, 136).unwrap(),
     }
 }
 
@@ -158,8 +158,8 @@ fn complete_preparation_and_four_controlled_resolutions_match_native_packet_reco
         prepared_work
             .prepare(&content.items[2], &content.items[201])
             .unwrap();
-        assert_eq!(prepared_work.sound, Some(402));
-        assert!(!prepared_work.armor_filter().unwrap());
+        assert_eq!(prepared_work.sound, 402);
+        assert!(!prepared_work.armor_filter());
         assert_party(&records, &case["prepared"]);
         // The pure resolver begins after the caller's independently captured debits.
         records = party(&case["targeted"]);

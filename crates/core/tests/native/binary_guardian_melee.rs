@@ -87,7 +87,7 @@ fn combat(case: &Value, actor: i16, party_position: (i16, i16)) -> Combat {
     combat.enemies.records = support::monsters(&case["records_before"]);
     combat.enemies.positions = support::positions(&case["positions_before"]);
     combat.order[1] = actor;
-    combat.attack_identity = Some([2, 4, 6]);
+    combat.attack_identity = [2, 4, 6];
     combat
 }
 
@@ -120,7 +120,7 @@ fn guardian_reaction_caller_matches_native_retained_actor_reload_and_natural_att
             &case["records_after"],
         );
         support::native_expect! {
-            bytes combat.attack_packet.as_ref().unwrap() => &case["packet_after"], &context;
+            bytes combat.attack_packet => &case["packet_after"], &context;
         }
         assert_eq!(combat.map.tiles, case.words("map_after"), "{context}");
         assert_eq!(combat.order, case.words("order_after"), "{context}");

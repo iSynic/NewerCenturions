@@ -105,7 +105,7 @@ fn enemy_health_drain_and_death_cleanup_match_complete_native_monster_slices() {
             None,
             &mut 0,
             &mut [0; 6],
-            0,
+            (0, &mut 0),
         )
         .unwrap();
         assert_eq!(combat.enemies.records[0].bytes, case.bytes("after"));

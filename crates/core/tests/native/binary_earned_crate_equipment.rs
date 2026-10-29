@@ -33,9 +33,9 @@ fn state(fixture: &Value, case: &Value, snapshot: &Value) -> Session {
     for (warrior, native) in result.warriors.iter_mut().zip(party(snapshot)) {
         warrior.bytes = native.bytes;
     }
-    result.native_work.inventory_record = Some(InventoryRecord(
+    result.native_work.inventory_record = InventoryRecord(
         snapshot.bytes("selected_record").try_into().unwrap(),
-    ));
+    );
     result
 }
 use support::compare_party as assert_party;
@@ -121,11 +121,11 @@ fn all_thirteen_collection_cases_match_native_records_and_warning_order() {
             }
             expected.crate_items = records(&case["closed"], "crate");
             expected.native_work.loaded_item_field32 =
-                Some(case["closed"].n::<i16>("item_context"));
+                case["closed"].n::<i16>("item_context");
             expected.native_work.ammunition_work.item = Some(case["closed"].bytes("item_work"));
-            expected.native_work.inventory_record = Some(InventoryRecord(
+            expected.native_work.inventory_record = InventoryRecord(
                 case["closed"].bytes("selected_record").try_into().unwrap(),
-            ));
+            );
             support::same_captured_session(&actual, &expected);
         }
     }
@@ -178,16 +178,14 @@ fn outdoor_wear_replacement_compaction_and_enhanced_preparation_match_native() {
             let mut expected = initial;
             expected.warriors[member] = actual.warriors[member].clone();
             expected.native_work.loaded_item_field32 =
-                Some(case["compacted"].n::<i16>("item_context"));
+                case["compacted"].n::<i16>("item_context");
             expected.native_work.ammunition_work.item = Some(case["compacted"].bytes("item_work"));
-            expected.native_work.inventory_record = Some(InventoryRecord(
+            expected.native_work.inventory_record = InventoryRecord(
                 case["worn"].bytes("selected_record").try_into().unwrap(),
-            ));
+            );
             expected
                 .native_work
                 .health_context
-                .as_mut()
-                .unwrap()
                 .affected[member] = 1;
             support::same_captured_session(&public, &expected);
             let markers = case["compacted"].bytes("markers");
@@ -250,11 +248,11 @@ fn continuous_stack_firearm_acquisition_preserves_native_normalization_and_cache
         }
         expected.crate_items = records(&case[closed], "crate");
         expected.native_work.loaded_item_field32 =
-            Some(case[closed]["item_context"].as_i64().unwrap() as i16);
+            case[closed]["item_context"].as_i64().unwrap() as i16;
         expected.native_work.ammunition_work.item = Some(bytes(&case[closed]["item_work"]));
-        expected.native_work.inventory_record = Some(InventoryRecord(
+        expected.native_work.inventory_record = InventoryRecord(
             case[closed].bytes("selected_record").try_into().unwrap(),
-        ));
+        );
         support::same_captured_session(&actual, &expected);
     }
     let slot = actual.warriors[4]
@@ -270,13 +268,11 @@ fn continuous_stack_firearm_acquisition_preserves_native_normalization_and_cache
     for (warrior, native) in expected.warriors.iter_mut().zip(party(&case["compacted"])) {
         warrior.bytes = native.bytes;
     }
-    expected.native_work.loaded_item_field32 = Some(case["compacted"].n::<i16>("item_context"));
+    expected.native_work.loaded_item_field32 = case["compacted"].n::<i16>("item_context");
     expected.native_work.ammunition_work.item = Some(case["compacted"].bytes("item_work"));
     expected
         .native_work
         .health_context
-        .as_mut()
-        .unwrap()
         .affected[4] = 1;
     support::same_captured_session(&actual, &expected);
     assert_eq!(word(&actual.warriors[4].bytes, 0x9d6).unwrap(), 970);

@@ -54,6 +54,7 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
             order,
             ..support::battle()
         });
+        crate::native_common::source_victory_context(&mut state);
         let events = move_warrior(&mut state, &content, case.n::<i8>("dx"), case.n::<i8>("dy"))
             .unwrap_or_else(|error| panic!("{context}: {error}"));
         let combat = current_combat(&state);
@@ -69,7 +70,7 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
         );
         support::native_expect! {
             scalar combat.squad.under_tiles[0] => &case["under"], "binary_warrior_opportunity";
-            bytes combat.attack_packet.as_ref().unwrap() => &case["packet"], &format!("{context} packet");
+            bytes combat.attack_packet => &case["packet"], &format!("{context} packet");
             scalar state.random.seed => &case["seed_after"], "binary_warrior_opportunity";
             scalar state.random.draws => &case["rng_draws"], "binary_warrior_opportunity";
         }

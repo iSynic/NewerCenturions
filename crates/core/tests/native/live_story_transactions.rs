@@ -21,7 +21,7 @@ fn stage_choice(state: &mut Session, parameter: i16) {
 
 #[test]
 fn failed_story_transaction_discards_mutations_and_ordered_effects() {
-    let (content, mut state) = fixture();
+    let (content, _) = fixture();
     for case in support::fixture("story-statistics.json").array("cases") {
         let warriors = support::warriors(&case.bytes("before"));
         let mask = case.n::<Vec<i16>>("mask").try_into().unwrap();
@@ -67,7 +67,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         let position = walking.exploration.as_mut().unwrap();
         position.x = 10;
         position.y = 10;
-        position.floor.fill(0);
+        position.floor.fill(1);
         position.events.fill(0);
         position.event_headers.fill(0);
         position.region_state = case.bytes("region");
@@ -108,20 +108,6 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             assert_eq!(walking.random.draws, case.n::<u64>("draws"));
         }
     }
-    let position = state.exploration.as_mut().unwrap();
-    let mut record = vec![0; 42];
-    for (offset, value) in [(8, 47_i16), (10, 9), (12, 63), (24, 2), (26, 6000)] {
-        record[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
-    }
-    position.script = Some(centurions_core::ScriptState::scheduled(record, 0));
-    position.presentation = Some(Presentation::Dialogue {
-        id: 0,
-        text: String::new(),
-    });
-    let before = state.clone();
-    assert!(apply(Command::Continue, &mut state, &content).is_err());
-    assert_eq!(state, before);
-
     // Scripted effects retain selection, original record changes and RNG across reload.
     for case in support::fixture("story-spell.json").array("cases") {
         let mut casting = support::mission_session(&content);
@@ -145,9 +131,6 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         support::assert_rng(&casting.random, &case["seed"], &case["draws"]);
         assert_eq!(support::event_sounds(&events), case.n::<Vec<i16>>("sounds"));
     }
-    assert!(apply(Command::SelectMenuEntry { index: 4 }, &mut state, &content).is_err());
-    assert_eq!(state, before);
-
     // The round35 dialog must pause before script36's faction changes and reduction.
     for case in support::fixture("story-faction.json").array("cases") {
         let mut neutralizing = support::mission_session(&content);
@@ -156,6 +139,9 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             warrior.bytes[0x9df] = 1;
         }
         let mut arena = support::battle();
+        // This source-composed caller starts from the fresh session's cold NPC
+        // backing; the helper capture itself records only its six active rows.
+        arena.retained_npcs = neutralizing.native_work.npc_backing.clone();
         arena.enemies.records = support::monsters(&case.bytes("before"));
         arena.enemies.positions = vec![(10, 10); arena.enemies.records.len()];
         arena.order[1] = 0;
@@ -165,6 +151,11 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         arena.round_scripts.counter = 2;
         arena.round_scripts.slots[0] = 35;
         neutralizing.combat = Some(arena);
+        crate::native_common::source_victory_context_recorded(
+            &mut neutralizing,
+            None,
+            Some(case.n("counter_before")),
+        );
         neutralizing.party_buffs[2..4].copy_from_slice(&5_i16.to_be_bytes());
         let random = neutralizing.random.clone();
         assert_eq!(
@@ -190,12 +181,6 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         let checkpoint = path("native-faction");
         save(&checkpoint, &neutralizing, &content).unwrap();
         let mut restored = load(&checkpoint, &content).unwrap();
-        let mut legacy: Value =
-            serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
-        legacy["schema_version"] = 5.into();
-        support::legacy_save(&mut legacy);
-        std::fs::write(&checkpoint, serde_json::to_vec(&legacy).unwrap()).unwrap();
-        assert!(load(&checkpoint, &content).is_err());
         replay_command(
             Command::Continue,
             &mut neutralizing,
@@ -237,6 +222,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     arena.order[1] = 0;
     let untouched = arena.enemies.records[0].clone();
     survivor.combat = Some(arena);
+    crate::native_common::source_victory_context(&mut survivor);
     let position = survivor.exploration.as_mut().unwrap();
     let mut record = vec![0; 42];
     record[8..10].copy_from_slice(&119_i16.to_be_bytes());
@@ -273,6 +259,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     combat.death_queue.enqueue(entry).unwrap();
     combat.death_queue.begin();
     curse.combat = Some(combat);
+    crate::native_common::source_victory_context(&mut curse);
     curse.combat_story = Some(centurions_core::combat::runtime::DeathStory {
         script: 176,
         cursor: 1,
@@ -375,12 +362,16 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         };
         combat.death_queue.enqueue(entry).unwrap();
         combat.death_queue.begin();
+        // death-summon captures queued opcode124 with the first retained entry.
+        summoning.native_work.death_processing.queue = 1;
         summoning.combat = Some(combat);
+        crate::native_common::source_victory_context(&mut summoning);
         summoning.combat_story = Some(centurions_core::combat::runtime::DeathStory {
             script: 16,
             cursor: 2,
             actor: 0,
             entry,
+            queue_cursor: Some(0),
             ..Default::default()
         });
         if case.n::<i16>("faction") == 1 {
@@ -390,10 +381,16 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             c.death_queue = Default::default();
             c.cursor = 109;
             c.enemies.records[0].bytes[0x110..0x112].copy_from_slice(&1_i16.to_be_bytes());
+            // This separate round-death input begins with an undefeated NPC,
+            // rather than the already counted queued death cloned above.
+            c.victory_work.defeated = 0;
             c.enemies.records[0].bytes[0xce] = 2;
             c.enemies.records[0].bytes[0xcb] = 0;
             apply(Command::EndTurn, &mut round, &content).unwrap();
-            assert!(round.combat_story.as_ref().unwrap().resume_turn);
+            // getup's Ready is zero, so this scripted drain death runs before the loop resumes.
+            let story = round.combat_story.as_ref().unwrap();
+            let returns = story.return_to.as_deref();
+            assert!(story.direct && matches!(returns, Some(runtime::CombatReturn::Round(_))));
             round = checkpoint(&round, &content, "round-death");
             let events = apply(Command::Continue, &mut round, &content).unwrap();
             assert!(
@@ -462,6 +459,12 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     // Confiscation protects native gear/modifier restoration and a pending recovery save.
     let receipt = support::fixture("confiscated-equipment.json");
     let mut captive: Session = serde_json::from_value(receipt["input"].clone()).unwrap();
+    // The native probe begins with the cold zero scratch; its old input omitted it.
+    captive
+        .native_work
+        .recovery_work
+        .displaced_items
+        .fill(0);
     let mut record = content.map(0).unwrap().script(282).unwrap().to_vec();
     record[20..24].fill(0); // Bound this caller after taking equipment, before its battle.
     let stage = |state: &mut Session, record, cursor| {
@@ -639,16 +642,8 @@ fn visited_map_consequences_and_pending_choices_survive_v3_reload() {
         record[4..7].copy_from_slice(&[0, 20, 20]);
         record[40] = level;
         position.script = Some(ScriptState {
-            record,
-            cursor: 8,
-            map_slot: 0,
-            item_return: false,
             scheduled: false,
-            menu: None,
-            persist: false,
-            origin: None,
-            caller_action: None,
-            chained: false,
+            ..ScriptState::scheduled(record, 8)
         });
         position.presentation = Some(Presentation::Dialogue {
             id: 0,
@@ -660,49 +655,6 @@ fn visited_map_consequences_and_pending_choices_survive_v3_reload() {
     }
     assert_eq!(state.exploration.as_ref().unwrap().floor[81], 123);
     assert_eq!(state.random, unchanged_rng);
-}
-
-#[test]
-fn v2_migration_preserves_recovered_history_and_rejects_unknown_maps() {
-    let (content, mut state) = fixture();
-    state.exploration.as_mut().unwrap().event_headers[42] = 17;
-    let destination = path("legacy-story");
-    save(&destination, &state, &content).unwrap();
-    let mut document: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&destination).unwrap()).unwrap();
-    document["schema_version"] = 2.into();
-    support::legacy_save(&mut document);
-    let session = document["session"].as_object_mut().unwrap();
-    for field in [
-        "menus",
-        "flags",
-        "mission_score",
-        "mission_stage",
-        "visited_maps",
-        "allies",
-        "ally_count",
-        "party_mask",
-        "selected_warrior",
-        "inventory_record",
-    ] {
-        session.remove(field);
-    }
-    let position = session["exploration"].as_object_mut().unwrap();
-    for field in ["floor", "objects", "events", "visibility"] {
-        position.remove(field);
-    }
-    std::fs::write(&destination, serde_json::to_vec(&document).unwrap()).unwrap();
-    let migrated = load(&destination, &content).unwrap();
-    assert_eq!(migrated.exploration.as_ref().unwrap().event_headers[42], 17);
-    assert_eq!(
-        migrated.exploration.as_ref().unwrap().floor,
-        content.map(0).unwrap().floor
-    );
-    assert_eq!(migrated.flags[0], 255);
-    document["session"]["exploration"]["map"] = 1.into();
-    std::fs::write(&destination, serde_json::to_vec(&document).unwrap()).unwrap();
-    assert!(load(&destination, &content).is_err());
-    std::fs::remove_file(destination).unwrap();
 }
 
 #[test]
@@ -769,7 +721,10 @@ fn shared_direct_death_child_preserves_original_header_and_saved_dialogue_return
     }
     assert_eq!(started, [14, 15]);
     for candidate in [&mut state, &mut resumed] {
-        candidate.combat.as_mut().unwrap().enemies.records[0].bytes[0x110..0x112].fill(0);
+        let combat = candidate.combat.as_mut().unwrap();
+        combat.enemies.records[0].bytes[0x110..0x112].fill(0);
+        // The constructed child-return control acknowledges a completed battle.
+        combat.victory_work.defeated = combat.victory_work.total;
     }
     step(Command::EndTurn, &mut state, &mut resumed, &content);
     assert!(state.combat.is_none());

@@ -5,6 +5,23 @@ use centurions_content::{
     Content, InventoryRecord, Warrior,
     records::{EquipmentStat, InventoryModifier as Modifier, InventorySlotsMut, ItemDefinition},
 };
+mod ammunition_menu;
+pub(crate) use ammunition_menu::choose as choose_ammunition;
+pub use ammunition_menu::{AmmunitionEntry, ammunition_menu};
+mod inventory_detail;
+pub(crate) use inventory_detail::quick_info;
+mod inventory_opening;
+mod item_information;
+pub(crate) use inventory_opening::{
+    calcw, highlight as highlight_inventory_row, open as open_inventory,
+    scroll as scroll_inventory, switch as switch_inventory_owner,
+};
+pub use item_information::{ShownDamage, shown_damage};
+pub(crate) use item_information::{
+    list_users as list_item_users, retarget as retarget_item_information,
+    show as show_item_information, show_dragged as show_dragged_item_information,
+    show_loot as show_loot_item_information,
+};
 
 /// booty1061fc..10630c retains the last higher-class record copied during sorting.
 pub(crate) fn sort_loot(items: &mut [InventoryRecord]) -> Option<InventoryRecord> {
@@ -21,14 +38,28 @@ pub(crate) fn sort_loot(items: &mut [InventoryRecord]) -> Option<InventoryRecord
 }
 
 pub fn compact(warrior: &mut Warrior) -> Result<(), RuleError> {
+    compact_inner(warrior, None)
+}
+
+fn compact_inner(warrior: &mut Warrior, mut selected: Option<&mut usize>) -> Result<(), RuleError> {
     let count = warrior.inventory()?.len();
     let mut records: Vec<_> = (0..100)
         .map(|slot| warrior.record().inventory_slot(slot))
         .collect();
+    let mut swap = |records: &mut [InventoryRecord], first, second| {
+        records.swap(first, second);
+        if let Some(slot) = selected.as_deref_mut() {
+            if *slot == first {
+                *slot = second;
+            } else if *slot == second {
+                *slot = first;
+            }
+        }
+    };
     for _ in 1..count {
         for index in 1..count {
             if records[index].equipment_flag() != 0 && records[index - 1].equipment_flag() == 0 {
-                records.swap(index, index - 1);
+                swap(&mut records, index, index - 1);
             }
         }
     }
@@ -44,7 +75,7 @@ pub fn compact(warrior: &mut Warrior) -> Result<(), RuleError> {
             if records[index].id() == EquipmentStat::Equipment(category).read(warrior)?
                 && records[index].equipment_flag() != 0
             {
-                records.swap(index, destination);
+                swap(&mut records, index, destination);
                 if category == 15 {
                     warrior
                         .record_mut()

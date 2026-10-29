@@ -114,6 +114,7 @@ pub fn exchange(state: &mut Session, target: i16) -> Result<Vec<Event>, RuleErro
         });
     }
     let combat = state.combat.as_mut().unwrap();
+    combat.ready = 0;
     let actor = combat.active_body().unwrap() as usize;
     let from = combat.squad.positions[actor];
     let to;

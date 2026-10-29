@@ -20,6 +20,16 @@ impl StoryRecord<'_> {
 pub struct StoryRecordMut<'a>(pub &'a mut [u8]);
 
 impl StoryRecordMut<'_> {
+    /// killbody restores only actions/parameters; the other DOOR bytes stay shared.
+    pub fn copy_return_header(&mut self, shared: &[u8]) {
+        self.0[..8].copy_from_slice(&shared[..8]);
+        self.0[40..42].copy_from_slice(&shared[40..42]);
+    }
+    /// Battle callers save actions/parameters and level, leaving header/stamp shared.
+    pub fn copy_battle_return_header(&mut self, shared: &[u8]) {
+        self.0[..8].copy_from_slice(&shared[..8]);
+        self.0[41] = shared[41];
+    }
     /// loaddoor2/branch replacement retains the original eight-byte header.
     pub fn replace_body(&mut self, replacement: &[u8]) {
         self.0[8..].copy_from_slice(&replacement[8..]);

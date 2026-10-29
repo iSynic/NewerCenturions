@@ -176,6 +176,7 @@ impl Application {
                     65 | 105 => {
                         let mut editor = crate::editor::WarriorEditor::new(state, member)?;
                         editor.free = self.editing;
+                        editor.enter(content)?;
                         self.characters.editor = Some(editor);
                     }
                     73..=78 | 84..=89 | 90..=95 => {

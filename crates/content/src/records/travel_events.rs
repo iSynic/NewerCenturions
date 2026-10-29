@@ -39,6 +39,9 @@ impl EventReplacementExtra<'_> {
     pub fn script(&self) -> Result<i16, ContentError> {
         word(self.0, 4)
     }
+    pub fn branch(&self) -> Result<i16, ContentError> {
+        word(self.0, 8)
+    }
 }
 
 /// Ten-byte EXTRA record setting map event chances: a single slot and an

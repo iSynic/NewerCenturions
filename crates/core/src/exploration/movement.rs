@@ -1,8 +1,7 @@
 //! Movement for maintained exploration.
-use super::{Regional, active_map, apply_region, regional_selection, run_script, unsupported};
+use super::{Regional, active_map, apply_region, regional_selection, run_script};
 use crate::{Event, MovementContinuation, Phase, RuleError, ScriptState, Session, travel};
 use centurions_content::Content;
-use centurions_content::mission::OpeningMission;
 
 pub fn manual_encounter(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     if state.phase != Phase::Exploration
@@ -64,89 +63,18 @@ pub fn move_squad(
     if let Some(events) = crate::field_controls::leave_camp(state, content, dx, dy)? {
         return Ok(events);
     }
-    let map = active_map(state, content)?;
-    let position = state.exploration.as_mut().unwrap();
-    if position.presentation.is_some()
-        || position.script.is_some()
-        || state.movement_continuation.is_some()
-    {
-        return Err(RuleError::Invalid(
-            "finish the current story page before moving".into(),
-        ));
-    }
     if let Some(control) = state.field_controls.as_mut() {
         control.camping = false;
         control.clinic = None;
     }
     state.shop_access = None;
-    position.last_move = [dx, dy];
-    let x = position.x + i32::from(dx);
-    let y = position.y + i32::from(dy);
-    let index = OpeningMission::index(x, y)?;
-    let tile = position.floor[index];
-    let property = if tile.unsigned_abs() > 200 || tile < 0 {
-        map.default_tile
-    } else {
-        tile
-    };
-    let sound = if tile < 0 {
-        82
-    } else {
-        map.movement_sound(tile)?
-    };
-    let mut effects = vec![Event::Sound { resource_id: sound }];
-    if map.boarding_field(property)? == 1 {
-        return Err(unsupported(
-            "exploration.move",
-            "boarding choice and boat movement",
-        ));
-    }
-    let event_branch = position.events[index] > 0;
-    let moved = event_branch
-        || (map.movement_blocker(property)? == 0 && map.boarding_field(property)? != 2);
-    if moved {
-        position.x = x;
-        position.y = y;
-        effects.push(Event::Moved { x, y });
-    }
+    let position = state.exploration.as_mut().unwrap();
     if dx != 0 {
         position.facing = u8::from(dx > 0);
+        state.native_work.boat_facing = if dx < 0 { -1 } else { 0 };
     }
-    let ticks = if position.events[index] > 0 {
-        if tile < 0 {
-            1
-        } else {
-            map.movement_time(tile)?
-        }
-    } else {
-        effects.push(Event::Sound { resource_id: sound });
-        if tile < 0 {
-            3
-        } else {
-            map.movement_time(property)?
-        }
-    };
-    if ticks < 0 {
-        return Err(unsupported(
-            "exploration.move",
-            "negative-time tile semantics",
-        ));
-    }
-    let px = position.x as i16;
-    let py = position.y as i16;
-    state.movement_continuation = Some(MovementContinuation::Region {
-        x: px,
-        y: py,
-        check: ticks != 0,
-        header: event_branch,
-    });
-    effects.extend(crate::time::advance(
-        state,
-        content,
-        ticks as u8,
-        map.minutes_per_tick,
-    )?);
-    Ok(effects)
+    position.last_move = [dx, dy];
+    super::boat::start(state, content)
 }
 
 pub(crate) fn resume_movement(
@@ -161,9 +89,10 @@ pub(crate) fn resume_movement(
             .as_ref()
             .is_some_and(|position| position.presentation.is_none() && position.script.is_none())
     {
-        if state.time_continuation.is_some() {
+        if state.time_continuation.is_some() || state.zero_time.is_some() {
             effects.extend(crate::time::resume(state, content)?);
             if state.time_continuation.is_some()
+                || state.zero_time.is_some()
                 || state.phase != Phase::Exploration
                 || state
                     .exploration
@@ -211,41 +140,26 @@ pub(crate) fn resume_movement(
             }
             Some(MovementContinuation::Header) => {
                 state.movement_continuation = Some(MovementContinuation::Secrets);
-                let position = state.exploration.as_mut().unwrap();
-                if let Some(header) = crate::walking_header::lookup(
-                    &position.event_headers,
-                    position.map,
-                    position.x,
-                    position.y,
-                    &mut state.random,
-                )? {
-                    position.script = Some(ScriptState {
-                        record: header.record,
-                        cursor: 0,
-                        map_slot: header.slot,
-                        item_return: false,
-                        scheduled: false,
-                        menu: None,
-                        persist: false,
-                        origin: Some(crate::ScriptOrigin {
-                            map: position.map,
-                            x: position.x,
-                            y: position.y,
-                            level: state.scenario_level,
-                        }),
-                        caller_action: None,
-                        chained: false,
-                    });
-                    effects.extend(run_script(state, content)?);
-                    if effects
-                        .iter()
-                        .any(|event| matches!(event, Event::Message { .. }))
-                    {
-                        break;
-                    }
+                effects.extend(walking_header(state, content)?);
+                if effects
+                    .iter()
+                    .any(|event| matches!(event, Event::Message { .. }))
+                {
+                    break;
+                }
+            }
+            Some(MovementContinuation::Boating(pending)) => {
+                effects.extend(super::boat::resume(state, content, pending)?);
+                if effects
+                    .iter()
+                    .any(|event| matches!(event, Event::Message { .. }))
+                {
+                    break;
                 }
             }
             Some(MovementContinuation::Secrets) => {
+                // buttonchoice109afe clears WORD443316 before checkforsecret.
+                state.bandage_ready = 0;
                 if crate::field_controls::automatic_search(state) {
                     continue;
                 }
@@ -279,4 +193,44 @@ pub(crate) fn resume_movement(
         }
     }
     Ok(effects)
+}
+
+pub(super) fn walking_header(
+    state: &mut Session,
+    content: &Content,
+) -> Result<Vec<Event>, RuleError> {
+    let position = state.exploration.as_mut().unwrap();
+    let found = crate::walking_header::lookup(
+        &position.event_headers,
+        position.map,
+        position.x,
+        position.y,
+        &mut state.random,
+    )?;
+    if let Some(row) = found.matched {
+        state.native_work.header_row = row as i16;
+    }
+    if let Some(header) = found.header {
+        position.script = Some(ScriptState {
+            record: header.record,
+            cursor: 0,
+            map_slot: header.slot,
+            item_return: false,
+            scheduled: false,
+            menu: None,
+            persist: false,
+            origin: Some(crate::ScriptOrigin {
+                map: position.map,
+                x: position.x,
+                y: position.y,
+                level: state.scenario_level,
+            }),
+            caller_action: None,
+            chained: false,
+            registers: (position.x as i16, position.y as i16),
+            persist_cell: (0, 0),
+        });
+        return run_script(state, content);
+    }
+    Ok(vec![])
 }

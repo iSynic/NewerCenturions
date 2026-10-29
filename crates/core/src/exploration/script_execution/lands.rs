@@ -20,6 +20,7 @@ pub(super) fn execute(
         .ok_or("story extras unavailable")?
         .encounters;
     let extra = ExtraTable(extras).record(parameter as usize)?;
+    state.native_work.extra_record = extra.to_vec();
     match operation {
         // newland57 writes the target land's tile set and light level. It pushes the
         // target as a word to loadland, which reads a long, so only land 0 loads. The
@@ -41,7 +42,7 @@ pub(super) fn execute(
             {
                 return Err(super::super::unsupported(
                     "story.opcode",
-                    "land tile set outside the installed BD files",
+                    "land tile set without an installed BD file quits the original",
                 ));
             }
             let mut regions = RegionTableMut(land_regions(state, content, 0)?);
@@ -77,6 +78,7 @@ pub(super) fn execute(
             let region = region as usize;
             let (delta, mode) = (word(extra, 6)?, word(extra, 8)?);
             let sizes = ExtraTable(extras).record(parameter as usize + 1)?;
+            state.native_work.extra_record = sizes.to_vec();
             let regions = land_regions(state, content, i32::from(word(extra, 0)?))?;
             let chance = RegionTable(regions)
                 .encounter_chance(region)?
@@ -141,14 +143,18 @@ pub(super) fn activate_destination(state: &mut Session) -> Result<bool, RuleErro
     if tile.wrapping_abs() < 1000 {
         return Ok(true);
     }
-    let Some(header) = crate::walking_header::lookup(
+    let found = crate::walking_header::lookup(
         &position.event_headers,
         position.map,
         position.x,
         position.y,
         &mut state.random,
-    )?
-    else {
+    )?;
+    if let Some(row) = found.matched {
+        state.native_work.header_row = row as i16;
+    }
+    let position = state.exploration.as_mut().unwrap();
+    let Some(header) = found.header else {
         return Ok(false);
     };
     let origin = crate::ScriptOrigin {
@@ -187,5 +193,6 @@ pub(super) fn enter_land(
         .visited_maps
         .insert(position.map, position.map_state());
     position.restore_map(target, records);
+    state.record_battle_land();
     Ok(())
 }

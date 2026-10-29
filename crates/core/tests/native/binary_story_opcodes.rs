@@ -1,6 +1,166 @@
 use crate::{prelude::*, support};
 use centurions_core::feedback::NativeFeedback;
 
+#[test]
+fn experience_reset_matches_native_preparation_and_resumes_once_after_saved_close() {
+    let content = support::content();
+    for (index, case) in support::fixture("story-experience-reset.json")
+        .array("cases")
+        .iter()
+        .enumerate()
+    {
+        let mut state = support::mission_session(&content);
+        state.warriors = support::warriors(&case.bytes("before"));
+        state.native_work.party_mask.fill(0);
+        for (slot, value) in case.n::<Vec<i16>>("mask").into_iter().enumerate() {
+            state.native_work.party_mask[slot] = value;
+        }
+        if index == 1 {
+            state.phase = Phase::Combat;
+            let mut arena = support::battle();
+            arena.squad.positions.truncate(state.warriors.len());
+            arena.squad.under_tiles.truncate(state.warriors.len());
+            // The opcode clears the roster count before rewards, even for a living NPC.
+            let mut enemy = vec![0; MONSTER_BYTES];
+            enemy[0x110..0x112].copy_from_slice(&100_i16.to_be_bytes());
+            arena.enemies.records.push(MonsterRecord { bytes: enemy });
+            arena.enemies.positions.push((10, 10));
+            state.combat = Some(arena);
+            state.handled_deaths.push(0);
+            state.combat_story = Some(runtime::DeathStory {
+                direct: true,
+                body: 0,
+                script: 1,
+                actor: 0,
+                shared_dispatch: true,
+                ..Default::default()
+            });
+        }
+        let position = state.exploration.as_mut().unwrap();
+        position.script = Some(ScriptState::scheduled(case.bytes("record"), 0));
+        position.presentation = Some(Presentation::Dialogue {
+            id: 0,
+            text: String::new(),
+        });
+        let before = state.clone();
+        let events = support::saved_command(Command::Continue, &mut state, &content);
+        assert_eq!(
+            support::record_bytes(&state.warriors),
+            case.bytes("prepared")
+        );
+        assert_eq!(support::event_sounds(&events), case.n::<Vec<i16>>("sounds"));
+        assert_eq!(state.phase, Phase::Exploration);
+        assert!(state.combat.is_none());
+        assert_eq!(
+            state
+                .native_work
+                .health_context
+                .unavailable,
+            case.n::<i8>("unavailable")
+        );
+        assert_eq!(state.random, before.random);
+        assert_eq!(state.party_currency, before.party_currency);
+        assert!(state.booty_items.iter().all(|item| item.id() == 0));
+        let position = state.exploration.as_ref().unwrap();
+        assert_eq!(position.presentation, Some(Presentation::Loot));
+        assert_eq!(position.script.as_ref().unwrap().cursor, 1);
+        let prepared = state.warriors.clone();
+        let events = support::saved_command(Command::Continue, &mut state, &content);
+        let expected = if index == 1 { vec![5, 20] } else { vec![5] };
+        assert_eq!(support::event_sounds(&events), expected);
+        assert_eq!(state.warriors, prepared);
+        assert!(state.exploration.as_ref().unwrap().script.is_none());
+        assert!(state.handled_deaths.is_empty());
+        assert!(state.combat_story.is_none());
+        if index == 0 {
+            // An overflowing award saturates the LONG under the modern IEEE policy.
+            let mut saturated = before;
+            saturated.warriors[0]
+                .record_mut()
+                .set_upgrade_points(i32::MAX);
+            apply(Command::Continue, &mut saturated, &content).unwrap();
+            assert_eq!(
+                centurions_content::records::CharacterInformation(&saturated.warriors[0].bytes).upgrade_points().unwrap(),
+                i32::MAX
+            );
+        }
+    }
+}
+
+#[test]
+fn object_rectangle_column90_matches_original_event_word_aliases() {
+    let mut content = content();
+    let mut last_state = None;
+    for case in support::fixture("object-rectangle-edge.json").array("cases") {
+        let words = |name| {
+            case.bytes(name)
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| i16::from_be_bytes(*b))
+                .collect::<Vec<_>>()
+        };
+        let longs = |name| {
+            case.bytes(name)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| i32::from_be_bytes(*b))
+                .collect::<Vec<_>>()
+        };
+        let mut state = support::mission_session(&content);
+        let position = state.exploration.as_mut().unwrap();
+        position.restore_map(
+            8,
+            centurions_core::MapState::authored(content.map(8).unwrap()),
+        );
+        position.objects = words("objects_before");
+        position.events = longs("events_before");
+        let mut record = vec![0; 42];
+        record[8..10].copy_from_slice(&(-12_i16).to_be_bytes());
+        record[24..26].copy_from_slice(&618_i16.to_be_bytes());
+        position.script = Some(ScriptState::scheduled(record, 0));
+        position.presentation = Some(Presentation::Dialogue {
+            id: 0,
+            text: String::new(),
+        });
+        let random = state.random.clone();
+        support::saved_command(Command::Continue, &mut state, &content);
+        let position = state.exploration.as_ref().unwrap();
+        assert_eq!(position.objects, words("objects_after"));
+        assert_eq!(position.events, longs("events_after"));
+        assert_eq!(state.random, random);
+        last_state = Some(state);
+    }
+    // The represented alias ends with the event layer, not arbitrary following memory.
+    let mut state = last_state.unwrap();
+    let map = &mut content.scenario.as_mut().unwrap().maps[8];
+    let shared = std::sync::Arc::make_mut(&mut map.shared);
+    let extra = &mut shared.combat.as_mut().unwrap().encounters[6180..6190];
+    extra[2..4].copy_from_slice(&270_i16.to_be_bytes());
+    extra[4..6].copy_from_slice(&270_i16.to_be_bytes());
+    let position = state.exploration.as_mut().unwrap();
+    let mut record = vec![0; 42];
+    record[8..10].copy_from_slice(&(-12_i16).to_be_bytes());
+    record[24..26].copy_from_slice(&618_i16.to_be_bytes());
+    position.script = Some(ScriptState::scheduled(record, 0));
+    position.presentation = Some(Presentation::Dialogue {
+        id: 0,
+        text: String::new(),
+    });
+    let before = state.clone();
+    assert!(matches!(
+        apply(Command::Continue, &mut state, &content)
+            .unwrap_err()
+            .root(),
+        RuleError::Unsupported {
+            action: "story.clear_objects",
+            ..
+        }
+    ));
+    assert_eq!(state, before);
+}
+
 /// newland mode -1 on constructed records: opcode 104, opcode 127 and values with
 /// no switch arm, each followed by sound 5.
 #[test]
@@ -499,6 +659,10 @@ fn party_shop_treasure_and_battle_opcodes_match_original_newland() {
         let mut shops = content.map(0).unwrap().shops.clone();
         shops[3002..6004].copy_from_slice(&fixture.bytes("shop"));
         state.shops.insert(state.scenario_level, shops);
+        // VerifyStoryEffects starts from initialized DATA, without resetgamefiles.
+        state.native_work.shop_work = serde_json::from_value(serde_json::json!({
+            "bytes": vec![0u8; 3002]
+        })).unwrap();
         if case.n::<i16>("battle") != 0 {
             let mut combat = support::battle();
             combat.enemies.records = case
@@ -606,7 +770,7 @@ fn party_shop_treasure_and_battle_opcodes_match_original_newland() {
 
 /// newland mode -1 for opcodes 50, 53, 58, 59, 60, 63 and 90, with the pick mask,
 /// members, difficulty, floor word and time as the case sets them. Opcode 63 is
-/// compared at timeclick's entry; a time outside the clock is refused.
+/// compared at timeclick's entry, before calendar work or scheduled child returns.
 #[test]
 fn selection_difficulty_time_and_points_opcodes_match_original_newland() {
     let fixture = support::fixture("story-selection.json");
@@ -638,7 +802,6 @@ fn selection_difficulty_time_and_points_opcodes_match_original_newland() {
             id: 0,
             text: String::new(),
         });
-        let result = apply(Command::Continue, &mut state, &content);
         let clock = case.array("calls").first().map(|call| {
             let fields: Vec<i16> = call
                 .as_str()
@@ -649,12 +812,18 @@ fn selection_difficulty_time_and_points_opcodes_match_original_newland() {
                 .collect();
             fields
         });
-        let outside =
-            |f: &Vec<i16>| !(0..24).contains(&f[3]) || !(0..60).contains(&f[4]) || f[2] < 1;
-        if clock.as_ref().is_some_and(outside) {
-            assert!(result.is_err(), "case {index} is refused");
-            continue;
+        if let Some(fields) = &clock {
+            let written = centurions_core::story_clock::alter(
+                (time[0], time[1], time[2]),
+                &case.bytes("extra"),
+            )
+            .unwrap();
+            assert_eq!(written, (fields[2], fields[3], fields[4]), "case {index}");
+            if fields[3] == 24 {
+                continue;
+            }
         }
+        let result = apply(Command::Continue, &mut state, &content);
         let events = result.unwrap_or_else(|error| panic!("case {index}: {error:?}"));
         assert_eq!(
             support::event_sounds(&events),
@@ -681,6 +850,7 @@ fn selection_difficulty_time_and_points_opcodes_match_original_newland() {
                 "case {index} time"
             );
         }
+
     }
 }
 
@@ -750,8 +920,24 @@ fn party_picks_and_complex_branch_elimination_match_original_newland() {
             .iter()
             .map(|warrior| Warrior::read(&support::bytes(warrior)).unwrap())
             .collect();
+        // VerifyStoryPicks seeds BYTE442739 from the controlled party before newland.
+        let unavailable = centurions_core::story_health::context(&state.warriors, 0, None).unavailable;
+        state.native_work.health_context.unavailable = unavailable;
         state.native_work.party_mask = [1; 6];
         let typed = case.n::<i16>("opcode") == 44;
+        if typed {
+            // The capture enters newland inside an already loaded encounter.
+            // Compose that caller's header from its fixture before running opcode44.
+            state
+                .native_work
+                .encounter_work
+                .load(
+                    &content.scenario.as_ref().unwrap().maps[0].typed_encounters,
+                    0,
+                    true,
+                )
+                .unwrap();
+        }
         let position = state.exploration.as_mut().unwrap();
         let mut script = ScriptState::scheduled(case.bytes("record"), 0);
         if typed {

@@ -40,6 +40,7 @@ pub fn free(state: &Session) -> bool {
         && state.medical_continuation.is_none()
         && state.outdoor_psi.is_none()
         && state.time_continuation.is_none()
+        && state.zero_time.is_none()
         && state.movement_continuation.is_none()
 }
 
@@ -286,10 +287,9 @@ fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Resu
             state.warriors[caster].record_mut().set_psi_points(psi);
             let amount = state.random.bound(8);
             if target < state.warriors.len() {
-                let context = crate::story_health::context(
-                    &state.warriors,
+                let context = crate::story_health::retained_context(
                     state.selected_warrior,
-                    state.native_work.health_context.as_ref(),
+                    &state.native_work.health_context,
                 );
                 let healed = crate::story_health::heal_outdoors(
                     &state.warriors,
@@ -300,14 +300,14 @@ fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Resu
                     &mut state.random,
                 )?;
                 state.warriors = healed.warriors;
-                state.native_work.health_context = Some(healed.context);
+                state.native_work.health_context = healed.context;
                 for effect in healed.events {
                     match effect {
                         crate::story_health::HealthEvent::Sound(resource_id) => {
                             events.push(Event::Sound { resource_id })
                         }
                         crate::story_health::HealthEvent::PartyLost => {
-                            events.extend(crate::mission::defeat(state, content));
+                            events.extend(crate::mission::defeat(state, content)?);
                             return Ok(());
                         }
                         _ => {}

@@ -10,6 +10,8 @@ mod assets;
 mod audio;
 mod collection;
 mod combat_controls;
+mod combat_flight;
+mod combat_playback;
 mod command_result;
 mod creation;
 mod creature;
@@ -25,6 +27,7 @@ mod note;
 #[cfg(all(test, feature = "original-fixtures"))]
 #[path = "../tests/unit/original_content.rs"]
 mod original_content;
+mod portrait;
 mod preferences;
 mod presentation;
 mod save_files;
@@ -37,10 +40,13 @@ mod window;
 use startup::{audit, config};
 mod view_actions;
 
-use centurions_core::{Command, Event};
+use centurions_core::Command;
 use macroquad::prelude::*;
 use presentation::Action;
 use std::io::Write;
+
+/// delay 0x1205f8 counts TickCount ticks, sixty a second; no preference changes it.
+const TICKS_PER_SECOND: f64 = 60.;
 
 #[macroquad::main(config)]
 async fn main() {
@@ -73,6 +79,8 @@ async fn main() {
             ui.movement.reset();
             ui.movement.stop_pointer();
             std::thread::sleep(std::time::Duration::from_millis(100));
+            // Macroquad clears every frame, so present the last rendered frame again.
+            layout::Canvas::new(screen_width(), screen_height()).draw(&target);
             next_frame().await;
             continue;
         }
@@ -149,6 +157,19 @@ async fn main() {
             {
                 ui.effects.pop_front();
             }
+            if let Some(playback) = ui.playback.as_mut() {
+                let idle = ui.feedback.is_empty() && get_time() >= ui.delay_until;
+                match playback.advance(get_time(), idle) {
+                    combat_playback::Advance::Waiting => {}
+                    combat_playback::Advance::Step(events) => {
+                        ui.events(&events);
+                        if let Ok(audio) = &audio {
+                            audio.play(events.iter());
+                        }
+                    }
+                    combat_playback::Advance::Finished => ui.playback = None,
+                }
+            }
             let before = (cfg!(debug_assertions) || audit_log.is_some()).then(|| state.clone());
             if let Err(error) = application.sync(state, capture.is_none()) {
                 if !sync_error {
@@ -162,7 +183,6 @@ async fn main() {
                 && let Ok(audio) = &audio
             {
                 audio.set_volumes(application.volume, application.music_volume);
-                audio.set_fast_delays(ui.preferences.enabled(10));
                 audio.tick_sounds(get_time());
                 audio.music(
                     application.music_enabled,
@@ -181,7 +201,13 @@ async fn main() {
             {
                 status_popup::scroll(state, assets, &mut ui);
             }
-            let controls = application.draw(content, state, assets, &ui);
+            // A playing combat command shows its pre-command copy until each step plays.
+            let shown = ui
+                .playback
+                .as_ref()
+                .map_or(&*state, |playback| &playback.session);
+            ui.held_pointer = pointer.filter(|_| is_mouse_button_down(MouseButton::Left));
+            let controls = application.draw(content, shown, assets, &ui);
             ui.movement.repeat_seconds = (application.speed as f64 * 5. - 5.) / 60.;
             let script_pause = {
                 ui.prepare_capture_prompt(state);
@@ -191,7 +217,7 @@ async fn main() {
                 && application.help.page.is_none()
                 && let Some(event) = ui.feedback_sound(get_time())
                 && let Ok(audio) = &audio
-                && let Event::Sound { resource_id } = event
+                && let Some(resource_id) = event.sound()
             {
                 ui.feedback_until = get_time()
                     + if application.sound && application.volume != 0 {
@@ -238,14 +264,18 @@ async fn main() {
             } else if capture.is_none()
                 && !display_shortcut
                 && !feedback_blocked
+                && ui.playback.is_none()
                 && !state.combat.as_ref().is_some_and(|c| c.selection_pending)
             {
                 application.input(state, assets, &controls, pointer)
             } else {
                 None
             };
-            let mut blocked =
-                display_shortcut || feedback_blocked || was_blocked || application.blocks_game();
+            let mut blocked = display_shortcut
+                || feedback_blocked
+                || was_blocked
+                || application.blocks_game()
+                || ui.playback.is_some();
             blocked |= status_popup::active(&ui);
             if !blocked
                 && capture.is_none()
@@ -352,6 +382,7 @@ async fn main() {
                 }
                 automatic_turn = action.is_some();
             }
+            ui.inventory.quick_info = application.native_preferences.enabled(22);
             action = match ui.resolve_inventory(action, state, content, get_time()) {
                 Ok(next) => next,
                 Err(error) => {
@@ -441,6 +472,7 @@ async fn main() {
                                 ui.feedback_until = 0.;
                                 ui.help_request = None;
                                 ui.effects.clear();
+                                ui.playback = None;
                                 ui.delay_until = 0.;
                                 ui.movement = Default::default();
                                 ui.inspection = None;

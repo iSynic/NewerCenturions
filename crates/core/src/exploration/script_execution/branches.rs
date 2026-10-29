@@ -37,6 +37,7 @@ pub(super) fn execute(
             .encounters,
     )
     .record(parameter as usize)?;
+    state.native_work.extra_record = extra.to_vec();
     let e = |offset: usize| word(extra, offset);
     let encounter = |mode: i16, id: i16| match mode {
         0 => Some(Jump::Script(id)),
@@ -182,8 +183,7 @@ pub(super) fn execute(
                     }
                     found
                 }
-                // The reconstruction never boards, so BYTE442748 stays clear.
-                3 => false,
+                3 => crate::exploration::boat::aboard(state),
                 4 => state.field_controls.as_ref().is_some_and(|c| c.camping),
                 test @ (7 | 8) => {
                     let mut total = 0_i16;
@@ -266,7 +266,14 @@ fn take(
             } else {
                 &state.menus
             };
-            position.presentation = present_menu(map, table, script, id)?;
+            position.presentation = present_menu(
+                map,
+                table,
+                script,
+                id,
+                &mut state.native_work.encounter_work,
+                true,
+            )?;
             if position.presentation.is_none() {
                 return Ok(ScriptStep::Continue);
             }
@@ -284,7 +291,14 @@ fn take(
             } else {
                 &state.typed_encounters
             };
-            position.presentation = Some(present_typed(map, table, script, id)?);
+            position.presentation = Some(present_typed(
+                map,
+                table,
+                script,
+                id,
+                &mut state.native_work.encounter_work,
+                true,
+            )?);
             effects.push(Event::Sound { resource_id: 20005 });
             effects.push(Event::StoryPresented);
             Ok(ScriptStep::Pause)

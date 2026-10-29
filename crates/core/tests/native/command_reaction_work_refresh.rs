@@ -20,12 +20,12 @@ fn initial(fixture: &Value, case: &Value) -> Session {
     }
     state.native_work.ammunition_work = WorkBuffers::default();
     state.native_work.weapon_work = WeaponWork {
-        natural_attack_index: None,
-        sound: Some(0),
-        weapon_armor_filter: Some(0),
-        ammunition_armor_filter: Some(0),
+        natural_attack_index: 0,
+        sound: 0,
+        weapon_armor_filter: 0,
+        ammunition_armor_filter: 0,
     };
-    state.native_work.loaded_item_field32 = Some(fixture["foundation"].n::<i16>("item_context"));
+    state.native_work.loaded_item_field32 = fixture["foundation"].n::<i16>("item_context");
     let combat = state.combat.as_mut().unwrap();
     let npcs = bytes(fixture, &snapshot["npcs"]);
     assert_eq!(npcs.len(), 100 * MONSTER_BYTES);
@@ -49,6 +49,7 @@ fn initial(fixture: &Value, case: &Value) -> Session {
         })
         .collect();
     combat.weapon_work = state.native_work.weapon_work;
+    native_common::source_victory_context(&mut state);
     state
 }
 
@@ -124,12 +125,12 @@ fn compose_reaction(state: &Session, fixture: &Value, case: &Value, content: &Co
         weapon: Some(natural.clone()),
         ammo: Some(natural.clone()),
     };
-    expected.native_work.loaded_item_field32 = Some(word(&item, 32).unwrap());
+    expected.native_work.loaded_item_field32 = word(&item, 32).unwrap();
     expected.native_work.weapon_work = WeaponWork {
-        natural_attack_index: None,
-        sound: Some(word(&natural, 14).unwrap()),
-        weapon_armor_filter: Some(word(&natural, 136).unwrap()),
-        ammunition_armor_filter: Some(word(&natural, 136).unwrap()),
+        natural_attack_index: 0,
+        sound: word(&natural, 14).unwrap(),
+        weapon_armor_filter: word(&natural, 136).unwrap(),
+        ammunition_armor_filter: word(&natural, 136).unwrap(),
     };
     combat.weapon_work = expected.native_work.weapon_work;
     let attacks = &content
@@ -141,11 +142,11 @@ fn compose_reaction(state: &Session, fixture: &Value, case: &Value, content: &Co
         .attacks;
     let packet = attacks[0x21c2..0x21c2 + 58].to_vec();
     assert_eq!(packet, bytes(fixture, &case["after"]["packet"]));
-    combat.attack_packet = Some(packet.clone());
-    expected.native_work.attack_packet = Some(packet.clone());
-    expected.native_work.health_context.as_mut().unwrap().effect = packet[18] as i8;
+    combat.attack_packet = packet.clone();
+    expected.native_work.attack_packet = packet.clone();
+    expected.native_work.health_context.effect = packet[18] as i8;
     assert_eq!(
-        expected.native_work.health_context.as_ref().unwrap().effect,
+        expected.native_work.health_context.effect,
         number(&case["after"], "health_effect") as i8
     );
 
@@ -197,7 +198,11 @@ fn public_moves_match_native_reactions_and_source_composed_outer_effects() {
         // and a complete original walking caller are not certified here.
         // Facing11c0cc and blocked sounds11c932/11ce50 follow Mode0.
         expected.warriors[0].bytes[0x9e0] = 1;
-        expected.bandage_ready = Some(0);
+        expected.bandage_ready = 0;
+        // Combatchoice writes442736/442737 before Mode0. A blocked walk
+        // clears those shared bytes; a continuing step retains its direction.
+        expected.exploration.as_mut().unwrap().last_move =
+            if index == 0 { [0, 0] } else { [-1, 0] };
         // AttackResolved uses the established synthesized neighbor convention;
         // native attack2 requests650 internally and captures no typed event.
         // The Sound subsequence alone has the native audio ordering.
@@ -207,6 +212,8 @@ fn public_moves_match_native_reactions_and_source_composed_outer_effects() {
                 target: 0,
                 damage: 0,
                 defeated: false,
+                icon: Default::default(),
+                flight: Default::default(),
             },
             Event::Sound { resource_id: 650 },
         ];

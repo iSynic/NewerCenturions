@@ -49,7 +49,7 @@ fn warmed_cast_automatic_initiative_and_field_collision_match_complete_native_ca
         let point = words(&case["casts"][0]["targets"]);
         let mut mask_rng = state.random.clone();
         let c = current_combat(&state);
-        let packet = c.attack_packet.as_ref().unwrap();
+        let packet = &c.attack_packet;
         let mask = spells::target_mask(
             c,
             &state.warriors,
@@ -79,7 +79,7 @@ fn warmed_cast_automatic_initiative_and_field_collision_match_complete_native_ca
             &mut state.warriors,
             mission,
             &mut state.random,
-            state.native_work.psi_memory.as_mut().unwrap(),
+            &mut state.native_work.psi_memory,
             0,
             CastRequest {
                 rotation: 0,
@@ -100,7 +100,7 @@ fn warmed_cast_automatic_initiative_and_field_collision_match_complete_native_ca
                 mission,
                 &mut state.native_work.attack_count,
                 &mut state.random,
-                10,
+                (10, state.selected_warrior, &mut state.bandage_ready),
             )
             .unwrap(),
         );
@@ -113,7 +113,7 @@ fn warmed_cast_automatic_initiative_and_field_collision_match_complete_native_ca
         let c = current_combat(&state);
         assert_eq!(c.death_queue, original.death_queue);
         assert_eq!(c.round_scripts, original.round_scripts);
-        let expected_filter = i16::from(c.weapon_work.armor_filter().unwrap());
+        let expected_filter = i16::from(c.weapon_work.armor_filter());
         for call in case.array("damage_arguments") {
             assert_eq!(call["arguments"][4], expected_filter);
         }

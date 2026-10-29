@@ -53,6 +53,16 @@ fn apply_inner(
         | Command::TakeCrate { .. }
         | Command::EquipItem { .. }
         | Command::InspectInventory { .. }
+        | Command::OpenInventory { .. }
+        | Command::SwitchInventoryOwner { .. }
+        | Command::ScrollInventory { .. }
+        | Command::HighlightInventoryRow { .. }
+        | Command::ShowItemInformation { .. }
+        | Command::RetargetItemInformation { .. }
+        | Command::ListItemUsers { .. }
+        | Command::ShowLootItemInformation { .. }
+        | Command::ShowDraggedItemInformation { .. }
+        | Command::ChooseAmmunition { .. }
         | Command::UnequipItem { .. }
         | Command::Reload { .. }
         | Command::FitAmmunition { .. }
@@ -61,6 +71,7 @@ fn apply_inner(
         | Command::AddToCrate { .. }
         | Command::AddToBooty { .. }) => inventory::execute(command, state, content),
         command @ (Command::SwapCombatants { .. }
+        | Command::AnswerOccupiedChoice { .. }
         | Command::AutomaticBandage
         | Command::BeginAutomaticTurn
         | Command::DelayTurn
@@ -122,6 +133,7 @@ fn apply_inner(
         | Command::SetWarriorAppearance { .. }
         | Command::EditWarriorUpgrade { .. }
         | Command::UpgradeWarrior { .. }
+        | Command::EnterWarriorUpgrade { .. }
         | Command::ViewWarrior { .. }
         | Command::RecalculateStatistics { .. }
         | Command::ImportStarters

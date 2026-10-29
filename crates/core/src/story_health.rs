@@ -15,6 +15,27 @@ pub struct HealthContext {
     pub affected: [i16; 6],
 }
 
+impl HealthContext {
+    /// Initialized DATA:442739/44273f/443760/442798/442750/408574.
+    pub(crate) fn startup() -> Self {
+        Self {
+            unavailable: 0,
+            selected_warrior: 0,
+            effect: 0,
+            last_body: 0,
+            marks_affected: false,
+            affected: [0; 6],
+        }
+    }
+}
+
+/// Copies the retained health work with the newly selected warrior.
+pub(crate) fn retained_context(selected_warrior: usize, previous: &HealthContext) -> HealthContext {
+    let mut context = previous.clone();
+    context.selected_warrior = selected_warrior;
+    context
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HealthEvent {
     Animation { warrior: usize, effect: i8 },
@@ -70,6 +91,7 @@ fn validate(warriors: &[Warrior]) -> Result<(), RuleError> {
 
 fn heal_member(
     outcome: &mut HealthOutcome,
+    party: usize,
     member: usize,
     amount: i16,
     animate: bool,
@@ -117,11 +139,11 @@ fn heal_member(
         outcome
             .events
             .push(HealthEvent::Sound(random.bound(2).wrapping_add(506)));
-        if outcome.context.unavailable > outcome.warriors.len() as i8 - 1 {
+        if outcome.context.unavailable > party as i8 - 1 {
             outcome.events.push(HealthEvent::PartyLost);
         }
     }
-    if outcome.context.unavailable > outcome.warriors.len() as i8 - 1 {
+    if outcome.context.unavailable > party as i8 - 1 {
         outcome.events.push(HealthEvent::PartyLost);
     }
     if outcome.context.marks_affected {
@@ -132,6 +154,28 @@ fn heal_member(
 /// Original outdoor heal 0x1287c2; combat body removal is a separate command boundary.
 pub fn heal_outdoors(
     warriors: &[Warrior],
+    member: usize,
+    amount: i16,
+    animate: bool,
+    context: &HealthContext,
+    random: &mut RandomState,
+) -> Result<HealthOutcome, RuleError> {
+    heal_record(
+        warriors,
+        warriors.len(),
+        member,
+        amount,
+        animate,
+        context,
+        random,
+    )
+}
+
+/// heal 0x1287c2 over the warrior table: `records` runs past the `party` members
+/// when the member is a held record, and party loss counts only the members.
+pub(crate) fn heal_record(
+    warriors: &[Warrior],
+    party: usize,
     member: usize,
     amount: i16,
     animate: bool,
@@ -149,7 +193,14 @@ pub fn heal_outdoors(
         amounts: Vec::new(),
     };
     let mut next_random = random.clone();
-    heal_member(&mut outcome, member, amount, animate, &mut next_random);
+    heal_member(
+        &mut outcome,
+        party,
+        member,
+        amount,
+        animate,
+        &mut next_random,
+    );
     *random = next_random;
     Ok(outcome)
 }
@@ -186,7 +237,14 @@ pub fn party_health(
             outcome.events.push(HealthEvent::Sound(sound));
         }
         let amount = next_random.range(low, high).wrapping_mul(multiplier);
-        heal_member(&mut outcome, member, amount, true, &mut next_random);
+        heal_member(
+            &mut outcome,
+            warriors.len(),
+            member,
+            amount,
+            true,
+            &mut next_random,
+        );
     }
     if dialogue != 0 {
         outcome

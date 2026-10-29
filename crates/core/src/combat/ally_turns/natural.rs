@@ -12,7 +12,7 @@ use crate::{
 use centurions_content::{
     Warrior,
     combat::MonsterRecord,
-    records::{AttackPacketMut, Condition, EnemyRecord},
+    records::{AttackPacketMut, Condition, EnemyRecord, EnemyRecordMut},
 };
 
 pub fn natural_attack_enemy(
@@ -32,6 +32,7 @@ pub fn natural_attack_enemy(
         index,
         attacker,
         attack::default_attack_packet(),
+        None,
     )?
     .0)
 }
@@ -84,6 +85,18 @@ pub(crate) fn natural_attack_enemy_with_target(
     attacks: Option<&[u8]>,
     retained: &[u8],
 ) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
+    natural_attack_enemy_with_processing(combat, warriors, random, bodies, attacks, retained, None)
+}
+
+pub(crate) fn natural_attack_enemy_with_processing(
+    combat: &mut Combat,
+    warriors: &mut [Warrior],
+    random: &mut RandomState,
+    bodies: (i16, i16, usize, i16),
+    attacks: Option<&[u8]>,
+    retained: &[u8],
+    processing: Option<crate::combat::death_scripts::DeathProcessing>,
+) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
     let (attacker, target, index, retained_actor) = bodies;
     if retained.len() != 58 {
         return Err(RuleError::Invalid("retained attack packet size".into()));
@@ -103,6 +116,7 @@ pub(crate) fn natural_attack_enemy_with_target(
         index,
         retained_actor,
         base,
+        processing,
     )?;
     *combat = next_combat;
     warriors.clone_from_slice(&next_warriors);
@@ -119,7 +133,8 @@ fn natural_attack_enemy_inner(
     target: i16,
     index: usize,
     retained_actor: i16,
-    mut packet: Vec<u8>,
+    packet: Vec<u8>,
+    processing: Option<crate::combat::death_scripts::DeathProcessing>,
 ) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
     if attacker < 10 || target < 10 || attacker == target || index >= 6 {
         return Err(RuleError::Invalid("invalid monster attack".into()));
@@ -141,9 +156,7 @@ fn natural_attack_enemy_inner(
         .bytes
         .clone();
     let source_record = EnemyRecord::from_bytes(&source);
-    let victim_record = EnemyRecord::from_bytes(victim);
-    let natural = source_record.natural_attack(index);
-    let condition = natural.condition;
+    let condition = source_record.natural_attack(index).condition;
     if source_record.melee_weapon()? != 0 || !matches!(condition, 0..=17 | 19) {
         return Err(RuleError::Unsupported {
             action: "combat.monster_attack",
@@ -158,34 +171,62 @@ fn natural_attack_enemy_inner(
     }
     let origin = position(combat, attacker);
     let destination = position(combat, target);
-    combat.enemies.records[attacker_index]
-        .record_mut()
-        .face_towards(origin.0, destination.0);
-    let hit = melee_accuracy::enemy_against_enemy(&source_record, &victim_record, 0)?;
-    let hit = random.bound(100)
-        <= hit.clamp(
-            15_i16.wrapping_sub(combat.difficulty.wrapping_mul(5)),
-            90_i16.wrapping_sub(combat.difficulty.wrapping_mul(5)),
-        );
-    let immunity = victim_record.weapon_immunity()?;
-    if hit && !matches!(immunity, -2..=0 | -1024) {
-        return Ok((
-            AttackResult {
-                feedback: None,
-                damage: 0,
-                killed: false,
-                sounds: vec![],
-            },
-            packet,
-            false,
-        ));
+    let mut records = [
+        combat.enemies.records[attacker_index].bytes.clone(),
+        combat.enemies.records[target_index].bytes.clone(),
+    ];
+    let outcome = natural_core(
+        (&source, victim),
+        &mut records,
+        (origin.0, destination.0),
+        index,
+        combat.difficulty,
+        packet,
+        random,
+    )?;
+    let [attacker_bytes, target_bytes] = records;
+    combat.enemies.records[attacker_index].bytes = attacker_bytes;
+    combat.enemies.records[target_index].bytes = target_bytes;
+    combat.victory_work.add_total(outcome.victory_delta);
+    if let Some(struck) = outcome.killed {
+        let body = if struck == Struck::Attacker {
+            attacker
+        } else {
+            target
+        };
+        lifecycle::kill_body_with_processing(combat, warriors, body, processing)?;
     }
-    let reflected = victim_record.condition(Condition::PhysicalReflection) != 0
-        && random.bound(100) < 34
-        && source_record.weapon_immunity()? == 0;
-    if !hit {
-        return Ok((
-            AttackResult {
+    Ok((outcome.result, outcome.packet, outcome.reflected))
+}
+
+/// The record attack2's NPC-target branch strikes: its target, or the attacker
+/// after the reflection redirect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Struck {
+    Attacker,
+    Target,
+}
+
+/// attack2's NPC-against-NPC branch over two NPC records.
+pub(crate) struct NpcMelee {
+    pub result: AttackResult,
+    pub packet: Vec<u8>,
+    pub reflected: bool,
+    /// Rand(100) admitted the hit, before the immunity test.
+    pub hit: bool,
+    /// The target's weapon immunity refused the hit (feedback code); attack2 returns.
+    pub immune: Option<i16>,
+    /// The WORD4435c4 change the caller applies before killbody.
+    pub victory_delta: i16,
+    /// The live caller's killbody, after the victory change.
+    pub killed: Option<Struck>,
+}
+
+impl NpcMelee {
+    fn missed(packet: Vec<u8>, reflected: bool, hit: bool, immune: Option<i16>) -> Self {
+        Self {
+            result: AttackResult {
+                icon: 0,
                 feedback: None,
                 damage: 0,
                 killed: false,
@@ -193,7 +234,47 @@ fn natural_attack_enemy_inner(
             },
             packet,
             reflected,
-        ));
+            hit,
+            immune,
+            victory_delta: 0,
+            killed: None,
+        }
+    }
+}
+
+/// `source` and `victim` are the records as attack2 found them; `records` holds the
+/// attacker and target records it writes. Facing, accuracy, immunity, reflection,
+/// damage and the NPC condition switch keep the live order and draws.
+pub(crate) fn natural_core(
+    (source, victim): (&[u8], &[u8]),
+    records: &mut [Vec<u8>; 2],
+    (origin_x, target_x): (i16, i16),
+    index: usize,
+    difficulty: i16,
+    mut packet: Vec<u8>,
+    random: &mut RandomState,
+) -> Result<NpcMelee, RuleError> {
+    let source_record = EnemyRecord::from_bytes(source);
+    let victim_record = EnemyRecord::from_bytes(victim);
+    let natural = source_record.natural_attack(index);
+    let condition = natural.condition;
+    let [attacker_bytes, target_bytes] = records;
+    EnemyRecordMut::from_bytes(attacker_bytes).face_towards(origin_x, target_x);
+    let hit = melee_accuracy::enemy_against_enemy(&source_record, &victim_record, 0)?;
+    let hit = random.bound(100)
+        <= hit.clamp(
+            15_i16.wrapping_sub(difficulty.wrapping_mul(5)),
+            90_i16.wrapping_sub(difficulty.wrapping_mul(5)),
+        );
+    let immunity = victim_record.weapon_immunity()?;
+    if hit && !matches!(immunity, -2..=0 | -1024) {
+        return Ok(NpcMelee::missed(packet, false, true, Some(-45)));
+    }
+    let reflected = victim_record.condition(Condition::PhysicalReflection) != 0
+        && random.bound(100) < 34
+        && source_record.weapon_immunity()? == 0;
+    if !hit {
+        return Ok(NpcMelee::missed(packet, reflected, false, None));
     }
     let bonus = source_record
         .melee_bonus()?
@@ -208,21 +289,27 @@ fn natural_attack_enemy_inner(
         natural.impact_sound
     });
     if reflected {
-        let result = attack::resolve_reflected_attack(
-            &mut combat.enemies.records[attacker_index].bytes,
+        let (result, total_delta) = attack::resolve_reflected_attack_with_victory(
+            attacker_bytes,
             &packet,
             index,
             true,
             None,
             random,
         )?;
-        if result.killed {
-            lifecycle::kill_body(combat, warriors, attacker)?;
-        }
-        return Ok((result, packet, true));
+        let killed = result.killed.then_some(Struck::Attacker);
+        return Ok(NpcMelee {
+            result,
+            packet,
+            reflected: true,
+            hit,
+            immune: None,
+            victory_delta: total_delta,
+            killed,
+        });
     }
     let resolved = resolve_damage(
-        &mut combat.enemies.records[target_index].bytes,
+        target_bytes,
         true,
         &DamagePacket {
             bytes: packet.clone(),
@@ -238,65 +325,61 @@ fn natural_attack_enemy_inner(
     let mut sounds = Vec::new();
     let mut extra_damage = 0_i16;
     let mut feedback = None;
+    let mut victory_delta = 0;
     if resolved.total != 0 {
+        let prior_faction = EnemyRecord::from_bytes(target_bytes).faction()?;
         let Some(effect) = crate::combat::natural_conditions::monster_attack_effect(
-            &mut combat.enemies.records[target_index].bytes,
-            &source,
+            target_bytes,
+            source,
             index,
             random,
         )?
         else {
-            return Ok((
-                AttackResult {
-                    feedback: None,
-                    damage: 0,
-                    killed: false,
-                    sounds: vec![],
-                },
-                packet,
-                false,
-            ));
+            return Ok(NpcMelee::missed(packet, false, true, None));
         };
-        effect.credit_attacker(&mut combat.enemies.records[attacker_index].bytes)?;
+        effect.credit_attacker(attacker_bytes)?;
         extra_damage = effect.extra_damage;
         feedback = effect.feedback;
         if effect.applied {
             match condition {
                 9 => sounds.push(104),
                 14 => sounds.push(344),
-                10 => combat.enemies.records[attacker_index]
-                    .record_mut()
-                    .set_target_body(-1),
+                10 => {
+                    let side = EnemyRecord::from_bytes(source).faction()?;
+                    if side == 0 {
+                        victory_delta = -1;
+                    } else if prior_faction == 0 {
+                        victory_delta = 1;
+                    }
+                    EnemyRecordMut::from_bytes(attacker_bytes).set_target_body(-1);
+                }
                 _ => {}
             }
         }
     }
-    let health = combat.enemies.records[target_index]
-        .record()
+    let health = EnemyRecord::from_bytes(target_bytes)
         .stamina()?
         .wrapping_sub(resolved.total)
         .wrapping_sub(extra_damage);
     if resolved.total != 0 {
-        combat.enemies.records[target_index]
-            .record_mut()
-            .set_stamina(health);
-        combat.enemies.records[target_index]
-            .record_mut()
-            .mark_damaged();
+        EnemyRecordMut::from_bytes(target_bytes).set_stamina(health);
+        EnemyRecordMut::from_bytes(target_bytes).mark_damaged();
     }
-    if health < 1 {
-        lifecycle::kill_body(combat, warriors, target)?;
-    }
-    Ok((
-        AttackResult {
+    Ok(NpcMelee {
+        result: AttackResult {
+            icon: resolved.sound,
             feedback,
             damage: resolved.total.wrapping_add(extra_damage),
             killed: health < 1,
             sounds,
         },
         packet,
-        false,
-    ))
+        reflected: false,
+        hit,
+        immune: None,
+        victory_delta,
+        killed: (health < 1).then_some(Struck::Target),
+    })
 }
 
 /// Select result audio from the retained attack index and loaded impact word.

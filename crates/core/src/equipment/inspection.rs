@@ -31,10 +31,7 @@ pub(crate) fn inspect(
             if shop_family >= 5 || scroll[side] >= 1000 {
                 return Err("shop inventory view outside native rows".into());
             }
-            let rows: Vec<_> = crate::shop::stock(state)?
-                .into_iter()
-                .filter(|(_, id, _)| usize::from(id.unsigned_abs()) / 200 == shop_family)
-                .collect();
+            let rows = crate::shop::stock_family(state, shop_family)?;
             for row in scroll[side]..scroll[side] + 9 {
                 let id = rows.get(row).map_or(0, |(_, id, _)| *id);
                 crate::shop::display_record(state, content, id)?;
@@ -61,7 +58,7 @@ pub(crate) fn inspect(
             return Err("inventory selection outside native rows".into());
         }
         if shop && side == 1 {
-            let id = crate::shop::stock(state)?
+            let id = crate::shop::stock_family(state, shop_family)?
                 .into_iter()
                 .find(|(index, _, _)| *index == slot)
                 .ok_or("selected shop stock missing")?
@@ -96,8 +93,8 @@ fn display_owned_row(
     if record.id() == 0 {
         definition[10..12].fill(0);
     }
-    state.native_work.loaded_item_field32 = Some(centurions_content::word(&definition, 32)?);
+    state.native_work.loaded_item_field32 = centurions_content::word(&definition, 32)?;
     state.native_work.ammunition_work.item = Some(definition);
-    state.native_work.inventory_record = Some(record);
+    state.native_work.inventory_record = record;
     Ok(())
 }

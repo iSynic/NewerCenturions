@@ -7,6 +7,7 @@ use crate::combat::{Combat, lifecycle};
 use crate::{Event, RandomState, RuleError};
 use centurions_content::{Warrior, records::Condition};
 
+/// Without a mission no field collides, so WORD438786 is never read.
 pub fn reduce_round(
     c: &mut Combat,
     w: &mut [Warrior],
@@ -23,15 +24,25 @@ pub fn reduce_round(
             audio: false,
             selected_warrior: 0,
             energy_recovery_disabled: 0,
+            item_work_alias: None,
+            processing: None,
+            movement_gate: &mut 0,
+            items: None,
         },
     )
     .map(|outcome| outcome.events)
 }
 
-pub(super) struct RoundContext {
+pub(super) struct RoundContext<'a> {
     pub(super) energy_recovery_disabled: u8,
     pub(super) audio: bool,
     pub(super) selected_warrior: usize,
+    pub(super) item_work_alias: Option<i16>,
+    pub(super) processing: Option<crate::combat::death_scripts::DeathProcessing>,
+    /// WORD438786 for movement-field collisions.
+    pub(super) movement_gate: &'a mut i16,
+    /// combatupdate2's ITEM work for a full-roster summon refusal.
+    pub(super) items: crate::combat::spell_summon::ItemRefresh<'a>,
 }
 
 pub(super) fn reduce_round_with_fields(
@@ -41,7 +52,7 @@ pub(super) fn reduce_round_with_fields(
     mission: Option<&centurions_content::mission::OpeningMission>,
     count: &mut i16,
     party_mask: &mut [i16; 6],
-    context: RoundContext,
+    mut context: RoundContext<'_>,
 ) -> Result<EnemyRoundOutcome, RuleError> {
     let mut events = vec![];
     let mut last_defeated_body = None;
@@ -104,6 +115,7 @@ pub(super) fn reduce_round_with_fields(
         if warrior.record().confusion_duration()? != 0 && warrior.record().faction()? != 0 {
             warrior.record_mut().set_faction(0);
             c.unavailable = c.unavailable.wrapping_sub(1);
+            c.victory_work.add_total(-1);
         }
         warrior.record_mut().decrement_temporary_conditions()?;
     }
@@ -119,7 +131,13 @@ pub(super) fn reduce_round_with_fields(
                     random,
                     FieldActor {
                         body: member as i16,
-                        selected_warrior: Some(context.selected_warrior),
+                        selected_warrior: context.selected_warrior,
+                        item_work_alias: context.item_work_alias,
+                        movement_gate: &mut *context.movement_gate,
+                        items: context
+                            .items
+                            .as_mut()
+                            .map(|(items, buffers)| (*items, &mut **buffers)),
                     },
                     party_mask,
                 )?;
@@ -159,11 +177,19 @@ pub(super) fn reduce_round_with_fields(
         mission,
         count,
         party_mask,
-        context.selected_warrior,
+        (
+            context.selected_warrior,
+            context.item_work_alias,
+            context.movement_gate,
+            context.items,
+        ),
+        super::enemy_round::EnemyRoundCursor::default(),
+        context.processing,
     )?;
     events.extend(enemy.events);
     Ok(EnemyRoundOutcome {
         events,
         last_defeated_body: enemy.last_defeated_body.or(last_defeated_body),
+        suspended: enemy.suspended,
     })
 }

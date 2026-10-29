@@ -14,17 +14,15 @@ fn authored_terminal_choice_matches_native_records_and_resumes() {
     state.mission_score = 17;
     state.allies = fixture.bytes("menu_before");
     state.ally_count = fixture.n::<usize>("menu_count_before");
-    state.native_work.health_context = Some(centurions_core::story_health::context(
+    state.native_work.health_context = centurions_core::story_health::context(
         &state.warriors,
         0,
         None,
-    ));
+    );
     assert_eq!(
         state
             .native_work
             .health_context
-            .as_ref()
-            .unwrap()
             .unavailable,
         1
     );
@@ -85,8 +83,6 @@ fn authored_terminal_choice_matches_native_records_and_resumes() {
         state
             .native_work
             .health_context
-            .as_ref()
-            .unwrap()
             .unavailable,
         1
     );

@@ -7,13 +7,21 @@ pub struct WalkingHeader {
     pub record: Vec<u8>,
 }
 
+/// newland 0x1402a8..0x1402de copies a matching header into DOOR and writes its row
+/// to WORD4427c2 before the chance test, so a failed chance still reports the row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeaderLookup {
+    pub matched: Option<usize>,
+    pub header: Option<WalkingHeader>,
+}
+
 pub fn lookup(
     headers: &[u8],
     map: i32,
     x: i32,
     y: i32,
     random: &mut RandomState,
-) -> Result<Option<WalkingHeader>, RuleError> {
+) -> Result<HeaderLookup, RuleError> {
     if headers.len() != 4200 {
         return Err(RuleError::Invalid(
             "walking header table must contain 100 records".into(),
@@ -28,13 +36,17 @@ pub fn lookup(
             continue;
         }
         let chance = i16::from(record[7] as i8);
-        if chance <= 0 || random.bound(100) > chance {
-            return Ok(None);
-        }
-        return Ok(Some(WalkingHeader {
-            slot,
-            record: record.to_vec(),
-        }));
+        let passed = chance > 0 && random.bound(100) <= chance;
+        return Ok(HeaderLookup {
+            matched: Some(slot),
+            header: passed.then(|| WalkingHeader {
+                slot,
+                record: record.to_vec(),
+            }),
+        });
     }
-    Ok(None)
+    Ok(HeaderLookup {
+        matched: None,
+        header: None,
+    })
 }

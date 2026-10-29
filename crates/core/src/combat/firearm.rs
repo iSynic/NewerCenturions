@@ -1,17 +1,15 @@
 mod preparation;
 pub(super) use preparation::compose_weapon_attack;
-pub(crate) use preparation::prepare_packet;
 pub use preparation::{prepare, prepare_enemy};
+pub(crate) use preparation::{prepare_packet, prepare_packet_with_enhancement};
 mod reload;
 mod resolution;
 pub use reload::reload_command;
 pub use resolution::{resolve, resolve_enemy, resolve_enemy_after_duration};
 pub(crate) use resolution::{resolve_after_duration, resolve_friendly_after_duration};
 
-/// Weapon `spell` descriptors for firearms: Cargo Pod `STR#` 4000 "Special 1st"
-/// entries 1 "Point Target" and 2 "Area Target".
+/// Original point descriptor retained by the narrow enemy-laser helper.
 pub(crate) const POINT_TARGET_ATTACK: i16 = 4101;
-pub(crate) const AREA_TARGET_ATTACK: i16 = 4102;
 /// Data ID items whose `STR#` 601 "Devices Short" names are "Small Laser" and
 /// "Medium Laser"; the only enemy primary weapons `prepare_enemy` accepts.
 pub(crate) const SMALL_LASER: i16 = 680;
@@ -315,5 +313,3 @@ pub fn reload(
     }
     Ok((false, sounds))
 }
-
-pub(in crate::combat) use preparation::compose_item_attack;

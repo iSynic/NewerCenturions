@@ -13,9 +13,9 @@ fn project(state: &mut Session, snapshot: &Value, owned: bool) {
     }
     state.ammunition = support::longs(&snapshot.bytes("ammunition"));
     state.random = native_common::snapshot_rng(snapshot);
-    state.native_work.loaded_item_field32 = Some(snapshot.n::<i16>("item_context"));
+    state.native_work.loaded_item_field32 = snapshot.n::<i16>("item_context");
     state.native_work.attack_count = snapshot.n::<i16>("attack_count");
-    state.native_work.psi_memory = Some(snapshot.bytes("memory"));
+    state.native_work.psi_memory = snapshot.bytes("memory");
     state.party_buffs = snapshot.bytes("party_buffs");
     state.native_work.weapon_work = snapshots::weapon_work(&|key| {
         snapshot.bytes(if key == "weapon_work" {
@@ -52,7 +52,7 @@ fn project(state: &mut Session, snapshot: &Value, owned: bool) {
     let mut health = centurions_core::story_health::context(
         &state.warriors,
         state.selected_warrior,
-        state.native_work.health_context.as_ref(),
+        Some(&state.native_work.health_context),
     );
     if owned {
         health.affected = snapshot.words("markers")[..6].try_into().unwrap();
@@ -60,7 +60,7 @@ fn project(state: &mut Session, snapshot: &Value, owned: bool) {
     } else {
         health.unavailable = combat.unavailable;
     }
-    state.native_work.health_context = Some(health);
+    state.native_work.health_context = health;
 }
 
 // Independent native low-AP fit/shoot receipts protect the automatic enemy-turn boundary.
@@ -89,6 +89,7 @@ fn native_automatic_turns_preserve_complete_state_events_and_save_resume() {
                 .unwrap()
             });
             project(&mut state, before, owned);
+            native_common::source_victory_context(&mut state);
             let original = state.clone();
             let command = if owned {
                 Command::ShootEnemy { body: 10 }
@@ -108,12 +109,12 @@ fn native_automatic_turns_preserve_complete_state_events_and_save_resume() {
             if owned {
                 expected.native_work.ammunition_work.weapon = Some(after.bytes("weapon"));
             }
-            expected.bandage_ready = Some(1);
-            expected.native_work.health_context = Some(centurions_core::story_health::context(
+            expected.bandage_ready = 1;
+            expected.native_work.health_context = centurions_core::story_health::context(
                 &expected.warriors,
                 expected.selected_warrior,
-                expected.native_work.health_context.as_ref(),
-            ));
+                Some(&expected.native_work.health_context),
+            );
             support::same_captured_session(&state, &expected);
             let mut expected_events: Vec<_> = after.n::<Vec<i16>>("sounds")
                 [before.array("sounds").len()..]
@@ -121,6 +122,14 @@ fn native_automatic_turns_preserve_complete_state_events_and_save_resume() {
                 .map(|id| Event::Sound { resource_id: *id })
                 .collect();
             if owned {
+                // The target key's firstt(76, 77) (combatchoice 11b026).
+                expected_events.insert(
+                    0,
+                    Event::Feedback(centurions_core::feedback::NativeFeedback::Tutorial {
+                        first: 76,
+                        last: 77,
+                    }),
+                );
                 expected_events.push(Event::AttackResolved {
                     attacker: case.n::<i16>("member"),
                     target: 10,
@@ -128,9 +137,20 @@ fn native_automatic_turns_preserve_complete_state_events_and_save_resume() {
                         .unwrap()
                         .wrapping_sub(word(&after.bytes("target"), 0x110).unwrap()),
                     defeated: false,
+                    icon: Default::default(),
+                    flight: Default::default(),
                 });
             }
             expected_events.push(Event::TurnStarted { body: 10, round: 1 });
+            if expected.warriors[case.n::<usize>("member")]
+                .record()
+                .guarding()
+                .unwrap()
+                != 0
+            {
+                expected_events =
+                    native_common::turn_guard_events(expected_events, case.n("member"));
+            }
             assert_eq!(events, expected_events, "{name}:{index}");
             support::checkpoint(&state, &content, "automatic-after");
         }

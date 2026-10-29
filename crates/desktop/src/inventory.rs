@@ -11,9 +11,18 @@ type ItemDetail = (
 
 #[derive(Clone, Debug)]
 pub enum InventoryAction {
-    Warrior { side: usize, member: usize },
-    Item { side: usize, slot: usize },
-    Scroll { side: usize, delta: i32 },
+    Warrior {
+        side: usize,
+        member: usize,
+    },
+    Item {
+        side: usize,
+        slot: usize,
+    },
+    Scroll {
+        side: usize,
+        delta: i32,
+    },
     Transfer,
     Activate,
     Refit(usize),
@@ -21,17 +30,46 @@ pub enum InventoryAction {
     Shop,
     Category(usize),
     Done,
+    /// CNTL 140 opens showiteminfo on the selected display row.
+    Information,
+    CloseInformation,
+    /// DLOG 149 item 1 (squad users) or item 2 (warrior item types).
+    UseList(bool),
+    /// CNTL 176 opens loadammoproc's MENU 1000 popup on the display row.
+    Ammunition,
+    /// A MENU 1000 item, numbered from 1.
+    AmmunitionItem(u16),
+    CloseAmmunition,
+    /// moveicon's option-drag on a shop window row.
+    DragInformation {
+        side: usize,
+        slot: usize,
+    },
 }
 
 pub struct Inventory {
     pub members: [usize; 2],
     pub scroll: [usize; 2],
     pub selected: Option<(usize, usize)>,
+    pub quick_info: bool,
+    /// The native selected display row WORD4471aa: zero on entry, set by a
+    /// row selection and kept when the owner changes.
+    display_row: i16,
     drag: Option<(usize, usize)>,
     last_click: f64,
     category: usize,
     rows: RefCell<ItemRows>,
     detail: RefCell<Option<ItemDetail>>,
+    /// The open DLOG 149 member and slot.
+    information: Option<(usize, usize)>,
+    /// The item ID of a dialog opened with member 0xffff, and whether booty
+    /// opened it over the loot grid.
+    information_item: Option<(i16, bool)>,
+    information_fields: RefCell<Option<information::ItemInformation>>,
+    /// An open showcondition list: professions, widened and the ITEM work it read.
+    use_list: Option<(bool, bool, Vec<u8>)>,
+    /// An open ammunition popup.
+    ammunition: Option<ammunition::Popup>,
 }
 impl Default for Inventory {
     fn default() -> Self {
@@ -39,11 +77,18 @@ impl Default for Inventory {
             members: [0, 1],
             scroll: [0; 2],
             selected: None,
+            quick_info: false,
+            display_row: 0,
             drag: None,
             last_click: -1.,
             category: 0,
             rows: RefCell::new(BTreeMap::new()),
             detail: RefCell::new(None),
+            information: None,
+            information_item: None,
+            information_fields: RefCell::new(None),
+            use_list: None,
+            ammunition: None,
         }
     }
 }
@@ -66,11 +111,15 @@ impl Inventory {
             },
         ];
         self.scroll = [0; 2];
+        self.display_row = 0;
         self.category = 0;
         self.selected = None;
         self.drag = None;
         self.rows.borrow_mut().clear();
         self.detail.borrow_mut().take();
+        self.information = None;
+        self.use_list = None;
+        self.ammunition = None;
     }
     pub fn handle(
         &mut self,
@@ -80,23 +129,53 @@ impl Inventory {
         now: f64,
     ) -> Result<Option<Action>, RuleError> {
         use InventoryAction::*;
+        if self.information.is_some() {
+            return Ok(self.handle_information(action, state));
+        }
+        if self.ammunition.is_some() || matches!(action, Ammunition) {
+            return Ok(self.handle_ammunition(action, state, content));
+        }
         match action {
             Warrior { side, member } => {
                 if side > 1 || member >= state.warriors.len() {
                     return Err("inventory warrior outside squad".into());
                 }
+                let scroll = self.scroll[side];
                 self.members[side] = member;
-                self.scroll[side] = 0;
                 self.selected = None;
+                if !Self::shop(state) {
+                    return Ok(Some(Action::Command(Command::SwitchInventoryOwner {
+                        warrior: member,
+                        scroll,
+                        quick_info: self.quick_info,
+                        selected_row: self.display_row,
+                    })));
+                }
+                self.scroll[side] = 0;
+            }
+            DragInformation { side, slot } => {
+                if !Self::shop(state) {
+                    return Ok(None);
+                }
+                return Ok(self.drag_information(state, content, side, slot));
             }
             Item { side, slot } => {
                 self.record(state, content, side, slot)?;
                 let activate = self.selected == Some((side, slot)) && now - self.last_click < 0.35;
                 self.selected = Some((side, slot));
+                self.display_row = slot.saturating_sub(self.scroll[side]) as i16;
                 self.drag = Some((side, slot));
                 self.last_click = now;
                 if activate {
                     return self.handle(Activate, state, content, now);
+                }
+                if !Self::shop(state) && side == 0 && self.quick_info {
+                    return Ok(Some(Action::Command(Command::HighlightInventoryRow {
+                        warrior: self.members[side],
+                        scroll: self.scroll[side],
+                        row: self.display_row as usize,
+                        quick_info: self.quick_info,
+                    })));
                 }
             }
             Scroll { side, delta } => {
@@ -104,10 +183,43 @@ impl Inventory {
                     return Err("inventory pane unavailable".into());
                 }
                 let count = self.items(state, content, side)?.len();
+                if !Self::shop(state) {
+                    let before = self.scroll[side];
+                    let change =
+                        i16::try_from(delta).map_err(|_| "inventory scroll delta outside WORD")?;
+                    if state.native_work.health_context.selected_warrior == self.members[side] {
+                        let maximum = count.saturating_sub(11).min(30).max(before);
+                        self.scroll[side] =
+                            (before as i64 + i64::from(delta)).clamp(0, maximum as i64) as usize;
+                    }
+                    return Ok(Some(Action::Command(Command::ScrollInventory {
+                        warrior: self.members[side],
+                        scroll: before,
+                        delta: change,
+                        quick_info: self.quick_info,
+                    })));
+                }
                 self.scroll[side] = (self.scroll[side] as i32 + delta)
                     .clamp(0, count.saturating_sub(9) as i32)
                     as usize;
             }
+            Information => {
+                let warrior = self.members[0];
+                let row = self.display_row.max(0) as usize;
+                let count = self.items(state, content, 0)?.len();
+                if count == 0 {
+                    return Ok(None);
+                }
+                self.information = Some((warrior, self.scroll[0] + row));
+                self.information_item = None;
+                return Ok(Some(Action::Command(Command::ShowItemInformation {
+                    warrior,
+                    scroll: self.scroll[0],
+                    row,
+                    quick_info: self.quick_info,
+                })));
+            }
+            CloseInformation | UseList(_) | Ammunition | AmmunitionItem(_) | CloseAmmunition => {}
             Shop => return Ok(Some(Action::Command(Command::OpenShop))),
             Category(family) => {
                 if family >= 5 {
@@ -176,6 +288,121 @@ impl Inventory {
         }
         Ok(Some(Action::Command(self.context_command())))
     }
+    fn handle_information(&mut self, action: InventoryAction, state: &Session) -> Option<Action> {
+        use centurions_core::ItemInformationList as List;
+        let (member, slot) = self.information?;
+        let warrior = self.members[0];
+        let quick_info = self.quick_info;
+        let retarget = |member, slot, list, item| {
+            Some(Action::Command(Command::RetargetItemInformation {
+                warrior,
+                member,
+                slot,
+                quick_info,
+                list,
+                item,
+            }))
+        };
+        let loot = self.information_item.is_some_and(|(_, loot)| loot);
+        if self.use_list.take().is_some() {
+            return None;
+        }
+        match action {
+            InventoryAction::Item { .. } if loot => None,
+            InventoryAction::Item { side: 0, slot } => {
+                let records = state.warriors.get(warrior)?.inventory().ok()?;
+                if slot >= records.len() {
+                    return None;
+                }
+                self.information = Some((member, slot));
+                if let Some((id, _)) = self.information_item.as_mut() {
+                    *id = records[slot].id();
+                }
+                let item = self.information_item.map(|(id, _)| id);
+                retarget(member, slot, List::Items, item)
+            }
+            InventoryAction::Item {
+                side: 1,
+                slot: cell,
+            } if Self::shop(state) => {
+                self.selected = Some((1, cell));
+                if let Some((id, _)) = self.information_item.as_mut()
+                    && let Ok(stock) = centurions_core::shop::stock_family(state, self.category)
+                    && let Some((_, stock_id, _)) = stock.into_iter().find(|(s, ..)| *s == cell)
+                {
+                    *id = stock_id;
+                }
+                let item = self.information_item.map(|(id, _)| id);
+                retarget(member, slot, List::Shop, item)
+            }
+            InventoryAction::Item { side: 1, slot } => {
+                let member = self.members[1];
+                self.information = Some((member, slot));
+                self.information_item = None;
+                retarget(member, slot, List::Owner, None)
+            }
+            InventoryAction::UseList(professions) => {
+                let widened = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+                let work = state.native_work.ammunition_work.item.clone()?;
+                self.use_list = Some((professions, widened, work));
+                Some(Action::Command(Command::ListItemUsers {
+                    warrior,
+                    professions,
+                    widened,
+                }))
+            }
+            InventoryAction::CloseInformation => {
+                self.information = None;
+                self.information_item = None;
+                None
+            }
+            _ => None,
+        }
+    }
+    /// moveicon's option-drag opens the dialog on a shop window row instead
+    /// of starting a drag.
+    fn drag_information(
+        &mut self,
+        state: &Session,
+        content: &Content,
+        side: usize,
+        slot: usize,
+    ) -> Option<Action> {
+        let warrior = self.members[0];
+        let stock = side == 1;
+        if stock {
+            let (_, id, _) = centurions_core::shop::stock_family(state, self.category)
+                .ok()?
+                .into_iter()
+                .find(|(cell, ..)| *cell == slot)?;
+            let definition = content.items.get(id.unsigned_abs() as usize)?;
+            let description = centurions_content::records::ItemDefinition(definition)
+                .description_id()
+                .ok()?;
+            self.information = Some((warrior, 0));
+            self.information_item = Some((description, false));
+        } else {
+            if slot >= state.warriors.get(warrior)?.inventory().ok()?.len() {
+                return None;
+            }
+            self.information = Some((warrior, slot));
+            self.information_item = None;
+        }
+        Some(Action::Command(Command::ShowDraggedItemInformation {
+            warrior,
+            slot,
+            stock,
+            quick_info: self.quick_info,
+        }))
+    }
+    /// booty's option-click opens the dialog over the loot grid.
+    pub fn open_loot_information(&mut self, owner: usize, id: i16) {
+        self.information = Some((owner, 0));
+        self.information_item = Some((id, true));
+    }
+    pub fn loot_information_open(&self) -> bool {
+        self.information.is_some() && self.information_item.is_some_and(|(_, loot)| loot)
+    }
     pub fn release(&mut self, pointer: Option<Vec2>) -> Option<InventoryAction> {
         let (side, slot) = self.drag.take()?;
         let pointer = pointer?;
@@ -222,9 +449,8 @@ impl Inventory {
             return Err("inventory pane unavailable".into());
         }
         if side == 1 && Self::shop(state) {
-            centurions_core::shop::stock(state)?
+            centurions_core::shop::stock_family(state, self.category)?
                 .into_iter()
-                .filter(|(_, id, _)| id.unsigned_abs() as usize / 200 == self.category)
                 .map(|(slot, id, _)| Ok((slot, centurions_core::shop::preview(content, id)?)))
                 .collect()
         } else {
@@ -312,5 +538,7 @@ pub(crate) fn draw_detail_plan(
     }
 }
 
+mod ammunition;
 mod detail;
+mod information;
 mod view;

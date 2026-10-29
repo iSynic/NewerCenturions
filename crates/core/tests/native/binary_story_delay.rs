@@ -21,10 +21,12 @@ fn native_tick_delay_uses_zero_default_strict_unsigned_elapsed_and_wrapping_tick
         assert_eq!(case["tick_reads"], reads);
         assert_eq!(case["returned"], returned);
 
-        if parameter > 0 {
+        if returned {
+            let duration = if parameter == 0 { default } else { parameter };
             assert_eq!(
-                centurions_core::story_delay::elapsed_ticks(parameter).unwrap(),
-                reads - 1
+                centurions_core::story_delay::elapsed_ticks_with_default(parameter, default)
+                    .unwrap(),
+                (i32::from(duration) as u32) + 1
             );
         } else {
             assert!(centurions_core::story_delay::elapsed_ticks(parameter).is_err());

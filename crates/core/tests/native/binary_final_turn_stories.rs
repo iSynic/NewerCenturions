@@ -4,7 +4,7 @@ use centurions_core::combat::final_turn_stories;
 use centurions_core::combat::final_turn_stories::TurnEffect;
 
 use native_common::script_mission as mission;
-fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>, RandomState) {
+pub(crate) fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>, RandomState) {
     let mut combat = support::battle();
     combat.battle = 134;
     combat.map.tiles = case.words("map_before");
@@ -60,6 +60,7 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
         arena.order[1] = 0;
         state.phase = Phase::Combat;
         state.combat = Some(arena);
+        crate::native_common::source_victory_context(&mut state);
         state.random = RandomState::new(builder.n::<u32>("seed_before"));
         let mut script = vec![0; 42];
         script[8..10].copy_from_slice(&120_i16.to_be_bytes());
@@ -177,6 +178,7 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
             state.warriors = support::warriors(&case.bytes("warriors_before"));
             state.phase = Phase::Combat;
             state.combat = Some(arena);
+            crate::native_common::source_victory_context(&mut state);
             state.random = start_random;
             let events = if conditioned {
                 let mut resumed = support::checkpoint(&state, &content, "npc-condition-before");

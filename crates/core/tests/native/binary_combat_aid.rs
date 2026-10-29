@@ -40,16 +40,16 @@ fn actual_owned_needle_consumption_and_preparation_match_native_complete_records
             word(&case["used"].bytes("item_work"), 32).unwrap()
         );
         assert_eq!(
-            result.weapon_work.sound().unwrap(),
+            result.weapon_work.sound(),
             word(&case["prepared"].bytes("weapon_work"), 14).unwrap()
         );
         assert_eq!(
             result.weapon_work.weapon_armor_filter,
-            Some(word(&case["prepared"].bytes("weapon_work"), 136).unwrap())
+            word(&case["prepared"].bytes("weapon_work"), 136).unwrap()
         );
         assert_eq!(
             result.weapon_work.ammunition_armor_filter,
-            Some(word(&case["prepared"].bytes("ammo_work"), 136).unwrap())
+            word(&case["prepared"].bytes("ammo_work"), 136).unwrap()
         );
         assert_eq!(sounds(&result.events), vec![655]);
         assert_eq!(actual[4].inventory().unwrap().len(), 3);
@@ -136,12 +136,12 @@ fn four_native_target_continuations_match_at_the_medical_boundary() {
         assert_eq!(actual.spell_fields, before.spell_fields);
         assert_eq!(actual.weapon_work, before.weapon_work);
         assert_eq!(actual.death_queue, before.death_queue);
-        assert_eq!(actual.attack_identity, Some([0, 3, 0]));
+        assert_eq!(actual.attack_identity, [0, 3, 0]);
         let mut packet = case["prepared"].bytes("packet");
         if index == 1 || index == 2 {
             packet[18] = 4;
         }
-        assert_eq!(actual.attack_packet, Some(packet));
+        assert_eq!(actual.attack_packet, packet);
         if index == 1 {
             support::native_expect! {
             positions actual.squad.positions => &case["after"]["party_positions"], "native positions";

@@ -36,6 +36,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         combat.enemies.positions = vec![target];
         combat.order[1..3].copy_from_slice(&[0, 10]);
         state.combat = Some(combat);
+        crate::native_common::source_victory_context(&mut state);
         let random = state.random.clone();
         assert!(click_command(&state, 20, 20).unwrap().is_none());
         assert!(matches!(
@@ -54,7 +55,11 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         };
         let replay = serde_json::from_str(&serde_json::to_string(&command).unwrap()).unwrap();
         let events = apply(replay, &mut state, &content).unwrap();
-        let mut expected = vec![];
+        // The target key's firstt(76, 77) precedes its refusals (combatchoice 11b026).
+        let mut expected = vec![Event::Feedback(NativeFeedback::Tutorial {
+            first: 76,
+            last: 77,
+        })];
         if refusal == CombatRefusal::NotEnoughAmmo {
             expected.push(Event::Feedback(NativeFeedback::Tutorial {
                 first: 78,
@@ -90,6 +95,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         arena.enemies.records.push(enemy);
         arena.enemies.positions.push((40, 40));
         state.combat = Some(arena);
+        crate::native_common::source_victory_context(&mut state);
         let targets = case.n::<Vec<i16>>("targets");
         let mut expected = support::warriors(&case.bytes("after"));
         let weapon = &content.items[case.n::<usize>("weapon")];
@@ -126,9 +132,13 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
                 apply(Command::ShootEnemy { body }, &mut state, &content).unwrap();
             }
         }
+        // A triple list below WORD4435be waits for the fire key (combatchoice 11ae08).
+        if current_combat(&state).firearm_selection.is_some() {
+            apply(Command::FireSelectedTargets, &mut state, &content).unwrap();
+        }
         assert_eq!(
-            current_combat(&state).attack_packet.as_ref().unwrap(),
-            &case.bytes("packet")
+            current_combat(&state).attack_packet,
+            case.bytes("packet")
         );
         support::compare_record_bytes(&state.warriors, &expected);
         assert_eq!(state.random.seed, case.n::<u32>("seed"));
@@ -170,6 +180,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
             battle.map.tiles[26 * 90 + 25] = 10;
         }
         state.combat = Some(battle);
+        crate::native_common::source_victory_context(&mut state);
         let events = apply(
             if case.get("actor").is_some() {
                 Command::ShootEnemy { body: target }
@@ -241,6 +252,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         combat.enemies.positions = vec![(30, 20)];
         combat.order[1] = 0;
         state.combat = Some(combat);
+        crate::native_common::source_victory_context(&mut state);
         let before = state.clone();
         assert!(apply(Command::Move { dx: 1, dy: 0 }, &mut state, &content).is_err());
         assert_eq!(state, before);
@@ -346,6 +358,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         combat.enemies.positions = vec![(21, 20)];
         combat.order[1] = 0;
         state.combat = Some(combat);
+        crate::native_common::source_victory_context(&mut state);
         let before = state.random.clone();
         let target = case.n::<i16>("target");
         let events = apply(

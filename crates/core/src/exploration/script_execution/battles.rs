@@ -17,12 +17,27 @@ pub(super) fn execute(
     effects: &mut Vec<Event>,
 ) -> Result<ScriptStep, RuleError> {
     let opcode = operation.native();
+    let turn_owns = state
+        .turn_dispatch
+        .as_ref()
+        .is_some_and(|frame| frame.owns_script(state));
+    let retained_round = state
+        .round_dispatch
+        .as_ref()
+        .is_some_and(|frame| frame.retained && frame.owns_script(state));
     let position = state.exploration.as_mut().unwrap();
     let script = position.script.as_mut().unwrap();
     match operation {
         Operation::CombatCleanup => {
+            if turn_owns {
+                crate::combat::runtime::mark_turn_cleanup(state);
+            }
             effects.extend(crate::story_cleanup::begin(state, content, parameter)?);
-            if state.scripted_cleanup == Some(crate::story_cleanup::Stage::Survivors) {
+            if state
+                .scripted_cleanup
+                .as_ref()
+                .is_some_and(crate::story_cleanup::Stage::pauses)
+            {
                 return Ok(ScriptStep::Pause);
             }
         }
@@ -38,6 +53,9 @@ pub(super) fn execute(
                 x: position.x,
                 y: position.y,
             });
+            if turn_owns {
+                effects.extend(super::super::finish_dispatch(state, content)?.unwrap_or_default());
+            }
             return Ok(ScriptStep::Pause);
         }
         Operation::ReplaceActor => {
@@ -71,6 +89,7 @@ pub(super) fn execute(
             if state.phase == crate::Phase::Combat {
                 let extra =
                     ExtraTable(&map.combat.as_ref().unwrap().encounters).by_magnitude(parameter)?;
+                state.native_work.extra_record = extra.to_vec();
                 let codes = (0..5)
                     .map(|i| word(extra, i * 2))
                     .collect::<Result<Vec<_>, _>>()?;
@@ -96,16 +115,32 @@ pub(super) fn execute(
             }
         }
         Operation::ReplaceRoundScript => {
-            if state.round_dispatch.is_none() {
-                return Err(unsupported("story.round_jump", "native round-slot caller"));
-            }
-            let arena = state.combat.as_mut().ok_or("round combat missing")?;
-            let slot = arena
-                .round_scripts
-                .pending
-                .as_ref()
-                .ok_or("round program missing")?
-                .slot;
+            // newland 0x7e has no caller test: outside a round frame it uses the shared
+            // slot WORD408576 and the retained round work the last Getup left.
+            let retained_round = retained_round
+                || state.round_dispatch.is_none()
+                    && state.combat.is_none()
+                    && !state.native_work.round_work.is_unknown();
+            // In a live battle with no round frame the shared WORD names the slot
+            // Getup last scanned; the live round scripts are its arrays.
+            let live_slot = if retained_round {
+                None
+            } else if state.round_dispatch.is_none() {
+                state.native_work.round_work.slot
+            } else {
+                Some(
+                    state
+                        .combat
+                        .as_ref()
+                        .ok_or("round combat missing")?
+                        .round_scripts
+                        .pending
+                        .as_ref()
+                        .ok_or("round program missing")?
+                        .slot
+                        .into(),
+                )
+            };
             let extra = ExtraTable(
                 &map.combat
                     .as_ref()
@@ -113,13 +148,30 @@ pub(super) fn execute(
                     .encounters,
             )
             .record(parameter.unsigned_abs() as usize)?;
-            let Some(target) = combat::round_stories::replacement(
-                &mut arena.round_scripts,
-                slot,
-                extra,
-                &mut state.random,
-            )?
-            else {
+            state.native_work.extra_record = extra.to_vec();
+            let target = if retained_round {
+                let work = &mut state.native_work.round_work;
+                combat::round_stories::replacement_slot(
+                    work.counter,
+                    work.slots.as_mut(),
+                    work.slot,
+                    extra,
+                    &mut state.random,
+                )?
+            } else if let Some(arena) = state.combat.as_mut() {
+                let scripts = &mut arena.round_scripts;
+                combat::round_stories::replacement_slot(
+                    Some(scripts.counter),
+                    Some(&mut scripts.slots),
+                    live_slot,
+                    extra,
+                    &mut state.random,
+                )?
+            } else {
+                // Outside any battle the session has no round work; the chance arm reads none.
+                combat::round_stories::replacement_slot(None, None, None, extra, &mut state.random)?
+            };
+            let Some(target) = target else {
                 effects.extend(finish_script(state, content, false)?);
                 return Ok(ScriptStep::Pause);
             };
@@ -128,44 +180,41 @@ pub(super) fn execute(
         Operation::SelectedSpell | Operation::PartySpell => {
             let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
                 .record(parameter.unsigned_abs() as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             effects.extend(crate::story_spell::apply(
                 state,
                 content,
                 extra,
                 operation == Operation::PartySpell,
             )?);
-            if state
-                .native_work
-                .health_context
-                .as_ref()
-                .is_some_and(|health| health.unavailable >= state.warriors.len() as i8)
-            {
-                effects.extend(crate::mission::defeat(state, content));
+            if state.native_work.health_context.unavailable >= state.warriors.len() as i8 {
+                effects.extend(crate::mission::defeat(state, content)?);
                 return Ok(ScriptStep::Pause);
             }
         }
         Operation::SelectPartyBySave => {
             let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
                 .record(parameter.unsigned_abs() as usize)?;
-            let packet = state
-                .combat
-                .as_ref()
-                .and_then(|c| c.attack_packet.as_ref())
-                .or(state.native_work.attack_packet.as_ref());
+            state.native_work.extra_record = extra.to_vec();
+            let (packet, ready) = state.combat.as_ref().map_or(
+                (&state.native_work.attack_packet, state.native_work.ready),
+                |c| (&c.attack_packet, c.ready),
+            );
+            let mind_shield = crate::combat::party_buffs::mind_shield(&state.party_buffs)?;
             let context = crate::story_party::PartySaveContext {
                 casting: false,
-                packet_type: packet.map_or(0, |p| AttackPacket(p).saving_throw_mode() as i8),
-                bonus: packet.map_or(0, |p| AttackPacket(p).save_bonus()),
-                bonus_per_attack: packet
-                    .map_or(0, |p| AttackPacket(p).save_bonus_per_attack() as i8),
+                packet_type: AttackPacket(packet).saving_throw_mode() as i8,
+                bonus: AttackPacket(packet).save_bonus(),
+                bonus_per_attack: AttackPacket(packet).save_bonus_per_attack() as i8,
                 attack_count: state.native_work.attack_count,
-                mind_shield: crate::combat::party_buffs::mind_shield(&state.party_buffs)?,
+                mind_shield,
             };
-            state.native_work.party_mask = crate::story_party::select_party(
+            state.native_work.party_mask = crate::story_party::select_party_with_ready(
                 &state.warriors,
                 state.selected_warrior,
                 extra,
                 context,
+                ready,
                 &mut state.random,
             )?;
         }
@@ -173,6 +222,7 @@ pub(super) fn execute(
             let extra_index = usize::try_from(parameter)
                 .map_err(|_| RuleError::Invalid("negative schedule extra index".into()))?;
             let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters).record(extra_index)?;
+            state.native_work.extra_record = extra.to_vec();
             crate::story_schedule::edit(&mut position.schedule, extra, position.day)?;
         }
         Operation::GroupBattle => {

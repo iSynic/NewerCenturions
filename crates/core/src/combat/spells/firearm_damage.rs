@@ -69,6 +69,7 @@ pub fn resolve_enemy_firearm_body_after_duration(
         if next_random.bound(100) > hit.clamp(minimum, maximum) {
             *random = next_random;
             return Ok(AttackResult {
+                icon: 0,
                 feedback: None,
                 damage: 0,
                 killed: false,
@@ -106,6 +107,7 @@ pub fn resolve_enemy_firearm_body_after_duration(
         }
     }
     let result = AttackResult {
+        icon: damage.sound,
         feedback: None,
         damage: damage.total,
         killed: damage.total != 0 && EnemyRecord::from_bytes(m).stamina()? < 1,

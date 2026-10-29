@@ -1,12 +1,11 @@
 use crate::{RuleError, Session};
-mod compatibility;
 use centurions_content::Content;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-const CURRENT_SCHEMA_VERSION: u32 = 15;
+const CURRENT_SCHEMA_VERSION: u32 = 62;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Save {
@@ -73,8 +72,14 @@ pub fn load(path: &Path, content: &Content) -> Result<Session, RuleError> {
     if metadata.len() > (2_000_000 + map_count * 1_500_000) as u64 {
         return Err(RuleError::Invalid("save exceeds size limit".into()));
     }
-    let mut saved: Save = serde_json::from_slice(&fs::read(path)?)?;
-    compatibility::restore(&mut saved, content)?;
+    let saved: Save = serde_json::from_slice(&fs::read(path)?)?;
+    // Only the current schema loads; older reconstruction saves are not supported.
+    if saved.schema_version != CURRENT_SCHEMA_VERSION {
+        return Err(RuleError::Invalid(format!(
+            "unsupported save version {}",
+            saved.schema_version
+        )));
+    }
     saved.session.validate(content)?;
     Ok(saved.session)
 }

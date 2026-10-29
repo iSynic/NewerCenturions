@@ -64,10 +64,12 @@ impl UiState {
                     .map_or(0, |(_, sound)| sound)
             }
             NativeFeedback::Sound { resource_id } => *resource_id,
-            NativeFeedback::Warning { .. } => 6000,
+            NativeFeedback::Warning { .. } | NativeFeedback::EquipmentLevel { .. } => 6000,
             NativeFeedback::Silent
+            | NativeFeedback::CombatResourceResult { .. }
             | NativeFeedback::Tutorial { .. }
-            | NativeFeedback::DialogText { .. } => 0,
+            | NativeFeedback::DialogText { .. }
+            | NativeFeedback::OutdoorBodyStatus { .. } => 0,
         };
         (resource_id != 0).then_some(Event::Sound { resource_id })
     }
@@ -128,16 +130,21 @@ impl UiState {
         }
         let started = self.feedback_started.unwrap_or(now);
         let done = match feedback {
-            NativeFeedback::CombatResult { .. } => now - started >= 20. / 60.,
+            NativeFeedback::CombatResult { .. } | NativeFeedback::CombatResourceResult { .. } => {
+                now - started >= 20. / 60.
+            }
+            NativeFeedback::OutdoorBodyStatus { wait, .. } => {
+                now - started > f64::from(*wait) / 60.
+            }
             NativeFeedback::DialogText { wait, .. } => now - started >= f64::from(*wait) / 60.,
             NativeFeedback::Flash { wait, .. } | NativeFeedback::ResourceFlash { wait, .. }
                 if *wait > 0 =>
             {
                 now - started >= f64::from(*wait) / 60.
             }
-            NativeFeedback::Flash { .. } | NativeFeedback::ResourceFlash { .. } => {
-                pressed && now - started >= 15. / 60.
-            }
+            NativeFeedback::Flash { .. }
+            | NativeFeedback::ResourceFlash { .. }
+            | NativeFeedback::EquipmentLevel { .. } => pressed && now - started >= 15. / 60.,
             NativeFeedback::Sound { .. } => now >= self.feedback_until,
             NativeFeedback::Silent => true,
             NativeFeedback::Tutorial { .. } => unreachable!(),
@@ -167,6 +174,13 @@ impl UiState {
             return;
         };
         let (text, rect, picture) = match feedback {
+            NativeFeedback::OutdoorBodyStatus { permanent, .. } => {
+                let address = if *permanent { 0x403294 } else { 0x403286 };
+                if let Ok(text) = assets.native_text.text(address, true) {
+                    assets.text(&text, 400., 30., 12, BLACK);
+                }
+                return;
+            }
             NativeFeedback::DialogText {
                 dialog,
                 item,
@@ -194,8 +208,14 @@ impl UiState {
                 assets
                     .reference_strings
                     .get(resource_id)
-                    .and_then(|list| list.get(index.saturating_sub(1)))
-                    .cloned()
+                    // GetIndString leaves index 0 and indexes past the list empty.
+                    .map(|list| {
+                        index
+                            .checked_sub(1)
+                            .and_then(|index| list.get(index))
+                            .cloned()
+                            .unwrap_or_default()
+                    })
                     .ok_or_else(|| {
                         centurions_content::ContentError::Invalid(
                             "original flash resource missing".into(),
@@ -209,23 +229,77 @@ impl UiState {
                 Rect::new(f32::from(*x), f32::from(*y) + 20., 260., 62.),
                 156,
             ),
+            NativeFeedback::EquipmentLevel { level } => (
+                assets
+                    .native_text
+                    .text(0x400548, false)
+                    .map(|prefix| format!("{prefix}{level}")),
+                Rect::new(50., 70., 260., 62.),
+                156,
+            ),
             NativeFeedback::Combat { kind } => (
                 assets.native_text.text(kind.address(), true),
                 Rect::new(580., 536., 208., 62.),
                 156,
             ),
+            NativeFeedback::CombatResourceResult { resource_id, index } => (
+                assets
+                    .reference_strings
+                    .get(resource_id)
+                    // GetIndString leaves index 0 and indexes past the list empty.
+                    .map(|list| {
+                        index
+                            .checked_sub(1)
+                            .and_then(|index| list.get(index))
+                            .cloned()
+                            .unwrap_or_default()
+                    })
+                    .ok_or_else(|| {
+                        centurions_content::ContentError::Invalid(
+                            "original combat result resource missing".into(),
+                        )
+                    }),
+                Rect::new(580., 536., 208., 62.),
+                156,
+            ),
             NativeFeedback::CombatResult { code, amount, .. } => {
-                let Some((address, _)) = centurions_core::feedback::combat_result(*code) else {
+                // showresults 0x158704..0x1588a4: string(abs(damage)) in red, then
+                // yellowColor and 0x400ec2 above one or 0x400eb4 for one; 0x15903a:
+                // -1 draws 0x400c4c.
+                let hit = match code {
+                    0 => Some(if *amount > 1 { 0x400ec2 } else { 0x400eb4 }),
+                    -1 => Some(0x400c4c),
+                    _ => None,
+                };
+                let Some((address, _)) = hit
+                    .map(|address| (address, 0))
+                    .or_else(|| centurions_core::feedback::combat_result(*code))
+                else {
                     return;
                 };
-                let text = assets.native_text.text(address, true).map(|label| {
-                    if matches!(code, -23..=-19 | -16 | -15) {
-                        format!("{amount}{label}")
-                    } else {
-                        label
-                    }
-                });
-                (text, Rect::new(580., 536., 208., 62.), 156)
+                let Ok(label) = assets.native_text.text(address, true) else {
+                    return;
+                };
+                // showresults 0x1585ee..0x158648: TextMode srcOr, TextSize 20 and
+                // ForeColor(redColor) for the amount; the amount codes then switch
+                // to yellowColor for their label (0x158b76..0x158cf8). In combat
+                // it draws PICT 156 over rect 0x44370a (0x15849e..0x1584ae) and moves
+                // to WORD40856c + 420, WORD40856e + 443 - 32 in window 128, whose
+                // controls sit 20 pixels lower here (scene's combat panels).
+                let rect = Rect::new(568., 538., 232., 50.);
+                assets.panel(156, rect);
+                let red = Color::from_rgba(0xdd, 0x08, 0x06, 255);
+                let yellow = Color::from_rgba(0xfc, 0xf3, 0x05, 255);
+                let (x, y) = (580., 571.);
+                if matches!(code, -23..=-19 | -16 | -15 | 0) {
+                    let amount = amount.wrapping_abs().to_string();
+                    assets.text(&amount, x, y, 20, red);
+                    let width = assets.text_width(&amount, 20);
+                    assets.text(&label, x + width, y, 20, yellow);
+                } else {
+                    assets.text(&label, x, y, 20, red);
+                }
+                return;
             }
             NativeFeedback::Warning { index } => (
                 assets
@@ -248,7 +322,9 @@ impl UiState {
         }
         if matches!(
             feedback,
-            NativeFeedback::Flash { .. } | NativeFeedback::ResourceFlash { .. }
+            NativeFeedback::Flash { .. }
+                | NativeFeedback::ResourceFlash { .. }
+                | NativeFeedback::EquipmentLevel { .. }
         ) {
             draw_rectangle_lines(
                 rect.x - 1.,

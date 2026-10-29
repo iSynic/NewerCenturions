@@ -101,7 +101,7 @@ pub fn fit_ammunition(
     )?;
     state.warriors[warrior] = result.warrior;
     state.ammunition = result.ammunition;
-    state.native_work.loaded_item_field32 = Some(result.loaded_item_field32);
+    state.native_work.loaded_item_field32 = result.loaded_item_field32;
     state
         .native_work
         .ammunition_work

@@ -41,6 +41,19 @@ impl WarriorEditor {
             scans: None,
         })
     }
+    /// upgradewarrior's entry for the current member (0x162376..0x1623e2).
+    pub fn enter(&mut self, content: &Content) -> Result<(), centurions_core::RuleError> {
+        apply(
+            Command::EnterWarriorUpgrade {
+                warrior: self.member,
+            },
+            &mut self.draft,
+            content,
+        )?;
+        self.initial = self.draft.warriors[self.member].clone();
+        self.previous = self.initial.clone();
+        Ok(())
+    }
     pub fn handle(
         &mut self,
         item: usize,
@@ -121,9 +134,8 @@ impl WarriorEditor {
                         1
                     })
                     % count;
-                self.initial = self.draft.warriors[self.member].clone();
-                self.previous = self.initial.clone();
                 self.selector = 0;
+                self.enter(content)?;
             }
             UpgradeControl::UndoLast | UpgradeControl::UndoAll => {
                 self.draft.warriors[self.member] = if control == UpgradeControl::UndoLast {

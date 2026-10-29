@@ -2,11 +2,11 @@ use crate::{native_common, prelude::*, snapshots, support};
 
 use native_common::foundation_session as input;
 fn project(state: &mut Session, snapshot: &Value, baseline: &Value, prepared_pair: bool) {
-    let retained_body = state.native_work.health_context.as_ref().unwrap().last_body;
+    let retained_body = state.native_work.health_context.last_body;
     snapshots::earned_projection(state, snapshot, baseline);
     // Frozen probes start with old body0; an unchanged native field retains the earned origin.
     if snapshot["health_last_body"] == baseline["health_last_body"] {
-        state.native_work.health_context.as_mut().unwrap().last_body = retained_body;
+        state.native_work.health_context.last_body = retained_body;
     }
     if prepared_pair {
         state.native_work.ammunition_work.weapon = Some(snapshot.bytes("weapon_work"));
@@ -48,15 +48,15 @@ fn source_prefix_pair(state: &mut Session, content: &Content, index: usize) {
     }
     assert_eq!(
         state.native_work.weapon_work.sound,
-        Some(word(&weapon, 14).unwrap())
+        word(&weapon, 14).unwrap()
     );
     assert_eq!(
         state.native_work.weapon_work.weapon_armor_filter,
-        Some(word(&weapon, 136).unwrap())
+        word(&weapon, 136).unwrap()
     );
     assert_eq!(
         state.native_work.weapon_work.ammunition_armor_filter,
-        Some(word(&ammo, 136).unwrap())
+        word(&ammo, 136).unwrap()
     );
     state.native_work.ammunition_work.weapon = Some(weapon);
     state.native_work.ammunition_work.ammo = Some(ammo);
@@ -83,12 +83,14 @@ fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
             Command::BeginMedicalItem { warrior, slot } => Command::UseItem { warrior, slot },
             other => other,
         };
+        let before = state.clone();
+        let events = apply(command.clone(), &mut state, content).unwrap();
         let expected = native_common::prefix_result_events(
+            &before,
             &state,
             &command,
             serde_json::from_value(recorded.clone()).unwrap(),
         );
-        let events = apply(command.clone(), &mut state, content).unwrap();
         assert_eq!(events, expected, "foundation {index} command {step}");
         if state.medical_continuation.is_some() {
             state = checkpoint(&state, content, &format!("prefix-medical-{index}"));
@@ -103,8 +105,6 @@ fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
     expected_input
         .native_work
         .health_context
-        .as_mut()
-        .unwrap()
         .last_body = 16;
     let last_npc = ordered_events
         .iter()
@@ -126,14 +126,17 @@ fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
     expected_input.native_work.inventory_record = native_common::earned_inventory_work(index);
     expected_input.combat.as_mut().unwrap().turn_origin =
         snapshots::recorded_turn_origin(&receipt, current_combat(&expected_input));
+    // Both earned prefixes end at Move(1,0), which writes442736/442737.
+    // The historical foundation retained the preceding outdoor Move(1,1).
+    expected_input.exploration.as_mut().unwrap().last_move = [1, 0];
     support::same_captured_session(&state, &expected_input);
-    let effect = state.native_work.health_context.as_ref().unwrap().effect;
+    let effect = state.native_work.health_context.effect;
     assert_eq!(
-        state.native_work.attack_packet.as_ref().unwrap()[18] as i8,
+        state.native_work.attack_packet[18] as i8,
         effect
     );
     assert_eq!(
-        current_combat(&state).attack_packet.as_ref().unwrap()[18] as i8,
+        current_combat(&state).attack_packet[18] as i8,
         effect
     );
     state
@@ -154,6 +157,13 @@ fn native_events(initial: &Session, expected: &Session, case: &Value) -> Vec<Eve
         .unwrap()["sound_count_after"]
         .as_u64()
         .unwrap() as usize;
+    // The target key's firstt(76, 77) (combatchoice 11b026).
+    events.push(Event::Feedback(
+        centurions_core::feedback::NativeFeedback::Tutorial {
+            first: 76,
+            last: 77,
+        },
+    ));
     for (sound_index, resource_id) in native_sounds.iter().enumerate() {
         events.push(Event::Sound {
             resource_id: *resource_id,
@@ -164,6 +174,8 @@ fn native_events(initial: &Session, expected: &Session, case: &Value) -> Vec<Eve
                 target: 10,
                 damage: native_damage,
                 defeated: native_damage > 0,
+                icon: Default::default(),
+                flight: Default::default(),
             });
         }
         for r in case.array("resolutions").iter().filter(|r| {
@@ -191,6 +203,8 @@ fn native_events(initial: &Session, expected: &Session, case: &Value) -> Vec<Eve
                     target: target as i16,
                     damage,
                     defeated: false,
+                    icon: Default::default(),
+                    flight: Default::default(),
                 });
             }
         }
@@ -254,7 +268,7 @@ fn party_range_membership_retains_the_original_truncated_boundary() {
     assert_eq!(weapon, 9);
     let ammo = centurions_core::combat::enemy_weapons::ammo_id(
         actor,
-        state.native_work.loaded_item_field32.unwrap(),
+        state.native_work.loaded_item_field32,
     )
     .unwrap();
     let prepared = centurions_core::combat::enemy_weapons::prepare(
@@ -340,6 +354,10 @@ fn coherent_earned_prefixes_and_shots_match_complete_native_state_and_resume() {
                 command,
                 vec![
                     centurions_core::feedback::NativeFeedback::Tutorial {
+                        first: 76,
+                        last: 77,
+                    },
+                    centurions_core::feedback::NativeFeedback::Tutorial {
                         first: 78,
                         last: 78,
                     },
@@ -358,7 +376,13 @@ fn coherent_earned_prefixes_and_shots_match_complete_native_state_and_resume() {
             &invalid,
             &content,
             Command::ShootEnemy { body: 10 },
-            vec![centurions_core::feedback::NativeFeedback::Silent],
+            vec![
+                centurions_core::feedback::NativeFeedback::Tutorial {
+                    first: 76,
+                    last: 77,
+                },
+                centurions_core::feedback::NativeFeedback::Silent,
+            ],
         );
         checkpoint(&state, &content, &format!("shot-after-{index}"));
     }

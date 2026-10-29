@@ -80,6 +80,13 @@ fn battle_state(
     state.warriors = support::warriors(&fixture["warriors_before"]);
     state.warriors.truncate(count);
     state.warriors[0].bytes[0x90..0x92].copy_from_slice(&marker.to_be_bytes());
+    if marker != 0 {
+        // These selected-count variants are constructed controls, not new native captures.
+        state.native_work.health_context = centurions_core::story_health::context(
+            &state.warriors, state.selected_warrior, None,
+        );
+    }
+
     let map = content.map(case.n::<i32>("map")).unwrap();
     let position = state.exploration.as_mut().unwrap();
     position.map = case.n::<i32>("map");
@@ -125,13 +132,6 @@ fn selected_squad_count_survives_mission_combat_entry_and_reload() {
         ] {
             assert!(apply(command, &mut state, &content).is_err());
             assert_eq!(state, before);
-        }
-        if difficulty != 0 {
-            let mut value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            value["schema_version"] = 3.into();
-            support::legacy_save(&mut value);
-            std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-            assert!(load(&path, &content).is_err());
         }
         std::fs::remove_file(path).unwrap();
     }

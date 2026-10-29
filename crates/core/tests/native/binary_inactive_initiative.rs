@@ -43,7 +43,7 @@ fn unavailable_counter_capacity_diagnostics_preserve_party_and_randomness() {
     let fixture: serde_json::Value = support::fixture("inactive-initiative.json");
     let original = fixture.bytes("warriors");
     let warriors: Vec<_> = support::warriors(&original);
-    for (counter, mode) in [(-128, 0), (-1, 0), (127, 0), (1, 1), (127, 1)] {
+    for (counter, mode) in [(-128, 0), (127, 0), (1, 1), (127, 1)] {
         let mut random = RandomState::new(12);
         let before = random.clone();
         let party = warriors.clone();

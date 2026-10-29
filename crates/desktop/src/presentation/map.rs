@@ -71,20 +71,22 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
                 let icon = if tile < 0 && id >= 1000 {
                     Some(id)
                 } else if (0..6).contains(&id) {
-                    state.warriors[id as usize].record().tactical_icon().ok()
+                    super::bodies::warrior_icon(state.warriors[id as usize].record())
                 } else if id >= 10 && id < 10 + c.enemies.records.len() as i16 {
-                    word(&c.enemies.records[(id - 10) as usize].bytes, 0x50).ok()
+                    // A -3 definition draws a picture in the bodies pass instead.
+                    let monster = c.enemies.records[(id - 10) as usize].record();
+                    match (monster.size(), monster.tactical_icon()) {
+                        (Ok(-3), _) | (_, Err(_)) => None,
+                        (Ok(_), Ok(icon)) => {
+                            Some(super::bodies::enemy_icon(monster.facing_flag(), icon))
+                        }
+                        (Err(_), Ok(_)) => None,
+                    }
                 } else {
                     None
                 };
                 if let Some(texture) = icon.and_then(|i| assets.icons.get(&i)) {
                     draw_texture(texture, sx, sy, WHITE);
-                }
-                if ui.combat_view.reveal && (0..state.warriors.len() as i16).contains(&id) {
-                    draw_rectangle_lines(sx + 1., sy + 1., 30., 30., 1., GREEN);
-                }
-                if c.active_body() == Some(id) {
-                    draw_rectangle_lines(sx, sy, 32., 32., 1., YELLOW);
                 }
             } else {
                 let index = (vx + x) as usize * 90 + (vy + y) as usize;
@@ -100,21 +102,108 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
             }
         }
     }
+    if let Some(c) = combat {
+        super::bodies::draw(state, c, assets, ui, (vx, vy));
+        super::range_lines::draw_edges(state, c, (vx, vy));
+    }
+    if let (Some(c), Some(playback)) = (combat, &ui.playback)
+        && let Some(icon) = playback.icon
+    {
+        result_icon(assets, c, icon, vx, vy);
+    }
+    if combat.is_some() {
+        super::flights::draw(assets, ui, (vx, vy));
+    }
+    if let (Some(c), Some(playback)) = (combat, &ui.playback)
+        && let Some(effect) = playback.effect
+        && let Some(icon) = effect.icon(get_time())
+        && let Some(texture) = assets.icons.get(&icon)
+    {
+        // calcbodyrect 0x10d3f6 and 0x15b67a..0x15b73a: the body's rectangle,
+        // which PlotCIcon fills; only its part in the view rect is copied.
+        for body in effect.bodies() {
+            if let Some((position, size)) = crate::combat_playback::Playback::body_cell(c, body) {
+                super::bodies::plot_clipped(
+                    texture,
+                    super::bodies::cell(position, size, (vx, vy)),
+                    layout::MAP,
+                );
+            }
+        }
+    }
+    let party_icon = match state.native_work.boat {
+        0 => Some(
+            if state.field_controls.as_ref().is_some_and(|c| c.camping) {
+                178
+            } else {
+                192 + i16::from(position.facing)
+            },
+        ),
+        _ => Some(13006 - i16::from(state.native_work.boat_facing)),
+    };
     if combat.is_none()
-        && let Some(texture) =
-            assets.icons.get(
-                &if state.field_controls.as_ref().is_some_and(|c| c.camping) {
-                    178
-                } else {
-                    192 + i16::from(position.facing)
-                },
-            )
+        && let Some(texture) = party_icon.and_then(|id| assets.icons.get(&id))
     {
         draw_texture(
             texture,
             (position.x - vx) as f32 * 32.,
             layout::MAP.y + (position.y - vy) as f32 * 32.,
             WHITE,
+        );
+    }
+}
+
+/// showdamage 0x1553bc: the cicn in the body's 32-pixel cell, raised 16 pixels for
+/// size classes 1 and 3 and moved 16 left above class 1, then the amount in bold
+/// at (left + 8, top + 20) in size 10 above 9, otherwise (left + 11, top + 20) in
+/// size 12. Cicns 160-163 print in blackColor and the others in whiteColor.
+fn result_icon(
+    assets: &Assets,
+    combat: &centurions_core::combat::Combat,
+    icon: crate::combat_playback::ResultIcon,
+    vx: i32,
+    vy: i32,
+) {
+    let Some(((x, y), size)) = crate::combat_playback::Playback::body_cell(combat, icon.body)
+    else {
+        return;
+    };
+    let mut top = layout::MAP.y + (i32::from(y) - vy) as f32 * 32.;
+    let mut left = layout::MAP.x + (i32::from(x) - vx) as f32 * 32.;
+    if size == 1 || size == 3 {
+        top -= 16.;
+    }
+    if size > 1 {
+        left -= 16.;
+    }
+    if let Some(texture) = assets.icons.get(&icon.icon) {
+        draw_texture_ex(
+            texture,
+            left,
+            top,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(vec2(32., 32.)),
+                ..Default::default()
+            },
+        );
+    }
+    // 0x1555c8..0x1555d8: the number is always drawn.
+    let color = if (160..=163).contains(&icon.icon) {
+        BLACK
+    } else {
+        WHITE
+    };
+    let (dx, text_size) = if icon.amount > 9 { (8., 10) } else { (11., 12) };
+    // TextFace(bold) at 0x1554bc: QuickDraw's bold repeats each glyph one
+    // pixel to the right.
+    for smear in [0., 1.] {
+        assets.text(
+            &icon.amount.to_string(),
+            left + dx + smear,
+            top + 20.,
+            text_size,
+            color,
         );
     }
 }

@@ -40,10 +40,9 @@ pub(super) fn execute(
                 0
             } else {
                 i16::from(
-                    crate::story_health::context(
-                        &state.warriors,
+                    crate::story_health::retained_context(
                         state.selected_warrior,
-                        state.native_work.health_context.as_ref(),
+                        &state.native_work.health_context,
                     )
                     .unavailable,
                 )
@@ -77,6 +76,10 @@ pub(super) fn execute(
             if !(1..=4).contains(&parameter) {
                 return Err(unsupported("story.opcode", "branch outside the encounter"));
             }
+            state
+                .native_work
+                .encounter_work
+                .eliminate(1 << (parameter - 1))?;
             if let Some(menu) = script.menu.as_mut().filter(|menu| menu.typed) {
                 menu.eliminated |= 1 << (parameter - 1);
             }
@@ -106,6 +109,7 @@ pub(super) fn execute(
         }
         Operation::ShiftParty => {
             let extra = story_extra(map, parameter)?;
+            state.native_work.extra_record = extra.to_vec();
             let random = word(extra, 6)? != 0;
             let mut shift = |amount: i16| {
                 if !random {
@@ -130,18 +134,29 @@ pub(super) fn execute(
         }
         Operation::BoatCampingBranch => {
             let extra = story_extra(map, parameter)?;
-            if word(extra, 4)? != 0 {
-                return Err(unsupported("story.opcode", "boat status change"));
-            }
-            // The reconstruction never boards, so BYTE442748 stays clear.
+            state.native_work.extra_record = extra.to_vec();
+            let boat_condition = word(extra, 0)?;
+            let boat_failed = if matches!(boat_condition, 1 | 2) {
+                let boat = state.native_work.boat != 0;
+                (boat_condition == 1 && !boat) || (boat_condition == 2 && boat)
+            } else {
+                false
+            };
             let camping = state.field_controls.as_ref().is_some_and(|c| c.camping);
             let condition = word(extra, 2)?;
-            if word(extra, 0)? == 1 || (condition == 1 && !camping) || (condition == 2 && camping) {
+            if boat_failed || (condition == 1 && !camping) || (condition == 2 && camping) {
                 script.cursor = StoryRecord::ACTIONS as u8;
+            }
+            // 141440 ends the body only after the remaining opcode103 writes.
+            match word(extra, 4)? {
+                1 => state.native_work.boat = 1,
+                2 => state.native_work.boat = 0,
+                _ => {}
             }
         }
         Operation::SetLandLight => {
             let extra = story_extra(map, parameter)?;
+            state.native_work.extra_record = extra.to_vec();
             let level = word(extra, 0)?.wrapping_sub(1);
             let regions = &mut position.region_state;
             centurions_content::span(regions, LIGHT_LEVEL, 1)?;
@@ -157,27 +172,18 @@ pub(super) fn execute(
         // work; only an hour of exactly 24 starts the next day and its time encounters.
         Operation::AlterGameTime => {
             let extra = story_extra(map, parameter)?;
-            let (day, hour, minute) = (word(extra, 2)?, word(extra, 4)?, word(extra, 6)?);
-            let (mut d, mut h, mut m) = (position.day, position.hour, position.minute);
-            match word(extra, 0)? {
-                1 => (d, h, m) = (day, hour, minute),
-                2 => {
-                    (d, h) = (d.wrapping_add(day), h.wrapping_add(hour));
-                    if h > 23 {
-                        (d, h) = (d.wrapping_add(1), h - 24);
-                    }
-                    m = m.wrapping_add(minute);
-                    if m > 59 {
-                        (h, m) = (h.wrapping_add(1), m - 60);
-                    }
-                }
-                _ => {}
+            state.native_work.extra_record = extra.to_vec();
+            (position.day, position.hour, position.minute) =
+                crate::story_clock::alter((position.day, position.hour, position.minute), extra)?;
+            let depth = |state: &Session| {
+                std::iter::successors(state.zero_time.as_ref(), |f| f.parent.as_deref()).count()
+            };
+            let before = depth(state);
+            effects.extend(crate::time::zero_tick(state, content)?);
+            // Only a new calendar frame suspends this script.
+            if depth(state) > before {
+                return Ok(ScriptStep::Pause);
             }
-            // The reconstruction's clock holds hours 0-23, minutes 0-59 and days from 1.
-            if !(0..24).contains(&h) || !(0..60).contains(&m) || d < 1 {
-                return Err(unsupported("story.opcode", "time outside the clock"));
-            }
-            (position.day, position.hour, position.minute) = (d, h, m);
         }
         // newland71 stores the parameter in WORD4354fe and redraws the fatigue bar
         // and coordinates.
@@ -203,6 +209,7 @@ pub(super) fn execute(
         }
         Operation::DisplayRandomString | Operation::AdjustPickedPsi => {
             let extra = story_extra(map, parameter)?;
+            state.native_work.extra_record = extra.to_vec();
             let id = if operation == Operation::DisplayRandomString {
                 state.random.range(word(extra, 0)?, word(extra, 2)?)
             } else {
@@ -232,9 +239,13 @@ pub(super) fn execute(
             resource_id: parameter,
         }),
         Operation::Delay => effects.push(Event::Delay {
-            ticks: crate::story_delay::elapsed_ticks(parameter)?,
+            ticks: crate::story_delay::elapsed_ticks_with_default(
+                parameter,
+                state.command_preferences.animation_delay,
+            )?,
         }),
         Operation::Question => {
+            state.native_work.extra_record = story_extra(map, parameter)?.to_vec();
             let previous = cursor
                 .checked_sub(1)
                 .ok_or_else(|| RuleError::Invalid("question text missing".into()))?;
@@ -251,8 +262,10 @@ pub(super) fn execute(
             effects.extend(finish_script(state, content, false)?);
             return Ok(ScriptStep::Pause);
         }
+        // newland25 saves A4/A3 for the return's DOOR copy into header row WORD4427c2.
         Operation::PersistEvent => {
-            script.persist = !script.scheduled;
+            script.persist = true;
+            script.persist_cell = script.registers;
         }
         Operation::Movie => {
             if !map.movies.contains_key(&parameter) && parameter != 1000 {

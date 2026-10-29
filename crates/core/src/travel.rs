@@ -56,6 +56,55 @@ pub fn apply_tile(layer: &[i16], mutation: &TileMutation) -> Result<Vec<i16>, Ru
     Ok(result)
 }
 
+/// newland -12 at 143730 writes WORDs from objects40c500 into the following
+/// LONG event layer410448. Authored extra618 includes column90; do not clip it.
+pub(crate) fn clear_object_rectangle(
+    objects: &mut [i16],
+    events: &mut [i32],
+    first: (i32, i32),
+    last: (i32, i32),
+) -> Result<(), RuleError> {
+    if objects.len() != MAP_CELLS || events.len() != MAP_CELLS {
+        return Err("object rectangle layers unavailable".into());
+    }
+    if first.0 > last.0 || first.1 > last.1 {
+        return Ok(());
+    }
+    // D3 is unsigned for MULU; D6 is a signed WORD index. ADDQ.W at the
+    // signed maximum would wrap and keep the original inclusive loop running.
+    let start = i64::from(first.0) * 90 + i64::from(first.1);
+    let end = i64::from(last.0) * 90 + i64::from(last.1);
+    if first.0 < 0
+        || first.1 < i32::from(i16::MIN)
+        || last.0 >= i32::from(i16::MAX)
+        || last.1 >= i32::from(i16::MAX)
+        || start < 0
+        || end >= (MAP_CELLS * 3) as i64
+    {
+        return Err(RuleError::Unsupported {
+            action: "story.clear_objects",
+            dependency: "rectangle writes outside object and event layers or wraps a WORD loop",
+        });
+    }
+    for x in first.0..=last.0 {
+        for y in first.1..=last.1 {
+            let index = (x * 90 + y) as usize;
+            if index < MAP_CELLS {
+                objects[index] = 0;
+            } else {
+                let word = index - MAP_CELLS;
+                let mask = if word.is_multiple_of(2) {
+                    0x0000_ffff
+                } else {
+                    0xffff_0000
+                };
+                events[word / 2] = (events[word / 2] as u32 & mask) as i32;
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EventReplacement {
     pub map: i16,

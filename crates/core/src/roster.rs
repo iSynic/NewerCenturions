@@ -31,7 +31,16 @@ impl Roster {
                 }
                 serde_json::from_slice::<Self>(&std::fs::read(path)?)?
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::supplied(content),
+            // Linux reports a file parent as NotADirectory where Windows reports
+            // NotFound; either way there is no roster yet.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                Self::supplied(content)
+            }
             Err(error) => return Err(error.into()),
         };
         if roster.schema_version != 1 || roster.content_identity != content.identity {
@@ -99,14 +108,15 @@ pub fn mission_records(state: &Session, content: &Content) -> Result<Vec<Warrior
                 .ok_or("roster item definition missing")?;
             let kind = ItemDefinition(definition).category()?;
             if kind < 0 || matches!(kind, 23..=25) {
-                crate::equipment::drop(warrior, slot, content, mission)?;
+                // The roster copy has no Session to receive party-wide writes.
+                let globals = crate::equipment::drop(warrior, slot, content, mission)?;
+                crate::equipment::require_no_globals(&globals)?;
             }
         }
         CharacterIdentityMut(&mut warrior.bytes).refresh_save_checksums()?;
-        if let Some(psi) = &state.native_work.psi_memory {
-            LearnedScansMut(&mut warrior.bytes)
-                .restore_selection_memory(&psi[member * 80..(member + 1) * 80]);
-        }
+        let psi = &state.native_work.psi_memory;
+        LearnedScansMut(&mut warrior.bytes)
+            .restore_selection_memory(&psi[member * 80..(member + 1) * 80]);
     }
     Ok(records)
 }
@@ -150,6 +160,42 @@ pub(crate) fn admit_management(state: &Session) -> Result<(), RuleError> {
             .is_none_or(|p| p.presentation.is_some() || p.script.is_some())
     {
         return Err(RuleError::Refused { feedback: vec![] });
+    }
+    Ok(())
+}
+
+/// partyselect's Add with the level's restrictions open (0x148b0c..0x148c9e):
+/// warnings 0x86 for a level above the limit, 0x87 for a full squad, 0x88 for a
+/// banned race and 0x89 for a banned M.O.S., checked in that order. `squad` is
+/// the number of warriors already chosen.
+pub fn admit_to_squad(
+    restrictions: &[u8],
+    warrior: &Warrior,
+    squad: usize,
+) -> Result<(), RuleError> {
+    let limits = centurions_content::records::PartyRestrictions(restrictions);
+    let record = warrior.record();
+    let refuse = |index| {
+        Err(RuleError::Refused {
+            feedback: vec![crate::feedback::NativeFeedback::Warning { index }],
+        })
+    };
+    let maximum = limits.maximum_level()?;
+    if maximum != 0 && record.level()? > maximum {
+        return refuse(0x86);
+    }
+    let warriors = limits.maximum_warriors()?;
+    if warriors != 0 && squad as i32 >= i32::from(warriors) {
+        return refuse(0x87);
+    }
+    let banned = |flag: Option<bool>| {
+        flag.ok_or_else(|| RuleError::Invalid("restriction index outside Data RI".into()))
+    };
+    if banned(limits.race_banned(record.race()?))? {
+        return refuse(0x88);
+    }
+    if banned(limits.profession_banned(record.profession()?))? {
+        return refuse(0x89);
     }
     Ok(())
 }

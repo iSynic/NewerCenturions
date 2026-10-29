@@ -115,7 +115,7 @@ fn guarded_player_reaction_and_enemy_counterattack_match_original_complete_calle
         expected.random = state.random.clone();
         let expected_combat = expected.combat.as_mut().unwrap();
         expected_combat.enemies.records = support::monsters(&case["after"]["records"]);
-        expected_combat.attack_packet = Some(case["after"].bytes("packet"));
+        expected_combat.attack_packet = case["after"].bytes("packet");
         expected_combat.weapon_work = work(&case["after"]);
         support::same_captured_session(&state, &expected);
     }
@@ -144,7 +144,7 @@ fn public_guard_preserves_complete_native_state_and_resumes_from_save() {
                 warrior.original_sha256 = original.original_sha256.clone();
             }
             expected.combat_story = actual.combat_story.clone();
-            expected.bandage_ready = Some(1);
+            expected.bandage_ready = 1;
             let events = if public {
                 let events = support::saved_command(Command::Guard, &mut actual, &content);
                 let combat = current_combat(&expected);
@@ -155,7 +155,7 @@ fn public_guard_preserves_complete_native_state_and_resumes_from_save() {
                 );
                 health.unavailable = combat.unavailable;
                 health.effect = case["after"].bytes("packet")[18] as i8;
-                expected.native_work.health_context = Some(health);
+                expected.native_work.health_context = health;
                 support::checkpoint(&actual, &content, "guard-after");
                 events
             } else {
@@ -171,6 +171,14 @@ fn public_guard_preserves_complete_native_state_and_resumes_from_save() {
             };
             support::same_captured_session(&actual, &expected);
             let mut expected_events: Vec<_> = support::sound_events(case.n::<Vec<i16>>("sounds"));
+            expected_events.push(Event::Feedback(
+                centurions_core::feedback::NativeFeedback::CombatResult {
+                    body: case.n("member"),
+                    code: -5,
+                    amount: 0,
+                    audible: false,
+                },
+            ));
             expected_events.push(Event::TurnStarted {
                 body: current_combat(&expected).active_body().unwrap(),
                 round: current_combat(&expected).round,
@@ -219,29 +227,5 @@ fn public_guard_rejects_interrupted_or_unavailable_input_atomically() {
     let mut state = Session::new(&content);
     let before = state.clone();
     assert!(apply(Command::Guard, &mut state, &content).is_err());
-    assert_eq!(state, before);
-}
-
-#[test]
-fn guard_rolls_back_arming_sound_and_initiative_on_later_round_failure() {
-    let content = content();
-    let fixture = support::fixture("player-guard.json");
-    let mut state = state(&content, &fixture["cases"][0]["before"]);
-    let member = current_combat(&state).active_body().unwrap();
-    let combat = state.combat.as_mut().unwrap();
-    combat.cursor = 109;
-    combat.order[109] = member;
-    // A non-round action must roll back the already-armed guard and its sound.
-    combat.round_scripts.slots[0] = 33;
-    let before = state.clone();
-    assert!(matches!(
-        apply(Command::Guard, &mut state, &content)
-            .as_ref()
-            .map_err(centurions_core::RuleError::root),
-        Err(centurions_core::RuleError::Unsupported {
-            action: "combat.round_story",
-            ..
-        })
-    ));
     assert_eq!(state, before);
 }

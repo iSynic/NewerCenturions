@@ -7,6 +7,16 @@ pub struct PartyOrder {
     pub order: Vec<i16>,
 }
 
+/// getbattleorder124d9e. It inserts (party - 1) - unavailable442739 + marked + 1
+/// living warriors, where marked counts living warriors whose WORD 0x90 is nonzero
+/// (124e06..124e0e); the same count widens the Rand bound (124ebc). partyselect
+/// and load count those warriors in 442739, so the terms normally cancel.
+/// When the counter undercounts them, 124ede..124eea keeps reading below the
+/// living list's first byte: frame byte -7 is the marked count, -8 is never
+/// written, -9 and -10 are the zero WORD stored at 124dd0, and lower bytes are
+/// saved registers. A read that names a squad warrior inserts that warrior, even a
+/// second time; undefined bytes and indices outside the squad are taken as 0xff,
+/// which keeps the native draws but leaves the drawn row empty.
 pub fn initiative(
     warriors: &[Warrior],
     enemy_speeds: &[i16],
@@ -40,12 +50,25 @@ pub fn initiative(
         .wrapping_sub(unavailable)
         .wrapping_add(marked)
         .wrapping_add(1) as u8 as usize;
-    if !(1..110).contains(&bound) || (surprise == 0 && inserted > living.len()) {
+    if !(1..110).contains(&bound) {
         return Err(RuleError::Unsupported {
             action: "combat.initiative",
-            dependency: "unavailable counter exceeds living-list capacity",
+            dependency: "initiative bound outside the 110-row order",
         });
     }
+    let frame = |index: isize| -> i16 {
+        let body = match index {
+            0.. => return living[index as usize],
+            -1 => i16::from(marked),
+            -4..=-3 => 0,
+            _ => -1,
+        };
+        if (0..warriors.len() as i16).contains(&body) {
+            body
+        } else {
+            -1
+        }
+    };
     let mut order = vec![-1; 110];
     match surprise {
         1 => {
@@ -73,12 +96,13 @@ pub fn initiative(
     let mut next_random = random.clone();
     if surprise == 0 {
         let mut remaining = inserted;
-        let first = living.len() - inserted;
+        let mut next = living.len() as isize;
         while remaining != 0 {
             let slot = next_random.bound(bound) as usize;
             if order[slot] == -1 {
                 remaining -= 1;
-                order[slot] = living[first + remaining];
+                next -= 1;
+                order[slot] = frame(next);
             }
         }
     }

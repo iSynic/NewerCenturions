@@ -1,16 +1,17 @@
 use crate::fixture_hex as hex;
-use centurions_content::Content;
-use centurions_content::WARRIOR_BYTES;
-use centurions_content::combat::MONSTER_BYTES;
+use centurions_content::combat::{MONSTER_BYTES, MonsterRecord};
+use centurions_content::{Content, InventoryRecord, WARRIOR_BYTES, Warrior};
 use centurions_core::{Command, Event, Session, apply};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 mod native_context;
 pub mod psi_frame;
-pub use native_context::{captured_session, legacy_save};
+pub use native_context::{
+    captured_session, source_frame, source_victory_context, source_victory_context_recorded,
+};
 mod command_replay;
-pub use command_replay::{current_combat, saved_command};
+pub use command_replay::{assert_no_turn_started, current_combat, saved_command};
 
 pub fn fixture_content(identity: &str) -> Content {
     Content {
@@ -56,21 +57,15 @@ pub fn bytes<T: BinaryInput + ?Sized>(value: &T) -> Vec<u8> {
     value.binary().into_owned()
 }
 pub fn words<T: BinaryInput + ?Sized>(value: &T) -> Vec<i16> {
-    value
-        .binary()
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| i16::from_be_bytes(*pair))
-        .collect()
+    records::<_, 2>(value, |pair| i16::from_be_bytes(*pair))
 }
 pub fn positions<T: BinaryInput + ?Sized>(value: &T) -> Vec<(i16, i16)> {
-    words(value)
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| (pair[0], pair[1]))
-        .collect()
+    records::<_, 4>(value, |pair| {
+        (
+            i16::from_be_bytes([pair[0], pair[1]]),
+            i16::from_be_bytes([pair[2], pair[3]]),
+        )
+    })
 }
 /// The checkout root, from the maintained crates and the archive's reference tests alike.
 pub fn root() -> PathBuf {
@@ -100,25 +95,20 @@ pub fn content() -> Content {
 
 pub fn mission_session(content: &Content) -> Session {
     let mut state = Session::new(content);
-    apply(Command::ImportStarters, &mut state, content).unwrap();
-    apply(
+    for command in [
+        Command::ImportStarters,
         Command::EnterMission {
             name: "The Thunder of Guns".into(),
         },
-        &mut state,
-        content,
-    )
-    .unwrap();
+    ] {
+        apply(command, &mut state, content).unwrap();
+    }
     state
 }
 
 pub fn data(name: &str) -> Vec<u8> {
-    std::fs::read(
-        root()
-            .join("NewCenturions/TheNewCenturions/Data Files")
-            .join(name),
-    )
-    .unwrap()
+    let files = root().join("NewCenturions/TheNewCenturions/Data Files");
+    std::fs::read(files.join(name)).unwrap()
 }
 pub fn items() -> Vec<Vec<u8>> {
     data("Data ID")
@@ -127,15 +117,6 @@ pub fn items() -> Vec<Vec<u8>> {
         .iter()
         .map(|record| record.to_vec())
         .collect()
-}
-pub fn assert_bytes(actual: &[u8], expected: &[u8], context: &str) {
-    assert_eq!(actual.len(), expected.len(), "{context}: length");
-    let differing = actual.iter().zip(expected).position(|(a, b)| a != b);
-    assert_eq!(
-        differing.map(|i| (i, actual[i], expected[i])),
-        None,
-        "{context}: first differing byte"
-    );
 }
 
 pub trait NativeScalar: PartialEq + std::fmt::Debug {
@@ -153,19 +134,11 @@ macro_rules! scalar {
 scalar!(as_i64; i8, i16, i32, i64);
 scalar!(as_u64; u8, u16, u32, u64, usize);
 scalar!(as_f64; f32, f64);
-impl NativeScalar for bool {
-    fn from_native(value: &Value) -> Self {
-        value.as_bool().unwrap()
-    }
-}
+scalar!(as_bool; bool);
 impl<T: NativeScalar> NativeScalar for Vec<T> {
     fn from_native(value: &Value) -> Self {
-        value
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(T::from_native)
-            .collect()
+        let values = value.as_array().unwrap();
+        values.iter().map(T::from_native).collect()
     }
 }
 impl<T: NativeScalar, const N: usize> NativeScalar for [T; N] {
@@ -173,32 +146,18 @@ impl<T: NativeScalar, const N: usize> NativeScalar for [T; N] {
         Vec::<T>::from_native(value).try_into().unwrap()
     }
 }
-#[track_caller]
-pub fn expect<T: NativeScalar>(actual: T, expected: &Value) {
-    assert_eq!(actual, T::from_native(expected));
-}
-#[track_caller]
-pub fn expect_array<T: NativeScalar>(actual: &T, expected: &Value) {
-    assert_eq!(actual, &T::from_native(expected));
-}
+
 pub trait NativeRecord {
     fn record_bytes(&self) -> &[u8];
 }
-impl NativeRecord for centurions_content::Warrior {
-    fn record_bytes(&self) -> &[u8] {
-        &self.bytes
-    }
+macro_rules! record_bytes {
+    ($($ty:ty => $field:tt),+) => {
+        $(impl NativeRecord for $ty {
+            fn record_bytes(&self) -> &[u8] { &self.$field }
+        })+
+    };
 }
-impl NativeRecord for centurions_content::combat::MonsterRecord {
-    fn record_bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-}
-impl NativeRecord for centurions_content::InventoryRecord {
-    fn record_bytes(&self) -> &[u8] {
-        &self.0
-    }
-}
+record_bytes!(Warrior => bytes, MonsterRecord => bytes, InventoryRecord => 0);
 pub trait NativeCase {
     fn n<T: NativeScalar>(&self, key: &str) -> T;
     fn text(&self, key: &str) -> &str;
@@ -226,135 +185,57 @@ impl NativeCase for Value {
 
 pub fn battle() -> centurions_core::combat::Combat {
     use centurions_core::combat::{Combat, EnemySetup, SquadPlacement, TacticalMap};
-    Combat {
-        difficulty: 0,
-        battle: 0,
-        map: TacticalMap {
+    Combat::from_records(
+        TacticalMap {
             tiles: vec![0; 8100],
             shift: (0, 0),
             edge_word: 0,
         },
-        squad: SquadPlacement {
+        SquadPlacement {
             positions: vec![(-1, -1); 6],
             under_tiles: vec![1155; 6],
         },
-        enemies: EnemySetup {
+        EnemySetup {
             records: vec![],
             positions: vec![],
         },
-        order: vec![-1; 110],
-        cursor: 1,
-        round: 0,
-        inactive_rounds: 0,
-        selection_pending: false,
-        script_enemy: 0,
-        selected_enemy: 0,
-        round_scripts: Default::default(),
-        death_queue: Default::default(),
-        spell_fields: vec![0; 1200],
-        field_used: vec![0; 128],
-        attack_packet: Some(vec![0; 58]),
-        attack_identity: Some([0; 3]),
-        weapon_work: centurions_core::combat::weapon_work::WeaponWork::zero(),
-        unavailable: 0,
-        pending_last_defeated: None,
-        retained_npcs: Default::default(),
-        direct_deaths: false,
-        direct_death: None,
-        firearm_selection: None,
-        capture_actor: None,
-        automatic: [false; 6],
-        turn_origin: None,
-    }
+    )
 }
 
-pub fn warriors<T: BinaryInput + ?Sized>(value: &T) -> Vec<centurions_content::Warrior> {
-    let raw = bytes(value);
-    let (records, tail) = raw.as_chunks::<WARRIOR_BYTES>();
-    assert!(tail.is_empty());
-    records
-        .iter()
-        .map(|record| centurions_content::Warrior::read(record).unwrap())
-        .collect()
+fn records<T, const N: usize>(
+    value: &(impl BinaryInput + ?Sized),
+    read: impl Fn(&[u8; N]) -> T,
+) -> Vec<T> {
+    let raw = value.binary();
+    assert_eq!(raw.len() % N, 0);
+    raw.as_chunks::<N>().0.iter().map(read).collect()
+}
+
+pub fn warriors<T: BinaryInput + ?Sized>(value: &T) -> Vec<Warrior> {
+    records::<_, WARRIOR_BYTES>(value, |record| Warrior::read(record).unwrap())
 }
 /// The warrior record at `index` in a captured party buffer.
-pub fn warrior_at(party: &[u8], index: usize) -> centurions_content::Warrior {
-    centurions_content::Warrior::read(&party[index * WARRIOR_BYTES..(index + 1) * WARRIOR_BYTES])
-        .unwrap()
+pub fn warrior_at(party: &[u8], index: usize) -> Warrior {
+    Warrior::read(&party[index * WARRIOR_BYTES..(index + 1) * WARRIOR_BYTES]).unwrap()
 }
 /// Writes one warrior back into its slot of a captured party buffer.
-pub fn put_warrior(party: &mut [u8], index: usize, warrior: &centurions_content::Warrior) {
+pub fn put_warrior(party: &mut [u8], index: usize, warrior: &Warrior) {
     party[index * WARRIOR_BYTES..(index + 1) * WARRIOR_BYTES].copy_from_slice(&warrior.bytes);
 }
-pub fn monsters<T: BinaryInput + ?Sized>(
-    value: &T,
-) -> Vec<centurions_content::combat::MonsterRecord> {
-    let raw = bytes(value);
-    let (records, tail) = raw.as_chunks::<MONSTER_BYTES>();
-    assert!(tail.is_empty());
-    records
-        .iter()
-        .map(|record| centurions_content::combat::MonsterRecord {
-            bytes: record.to_vec(),
-        })
-        .collect()
+pub fn monsters<T: BinaryInput + ?Sized>(value: &T) -> Vec<MonsterRecord> {
+    records::<_, MONSTER_BYTES>(value, |record| MonsterRecord {
+        bytes: record.to_vec(),
+    })
 }
 
 pub fn longs<T: BinaryInput + ?Sized>(value: &T) -> Vec<i32> {
-    let raw = bytes(value);
-    let (records, tail) = raw.as_chunks::<4>();
-    assert!(tail.is_empty());
-    records
-        .iter()
-        .map(|record| i32::from_be_bytes(*record))
-        .collect()
+    records::<_, 4>(value, |record| i32::from_be_bytes(*record))
 }
 
-pub fn inventory<T: BinaryInput + ?Sized>(value: &T) -> Vec<centurions_content::InventoryRecord> {
-    let raw = bytes(value);
-    let (records, tail) = raw.as_chunks::<22>();
-    assert!(tail.is_empty());
-    records
-        .iter()
-        .map(|record| centurions_content::InventoryRecord(*record))
-        .collect()
+pub fn inventory<T: BinaryInput + ?Sized>(value: &T) -> Vec<InventoryRecord> {
+    records::<_, 22>(value, |record| InventoryRecord(*record))
 }
 
-macro_rules! native_expect {
-    ($($kind:ident $actual:expr => $expected:expr, $context:expr;)*) => {
-        $(crate::support::native_expect!(@$kind $actual, $expected, $context);)*
-    };
-    (@rng $actual:expr, $expected:expr, $context:expr) => {
-        {
-            let (seed, draws) = $expected;
-            crate::support::native_expect!(@scalar $actual.seed, seed, $context);
-            crate::support::native_expect!(@scalar $actual.draws, draws, $context);
-        }
-    };
-    (@scalar $actual:expr, $expected:expr, $context:expr) => {
-        { let actual = &$actual; assert_eq!(actual, &crate::support::native_value(actual, $expected), "{}", $context); }
-    };
-    (@records $actual:expr, $expected:expr, $context:expr) => {
-        crate::support::native_expect!(@bytes crate::support::record_bytes($actual), $expected, $context)
-    };
-    (@bytes $actual:expr, $expected:expr, $context:expr) => {
-        crate::support::assert_bytes(&$actual[..], &crate::support::bytes($expected), &$context)
-    };
-    (@positions $actual:expr, $expected:expr, $context:expr) => {
-        assert_eq!(&$actual[..], &crate::support::positions($expected)[..], "{}", $context)
-    };
-    (@words $actual:expr, $expected:expr, $context:expr) => {
-        assert_eq!(&$actual[..], &crate::support::words($expected)[..], "{}", $context)
-    };
-}
-pub(crate) use native_expect;
-pub fn native_value<T: NativeScalar>(_: &T, value: &Value) -> T {
-    T::from_native(value)
-}
-
-pub fn stories() -> centurions_content::mission::StoryTables {
-    centurions_content::mission::StoryTables::default()
-}
 pub fn terrain_mission(fixture: &Value) -> centurions_content::mission::OpeningMission {
     centurions_content::mission::OpeningMission {
         tile_properties: fixture.bytes("properties")[64..12064].to_vec(),
@@ -374,7 +255,7 @@ pub fn mission() -> centurions_content::mission::OpeningMission {
         terrain: 2,
         default_tile: 155,
         minutes_per_tick: 5,
-        shared: std::sync::Arc::new(stories()),
+        shared: std::sync::Arc::new(Default::default()),
     }
 }
 
@@ -384,65 +265,29 @@ pub fn record_bytes<T: NativeRecord>(records: &[T]) -> Vec<u8> {
         .flat_map(|record| record.record_bytes().iter().copied())
         .collect()
 }
-pub fn event_sounds(events: &[centurions_core::Event]) -> Vec<i16> {
-    events
-        .iter()
-        .filter_map(|event| match event {
-            centurions_core::Event::Sound { resource_id } => Some(*resource_id),
-            _ => None,
-        })
-        .collect()
+pub fn event_sounds(events: &[Event]) -> Vec<i16> {
+    events.iter().filter_map(Event::sound).collect()
 }
 pub fn word_bytes(values: &[i16]) -> Vec<u8> {
-    values
-        .iter()
-        .flat_map(|value| value.to_be_bytes())
-        .collect()
+    values.iter().copied().flat_map(i16::to_be_bytes).collect()
 }
 
 pub fn long_bytes(values: &[i32]) -> Vec<u8> {
-    values
-        .iter()
-        .flat_map(|value| value.to_be_bytes())
-        .collect()
+    values.iter().copied().flat_map(i32::to_be_bytes).collect()
 }
 
 #[track_caller]
-pub fn same_session(actual: &centurions_core::Session, expected: &centurions_core::Session) {
-    if actual == expected {
-        return;
-    }
-    let actual = serde_json::to_value(actual).unwrap();
-    let expected = serde_json::to_value(expected).unwrap();
-    if let Some(difference) = crate::native_common::first_difference(&actual, &expected, "session")
-    {
+pub fn same_session(actual: &Session, expected: &Session) {
+    if actual != expected {
+        let actual = serde_json::to_value(actual).unwrap();
+        let expected = serde_json::to_value(expected).unwrap();
+        let difference = crate::native_common::first_difference(&actual, &expected, "session")
+            .unwrap_or_else(|| "session differs outside serialized fields".into());
         panic!("{difference}");
     }
-    panic!("session differs outside serialized fields");
 }
 
-pub fn buffer(fixture: &Value, value: &Value) -> Vec<u8> {
-    let encoded = value.as_str().unwrap_or_else(|| {
-        fixture["shared_rule_buffers"][value.text("shared_buffer_sha256")]
-            .as_str()
-            .unwrap()
-    });
-    let decoded = bytes(encoded);
-    if value.is_object() {
-        expect(decoded.len(), &value["byte_length"]);
-        assert_eq!(
-            centurions_content::digest(&decoded),
-            value.text("shared_buffer_sha256")
-        );
-    }
-    decoded
-}
-
-pub fn checkpoint(
-    state: &centurions_core::Session,
-    content: &centurions_content::Content,
-    label: &str,
-) -> centurions_core::Session {
+pub fn checkpoint(state: &Session, content: &Content, label: &str) -> Session {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     // Parallel tests may share a label; each checkpoint needs its own file.
     let path = std::env::temp_dir().join(format!(
@@ -463,38 +308,16 @@ pub fn replay_command(
     state: &mut Session,
     resumed: &mut Session,
     content: &Content,
-) -> Vec<centurions_core::Event> {
+) -> Vec<Event> {
     let events = apply(command.clone(), state, content).unwrap();
     assert_eq!(apply(command, resumed, content).unwrap(), events);
     same_session(state, resumed);
     events
 }
 
-pub fn replay_rng(random: &mut centurions_core::RandomState, receipts: &[Value]) {
-    for receipt in receipts {
-        expect(random.bound(receipt.n::<i16>("bound")), &receipt["result"]);
-    }
-}
-
-pub fn advance_rng<'a>(
-    random: &mut centurions_core::RandomState,
-    receipts: &mut impl Iterator<Item = &'a Value>,
-    draws: u64,
-) {
-    while random.draws < draws {
-        let receipt = receipts.next().unwrap();
-        expect(random.bound(receipt.n::<i16>("bound")), &receipt["result"]);
-    }
-    assert_eq!(random.draws, draws);
-}
-
-pub fn reject_command(
-    state: &centurions_core::Session,
-    content: &centurions_content::Content,
-    command: centurions_core::Command,
-) {
+pub fn reject_command(state: &Session, content: &Content, command: Command) {
     let mut candidate = state.clone();
-    assert!(centurions_core::apply(command, &mut candidate, content).is_err());
+    assert!(apply(command, &mut candidate, content).is_err());
     same_session(&candidate, state);
 }
 
@@ -507,86 +330,21 @@ pub fn refuse_command(
     let mut candidate = state.clone();
     let events = match apply(command, &mut candidate, content) {
         Err(centurions_core::RuleError::Refused { feedback }) => {
-            same_session(&candidate, state);
             feedback.into_iter().map(Event::Feedback).collect()
         }
         result => result.unwrap(),
     };
-    assert_eq!(
-        events,
-        feedback
-            .into_iter()
-            .map(centurions_core::Event::Feedback)
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(candidate.warriors, state.warriors);
-    assert_eq!(candidate.random, state.random);
-    let (after, before) = (
-        candidate.combat.as_ref().unwrap(),
-        state.combat.as_ref().unwrap(),
-    );
-    assert_eq!(after.map, before.map);
-    assert_eq!(after.squad, before.squad);
-    assert_eq!(after.enemies, before.enemies);
-    assert_eq!(after.cursor, before.cursor);
-    assert_eq!(after.order, before.order);
-}
-
-pub fn compare_party(actual: &[centurions_content::Warrior], snapshot: &Value) {
-    compare_party_named(actual, snapshot, "party");
-}
-
-pub fn compare_party_named(
-    actual: &[centurions_content::Warrior],
-    snapshot: &Value,
-    context: &str,
-) {
-    assert_bytes(&record_bytes(actual), &bytes(&snapshot["party"]), context);
+    let expected: Vec<_> = feedback.into_iter().map(Event::Feedback).collect();
+    assert_eq!(events, expected);
+    same_session(&candidate, state);
 }
 
 pub fn compare_record_bytes<T: NativeRecord>(actual: &[T], expected: &[T]) {
     assert_eq!(record_bytes(actual), record_bytes(expected));
 }
 
-#[track_caller]
-pub fn assert_rng(actual: &centurions_core::RandomState, seed: &Value, draws: &Value) {
-    assert_eq!(
-        actual.seed,
-        seed.as_u64().unwrap() as u32,
-        "native RNG seed"
-    );
-    assert_eq!(actual.draws, draws.as_u64().unwrap(), "native RNG draws");
-}
-
-/// Native attack receipts may append caller metadata after the two body IDs.
-pub fn attack_calls(value: &Value) -> Vec<(i16, i16)> {
-    value
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|call| {
-            (
-                call[0].as_i64().unwrap() as i16,
-                call[1].as_i64().unwrap() as i16,
-            )
-        })
-        .collect()
-}
-
 pub fn same_captured_session(actual: &Session, expected: &Session) {
     same_session(&captured_session(actual), &captured_session(expected));
-}
-
-/// Apply the sparse byte changes recorded by original-instruction receipts.
-pub fn patch_bytes(raw: &mut [u8], changes: &Value) {
-    for change in changes.as_array().unwrap() {
-        raw[change[0].as_u64().unwrap() as usize] = change[1].as_u64().unwrap() as u8;
-    }
-}
-
-/// Remove one saved field when constructing a historical-version specimen.
-pub fn remove_field(value: &mut Value, name: &str) {
-    value.as_object_mut().unwrap().remove(name);
 }
 
 pub fn sound_events(sounds: impl IntoIterator<Item = i16>) -> Vec<Event> {
@@ -594,4 +352,35 @@ pub fn sound_events(sounds: impl IntoIterator<Item = i16>) -> Vec<Event> {
         .into_iter()
         .map(|resource_id| Event::Sound { resource_id })
         .collect()
+}
+
+#[path = "../native/comparison.rs"]
+mod native_comparison;
+pub(crate) use native_comparison::native_expect;
+pub use native_comparison::{
+    advance_rng, assert_bytes, assert_rng, attack_calls, buffer, compare_party,
+    compare_party_named, expect, expect_array, native_value, patch_bytes, replay_rng,
+};
+
+/// Pause before a scheduled record, so its first public Continue owns execution.
+pub fn pause_script(state: &mut Session, record: Vec<u8>, cursor: u8) {
+    let position = state.exploration.as_mut().unwrap();
+    position.script = Some(centurions_core::ScriptState::scheduled(record, cursor));
+    position.presentation = Some(centurions_core::Presentation::Dialogue {
+        id: 0,
+        text: String::new(),
+    });
+}
+
+pub fn script_record(actions: &[(i16, i16)]) -> Vec<u8> {
+    let mut record = vec![0; 42];
+    for (slot, (op, parameter)) in actions.iter().enumerate() {
+        record[8 + slot * 2..10 + slot * 2].copy_from_slice(&op.to_be_bytes());
+        record[24 + slot * 2..26 + slot * 2].copy_from_slice(&parameter.to_be_bytes());
+    }
+    record
+}
+
+pub fn script(state: &Session) -> &centurions_core::ScriptState {
+    state.exploration.as_ref().unwrap().script.as_ref().unwrap()
 }

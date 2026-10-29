@@ -60,7 +60,14 @@ fn place_spawn(
     body: i16,
 ) -> Result<footprint::PlacedBody, RuleError> {
     let mut map = combat.map.clone();
-    for ring in 1..=180_i16 {
+    // The original widens the square without limit. Past this ring every
+    // in-window cell has been tried, so finding none means it never ends.
+    let reach = |axis: i16, shift: i16| {
+        let absolute = i32::from(axis) + i32::from(shift) + 5;
+        (absolute - 7).max(83 - absolute).max(1)
+    };
+    let last = reach(center.0, map.shift.0).max(reach(center.1, map.shift.1));
+    for ring in 1..=last.min(i32::from(i16::MAX)) as i16 {
         for dy in -ring..ring {
             for dx in -ring..ring {
                 let position = (center.0.wrapping_add(dx), center.1.wrapping_add(dy));
@@ -79,7 +86,9 @@ fn place_spawn(
             }
         }
     }
-    Err(unsupported("summoning placement budget exhausted"))
+    Err(unsupported(
+        "no passable summoning placement; the original search never ends",
+    ))
 }
 
 pub(super) fn spawn(
@@ -127,17 +136,21 @@ pub(crate) fn spawn_at(
         count
     };
     if count < 0 || combat.enemies.records.len() + count as usize > 100 {
+        // Native body110 writes into warrior0's position array. The shared
+        // command boundary rejects this corruption without partial changes.
         return Err(unsupported(
             "summon count exceeds the native roster capacity",
         ));
     }
     for _ in 0..count {
+        combat.monster_work_written = true;
         let monster = build_monster(definitions, id, faction, combat.difficulty, random)?;
         let body = combat.enemies.records.len() as i16 + 10;
         let placed = place_spawn(combat, mission, &monster, center, body)?;
         combat.map = placed.map;
         if placed.monster.record().faction()? != 0 {
             result.hostile_additions = result.hostile_additions.wrapping_add(1);
+            combat.victory_work.add_total(1);
         }
         combat.enemies.records.push(placed.monster);
         combat.enemies.positions.push(placed.position);

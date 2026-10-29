@@ -23,8 +23,24 @@ pub(super) enum ScriptStep {
 }
 
 pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+    crate::combat::runtime::resume_turn_child(state)?;
     let mut effects = Vec::new();
     for _ in 0..128 {
+        if state.zero_time.is_some()
+            || state.combat_story.is_some()
+            || state.turn_dispatch.is_some()
+        {
+            let record = state
+                .exploration
+                .as_ref()
+                .and_then(|p| p.script.as_ref())
+                .map(|script| script.record.clone());
+            if let Some(record) = record {
+                super::retain_turn_header(state, &record);
+                crate::time::retain_zero_work(state, &record);
+                crate::combat::runtime::retain_death_header(state, &record);
+            }
+        }
         if let Some(stamp) = state
             .exploration
             .as_ref()
@@ -57,6 +73,8 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                             },
                             script,
                             id,
+                            &mut state.native_work.encounter_work,
+                            false,
                         )?);
                         effects.push(Event::StoryPresented);
                         return Ok(effects);
@@ -67,7 +85,14 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                         &state.menus
                     };
                     effects.push(Event::Sound { resource_id: 20005 });
-                    position.presentation = present_menu(map, table, script, id)?;
+                    position.presentation = present_menu(
+                        map,
+                        table,
+                        script,
+                        id,
+                        &mut state.native_work.encounter_work,
+                        false,
+                    )?;
                     if position.presentation.is_some() {
                         effects.push(Event::StoryPresented);
                         return Ok(effects);
@@ -151,6 +176,10 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                 cursor,
                 &mut effects,
             )?,
+            Operation::ResetExperience => {
+                effects.extend(super::loot::reset_experience(state, content)?);
+                ScriptStep::Pause
+            }
             Operation::PartyConditionBranch
             | Operation::GameTimeBranch
             | Operation::ItemChargesBranch

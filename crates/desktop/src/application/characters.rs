@@ -137,6 +137,7 @@ impl Application {
                 }
                 let mut editor = crate::editor::WarriorEditor::new(state, warrior)?;
                 editor.free = self.editing;
+                editor.enter(content)?;
                 self.characters.editor = Some(editor);
             }
             ApplicationAction::EditorItem(item) => {

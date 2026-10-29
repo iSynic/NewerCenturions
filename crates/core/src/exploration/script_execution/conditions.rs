@@ -3,14 +3,15 @@ use super::super::{present_menu, present_typed, unsupported};
 use super::{Operation, ScriptStep};
 use crate::{
     Event, MapState, Presentation, RuleError, Session, story, story_allies, story_inventory,
-    story_variables, travel, typed_encounter,
+    story_variables, travel,
 };
 use centurions_content::mission::OpeningMission;
 use centurions_content::records::StoryRecord;
 use centurions_content::records::{
-    AllyClassBranchExtra, ChanceBranchExtra, EnemyRecord, ExtraTable, ItemConsumptionExtra,
-    ItemDefinition, MapEffectExtra, MapMutationExtra, ObjectRectangleExtra, PaymentBranchExtra,
-    RandomBranchExtra, RegionChangeExtra, RegionTableMut, StoryRecordMut, TravelExtra,
+    AllyClassBranchExtra, ChanceBranchExtra, EnemyRecord, EventReplacementExtra, ExtraTable,
+    ItemConsumptionExtra, ItemDefinition, MapEffectExtra, MapMutationExtra, ObjectRectangleExtra,
+    PaymentBranchExtra, RandomBranchExtra, RegionChangeExtra, RegionTableMut, StoryRecordMut,
+    TravelExtra,
 };
 use centurions_content::{Content, span, word};
 
@@ -30,6 +31,7 @@ pub(super) fn execute(
         Operation::ChangeRegion => {
             let extra =
                 ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let change = RegionChangeExtra(extra);
             let target = change.map()?;
             let authored = content
@@ -62,6 +64,7 @@ pub(super) fn execute(
         Operation::ClearObjects => {
             let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
                 .record(parameter.unsigned_abs() as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let rectangle = ObjectRectangleExtra(extra);
             let target = rectangle.map()?;
             let authored = content
@@ -69,27 +72,47 @@ pub(super) fn execute(
                 .ok_or("object clearing map unavailable")?;
             let first = rectangle.first()?;
             let last = rectangle.last()?;
-            OpeningMission::index(first.0, first.1)?;
-            OpeningMission::index(last.0, last.1)?;
-            let objects = if target == position.map {
-                &mut position.objects
+            let (objects, events) = if target == position.map {
+                (&mut position.objects, &mut position.events)
             } else {
-                &mut state
+                let records = state
                     .visited_maps
                     .entry(target)
-                    .or_insert_with(|| MapState::authored(authored))
-                    .objects
+                    .or_insert_with(|| MapState::authored(authored));
+                (&mut records.objects, &mut records.events)
             };
-            for x in first.0..=last.0 {
-                for y in first.1..=last.1 {
-                    objects[OpeningMission::index(x, y)?] = 0;
-                }
-            }
+            travel::clear_object_rectangle(objects, events, first, last)?;
         }
         Operation::ReplaceMapEvent | Operation::ChangeTiles | Operation::SetEventChances => {
             let extra =
                 ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let target = MapMutationExtra(extra).map()?;
+            if operation == Operation::ReplaceMapEvent && target < 0 {
+                let (saved, authored) = match target {
+                    -1 => (&mut state.menus, &map.menus),
+                    -2 => (&mut state.typed_encounters, &map.typed_encounters),
+                    _ => {
+                        return Err(RuleError::Invalid(
+                            "encounter replacement table unavailable".into(),
+                        ));
+                    }
+                };
+                let table = if saved.is_empty() { authored } else { &*saved };
+                *saved = story::replace_encounter_branch(
+                    table,
+                    extra,
+                    &map.script(EventReplacementExtra(extra).script()?)?,
+                )?;
+                let offset = usize::from(EventReplacementExtra(extra).slot()? as u16)
+                    * story::MENU_RECORD_BYTES;
+                let header = if target == -2 { 156 } else { 106 };
+                state
+                    .native_work
+                    .encounter_work
+                    .replace_header(target == -2, span(saved, offset, header)?)?;
+                return Ok(ScriptStep::Continue);
+            }
             let authored = content
                 .map(target)
                 .ok_or_else(|| RuleError::Invalid("map mutation target unavailable".into()))?;
@@ -142,6 +165,7 @@ pub(super) fn execute(
         Operation::MapEffect => {
             let extra =
                 ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let effect = MapEffectExtra(extra);
             effects.push(Event::OutdoorEffect {
                 effect: effect.effect()?,
@@ -154,16 +178,18 @@ pub(super) fn execute(
         Operation::ConsumePartyItems => {
             let tables = map.combat.as_ref().unwrap();
             let extra = ExtraTable(&tables.encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let consumed = story_inventory::consume_party_items_retained(
                 &state.warriors,
                 content,
                 &tables.race_moves,
                 extra,
-                state.native_work.inventory_record.as_ref(),
+                Some(&state.native_work.inventory_record),
             )?;
+            state.apply_equipment_globals(&consumed.global_writes)?;
             if let Some(definition) = consumed.definition {
                 state.native_work.loaded_item_field32 =
-                    Some(ItemDefinition(&definition).retained_field32()?);
+                    ItemDefinition(&definition).retained_field32()?;
                 state.native_work.ammunition_work.item = Some(definition);
             } else if consumed.consumed != 0 {
                 let consumption = ItemConsumptionExtra(extra);
@@ -172,14 +198,14 @@ pub(super) fn execute(
                 } else {
                     consumption.item()?
                 };
-                state.native_work.loaded_item_field32 = Some(
-                    state
-                        .native_work
-                        .ammunition_work
-                        .load_item(content, loaded)?,
-                );
+                state.native_work.loaded_item_field32 = state
+                    .native_work
+                    .ammunition_work
+                    .load_item(content, loaded)?;
             }
-            state.native_work.inventory_record = consumed.record;
+            if let Some(record) = consumed.record {
+                state.native_work.inventory_record = record;
+            }
             state.warriors = consumed.warriors;
             effects.extend(consumed.events);
         }
@@ -192,11 +218,19 @@ pub(super) fn execute(
         Operation::Travel | Operation::TeleportActivate => {
             let extra =
                 ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let destination = TravelExtra(extra);
             let target = destination.map(position.map)?;
             let x = destination.x(position.x)?;
             let y = destination.y(position.y)?;
             OpeningMission::index(x, y)?;
+            // 143bfa..143c20 replace A4/A3 only with a nonnegative target WORD.
+            let script = position.script.as_mut().unwrap();
+            let (a4, a3) = script.registers;
+            script.registers = (
+                destination.x(i32::from(a4))? as i16,
+                destination.y(i32::from(a3))? as i16,
+            );
             super::lands::enter_land(state, content, target)?;
             let position = state.exploration.as_mut().unwrap();
             position.x = x;
@@ -241,13 +275,21 @@ pub(super) fn execute(
             script.cursor = resume as u8;
         }
         Operation::Menu => {
+            script.menu = None;
             effects.push(Event::Sound { resource_id: 20005 });
             let table = if state.menus.is_empty() {
                 &map.menus
             } else {
                 &state.menus
             };
-            position.presentation = present_menu(map, table, script, parameter)?;
+            position.presentation = present_menu(
+                map,
+                table,
+                script,
+                parameter,
+                &mut state.native_work.encounter_work,
+                true,
+            )?;
             if position.presentation.is_some() {
                 effects.push(Event::StoryPresented);
                 return Ok(ScriptStep::Pause);
@@ -264,6 +306,8 @@ pub(super) fn execute(
                 },
                 script,
                 parameter,
+                &mut state.native_work.encounter_work,
+                true,
             )?);
             effects.push(Event::Sound { resource_id: 20005 });
             effects.push(Event::StoryPresented);
@@ -276,6 +320,7 @@ pub(super) fn execute(
         | Operation::AllyClassBranch => {
             let extra =
                 ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let continuation = match opcode {
                 21 => story_variables::party_item_condition(&state.warriors, extra)?,
                 76 => {
@@ -338,7 +383,14 @@ pub(super) fn execute(
                     } else {
                         &state.menus
                     };
-                    position.presentation = present_menu(map, table, script, id)?;
+                    position.presentation = present_menu(
+                        map,
+                        table,
+                        script,
+                        id,
+                        &mut state.native_work.encounter_work,
+                        true,
+                    )?;
                     if position.presentation.is_some() {
                         effects.push(Event::StoryPresented);
                         return Ok(ScriptStep::Pause);
@@ -355,6 +407,8 @@ pub(super) fn execute(
                         },
                         script,
                         id,
+                        &mut state.native_work.encounter_work,
+                        true,
                     )?);
                     effects.push(Event::StoryPresented);
                     return Ok(ScriptStep::Pause);
@@ -370,17 +424,24 @@ pub(super) fn execute(
                 RuleError::Invalid("menu mutation has no active encounter".into())
             })?;
             let id = menu.id;
+            let original = menu.original.clone();
+            state.native_work.encounter_work.disable_choice(parameter)?;
+            let header = state.native_work.encounter_work.header(false);
             if state.menus.is_empty() {
                 state.menus = map.menus.clone();
             }
             let offset = id as usize * story::MENU_RECORD_BYTES;
-            let replacement = story::disable_menu_entry(
-                span(&state.menus, offset, story::MENU_RECORD_BYTES)?,
-                parameter,
+            span(&state.menus, offset, header.len())?;
+            state.menus[offset..offset + header.len()].copy_from_slice(header);
+            script.record = original;
+            position.presentation = present_menu(
+                map,
+                &state.menus,
+                script,
+                id,
+                &mut state.native_work.encounter_work,
+                false,
             )?;
-            state.menus[offset..offset + story::MENU_RECORD_BYTES].copy_from_slice(&replacement);
-            script.record = menu.original.clone();
-            position.presentation = present_menu(map, &state.menus, script, id)?;
             if position.presentation.is_some() {
                 effects.push(Event::StoryPresented);
                 return Ok(ScriptStep::Pause);
@@ -391,6 +452,7 @@ pub(super) fn execute(
         Operation::DisableEncounterChoice => {
             let extra =
                 ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let choice = word(extra, 2)?;
             let offset = usize::try_from(word(extra, 0)?)
                 .ok()
@@ -411,6 +473,7 @@ pub(super) fn execute(
         | Operation::TileBranch => {
             let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
                 .record(usize::from(parameter.unsigned_abs()))?;
+            state.native_work.extra_record = extra.to_vec();
             let jump = if operation == Operation::PaymentBranch {
                 let payment = crate::story_inventory::payment::pay(
                     &crate::story_inventory::payment::PaymentState {
@@ -501,54 +564,25 @@ pub(super) fn execute(
                         script.restart_from(&replacement);
                     }
                     story::ConditionalJump::MenuBranch { branch, start } => {
-                        let id = script
-                            .menu
-                            .as_ref()
-                            .ok_or_else(|| {
-                                RuleError::Invalid("conditional branch has no active menu".into())
-                            })?
-                            .id;
-                        let table = if state.menus.is_empty() {
-                            &map.menus
-                        } else {
-                            &state.menus
-                        };
-                        let menu = span(
-                            table,
-                            id as usize * story::MENU_RECORD_BYTES,
-                            story::MENU_RECORD_BYTES,
-                        )?;
-                        StoryRecordMut(&mut script.record)
-                            .write_actions(&story::dispatch_menu_branch(menu, branch as i8 + 1)?);
+                        StoryRecordMut(&mut script.record).write_actions(
+                            &story::dispatch_menu_branch(
+                                state.native_work.encounter_work.header(false),
+                                branch as i8 + 1,
+                            )?,
+                        );
                         script.cursor = start;
                     }
                     story::ConditionalJump::TypedBranch { branch, start } => {
-                        let menu = script
-                            .menu
-                            .as_ref()
-                            .filter(|m| m.typed)
-                            .ok_or("conditional branch has no active typed encounter")?;
-                        let (id, eliminated) = (menu.id, menu.eliminated);
-                        let table = if state.typed_encounters.is_empty() {
-                            &map.typed_encounters
-                        } else {
-                            &state.typed_encounters
-                        };
-                        let mut record = span(
-                            table,
-                            id as usize * typed_encounter::RECORD_BYTES,
-                            typed_encounter::RECORD_BYTES,
-                        )?
-                        .to_vec();
-                        typed_encounter::eliminate_branches(&mut record, eliminated);
                         StoryRecordMut(&mut script.record).write_actions(
-                            &story::dispatch_menu_branch(&record, branch as i8 + 1)?,
+                            &story::dispatch_menu_branch(
+                                state.native_work.encounter_work.header(true),
+                                branch as i8 + 1,
+                            )?,
                         );
                         script.cursor = start;
                     }
                     story::ConditionalJump::EndMenu => {
                         position.script = None;
-                        return Ok(ScriptStep::Pause);
                     }
                     story::ConditionalJump::LastAction => {
                         script.cursor = 7;

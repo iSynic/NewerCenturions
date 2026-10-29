@@ -35,6 +35,13 @@ impl EquipmentEligibility<'_> {
     pub fn permits_required_school(&self, index: usize) -> Result<bool, ContentError> {
         bit(self.0, 114, index)
     }
+    /// BitTst with a signed index: -1 reads bit 7 of the preceding byte 113.
+    pub fn permits_required_school_bit(&self, index: i16) -> Result<bool, ContentError> {
+        let byte = 114 + isize::from(index >> 3);
+        let byte = usize::try_from(byte)
+            .map_err(|_| ContentError::Invalid("required school bit before record".into()))?;
+        Ok(span(self.0, byte, 1)?[0] & (0x80 >> (index & 7)) != 0)
+    }
 }
 
 impl RaceEquipment<'_> {

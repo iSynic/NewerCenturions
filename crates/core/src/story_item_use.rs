@@ -9,6 +9,8 @@ pub struct ScenarioItemUse {
     pub script: Option<i16>,
     pub sounds: Vec<i16>,
     pub warnings: Vec<i16>,
+    /// Party-wide writes from removing a worn discarded item.
+    pub(crate) global_writes: Vec<crate::equipment::GlobalWrite>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -86,6 +88,7 @@ pub fn use_scenario_item(
         } else {
             vec![]
         },
+        global_writes: vec![],
     };
     result.warriors[member]
         .record_mut()
@@ -112,6 +115,7 @@ pub fn use_scenario_item(
             )?;
             result.warriors[member] = removed.warrior;
             result.warnings.extend(removed.warnings);
+            result.global_writes = removed.global_writes;
             if removed.native_return as u16 == 0 {
                 return Ok(result);
             }

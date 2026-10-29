@@ -1,8 +1,8 @@
-use crate::{Content, Event, RuleError, Session, combat, feedback::NativeFeedback, story_health};
-use centurions_content::records::{
-    AttackPacket, AttackPacketMut, Condition, DevelopmentField, ItemDefinition, ScriptedSpellExtra,
-    WarriorRecord, WarriorRecordMut,
-};
+mod outdoors;
+mod targets;
+use crate::{Content, Event, RuleError, Session, combat};
+use centurions_content::records::{AttackPacketMut, ItemDefinition, ScriptedSpellExtra};
+pub(crate) use outdoors::{party as resolve_party_outdoors, resolve as resolve_outdoors};
 
 /// newland 17/18: the existing selection mask is retained by 17 and replaced by 18.
 pub(crate) fn apply(
@@ -11,6 +11,7 @@ pub(crate) fn apply(
     extra: &[u8],
     all: bool,
 ) -> Result<Vec<Event>, RuleError> {
+    let caster = targets::caster(state);
     let extra = ScriptedSpellExtra::new(extra)?;
     let id = extra.spell()?;
     let count = extra.attack_count()?;
@@ -26,349 +27,118 @@ pub(crate) fn apply(
     if extra.overrides_saving_throw()? {
         AttackPacketMut(&mut packet).set_saving_throw_mode(3);
     }
-    let effect = AttackPacket(&packet).effect()?.wrapping_abs();
-    // The supplied scripted packet uses condition 23. Other effects retain their explicit adapters.
-    if !matches!(effect, 0 | 23 | 57) {
-        return Err(RuleError::Unsupported {
-            action: "story.spell",
-            dependency: "other scripted effect or tactical target selection",
-        });
+    // resolvespell's movement and summon arms read WORD443722/443724. newland17 writes
+    // its script target there (143a82..143ae2); newland18 leaves an earlier writer's cell.
+    let arm = combat::spells::detached::arm_of(&packet)?;
+    if state.combat.is_some() && arm.is_some() && state.selected_warrior >= state.warriors.len() {
+        // The session admits only a selected warrior inside the squad.
+        return Err(
+            "scripted combat movement or summon arm for an inactive selected warrior".into(),
+        );
     }
     if all {
-        state.native_work.party_mask.fill(0);
+        state.clear_spell_targets();
         state.native_work.party_mask[..state.warriors.len()].fill(1);
     }
+    let selected = if !all && state.combat.is_some() {
+        Some(targets::select(state, content, map, &packet, id, count)?)
+    } else {
+        None
+    };
     if let Some(combat) = state.combat.as_mut() {
         let mut mask = [0; 110];
         if all {
             mask[..state.warriors.len()].fill(1);
         } else {
-            let story = state
-                .combat_story
-                .as_ref()
-                .ok_or("scripted tactical spell origin missing")?;
-            let target = combat::spells::SpellTarget {
-                first: story.entry.x as i16,
-                second: story.entry.y as i16,
-                kind: 3,
-            };
-            let context = combat::spells::SpellContext {
-                packet: &packet,
-                id,
-                count,
-                caster: story.actor,
-                initiative: combat.cursor as i16,
-                collision: false,
-            };
-            // newland overwrites the two coordinates but leaves the cleared kind WORD.
-            // spelltargets therefore reads the coordinate as an index into native party-position memory.
-            let first = target.first;
-            let point = if (0..state.warriors.len() as i16).contains(&first) {
-                combat.squad.positions[first as usize]
-            } else if first >= 8 {
-                let index = (first as usize * 4 - 30) / 2;
-                (
-                    *combat
-                        .order
-                        .get(index)
-                        .ok_or("script target position alias outside initiative")?,
-                    *combat
-                        .order
-                        .get(index + 1)
-                        .ok_or("script target position alias outside initiative")?,
-                )
-            } else {
-                return Err(RuleError::Unsupported {
-                    action: "story.spell",
-                    dependency: "script target position in unrepresented selection work",
-                });
-            };
-            let selected_target = combat::spells::SpellTarget {
-                first: point.0 + combat.map.shift.0 + 5,
-                second: point.1 + combat.map.shift.1 + 5,
-                kind: 3,
-            };
-            let selected = combat::spells::target_mask_with_origin(
-                combat,
-                &state.warriors,
-                &map.areas,
-                (&selected_target, &target),
-                &context,
-                &combat.spell_fields,
-                &mut state.random,
-            )?;
+            let (selected, target) = selected.ok_or("scripted tactical selection missing")?;
             mask = selected.mask;
             combat.spell_fields = selected.fields;
+            combat.target_work.cell = target;
         }
         state.native_work.party_mask.copy_from_slice(&mask[..6]);
-        combat.attack_packet = Some(packet.clone());
-        combat.attack_identity = Some([id / 1000 - 1, id % 1000 / 100 - 1, id % 100 - 1]);
+        combat.target_tail = mask[6..].to_vec();
+        combat.attack_packet = packet.clone();
+        combat.attack_identity = [id / 1000 - 1, id % 1000 / 100 - 1, id % 100 - 1];
         state.native_work.attack_count = count;
-        return combat::runtime::resolve_spell_mask(
+        combat.ready = 1;
+        if let Some(arm) = arm {
+            combat.mark_monster_spell_work(&packet, &mask);
+            combat.inactive_rounds = 0;
+            let result = combat::runtime::live_arm(
+                combat,
+                &mut state.warriors,
+                (map, &mut state.random),
+                (arm, state.selected_warrior),
+                (id, &packet, count),
+                &mut state.bandage_ready,
+                (Some(caster), None),
+                Some((&content.items, &mut state.native_work.ammunition_work)),
+            )?;
+            combat.ready = 0;
+            if !all {
+                // newland17's spelltargets (143af2, triple argument 0) writes -1 after resolvespell.
+                combat.target_work.resolved(0);
+            }
+            return Ok(result);
+        }
+        let memory = combat::spells::RestrictionMemoryView::ordinary_startup(
+            &map.item_cache,
+            state
+                .native_work
+                .ammunition_work
+                .item
+                .as_ref()
+                .map(|item| ItemDefinition(item).restriction_alias())
+                .transpose()?,
+        )
+        .with_tables(map)
+        .with_definitions(&content.items)
+        .with_selected_warrior(state.selected_warrior as i16)
+        .with_alias_owners(
+            combat::warrior_alias::Owners::new(
+                state.native_work.ammunition_work.item.as_deref(),
+                &state.native_work.shop_work,
+                state
+                    .exploration
+                    .as_ref()
+                    .map(|position| position.event_headers.as_slice()),
+            )
+            .with_backup(&state.native_work.warrior_table),
+        )
+        // resist reads the body at 4470b8[447194] and WORD4435d2 or WORD447196.
+        .with_live_caster(combat, &state.warriors)
+        .with_live_resist_caster(
+            combat,
+            &state.warriors,
+            (
+                Some(state.selected_warrior as i16),
+                Some(combat.selected_enemy),
+            ),
+        );
+        let result = combat::runtime::resolve_spell_mask(
             combat,
             &mut state.warriors,
             &mut state.random,
             (id, &packet, count),
             &mask,
-            state
-                .combat_story
-                .as_ref()
-                .map_or(state.selected_warrior as i16, |s| s.actor),
-            combat::spells::RestrictionMemoryView::ordinary_startup(
-                &map.item_cache,
-                state
-                    .native_work
-                    .ammunition_work
-                    .item
-                    .as_ref()
-                    .map(|item| ItemDefinition(item).restriction_alias())
-                    .transpose()?,
-            ),
-        );
-    }
-    resolve_outdoors(state, &packet, id, count, state.selected_warrior, false)
-}
-
-/// resolvespell151022 outdoors still runs resistance, but ignores its refusal result.
-pub(crate) fn resolve_outdoors(
-    state: &mut Session,
-    packet: &[u8],
-    id: i16,
-    count: i16,
-    caster: usize,
-    include_allies: bool,
-) -> Result<Vec<Event>, RuleError> {
-    let effect = AttackPacket(packet).effect()?.wrapping_abs();
-    if !matches!(effect, 0..=40 | 57 | 64 | 70)
-        && !(AttackPacket(packet).targeting_mode() == 7 && effect == 110)
-    {
-        return Err(RuleError::Unsupported {
-            action: "psi.outdoor",
-            dependency: "other outdoor spell effect",
-        });
-    }
-    let mut duration = state.random.range(
-        AttackPacket(packet).duration_bounds().0,
-        AttackPacket(packet).duration_bounds().1,
-    );
-    if AttackPacket(packet).additional_duration_bounds().0 != 0 {
-        for _ in 0..count {
-            duration = duration.wrapping_add(state.random.range(
-                AttackPacket(packet).additional_duration_bounds().0,
-                AttackPacket(packet).additional_duration_bounds().1,
-            ));
-        }
-    }
-    if AttackPacket(packet).targeting_mode() == 7 {
-        if effect == 110 {
-            combat::party_buffs::extend_scenario_tail(state, duration)?;
-        } else {
-            combat::party_buffs::extend(&mut state.party_buffs, effect, duration)?;
-        }
-        state.native_work.attack_packet = Some(packet.to_vec());
-        return Ok(vec![]);
-    }
-    let position = state.exploration.as_ref().unwrap();
-    let (x, y) = (position.x as i16, position.y as i16);
-    let mut health = story_health::context(
-        &state.warriors,
-        state.selected_warrior,
-        state.native_work.health_context.as_ref(),
-    );
-    state.native_work.attack_packet = Some(packet.to_vec());
-    health.effect = AttackPacket(packet).health_effect();
-    let mut events = Vec::new();
-    for member in 0..state.warriors.len() {
-        if state.native_work.party_mask[member] <= 0 {
-            continue;
-        }
-        let w = &mut state.warriors[member].bytes;
-        // resist still executes outdoors; its return value does not suppress resolvedamage.
-        let race = WarriorRecord::from_bytes(w).race()?;
-        let excluded = AttackPacket(packet).race_restriction()? != 0
-            && (1..=16).contains(&race)
-            && AttackPacket(packet).race_restriction()? as u16 & (0x8000 >> (race - 1)) != 0;
-        if excluded {
-            events.push(Event::Feedback(NativeFeedback::Flash {
-                address: 0x4018b4,
-                x: 50,
-                y: 50,
-                wait: 40,
-                sound: 139,
-            }));
-        } else if !matches!(AttackPacket(packet).saving_throw_mode(), 1 | 3..=255) {
-            let mut saved = false;
-            if AttackPacket(packet).defense_category() == 0 {
-                let threshold = DevelopmentField::Resistance(0)
-                    .read(w)?
-                    .wrapping_add(if race == 3 { 1000 } else { 0 })
-                    .wrapping_add(
-                        AttackPacket(packet)
-                            .save_bonus_per_attack()
-                            .wrapping_mul(count),
-                    );
-                saved = state.random.bound(100) <= threshold;
-            }
-            if !saved
-                && !(matches!(AttackPacket(packet).defense_category(), 0 | 5)
-                    && WarriorRecord::from_bytes(w).automatic_mode()? != 0)
-            {
-                state.random.bound(100);
-            }
-        }
-        let result = combat::damage::resolve_damage(
-            w,
-            false,
-            &combat::damage::DamagePacket {
-                bytes: packet.to_vec(),
-                attack_count: count,
-            },
-            combat::damage::DamageFlags {
-                shield: true,
-                armor: true,
-                saves: true,
-                armor_filter: false,
-            },
-            &mut state.random,
+            caster,
+            memory,
         )?;
-        if result.shield_sound {
-            events.push(Event::Sound { resource_id: 206 });
+        combat.ready = 0;
+        if !all {
+            combat.target_work.resolved(0);
         }
-        let mut follow_up = None;
-        if (1..=40).contains(&effect) {
-            combat::spell_conditions::add_duration(w, false, effect, duration)?;
-        }
-        if matches!(effect, 1..=40 | 64 | 70) {
-            follow_up = Some(
-                if WarriorRecord::from_bytes(w).condition(Condition::ReflectingScans)? != 0
-                    && state.random.bound(100) < 34
-                {
-                    caster
-                } else {
-                    member
-                },
-            );
-            if result.total == 0 {
-                events.push(Event::Sound {
-                    resource_id: AttackPacket(packet).impact_sound()?,
-                });
-                events.push(Event::OutdoorEffect {
-                    effect: AttackPacket(packet).effect_animation().wrapping_abs(),
-                    x,
-                    y,
-                    size: 32,
-                    delay: 0,
-                });
-            }
-        }
-        if let Some(target) = follow_up {
-            combat::spell_conditions::follow_up(&mut state.warriors[target].bytes, false, effect)?;
-        }
-        let w = &mut state.warriors[member].bytes;
-        let before = WarriorRecord::from_bytes(w).stamina()?;
-        let defeated = before > 0 && before.wrapping_sub(result.total) < 1;
-        if result.total != 0 && before > -10 {
-            events.push(Event::Sound {
-                resource_id: AttackPacket(packet).impact_sound()?,
-            });
-            if result.total < 0 {
-                let outcome = story_health::heal_outdoors(
-                    &state.warriors,
-                    member,
-                    result.total.wrapping_abs(),
-                    true,
-                    &health,
-                    &mut state.random,
-                )?;
-                for event in outcome.events {
-                    match event {
-                        story_health::HealthEvent::Animation { effect, .. } => {
-                            events.push(Event::OutdoorEffect {
-                                effect: i16::from(effect),
-                                x,
-                                y,
-                                size: 32,
-                                delay: 0,
-                            })
-                        }
-                        story_health::HealthEvent::Sound(resource_id) => {
-                            events.push(Event::Sound { resource_id })
-                        }
-                        _ => {}
-                    }
-                }
-                state.warriors = outcome.warriors;
-                health = outcome.context;
-            } else if before >= 0 {
-                WarriorRecordMut::from_bytes(w).set_stamina(before.wrapping_sub(result.total));
-                health.affected[member] = -1;
-                if defeated {
-                    // Outdoor killbody increments availability and plays a death sound, without combat record cleanup.
-                    health.unavailable = health.unavailable.wrapping_add(1);
-                    health.last_body = member as i16;
-                    events.push(Event::Sound {
-                        resource_id: state.random.bound(2).wrapping_add(506),
-                    });
-                } else {
-                    events.push(Event::OutdoorEffect {
-                        effect: AttackPacket(packet).effect_animation().wrapping_abs(),
-                        x,
-                        y,
-                        size: 32,
-                        delay: 0,
-                    });
-                }
-            }
-        }
-        events.push(Event::SpellResolved {
-            caster: None,
-            spell: id,
-            target: member as i16,
-            damage: result.total,
-            defeated,
-        });
+        state.commit_alias_writes()?;
+        return Ok(result);
     }
-    if include_allies {
-        for ally in state.allies[..state.ally_count * crate::story_allies::ALLY_BYTES]
-            .as_chunks_mut::<{ crate::story_allies::ALLY_BYTES }>()
-            .0
-        {
-            // Currently selectable party/multi outdoor packets have duration effects only.
-            let result = combat::damage::resolve_damage(
-                ally,
-                true,
-                &combat::damage::DamagePacket {
-                    bytes: packet.to_vec(),
-                    attack_count: count,
-                },
-                combat::damage::DamageFlags {
-                    shield: true,
-                    armor: true,
-                    saves: true,
-                    armor_filter: false,
-                },
-                &mut state.random,
-            )?;
-            if result.total != 0 {
-                return Err(RuleError::Unsupported {
-                    action: "psi.outdoor",
-                    dependency: "outdoor allied-body damage continuation",
-                });
-            }
-            if result.shield_sound {
-                events.push(Event::Sound { resource_id: 206 });
-            }
-            if (1..=40).contains(&effect) {
-                combat::spell_conditions::apply(ally, true, effect, duration, &mut state.random)?;
-                events.push(Event::Sound {
-                    resource_id: AttackPacket(packet).impact_sound()?,
-                });
-            }
-        }
+    state.native_work.attack_identity = [id / 1000 - 1, id % 1000 / 100 - 1, id % 100 - 1];
+    state.native_work.attack_count = count;
+    state.set_ready(1);
+    let outcome = resolve_outdoors(state, content, &packet, id, count)?;
+    if outcome.flow == combat::runtime::TurnFlow::Terminated {
+        return Ok(outcome.events);
     }
-    // heal1287dc writes the effect byte in the retained attack packet itself.
-    AttackPacketMut(state.native_work.attack_packet.as_mut().unwrap())
-        .set_health_effect(health.effect as u8);
-    state.native_work.health_context = Some(health);
-    Ok(events)
+    // newland143afe..143b0c surrounds the outdoor resolver with Ready1/0.
+    state.set_ready(0);
+    Ok(outcome.events)
 }

@@ -51,7 +51,7 @@ pub(super) fn compare(fixture: Value, elemental_audio: bool) {
                     &[0; 58],
                 )
                 .unwrap_or_else(|error| panic!("{context}: {error:?}"));
-                combat.attack_packet = Some(packet);
+                combat.attack_packet = packet;
                 let mut sounds = result.sounds;
                 sounds.push(if elemental_audio {
                     centurions_core::combat::ally_turns::result_audio(
@@ -91,7 +91,7 @@ pub(super) fn compare(fixture: Value, elemental_audio: bool) {
             let actual: Vec<_> = support::record_bytes(&combat.enemies.records);
             support::native_expect! {
                 bytes actual => &case["records_after"], &format!("{context} records");
-                bytes combat.attack_packet.as_ref().unwrap() => &case["packet_after"], &format!("{context} packet");
+                bytes combat.attack_packet => &case["packet_after"], &format!("{context} packet");
             }
             assert_eq!(combat.map.tiles, case.words("map_after"), "{context} map");
             assert_eq!(combat.order, case.words("order_after"), "{context} order");

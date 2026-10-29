@@ -1,13 +1,15 @@
 use centurions_content::records::SHOP_BYTES as RECORD;
 mod access;
+mod work;
+pub use work::ShopWork;
 mod generated_stock;
 pub use access::Access;
-use access::{active, records, refused};
+use access::{active, refused};
 pub(crate) use access::{alter, close, command_allowed, open, validate, visit, visit_restricted};
 mod catalog;
 mod pricing;
 pub(crate) use catalog::display_record;
 use catalog::enhanced_stock;
-pub use catalog::{preview, price, stock};
+pub use catalog::{preview, price, stock, stock_family};
 mod transactions;
 pub(crate) use transactions::{buy, reload, sell};

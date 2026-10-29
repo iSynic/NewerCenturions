@@ -1,8 +1,8 @@
 //! Named operations at the maintained story boundary. Numeric identities come
 //! from Centurions newland, not Realmz. This derived type is never serialized;
 //! original record bytes and unknown-opcode diagnostics remain authoritative.
-//! The death and battle-round interpreters match the same names; each accepts
-//! only its own subset and keeps its own fallback for the rest.
+//! The death and battle-round interpreters match the same names. Round-local
+//! operations run there; other round operations enter the shared script owner.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Operation {
     Clinic,
@@ -62,6 +62,7 @@ pub(crate) enum Operation {
     ScenarioRegistration,
     CombatCleanup,
     UndoLastStep,
+    ResetExperience,
     SuppressAllies,
     GroupBattle,
     AdjustStatistics,
@@ -117,14 +118,9 @@ pub(crate) enum Operation {
     DisableEncounterChoice,
     ChoosePartyInverted,
     EliminateComplexBranch,
-    /// An original newland arm not yet recovered; its execution is a diagnostic.
-    Unknown(i16),
     /// A value with no newland arm: the switch falls through to the next action.
     Unarmed(i16),
 }
-
-/// newland arms (0x1400e4) that have no named operation yet.
-const UNRECOVERED_ARMS: [i16; 1] = [102];
 
 impl Operation {
     pub(crate) fn from_native(opcode: i16) -> Self {
@@ -187,6 +183,7 @@ impl Operation {
             99 => Self::ScenarioRegistration,
             100 => Self::CombatCleanup,
             101 => Self::UndoLastStep,
+            102 => Self::ResetExperience,
             105 => Self::SuppressAllies,
             107 => Self::GroupBattle,
             108 => Self::AdjustStatistics,
@@ -241,7 +238,6 @@ impl Operation {
             104 => Self::SetRandomBattles,
             106 => Self::SetLandLight,
             127 => Self::ContinueIfMonster,
-            other if UNRECOVERED_ARMS.contains(&other) => Self::Unknown(other),
             other => Self::Unarmed(other),
         }
     }
@@ -305,6 +301,7 @@ impl Operation {
             Self::ScenarioRegistration => 99,
             Self::CombatCleanup => 100,
             Self::UndoLastStep => 101,
+            Self::ResetExperience => 102,
             Self::SuppressAllies => 105,
             Self::GroupBattle => 107,
             Self::AdjustStatistics => 108,
@@ -360,7 +357,7 @@ impl Operation {
             Self::CheckRegisteredScenario => 84,
             Self::SetRandomBattles => 104,
             Self::ContinueIfMonster => 127,
-            Self::Unknown(other) | Self::Unarmed(other) => other,
+            Self::Unarmed(other) => other,
         }
     }
 }

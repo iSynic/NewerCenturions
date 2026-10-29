@@ -17,7 +17,6 @@ pub struct Audio {
     current_music: Cell<Option<usize>>,
     music_until: Cell<f64>,
     pending_sounds: RefCell<VecDeque<(f64, i16)>>,
-    ticks_per_second: Cell<f64>,
 }
 impl Audio {
     pub async fn load(content: &Content, resource_root: &Path) -> Result<Self, String> {
@@ -76,7 +75,6 @@ impl Audio {
             current_music: Cell::new(None),
             music_until: Cell::new(0.),
             pending_sounds: RefCell::new(VecDeque::new()),
-            ticks_per_second: Cell::new(60.),
         })
     }
     pub fn set_volumes(&self, effects: usize, music: usize) {
@@ -151,8 +149,8 @@ impl Audio {
             });
         for event in events {
             match event {
-                Event::Delay { ticks } => at += f64::from(*ticks) / self.ticks_per_second.get(),
-                Event::Sound { resource_id } => self
+                Event::Delay { ticks } => at += f64::from(*ticks) / crate::TICKS_PER_SECOND,
+                Event::Sound { resource_id } | Event::Launch { resource_id, .. } => self
                     .pending_sounds
                     .borrow_mut()
                     .push_back((at, *resource_id)),
@@ -176,10 +174,6 @@ impl Audio {
                 );
             }
         }
-    }
-
-    pub fn set_fast_delays(&self, fast: bool) {
-        self.ticks_per_second.set(if fast { 120. } else { 60. });
     }
 
     pub fn clear_pending(&self) {

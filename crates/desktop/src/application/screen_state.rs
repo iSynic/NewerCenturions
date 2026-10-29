@@ -25,7 +25,7 @@ impl CharacterScreens {
 
 pub(super) struct SquadScreen {
     pub(super) modify_squad: bool,
-    pub(super) roster_page: usize,
+    pub(super) roster_top: usize,
     pub(super) order: Option<Vec<usize>>,
     pub(super) end_question: bool,
     pub(super) selected: Option<usize>,
@@ -36,7 +36,7 @@ impl SquadScreen {
     pub(super) fn new() -> Self {
         Self {
             modify_squad: false,
-            roster_page: 0,
+            roster_top: 0,
             order: None,
             end_question: false,
             selected: None,

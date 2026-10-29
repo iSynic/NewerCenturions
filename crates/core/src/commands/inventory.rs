@@ -10,6 +10,76 @@ pub(super) fn execute(
     content: &Content,
 ) -> Result<Vec<Event>, RuleError> {
     match command {
+        Command::OpenInventory {
+            warrior,
+            quick_info,
+        } => items::open_inventory(state, content, warrior, quick_info),
+        Command::SwitchInventoryOwner {
+            warrior,
+            scroll,
+            quick_info,
+            selected_row,
+        } => items::switch_inventory_owner(
+            state,
+            content,
+            warrior,
+            scroll,
+            quick_info.then_some(selected_row),
+        ),
+        Command::ScrollInventory {
+            warrior,
+            scroll,
+            delta,
+            quick_info,
+        } => items::scroll_inventory(state, content, warrior, scroll, delta, quick_info),
+        Command::HighlightInventoryRow {
+            warrior,
+            scroll,
+            row,
+            quick_info,
+        } => items::highlight_inventory_row(state, content, warrior, scroll, row, quick_info),
+        Command::ShowItemInformation {
+            warrior,
+            scroll,
+            row,
+            quick_info,
+        } => items::show_item_information(state, content, warrior, scroll, row, quick_info),
+        Command::RetargetItemInformation {
+            warrior,
+            member,
+            slot,
+            quick_info,
+            list,
+            item,
+        } => items::retarget_item_information(
+            state,
+            content,
+            warrior,
+            (member, slot, list, item),
+            quick_info,
+        ),
+        Command::ShowLootItemInformation { slot } => {
+            items::show_loot_item_information(state, content, slot)
+        }
+        Command::ChooseAmmunition {
+            warrior,
+            scroll,
+            row,
+            item,
+        } => items::choose_ammunition(state, content, warrior, (scroll, row), item),
+        Command::ShowDraggedItemInformation {
+            warrior,
+            slot,
+            stock,
+            quick_info,
+        } => {
+            items::show_dragged_item_information(state, content, warrior, (slot, stock), quick_info)
+        }
+        Command::ListItemUsers {
+            warrior,
+            professions,
+            widened,
+        } => items::list_item_users(state, content, warrior, professions, widened),
         Command::OpenShop => shop::open(state),
         Command::CloseShop => shop::close(state, content),
         Command::BuyItem { warrior, stock } => shop::buy(state, content, warrior, stock),
@@ -35,7 +105,7 @@ pub(super) fn execute(
                     },
                     &state.native_work.ammunition_work,
                     &mut state.random,
-                    state.native_work.inventory_record.as_ref(),
+                    Some(&state.native_work.inventory_record),
                 )?;
                 events.extend(ammunition::commit_result(state, member, result)?);
             }
@@ -58,16 +128,13 @@ pub(super) fn execute(
                 .warriors
                 .get_mut(warrior)
                 .ok_or("drop warrior outside squad")?;
-            if state.native_work.inventory_record.is_some() {
-                state.native_work.inventory_record = Some(
-                    record
-                        .inventory()?
-                        .get(slot)
-                        .cloned()
-                        .ok_or("drop slot missing")?,
-                );
-            }
-            equipment::drop(record, slot, content, mission)?;
+            state.native_work.inventory_record = record
+                .inventory()?
+                .get(slot)
+                .cloned()
+                .ok_or("drop slot missing")?;
+            let globals = equipment::drop(record, slot, content, mission)?;
+            state.apply_equipment_globals(&globals)?;
             Ok(vec![Event::Sound { resource_id: 655 }])
         }
         Command::PoolCredits => {

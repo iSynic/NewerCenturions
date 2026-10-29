@@ -121,8 +121,16 @@ impl<'a> EnemyRecord<'a> {
     pub fn level_protection(&self, level: usize) -> u8 {
         self.0[0xc2 + level]
     }
+    pub fn signed_level_protection(&self, level: i16) -> Result<u8, ContentError> {
+        let offset = usize::try_from(0xc2 + i32::from(level)).unwrap_or(usize::MAX);
+        Ok(crate::span(self.0, offset, 1)?[0])
+    }
     /// Zero-based entry of Cargo Pod `STR#` 130 "Race Class": "Mechanical".
     pub const MECHANICAL_CATEGORY: usize = 3;
+    /// Conditions, faction WORD and stamina WORD, in the order that the final
+    /// booty cleanup (1060ae/c6/d8) zeroes them.
+    pub const REWARD_CLEARED_FIELDS: [std::ops::Range<usize>; 3] =
+        [0xb2..0xda, 0xe..0x10, 0x110..0x112];
     pub fn has_creature_category(&self, category: usize) -> bool {
         self.0[0xa8 + category] != 0
     }
@@ -216,7 +224,15 @@ impl<'a> EnemyRecord<'a> {
     pub fn spell_chance(&self) -> Result<i16, ContentError> {
         word(self.0, 0x42)
     }
-    /// One of the nine spell IDs an NPC chooses from (words 0x12..0x24).
+    /// getup127022 compares this signed word with HP / HP * 100.
+    pub fn retreat_threshold(&self) -> Result<i16, ContentError> {
+        word(self.0, 0x44)
+    }
+    /// getup126f22; movemonster writes 101 after an eligible map-edge exit.
+    pub fn fleeing_chance(&self) -> Result<i16, ContentError> {
+        word(self.0, 0x46)
+    }
+    /// One of the ten spell IDs an NPC chooses from (WORDs 0x12 through 0x24).
     pub fn spell_slot(&self, index: usize) -> Result<i16, ContentError> {
         word(self.0, 0x12 + index * 2)
     }
@@ -351,6 +367,14 @@ impl EnemyRecordMut<'_> {
             }
         }
     }
+    /// reduce14e58e visits six retained ally condition BYTEs per party member.
+    pub fn decrement_party_conditions(&mut self) {
+        for value in &mut self.0[0xb2..0xb8] {
+            if (*value as i8) > 0 {
+                *value -= 1;
+            }
+        }
+    }
     pub fn from_bytes(bytes: &mut [u8]) -> EnemyRecordMut<'_> {
         EnemyRecordMut(bytes)
     }
@@ -371,6 +395,9 @@ impl EnemyRecordMut<'_> {
     }
     pub fn set_target_body(&mut self, value: i16) {
         put_word(self.0, 0x10c, value);
+    }
+    pub fn set_primary_weapon(&mut self, value: i16) {
+        put_word(self.0, 0x26, value);
     }
     pub fn set_selected_item(&mut self, value: i16) {
         put_word(self.0, 0x4e, value);

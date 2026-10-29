@@ -9,6 +9,7 @@ fn input(fixture: &Value, case: &Value) -> Session {
         // Native display normalization reaches Getup's full item refresh before this command.
         state.native_work.ammunition_work.item = Some(case["before_command"].bytes("item_work"));
     }
+    native_common::source_victory_context(&mut state);
     state
 }
 fn project(state: &mut Session, snapshot: &Value, baseline: &Value) {
@@ -35,11 +36,6 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
     state = checkpoint(&state, content, &format!("prefix-start-{index}"));
     for (step, (command, recorded)) in commands.iter().zip(ordered_events).enumerate() {
         let command: Command = serde_json::from_value(command.clone()).unwrap();
-        let expected = native_common::prefix_result_events(
-            &state,
-            &command,
-            serde_json::from_value(recorded.clone()).unwrap(),
-        );
         let before = state.clone();
         let result = apply(command.clone(), &mut state, content);
         if let Ok(events) = &result
@@ -52,9 +48,15 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
         {
             assert_eq!((index, step), (1, 149));
             assert!(matches!(&command, Command::ShootEnemy { body: 15 }));
-            let feedback = vec![centurions_core::feedback::NativeFeedback::Combat {
-                kind: centurions_core::feedback::CombatRefusal::OutOfRange,
-            }];
+            let feedback = vec![
+                centurions_core::feedback::NativeFeedback::Tutorial {
+                    first: 76,
+                    last: 77,
+                },
+                centurions_core::feedback::NativeFeedback::Combat {
+                    kind: centurions_core::feedback::CombatRefusal::OutOfRange,
+                },
+            ];
             support::refuse_command(&before, content, command.clone(), feedback);
             assert_eq!(state.warriors, before.warriors);
             assert_eq!(state.random, before.random);
@@ -83,6 +85,12 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
             return None;
         }
         let events = result.unwrap();
+        let expected = native_common::prefix_result_events(
+            &before,
+            &state,
+            &command,
+            serde_json::from_value(recorded.clone()).unwrap(),
+        );
         assert_eq!(events, expected, "foundation {index} command {step}");
         if state.medical_continuation.is_some() {
             state = checkpoint(&state, content, &format!("prefix-medical-{index}"));
@@ -97,8 +105,6 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
     expected
         .native_work
         .health_context
-        .as_mut()
-        .unwrap()
         .last_body = 16;
     // The seed12 receipt's last full pair writer is its real Shoot at command145.
     let mut weapon = content.items[165].clone();
@@ -114,6 +120,9 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
     expected.native_work.inventory_record = native_common::earned_inventory_work(index);
     expected.combat.as_mut().unwrap().turn_origin =
         snapshots::recorded_turn_origin(&receipt, current_combat(&expected));
+    // The earned prefix's last walking command is Move(1,0); combatchoice
+    // replaces the earlier outdoor direction even while combat stays active.
+    expected.exploration.as_mut().unwrap().last_move = [1, 0];
     support::same_captured_session(&state, &expected);
     Some(state)
 }

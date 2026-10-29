@@ -1,6 +1,10 @@
 //! Departure in the original combat execution order.
-use super::{alive, neighbors, neighbors_at, refresh_body_item, resolve_attack};
-use crate::combat::{Combat, enemy};
+use super::reaction_calls::{self, ReactionContext, ReactionResult};
+use super::{neighbors, neighbors_at, refresh_body_item};
+use crate::combat::{
+    Combat, enemy,
+    neighbor_work::{self, NativeNeighbors},
+};
 use crate::{Event, RandomState, RuleError};
 use centurions_content::Warrior;
 
@@ -37,33 +41,9 @@ pub fn warrior_departure_with_buffs(
         buffs,
         &mut Default::default(),
         false,
+        None,
     )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn warrior_departure_with_work(
-    c: &mut Combat,
-    w: &mut [Warrior],
-    random: &mut RandomState,
-    body: i16,
-    destination: (i16, i16),
-    items: &[Vec<u8>],
-    attacks: &[u8],
-    buffs: &[u8],
-    buffers: &mut crate::ammunition::WorkBuffers,
-) -> Result<Vec<Event>, RuleError> {
-    warrior_departure_inner(
-        c,
-        w,
-        random,
-        body,
-        destination,
-        items,
-        attacks,
-        buffs,
-        buffers,
-        true,
-    )
+    .map(|result| result.events)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -78,65 +58,62 @@ pub(super) fn warrior_departure_inner(
     buffs: &[u8],
     buffers: &mut crate::ammunition::WorkBuffers,
     display_writers: bool,
-) -> Result<Vec<Event>, RuleError> {
-    if (body < 10 && w[body as usize].record().reaction_suppression()? != 0)
-        || (body >= 10
-            && c.enemies.records[(body - 10) as usize]
-                .record()
-                .reaction_suppression()
-                != 0)
-    {
-        return Ok(vec![]);
-    }
-    let mut previous = neighbors(c, w, body)?;
-    let projected = neighbors_at(c, w, body, destination)?;
-    previous.retain(|other| !projected.contains(other));
-    previous.sort_unstable();
-    let mut events = vec![];
+    mut native: Option<NativeNeighbors<'_>>,
+) -> Result<ReactionResult, RuleError> {
+    let previous = if let Some(context) = native.as_mut() {
+        neighbor_work::begin(c);
+        let position = super::position(c, body);
+        let direction = (
+            destination.0.wrapping_sub(position.0) as i8,
+            destination.1.wrapping_sub(position.1) as i8,
+        );
+        neighbor_work::scan(c, w, 2, direction, context)?
+    } else {
+        if (body < 10 && w[body as usize].record().reaction_suppression()? != 0)
+            || (body >= 10
+                && c.enemies.records[(body - 10) as usize]
+                    .record()
+                    .reaction_suppression()
+                    != 0)
+        {
+            return Ok(ReactionResult::default());
+        }
+        let mut previous = neighbors(c, w, body)?;
+        let projected = neighbors_at(c, w, body, destination)?;
+        previous.retain(|other| !projected.contains(other));
+        previous.sort_unstable();
+        previous
+    };
+    let mut context = ReactionContext {
+        items: Some(items),
+        attacks: Some(attacks),
+        buffs,
+        buffers,
+        display_writers,
+        native: native.as_mut().map(|native| NativeNeighbors {
+            selected_warrior: native.selected_warrior,
+            party_mask: &mut *native.party_mask,
+            aliases: native.aliases,
+            table: native.table,
+        }),
+    };
     let mut changed = false;
-    for other in previous {
-        if other < 10 {
-            if w[other as usize].record().turn_skip_duration()? != 0 {
-                continue;
-            }
-            w[other as usize].record_mut().set_guarding(0);
-        } else {
-            let m = &mut c.enemies.records[(other - 10) as usize].bytes;
-            if m[0xb3] != 0
-                || m[0xb0] == 255
-                || (body < 10 && matches!(w[body as usize].record().profession()?, 4 | 5))
-            {
-                continue;
-            }
-            m[0x104] = 0;
-        }
-        if display_writers {
-            refresh_body_item(c, w, items, other, buffers)?;
-        }
-        changed = true;
-        events.extend(resolve_attack(
-            c,
-            w,
-            random,
-            other,
-            body,
-            0,
-            body,
-            Some(items),
-            Some(attacks),
-            buffs,
-            buffers,
-        )?);
-        if !alive(c, w, body) {
-            changed = false;
-            break;
-        }
-    }
+    let result = reaction_calls::guards(
+        c,
+        w,
+        random,
+        body,
+        true,
+        &previous,
+        &mut changed,
+        &mut context,
+    )?;
     if changed && display_writers {
-        refresh_body_item(c, w, items, body, buffers)?;
+        refresh_body_item(c, w, items, context.actor(c, body), context.buffers)?;
     }
-    Ok(events)
+    Ok(result)
 }
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn move_actor_with_reactions(
     c: &mut Combat,
@@ -148,15 +125,29 @@ pub(crate) fn move_actor_with_reactions(
     buffs: &[u8],
     buffers: &mut crate::ammunition::WorkBuffers,
     display_writers: bool,
+    mut native: Option<NativeNeighbors<'_>>,
     events: &mut Vec<Event>,
 ) -> Result<enemy::EnemyMove, RuleError> {
+    if c.enemies.records[(body - 10) as usize]
+        .record()
+        .fleeing_duration()
+        != 0
+        && let Some(context) = native.as_mut()
+    {
+        neighbor_work::begin(c);
+        neighbor_work::scan(c, w, 1, (0, 0), context)?;
+    }
+    let aliases = native.as_ref().map_or(
+        crate::combat::map_alias::MapAliases::of_mission(mission),
+        |native| native.aliases,
+    );
     let moved = crate::combat::footprint::move_enemy_before_place(
         c,
-        mission,
+        (mission, aliases),
         (body - 10) as usize,
         random,
         &mut |projected, rng, destination| {
-            events.extend(warrior_departure_inner(
+            let reaction = warrior_departure_inner(
                 projected,
                 w,
                 rng,
@@ -171,7 +162,15 @@ pub(crate) fn move_actor_with_reactions(
                 buffs,
                 buffers,
                 display_writers,
-            )?);
+                native.as_mut().map(|context| NativeNeighbors {
+                    selected_warrior: context.selected_warrior,
+                    party_mask: &mut *context.party_mask,
+                    aliases: context.aliases,
+                    table: context.table,
+                }),
+            )?;
+            // movemonster13e2b6 ignores checkforenemy(2)'s return value.
+            events.extend(reaction.events);
             Ok(())
         },
     )?;

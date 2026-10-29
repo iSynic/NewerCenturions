@@ -34,6 +34,39 @@ pub fn cast_party(
     disabled: u8,
     request: PartyCastRequest,
 ) -> Result<PartyCastResult, RuleError> {
+    let mut result = prepare_party(warriors, memory, buffs, mission, disabled, request)?;
+    let packet = result.packet.clone();
+    if AttackPacket(&packet).targeting_mode() != 7 {
+        return Ok(result);
+    }
+    let mut next_random = random.clone();
+    let (minimum, maximum) = AttackPacket(&packet).duration_bounds();
+    let mut duration = next_random.range(minimum, maximum);
+    let (minimum, maximum) = AttackPacket(&packet).additional_duration_bounds();
+    if minimum != 0 {
+        for _ in 0..request.power {
+            duration = duration.wrapping_add(next_random.range(minimum, maximum));
+        }
+    }
+    let effect = AttackPacket(&packet).effect()?;
+    if effect == 110 {
+        result.scenario_duration = Some(duration);
+    } else {
+        crate::combat::party_buffs::extend(&mut result.buffs, effect, duration)?;
+    }
+    *random = next_random;
+    Ok(result)
+}
+
+/// Charges the menu selection; buttonchoice owns the later resolution and ally copies.
+pub(crate) fn prepare_party(
+    warriors: &[Warrior],
+    memory: &[u8],
+    buffs: &[u8],
+    mission: &OpeningMission,
+    disabled: u8,
+    request: PartyCastRequest,
+) -> Result<PartyCastResult, RuleError> {
     if memory.len() != 480 || buffs.len() != 20 {
         return Err(RuleError::Invalid("outdoor psi input size".into()));
     }
@@ -66,25 +99,6 @@ pub fn cast_party(
         identity,
         request.power,
     );
-    if AttackPacket(&packet).targeting_mode() != 7 {
-        return Ok(result);
-    }
-    let mut next_random = random.clone();
-    let (minimum, maximum) = AttackPacket(&packet).duration_bounds();
-    let mut duration = next_random.range(minimum, maximum);
-    let (minimum, maximum) = AttackPacket(&packet).additional_duration_bounds();
-    if minimum != 0 {
-        for _ in 0..request.power {
-            duration = duration.wrapping_add(next_random.range(minimum, maximum));
-        }
-    }
-    let effect = AttackPacket(&packet).effect()?;
-    if effect == 110 {
-        result.scenario_duration = Some(duration);
-    } else {
-        crate::combat::party_buffs::extend(&mut result.buffs, effect, duration)?;
-    }
-    *random = next_random;
     Ok(result)
 }
 

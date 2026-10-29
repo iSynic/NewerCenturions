@@ -68,6 +68,7 @@ fn learned_crystalize_matches_complete_native_cast_field_creation_cost_rng_and_a
                     target: 10,
                     damage,
                     defeated: false,
+                    ..
                 } = e
                 {
                     Some(*damage)

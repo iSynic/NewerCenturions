@@ -17,30 +17,50 @@ pub mod final_turn_stories;
 pub mod firearm;
 pub mod footprint;
 pub mod interaction;
+pub(crate) mod item_activation;
 pub mod lifecycle;
+pub mod map_alias;
 pub mod medical;
 pub mod mission_deaths;
 pub mod monster;
+pub(crate) mod monster_weapons;
 pub mod natural_conditions;
+pub mod neighbor_work;
+pub mod npc_work;
 mod occupied_cell;
+pub(crate) mod outdoor_health;
 pub mod party_buffs;
 pub mod player_psi;
 pub mod psi_selection;
+mod record_state;
 mod records;
 pub mod retained;
 pub mod retreat;
+mod reward_mode;
 pub mod rewards;
 pub mod round_stories;
+pub mod round_work;
 pub mod runtime;
 pub mod shooting;
 pub mod spell_conditions;
 pub mod spells;
+pub mod tactical_work;
+pub mod target_work;
 pub mod targeting;
+pub mod victory_work;
+pub mod warrior_alias;
 mod warrior_attack;
 pub mod weapon_work;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Combat {
+    #[serde(default)]
+    pub victory_work: victory_work::VictoryWork,
+    #[serde(default)]
+    pub neighbor_work: neighbor_work::NeighborWork,
+    /// Live copy of signed WORD438760, retained to NativeWorkContext at teardown.
+    #[serde(default)]
+    pub ready: i16,
     #[serde(default, skip_serializing_if = "crate::normal_difficulty")]
     pub difficulty: i16,
     pub battle: i16,
@@ -51,6 +71,25 @@ pub struct Combat {
     pub retained_npcs: retained::NpcBacking,
     #[serde(default)]
     pub direct_deaths: bool,
+    /// A support spell's effect68 within this command; the command boundary stores it.
+    #[serde(skip)]
+    pub fatigue_reset: bool,
+    /// Effect26/64 warrior-indexed NPC writes awaiting their retained owners.
+    #[serde(skip)]
+    pub alias_writes: Vec<warrior_alias::AliasWrite>,
+    /// Scoped resolvespell caller input while an item uses the shared cast/ray
+    /// kernels; restored before any command or save boundary.
+    #[serde(skip)]
+    pub item_condition_caller: Option<i16>,
+    /// Transient notification of an actual MONSTER scratch copy/build.
+    #[serde(skip)]
+    pub monster_work_written: bool,
+    /// Known MONSTER work lent for the current command; never saved.
+    #[serde(skip)]
+    pub monster_template: Option<Vec<u8>>,
+    /// Actual attack writer, drained into shared WORD43877e before callbacks.
+    #[serde(skip)]
+    pub npc_inhibit_write: Option<i16>,
     #[serde(default)]
     pub direct_death: Option<(i16, death_scripts::DeathEntry)>,
     pub order: Vec<i16>,
@@ -75,10 +114,10 @@ pub struct Combat {
     pub spell_fields: Vec<u8>,
     #[serde(default = "empty_field_used")]
     pub field_used: Vec<u8>,
+    #[serde(default = "attack_packet_startup")]
+    pub attack_packet: Vec<u8>,
     #[serde(default)]
-    pub attack_packet: Option<Vec<u8>>,
-    #[serde(default)]
-    pub attack_identity: Option<[i16; 3]>,
+    pub attack_identity: [i16; 3],
     #[serde(default)]
     pub weapon_work: weapon_work::WeaponWork,
     #[serde(default)]
@@ -94,6 +133,27 @@ pub struct Combat {
     pub automatic: [bool; 6],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_origin: Option<(i16, i16)>,
+    /// Target-mask WORDs 6..109 at 4434e0; words 0..5 stay in the session party mask.
+    #[serde(default = "target_tail_startup")]
+    pub target_tail: Vec<i16>,
+    /// WORDs 443722/443724, 4435c0 and 442bd4; schema 60.
+    #[serde(default, skip_serializing_if = "target_work::TargetWork::is_startup")]
+    pub target_work: target_work::TargetWork,
+}
+
+/// The 58-byte attack packet work is zero before the first prepared attack.
+pub(crate) fn attack_packet_startup() -> Vec<u8> {
+    vec![0; 58]
+}
+
+fn target_tail_startup() -> Vec<i16> {
+    vec![0; 104]
+}
+impl Combat {
+    /// cleartarget13822a, and cast10e642's clear after each target.
+    pub(crate) fn clear_target_tail(&mut self) {
+        self.target_tail = vec![0; 104];
+    }
 }
 fn automatic_off(flags: &[bool; 6]) -> bool {
     flags.iter().all(|flag| !flag)
@@ -106,6 +166,7 @@ fn empty_field_used() -> Vec<u8> {
 }
 impl Combat {
     pub fn validate(&self, warriors: &[Warrior]) -> Result<(), RuleError> {
+        self.neighbor_work.validate()?;
         self.retained_npcs.validate()?;
         self.weapon_work.validate()?;
         if self.capture_actor.is_some_and(|actor| {
@@ -151,16 +212,14 @@ impl Combat {
                 && self
                     .active_body()
                     .is_none_or(|body| !(0..warriors.len() as i16).contains(&body))
+            || self.target_tail.len() != 104
             || self.round < 0
             || !(0..=9).contains(&self.inactive_rounds)
             || (self.selection_pending
                 && (self.cursor != 110 || self.round_scripts.pending.is_some()))
             || self.spell_fields.len() != 1200
             || self.field_used.len() != 128
-            || self
-                .attack_packet
-                .as_ref()
-                .is_some_and(|packet| packet.len() != 58)
+            || self.attack_packet.len() != 58
             || self.enemies.records.iter().any(|m| m.bytes.len() != 288)
             || self.order.iter().any(|id| {
                 *id < -1
@@ -203,7 +262,7 @@ pub fn click_command(state: &Session, x: i16, y: i16) -> Result<Option<Command>,
     interaction::click_command(state, x, y)
 }
 #[cfg(all(test, feature = "original-fixtures"))]
-#[path = "../tests/unit/combat_initial_turn_tests.rs"]
+#[path = "../tests/native/initial_turn_reference.rs"]
 mod initial_turn_tests;
 
 mod movement;
@@ -215,6 +274,7 @@ pub use turn_setup::{
 };
 pub(crate) use turn_setup::{initialize_enemy_record, initialize_warrior_record};
 mod battle_entry;
+pub(crate) use battle_entry::begin_selected_child;
 pub use battle_entry::{
     EnemySetup, SquadPlacement, TacticalMap, begin, begin_battle, begin_group, begin_npc,
     begin_selected_battle, encounter_battle,
@@ -224,3 +284,7 @@ use placement::place_enemies_with_allies;
 pub use placement::{place_enemies, place_enemies_at_difficulty, place_squad};
 mod map;
 pub use map::build_tactical_map;
+mod monster_work;
+pub(crate) mod reward_work;
+mod spell_summon;
+pub use monster_work::MonsterWork;

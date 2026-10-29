@@ -159,6 +159,7 @@ fn authored_item_variable_ally_and_random_branches_resume_without_repeating_effe
     for case in support::fixture("thunder-round-replacement.json").array("cases") {
         let mut state: Session =
             serde_json::from_value(foundation["foundations"][0]["session"].clone()).unwrap();
+        crate::native_common::source_victory_context(&mut state);
         let combat = state.combat.as_mut().unwrap();
         combat.order.fill(-1);
         combat.order[109] = 4;
@@ -177,6 +178,7 @@ fn authored_item_variable_ally_and_random_branches_resume_without_repeating_effe
     }
     let mut state: Session =
         serde_json::from_value(foundation["foundations"][0]["session"].clone()).unwrap();
+        crate::native_common::source_victory_context(&mut state);
     let definition = &content.map(0).unwrap().combat.as_ref().unwrap().monsters
         [26 * MONSTER_BYTES..27 * MONSTER_BYTES];
     support::expect(

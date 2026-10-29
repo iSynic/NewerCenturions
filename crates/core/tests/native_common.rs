@@ -10,6 +10,7 @@ pub fn earned_receipt(name: &str, index: usize) -> Value {
 /// changing the frozen receipt bytes; no recorded event carries fatigue.
 pub fn earned_start(receipt: &Value) -> Session {
     let mut state: Session = serde_json::from_value(receipt["starting_session"].clone()).unwrap();
+    assert!(state.native_import.is_none());
     state.exploration.as_mut().unwrap().fatigue = 4;
     state
 }
@@ -49,10 +50,27 @@ pub fn shield_result_events(events: Vec<Event>) -> Vec<Event> {
     result
 }
 
-/// Reconstructed prefix recordings predate the native death-feedback correction.
-/// Preserve those bytes; showresults158ee0 supplies the omitted non165 NPC cue.
-pub fn prefix_result_events(state: &Session, command: &Command, events: Vec<Event>) -> Vec<Event> {
+/// Reconstructed prefix recordings predate the native death-feedback correction and
+/// the target key's firstt(76, 77). Preserve those bytes; showresults158ee0 supplies
+/// the omitted non165 NPC cue, and combatchoice 11b026 the tutorial.
+pub fn prefix_result_events(
+    state: &Session,
+    after: &Session,
+    command: &Command,
+    events: Vec<Event>,
+) -> Vec<Event> {
     let mut result = vec![];
+    if matches!(
+        command,
+        Command::ShootEnemy { .. } | Command::ShootAt { .. }
+    ) {
+        result.push(Event::Feedback(
+            centurions_core::feedback::NativeFeedback::Tutorial {
+                first: 76,
+                last: 77,
+            },
+        ));
+    }
     for event in shield_result_events(events) {
         if matches!(command, Command::ShootEnemy { .. })
             && let Event::AttackResolved {
@@ -79,7 +97,46 @@ pub fn prefix_result_events(state: &Session, command: &Command, events: Vec<Even
         }
         result.push(event);
     }
+    if let Some(body) = state.combat.as_ref().and_then(Combat::active_body) {
+        let guarding = if body < 6 {
+            after.warriors[body as usize].record().guarding().unwrap() != 0
+        } else {
+            after.combat.as_ref().is_some_and(|combat| {
+                combat.enemies.records[(body - 10) as usize]
+                    .record()
+                    .guarding()
+                    != 0
+            })
+        };
+        if guarding {
+            return turn_guard_events(result, body);
+        }
+    }
     result
+}
+
+pub fn guard_result(body: i16) -> Event {
+    Event::Feedback(centurions_core::feedback::NativeFeedback::CombatResult {
+        body,
+        code: -5,
+        amount: 0,
+        audible: false,
+    })
+}
+
+/// Older receipts omit Getup125bd2's result-only cue before the next turn.
+/// Its guard field remains independently compared in their native records.
+pub fn turn_guard_events(mut events: Vec<Event>, body: i16) -> Vec<Event> {
+    if let Some(mut at) = events
+        .iter()
+        .position(|event| matches!(event, Event::TurnStarted { .. }))
+    {
+        if at > 0 && matches!(events[at - 1], Event::Sound { resource_id: 138 }) {
+            at -= 1;
+        }
+        events.insert(at, guard_result(body));
+    }
+    events
 }
 
 pub fn assert_body_records(
@@ -331,7 +388,7 @@ pub fn melee_combat(records: &[u8]) -> Combat {
     combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
     combat.enemies.records = crate::support::monsters(records);
     combat.enemies.positions = vec![(20, 20), (21, 20), (40, 40)];
-    combat.attack_identity = Some([2, 4, 6]);
+    combat.attack_identity = [2, 4, 6];
     combat
 }
 
@@ -379,13 +436,24 @@ pub use crate::support::positions as decoded_positions;
 pub fn snapshot_word(snapshot: &Value, key: &str) -> i16 {
     snapshot[key].as_i64().unwrap() as i16
 }
+/// Declared probe/source inputs only: selected447196, attempts438780, inhibit43877e.
+/// Call before execution, never to fill unknown runtime/migration or expected-state history.
+pub fn npc_command_input(state: &mut Session, selected: usize, words: [i16; 2]) {
+    source_victory_context(state);
+    state.combat.as_mut().unwrap().selected_enemy = selected;
+    state.native_work.selected_enemy = selected;
+    state.native_work.script_enemy = state.combat.as_ref().unwrap().script_enemy;
+    state.native_work.npc_work.attempts = words[0];
+    state.native_work.npc_work.inhibit = words[1];
+}
+
 pub fn foundation_session(fixture: &Value, case: &Value) -> Session {
-    let mut state = serde_json::from_value(
+    let mut state = crate::support::source_frame(
         fixture["foundations"][case.n::<usize>("foundation")]["session"].clone(),
-    )
-    .unwrap();
-    if case["before"].get("current_npc_index").is_some() {
-        crate::snapshots::actor_work(&mut state, &case["before"]);
+    );
+    // Only the current-terrain receipt declares this NPC entry; loaded-shot foundations do not.
+    if let Some(selected) = case["before"].get("current_npc_index") {
+        npc_command_input(&mut state, selected.as_u64().unwrap() as usize, [0, 0]);
     }
     state
 }
@@ -431,13 +499,13 @@ pub fn first_difference(actual: &Value, expected: &Value, path: &str) -> Option<
     }
     Some(format!("{path}: fields differ"))
 }
-pub fn earned_inventory_work(index: usize) -> Option<centurions_content::InventoryRecord> {
-    Some(centurions_content::InventoryRecord(
+pub fn earned_inventory_work(index: usize) -> centurions_content::InventoryRecord {
+    centurions_content::InventoryRecord(
         crate::support::fixture("earned-crate-equipment.json")["cases"][5 + index]["picked"]
             .bytes("selected_record")
             .try_into()
             .unwrap(),
-    ))
+    )
 }
 pub fn refresh_item_work(state: &mut Session, content: &Content) {
     // Compose the omitted combatupdate2 writer after the native Getup/prefix:
@@ -459,7 +527,7 @@ pub fn refresh_item_work(state: &mut Session, content: &Content) {
     let mut record = content.items[usize::from(id.unsigned_abs())].clone();
     let class = word(&record, 26).unwrap().wrapping_abs();
     record[26..28].copy_from_slice(&class.to_be_bytes());
-    state.native_work.loaded_item_field32 = Some(word(&record, 32).unwrap());
+    state.native_work.loaded_item_field32 = word(&record, 32).unwrap();
     state.native_work.ammunition_work.item = Some(record);
 }
 
@@ -510,18 +578,19 @@ pub fn psi_work(snapshot: &Value) -> WeaponWork {
 pub fn psi_snapshot(content: &Content, snapshot: &Value) -> Session {
     let mut state = crate::support::mission_session(content);
     state.warriors = snapshot_party(snapshot);
-    state.native_work.psi_memory = Some(snapshot.bytes("memory"));
+    state.native_work.psi_memory = snapshot.bytes("memory");
     state.party_buffs = snapshot.bytes("party_buffs");
-    state.native_work.loaded_item_field32 = Some(snapshot.n("item_context"));
+    state.native_work.loaded_item_field32 = snapshot.n("item_context");
     state.native_work.attack_count = snapshot.n("count");
     state.native_work.weapon_work = psi_work(snapshot);
-    state.native_work.attack_packet = Some(snapshot.bytes("packet"));
-    state.native_work.attack_identity = Some(snapshot.words("identity").try_into().unwrap());
+    state.native_work.attack_packet = snapshot.bytes("packet");
+    state.native_work.attack_identity = snapshot.words("identity").try_into().unwrap();
     state.random = random_state(snapshot);
     let mut combat = crate::support::psi_frame::combat(snapshot);
     combat.weapon_work = state.native_work.weapon_work;
     state.combat = Some(combat);
     state.phase = Phase::Combat;
+    source_victory_context(&mut state);
     state
 }
 
@@ -530,4 +599,12 @@ pub fn psi_snapshot(content: &Content, snapshot: &Value) -> Session {
 pub fn keep_tile_set(state: &mut Session, content: &Content) {
     let position = state.exploration.as_mut().unwrap();
     position.region_state[0x208] = content.map(position.map).unwrap().regions[0x208];
+}
+
+pub use crate::support::{source_victory_context, source_victory_context_recorded};
+
+/// Loaded-shot record foundation with the declared source counter history.
+pub fn loaded_shot_frame(index: usize) -> Session {
+    let fixture = crate::support::fixture("earned-loaded-shot-replay.json");
+    crate::support::source_frame(fixture["foundations"][index]["session"].clone())
 }

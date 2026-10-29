@@ -62,6 +62,8 @@ fn expected_events(f: &Value, case: &Value) -> Vec<Event> {
                 target: body,
                 damage: damage.n::<i16>("d0_return_word"),
                 defeated: health < 1,
+                icon: Default::default(),
+                flight: Default::default(),
             });
         }
     }
@@ -80,15 +82,20 @@ fn consume(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleErr
         content.map(2),
         &mut state.native_work.attack_count,
         &mut state.native_work.party_mask,
-        state.selected_warrior,
+        (state.selected_warrior, &mut state.bandage_ready),
     )?;
     // Project the typed slice outcome through the same Session bookkeeping
     // represented by the independently captured native globals.
+    if std::mem::take(&mut combat.monster_work_written) {
+        state.native_work.monster_work = Default::default();
+    }
     state.native_work.attack_packet = combat.attack_packet.clone();
     combat.pending_last_defeated = None;
+    // The capture does not record Ready; a collision leaves spelltargets' 0.
+    combat.ready = 0;
     state.native_work.attack_identity = combat.attack_identity;
-    let health = state.native_work.health_context.as_mut().unwrap();
-    health.effect = combat.attack_packet.as_ref().unwrap()[18] as i8;
+    let health = &mut state.native_work.health_context;
+    health.effect = combat.attack_packet[18] as i8;
     if let Some(body) = outcome.last_defeated_body {
         health.last_body = body;
     }
@@ -97,7 +104,7 @@ fn consume(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleErr
         .iter()
         .any(|event| matches!(event, Event::SpellResolved { damage, .. } if *damage > 0))
     {
-        state.bandage_ready = Some(0);
+        state.bandage_ready = 0;
     }
     Ok(outcome.events)
 }
@@ -112,12 +119,21 @@ fn npc_poison_slice_matches_complete_native_records_fields_work_and_rng_for_21_c
         let before = initial(&f, case, &content);
         let mut expected = before.clone();
         project(&mut expected, &f, &case["after"]);
+        // The recorded killbody/showresults path clears the newly represented WORD.
+        expected.combat.as_mut().unwrap().neighbor_work.departure = 0;
+        // The capture omits target WORDs 6..109; collide leaves its own marks there.
+        let tail = |s: &Session| s.combat.as_ref().unwrap().target_tail.clone();
         let mut actual = before.clone();
         assert_eq!(
             consume(&mut actual, &content).unwrap(),
             expected_events(&f, case),
             "events case {index}"
         );
+        expected.combat.as_mut().unwrap().target_tail = tail(&actual);
+        // Nor target 0, where collide stores the field centre (1142e0..1142fe).
+        expected.combat.as_mut().unwrap().target_work = actual.combat.as_ref().unwrap().target_work;
+        // The capture omits the victory WORDs; killbody's count is not compared.
+        expected.combat.as_mut().unwrap().victory_work = actual.combat.as_ref().unwrap().victory_work;
         assert_eq!(actual, expected, "complete Session projection case {index}");
         let mut receipt = before.random.clone();
         support::replay_rng(&mut receipt, case.array("rng"));
@@ -129,8 +145,6 @@ fn npc_poison_slice_matches_complete_native_records_fields_work_and_rng_for_21_c
             actual
                 .native_work
                 .health_context
-                .as_ref()
-                .unwrap()
                 .last_body,
             20
         );

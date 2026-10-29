@@ -56,7 +56,7 @@ def route(root, seed, difficulty, target):
 
         enter(5, 4, 85, -1, -1)
         enter(1, 7, 3, 1, 0, [{"QuestItems": list(range(804, 810))}])
-        enter(3, 58, 39, 1, 0)
+        enter(3, 58, 39, 1, 0, [{"Region": {"slot": 6, "chance": 0}}] if seed == 1 else [])
         box.send([{"SubmitText": {"text": "wildriver"}}])
         drain(box, steps)
         box.send(["CancelMenu"])

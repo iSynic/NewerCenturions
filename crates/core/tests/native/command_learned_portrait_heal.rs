@@ -6,8 +6,8 @@ pub(super) fn project(state: &mut Session, snapshot: &Value) {
     snapshots::carried_items(state, &read);
     state.ammunition = support::longs(&read("ammunition"));
     state.selected_warrior = snapshot.n("selected_member");
-    state.native_work.loaded_item_field32 = Some(snapshot.n("item_context"));
-    state.bandage_ready = Some(snapshot.n("aid_gate"));
+    state.native_work.loaded_item_field32 = snapshot.n("item_context");
+    state.bandage_ready = snapshot.n("aid_gate");
     state.native_work.weapon_work = snapshots::weapon_work(&read);
     let arena = state.combat.as_mut().unwrap();
     let before = (arena.cursor, arena.round);
@@ -31,15 +31,15 @@ pub(super) fn project(state: &mut Session, snapshot: &Value) {
     let mut health = centurions_core::story_health::context(
         &state.warriors,
         state.selected_warrior,
-        state.native_work.health_context.as_ref(),
+        Some(&state.native_work.health_context),
     );
     health.unavailable = arena.unavailable;
     health.marks_affected = snapshot.n::<u64>("heal_marks_affected") != 0;
     health
         .affected
         .copy_from_slice(&snapshot.words("markers")[..6]);
-    health.effect = state.native_work.attack_packet.as_ref().unwrap()[18] as i8;
-    state.native_work.health_context = Some(health);
+    health.effect = state.native_work.attack_packet[18] as i8;
+    state.native_work.health_context = health;
     snapshots::actor_work(state, snapshot);
 }
 
@@ -51,6 +51,7 @@ fn input(fixture: &Value, snapshot: &Value) -> Session {
         .unwrap();
     let mut state = serde_json::from_value(foundation["session"].clone()).unwrap();
     project(&mut state, snapshot);
+    native_common::source_victory_context(&mut state);
     state
 }
 use native_common::refresh_item_work as source_item_refresh;
@@ -82,6 +83,7 @@ fn assert_native_damage(case: &Value, events: &[Event]) {
                     target,
                     damage,
                     defeated,
+                    ..
                 } => Some((*caster, *spell, *target, *damage, *defeated)),
                 _ => None,
             })
@@ -261,15 +263,10 @@ fn learned_preparation_rejects_unknown_powers_and_preserves_inventory() {
     for power in [-1, 0, 8, i16::MAX] {
         atomic(&state, &content, Command::BeginLearnedHeal { power });
     }
-    let mut unknown = state.clone();
-    unknown.combat.as_mut().unwrap().weapon_work = WeaponWork::default();
-    atomic(&unknown, &content, Command::BeginLearnedHeal { power: 1 });
     let mut marking = state.clone();
     marking
         .native_work
         .health_context
-        .as_mut()
-        .unwrap()
         .marks_affected = true;
     let mut unmarked = state.clone();
     for candidate in [&mut marking, &mut unmarked] {
@@ -289,8 +286,6 @@ fn learned_preparation_rejects_unknown_powers_and_preserves_inventory() {
         marking
             .native_work
             .health_context
-            .as_ref()
-            .unwrap()
             .affected[target],
         -1
     );
@@ -315,6 +310,7 @@ fn consecutive_native_heals_restore_saved_menu_power_without_repeating_costs() {
         let mut state: Session =
             serde_json::from_value(fixture["foundation"]["session"].clone()).unwrap();
         project(&mut state, &case["before"]);
+        native_common::source_victory_context(&mut state);
         let initial = state.clone();
         let second_power = case.n::<i16>("second_power");
         let mut events = vec![];
@@ -387,6 +383,7 @@ fn owned_prior_spell_row_matches_native_heal_menu_and_saved_continuation() {
         let mut state: Session =
             serde_json::from_value(fixture["foundation"]["session"].clone()).unwrap();
         project(&mut state, &case["before"]);
+        native_common::source_victory_context(&mut state);
         let selected = case["before"].bytes("selected");
         state.psi_menu_choices[5] = Some(centurions_core::PsiMenuChoice {
             row: selected[10],

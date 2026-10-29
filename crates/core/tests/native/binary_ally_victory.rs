@@ -48,6 +48,7 @@ fn survivor_cleanup_and_rewards_match_original_composite_execution() {
 fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands() {
     let content = content();
     for case in support::fixture("survivor-selection.json").array("cases") {
+        for retained in [false, true] {
         let mut state = support::mission_session(&content);
         state.phase = Phase::Combat;
         state.random = RandomState::new(12);
@@ -60,10 +61,29 @@ fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands(
         arena.squad.positions = (0..6).map(|i| (20 + i, 20)).collect();
         arena.order[1] = 0;
         state.combat = Some(arena);
+        crate::native_common::source_victory_context(&mut state);
         let position = state.exploration.as_mut().unwrap();
         position.presentation = None;
         position.script = None;
-        let mut events = apply(Command::EndTurn, &mut state, &content).unwrap();
+        let command = if retained {
+            let arena = state.combat.take().unwrap();
+            state.phase = Phase::Exploration;
+            state.native_work.npc_backing.active_count = arena.enemies.records.len() as i16;
+            for (index, record) in arena.enemies.records.into_iter().enumerate() {
+                state.native_work.npc_backing.slots[index] = Some(centurions_core::combat::retained::NpcSlot {
+                    record, position: Some((0, 0)),
+                });
+            }
+            state.native_work.treasure_record = vec![0; 88];
+            let mut script = vec![0; 42];
+            script[9] = 100;
+            script[25] = 2;
+            support::pause_script(&mut state, script, 0);
+            Command::Continue
+        } else {
+            Command::EndTurn
+        };
+        let mut events = apply(command, &mut state, &content).unwrap();
         let mut resumed = support::checkpoint(&state, &content, "survivors");
         for step in case.array("steps") {
             let selection = state.survivors.as_ref().unwrap();
@@ -112,7 +132,7 @@ fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands(
             .cloned()
             .collect();
         assert_eq!(observed, expected);
-        let mut records = current_combat(&state).enemies.records.clone();
+        let mut records: Vec<_> = (0..7).map(|index| state.survivor_record(index).unwrap().clone()).collect();
         let copied = centurions_core::combat::allies::commit_survivors(
             &state.allies,
             state.ally_count,
@@ -126,5 +146,6 @@ fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands(
         assert_eq!(state.allies, copied.menu);
         assert_eq!(state.ally_count, case.n::<usize>("count_after"));
         assert!(state.survivors.is_none());
+        }
     }
 }

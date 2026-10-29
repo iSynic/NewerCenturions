@@ -7,6 +7,66 @@ use support::warriors as party;
 
 use support::{assert_bytes, record_bytes as flatten_party};
 
+#[test]
+fn npc_revival_matches_inert_backup_aliases_and_keeps_writing_cases_atomic() {
+    let fixture = support::fixture("revival-boundary.json");
+    let content = content();
+    let attacks = &content.map(0).unwrap().combat.as_ref().unwrap().attacks;
+    let packet = spells::load_packet(attacks, 1705).unwrap();
+    let warriors = party(fixture.text("warrior"));
+    let enemies = support::monsters(&fixture.bytes("npc").repeat(5));
+    for (index, case) in fixture.array("cases").iter().enumerate() {
+        let body = case.n::<usize>("body");
+        let backup = case.bytes("backup_before");
+        let memory = if index < 4 {
+            spells::RestrictionMemoryView::ordinary_startup(&[], None)
+        } else {
+            spells::RestrictionMemoryView::with_editor_backup(&[], None, &backup).unwrap()
+        };
+        let mut mask = vec![0; 15];
+        mask[body] = 1;
+        let context = DirectSpell {
+            packet: &packet,
+            level: 6,
+            count: 1,
+            armor_filter: false,
+            weapon_sound: 0,
+        };
+        // The receipt executes spelllist, without the enclosing duration draw.
+        let mut random = RandomState::new(1);
+        let result = spells::resolve_support_for_caster(
+            &warriors,
+            &enemies,
+            &mask,
+            1705,
+            &context,
+            (Some(0), Some(memory)),
+            &mut random,
+        );
+        if index < 4 {
+            let result = result.unwrap();
+            assert_bytes(&backup, &case.bytes("backup_after"), "inert native backup");
+            assert_eq!(result.warriors, warriors);
+            assert_eq!(result.enemies, enemies);
+            assert_eq!(result.targets[0].0, body);
+            assert_eq!(result.targets[0].1.sounds, [word(&packet, 38).unwrap()]);
+            let mut expected = RandomState::new(1);
+            expected.range(1, 1);
+            assert_eq!(random, expected);
+        } else {
+            assert_ne!(backup, case.bytes("backup_after"));
+            assert!(matches!(
+                result,
+                Err(RuleError::Unsupported {
+                    dependency: "warrior-indexed NPC write into the editor backup without the session table",
+                    ..
+                })
+            ));
+            assert_eq!(random, RandomState::new(1));
+        }
+    }
+}
+
 fn combat(snapshot: &Value, caster: i16) -> Combat {
     let mut combat = support::psi_frame::combat(snapshot);
     combat.order = vec![-1; 110];
@@ -89,7 +149,7 @@ fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let weapon = case.n::<usize>("weapon");
         let buffs = before.bytes("party_buffs");
-        let retained = c.attack_packet.as_ref().unwrap().clone();
+        let retained = c.attack_packet.clone();
         let (result, packet) = if weapon == 187 {
             enemy_weapons::melee_warrior_with_buffs(
                 &mut c,
@@ -115,7 +175,7 @@ fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
             )
         }
         .unwrap_or_else(|e| panic!("{label} {e:?}"));
-        c.attack_packet = Some(packet);
+        c.attack_packet = packet;
         compare(&c, &w, after, &label);
         assert_eq!(random, native_common::random_state(after));
         let mut sounds = result.sounds;

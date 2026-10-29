@@ -5,8 +5,47 @@ use crate::combat::{Combat, attack, lifecycle};
 use crate::{Event, RandomState, RuleError};
 use centurions_content::Warrior;
 
+#[derive(Default)]
+pub(super) struct AttackOutcome {
+    pub events: Vec<Event>,
+    pub returned: bool,
+    pub terminated: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(super) fn resolve_attack(
+pub(super) fn resolve_attack_with_death(
+    combat: &mut Combat,
+    warriors: &mut [Warrior],
+    random: &mut RandomState,
+    attacker: i16,
+    recipient: i16,
+    attack_index: usize,
+    retained_actor: i16,
+    items: Option<&[Vec<u8>]>,
+    attacks: Option<&[u8]>,
+    buffs: &[u8],
+    buffers: &mut crate::ammunition::WorkBuffers,
+    death_processing: Option<crate::combat::death_scripts::DeathProcessing>,
+) -> Result<Vec<Event>, RuleError> {
+    resolve_attack_result(
+        combat,
+        warriors,
+        random,
+        attacker,
+        recipient,
+        attack_index,
+        retained_actor,
+        items,
+        attacks,
+        buffs,
+        buffers,
+        death_processing,
+    )
+    .map(|outcome| outcome.events)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn resolve_attack_result(
     combat: &mut Combat,
     warriors: &mut [Warrior],
     random: &mut RandomState,
@@ -18,31 +57,34 @@ pub(super) fn resolve_attack(
     attacks: Option<&[u8]>,
     buffs: &[u8],
     buffers: &mut crate::ammunition::WorkBuffers,
-) -> Result<Vec<Event>, RuleError> {
-    if attacker >= 10 && !has_active_warrior(warriors) {
-        combat.attack_packet = Some(if let Some(attacks) = attacks {
-            attack::attack_packet(attacks)?
-        } else {
-            attack::default_attack_packet()
-        });
-        return Ok(vec![]);
+    death_processing: Option<crate::combat::death_scripts::DeathProcessing>,
+) -> Result<AttackOutcome, RuleError> {
+    let presents_result = attacker >= 10
+        || warriors[attacker as usize].record().attacks_used()?
+            < warriors[attacker as usize].record().attack_limit()?;
+    if presents_result {
+        combat.npc_inhibit_write = Some(1);
+    }
+    if !has_active_warrior(warriors) {
+        combat.victory_work.finish();
+        if attacker >= 10 {
+            combat.attack_packet = if let Some(attacks) = attacks {
+                attack::attack_packet(attacks)?
+            } else {
+                attack::default_attack_packet()
+            };
+        }
+        return Ok(AttackOutcome::default());
     }
     combat.inactive_rounds = 0;
-    let previous_faction = if attacker >= 10 && (0..warriors.len() as i16).contains(&recipient) {
-        Some((
-            recipient as usize,
-            warriors[recipient as usize].record().faction()?,
-        ))
-    } else {
-        None
-    };
-    let retained = combat.attack_packet.clone().unwrap_or_else(|| vec![0; 58]);
+    let retained = combat.attack_packet.clone();
     // Warrior turns leave WORD447196 at the most recently selected NPC.
     let retained_actor = if retained_actor < 10 {
         combat.selected_enemy as i16 + 10
     } else {
         retained_actor
     };
+    let mut death_handled = false;
     let result = if attacker < 10 {
         let weapon =
             warrior_attack::weapon(&warriors[attacker as usize].bytes, items.unwrap_or(&[]))?;
@@ -78,7 +120,11 @@ pub(super) fn resolve_attack(
                 buffs,
             )? {
                 WarriorMelee::Halted { packet, warned } => {
-                    return Ok(halted_spell_weapon(combat, packet, warned));
+                    return Ok(AttackOutcome {
+                        events: halted_spell_weapon(combat, packet, warned),
+                        returned: false,
+                        terminated: false,
+                    });
                 }
                 WarriorMelee::Struck {
                     result,
@@ -86,7 +132,7 @@ pub(super) fn resolve_attack(
                     target,
                 } => {
                     recipient = target;
-                    if packet.is_some() {
+                    if let Some(packet) = packet {
                         combat.attack_packet = packet;
                     }
                     result
@@ -125,11 +171,11 @@ pub(super) fn resolve_attack(
             if reflected {
                 recipient = attacker;
             }
-            combat.attack_packet = Some(packet);
+            combat.attack_packet = packet;
             result
         } else {
             load_natural_work(combat, items, buffers)?;
-            let (result, packet, reflected) = attack::natural_attack_with_target(
+            let (result, packet, reflected, total_delta) = attack::natural_attack_with_target(
                 &mut warriors[recipient as usize],
                 &mut combat.enemies.records[(attacker - 10) as usize],
                 attack_index,
@@ -139,10 +185,14 @@ pub(super) fn resolve_attack(
                 buffs,
                 combat.difficulty,
             )?;
+            combat.victory_work.add_total(total_delta);
+            if !reflected {
+                combat.unavailable = combat.unavailable.wrapping_add(total_delta as i8);
+            }
             if reflected {
                 recipient = attacker;
             }
-            combat.attack_packet = Some(packet);
+            combat.attack_packet = packet;
             result
         }
     } else {
@@ -170,35 +220,36 @@ pub(super) fn resolve_attack(
             if reflected {
                 recipient = attacker;
             }
-            combat.attack_packet = Some(packet);
+            combat.attack_packet = packet;
             result
         } else {
             load_natural_work(combat, items, buffers)?;
             let (result, packet, reflected) =
-                crate::combat::ally_turns::natural_attack_enemy_with_target(
+                crate::combat::ally_turns::natural_attack_enemy_with_processing(
                     combat,
                     warriors,
                     random,
                     (attacker, recipient, attack_index, retained_actor),
                     attacks,
                     &retained,
+                    death_processing,
                 )?;
             if reflected {
                 recipient = attacker;
             }
-            combat.attack_packet = Some(packet);
+            combat.attack_packet = packet;
+            // The NPC natural adapter owns killbody, including reflection.
+            death_handled = result.killed;
             result
         }
     };
-    if let Some((member, 0)) = previous_faction
-        && warriors[member].record().faction()? != 0
-    {
-        combat.unavailable = combat.unavailable.wrapping_add(1);
+    if presents_result {
+        combat.neighbor_work.departure = 0;
     }
-    if result.killed {
+    if result.killed && !death_handled {
         let direct = combat.direct_deaths;
         combat.direct_deaths &= attacker < 6;
-        lifecycle::kill_body(combat, warriors, recipient)?;
+        lifecycle::kill_body_with_processing(combat, warriors, recipient, death_processing)?;
         combat.direct_deaths = direct;
     }
     let feedback = result.feedback.map(|feedback| {
@@ -230,6 +281,8 @@ pub(super) fn resolve_attack(
         target: recipient,
         damage: result.damage,
         defeated: result.killed,
+        icon: crate::event::PresentationIcon(result.icon),
+        flight: Default::default(),
     });
     if attacker >= 10 {
         let melee_id = combat.enemies.records[(attacker - 10) as usize]
@@ -259,12 +312,31 @@ pub(super) fn resolve_attack(
             resource_id: warriors[attacker as usize].record().melee_hit_sound()?,
         });
     }
-    Ok(events)
+    if death_processing.is_some() && result.killed {
+        if recipient >= 10 {
+            events.extend(super::death::enemy_death_feedback(
+                &combat.enemies.records[(recipient - 10) as usize],
+                recipient,
+            )?);
+        }
+        if combat
+            .direct_death
+            .as_ref()
+            .is_none_or(|(body, _)| *body != recipient)
+        {
+            events.push(Event::Delay { ticks: 15 });
+        }
+    }
+    Ok(AttackOutcome {
+        events,
+        returned: result.killed,
+        terminated: false,
+    })
 }
 
 /// A halted spell-weapon attack leaves loadspell2's packet and no strike events.
 fn halted_spell_weapon(combat: &mut Combat, packet: Vec<u8>, warned: bool) -> Vec<Event> {
-    combat.attack_packet = Some(packet);
+    combat.attack_packet = packet;
     if warned {
         vec![Event::Feedback(crate::feedback::NativeFeedback::Warning {
             index: 39,

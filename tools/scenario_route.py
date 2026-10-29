@@ -17,8 +17,8 @@ def script(raw):
     return [[op, arg] for op, arg in zip(words(raw, 8, 8), words(raw, 8, 24)) if op]
 
 
-def catalogue(root):
-    base = root / SCENARIO
+def catalogue(root, scenario=None):
+    base = root / (scenario or SCENARIO)
     read = lambda name: (base / name).read_bytes()
     mission, doors, code = read("Data Mission"), read("Data ED3"), read("Data EDCD")
     headers, regions, land, menus = read("Data DD"), read("Data RD"), read("Data LD"), read("Data ED")
@@ -191,9 +191,9 @@ def story_dispatch_arms(project):
     return arms
 
 
-def completion_inventory(root, result):
+def completion_inventory(root, result, scenario=None):
     """Conservative authored dependencies; source coverage is not native agreement."""
-    base = root / SCENARIO
+    base = root / (scenario or SCENARIO)
     project = Path(__file__).resolve().parent.parent
     dispatch_arms = story_dispatch_arms(project)
     nodes, edges, uncertainties, conditional_sources = {}, [], [], []

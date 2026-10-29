@@ -289,6 +289,8 @@ pub fn initial_items(
     for slot in 0..warrior.inventory()?.len() {
         if warrior.inventory()?[slot].id() == 1 {
             let result = crate::equipment::wear(warrior, content, mission, slot, false)?;
+            // A new character has no Session yet to receive party-wide writes.
+            crate::equipment::require_no_globals(&result.global_writes)?;
             *warrior = result.warrior;
         }
     }

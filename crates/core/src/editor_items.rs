@@ -55,7 +55,7 @@ pub(crate) fn equipment_record(
     content: &Content,
     slot: usize,
     wearing: bool,
-) -> Result<(Warrior, Vec<i16>), RuleError> {
+) -> Result<(Warrior, Vec<i16>, Vec<GlobalWrite>), RuleError> {
     equipment_record_inner(warrior, content, slot, wearing, false)
 }
 
@@ -63,7 +63,7 @@ pub(crate) fn equipment_record_forced(
     warrior: &Warrior,
     content: &Content,
     slot: usize,
-) -> Result<(Warrior, Vec<i16>), RuleError> {
+) -> Result<(Warrior, Vec<i16>, Vec<GlobalWrite>), RuleError> {
     equipment_record_inner(warrior, content, slot, false, true)
 }
 
@@ -71,7 +71,7 @@ pub(crate) fn equipment_record_restored(
     warrior: &Warrior,
     content: &Content,
     slot: usize,
-) -> Result<(Warrior, Vec<i16>), RuleError> {
+) -> Result<(Warrior, Vec<i16>, Vec<GlobalWrite>), RuleError> {
     equipment_record_inner(warrior, content, slot, true, true)
 }
 
@@ -81,7 +81,7 @@ fn equipment_record_inner(
     slot: usize,
     wearing: bool,
     forced: bool,
-) -> Result<(Warrior, Vec<i16>), RuleError> {
+) -> Result<(Warrior, Vec<i16>, Vec<GlobalWrite>), RuleError> {
     let item = warrior
         .inventory()?
         .get(slot)
@@ -93,10 +93,10 @@ fn equipment_record_inner(
         item
     };
     let result = retained_equipment(warrior, content, slot, wearing, forced, &retained)?;
-    Ok((result.warrior, result.warnings))
+    Ok((result.warrior, result.warnings, result.global_writes))
 }
 
-pub(crate) use crate::equipment::RetainedEquipment;
+pub(crate) use crate::equipment::{GlobalWrite, RetainedEquipment};
 
 pub(crate) fn retained_equipment(
     warrior: &Warrior,
@@ -126,27 +126,16 @@ pub fn edit(
         return Err(unavailable());
     }
     let item = warrior.record().inventory_slot(slot);
-    let (next, retained, difficulty) =
-        crate::equipment::edit_record(warrior, content, slot, control, state.difficulty).map_err(
-            |error| match error {
-                RuleError::Unsupported {
-                    action: "equipment",
-                    dependency: "item changes global rules outside the warrior record",
-                } => unavailable(),
-                error => error,
-            },
-        )?;
+    let (next, retained, globals) = crate::equipment::edit_record(warrior, content, slot, control)?;
+    // Removal then re-wear write the party-wide WORDs, including difficulty40.
+    state.apply_equipment_globals(&globals)?;
     state.warriors[member] = next;
-    if state.native_work.inventory_record.is_some() {
-        state.native_work.inventory_record = Some(retained);
+    state.native_work.inventory_record = retained;
+    // loaditem copies nothing for an ID outside its five banks, keeping the work record.
+    if item.id() != 0
+        && let Some(definition) = content.items.get(usize::from(item.id().unsigned_abs()))
+    {
+        state.native_work.loaded_item_field32 = word(definition, 32)?;
     }
-    if item.id() != 0 {
-        state.native_work.loaded_item_field32 = content
-            .items
-            .get(usize::from(item.id().unsigned_abs()))
-            .map(|definition| word(definition, 32))
-            .transpose()?;
-    }
-    state.difficulty = difficulty;
     Ok(vec![Event::Sound { resource_id: 141 }])
 }

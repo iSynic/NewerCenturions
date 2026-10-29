@@ -40,8 +40,7 @@ pub fn archive_entries(
         .monsters;
     let mut entries = Vec::new();
     let order: Vec<_> = map
-        .archive_order
-        .clone()
+        .archive_order()
         .unwrap_or_else(|| (0..records.len() / 288).collect());
     for index in order {
         let record = span(records, index * 288, 288)?;
@@ -52,7 +51,7 @@ pub fn archive_entries(
             entries.push((index, centurions_content::combat::monster_name(record)?));
         }
     }
-    if map.archive_order.is_none() {
+    if map.archive_table.is_none() {
         entries.sort_by(|(a, _), (b, _)| {
             let a = a * 288 + 218;
             let b = b * 288 + 218;

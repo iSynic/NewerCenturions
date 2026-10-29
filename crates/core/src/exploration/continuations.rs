@@ -19,6 +19,9 @@ pub fn continue_messages(state: &mut Session, content: &Content) -> Result<Vec<E
         position.presentation = Some(Presentation::Messages { pages, next });
         return Ok(vec![Event::StoryPresented]);
     }
+    if let Some(Presentation::ClinicEntry { percent }) = next.as_deref() {
+        return crate::clinic::visit(state, *percent);
+    }
     position.presentation = next.map(|page| *page);
     if position.presentation.is_some() {
         return Ok(vec![Event::StoryPresented]);
@@ -91,7 +94,12 @@ pub(super) fn continue_with_spells(
             seed: state.library_random_seed,
             draws: state.library_random_draws,
         };
-        let closed = crate::story_promotion::close(
+        let close = if state.recovery_return.is_some() {
+            crate::story_promotion::close_recovery
+        } else {
+            crate::story_promotion::close
+        };
+        let closed = close(
             &state.warriors,
             &map.races,
             &map.profiles,
@@ -138,6 +146,7 @@ pub(crate) fn finish_story_page(
         position.presentation,
         Some(
             Presentation::Question { .. }
+                | Presentation::BoatQuestion { .. }
                 | Presentation::Menu { .. }
                 | Presentation::Typed { .. }
                 | Presentation::StageChange { .. }
@@ -149,6 +158,7 @@ pub(crate) fn finish_story_page(
             "choose or cancel the current question or menu".into(),
         ));
     }
+    let loot = position.presentation == Some(Presentation::Loot);
     if position.presentation.take().is_none() {
         return Err(RuleError::Invalid("no story page to continue".into()));
     }
@@ -156,6 +166,23 @@ pub(crate) fn finish_story_page(
         return Err(RuleError::Invalid(
             "collect or store the equipment before continuing".into(),
         ));
+    }
+    if loot {
+        state.booty_tally = crate::BootyTally::default();
+    }
+    if loot && let Some(continued) = crate::loot_recovery::close(state, content)? {
+        return Ok(continued);
+    }
+    if loot && let Some(continued) = crate::story_cleanup::close_rewards(state, content)? {
+        return Ok(continued);
+    }
+    if loot && let Some(continued) = combat::runtime::close_selected_rewards(state, content)? {
+        events.extend(continued);
+        return Ok(events);
+    }
+    if loot && let Some(continued) = combat::runtime::close_ordinary_rewards(state, content)? {
+        events.extend(continued);
+        return Ok(events);
     }
     if state.actor_replacement.is_some() {
         let (feedback, progress) = crate::story_actor::resume(state, content)?;

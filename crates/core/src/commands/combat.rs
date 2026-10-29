@@ -7,6 +7,9 @@ pub(super) fn execute(
     content: &Content,
 ) -> Result<Vec<Event>, RuleError> {
     match command {
+        Command::AnswerOccupiedChoice { exchange } => {
+            combat::runtime::answer_retained_walk(state, content, exchange)
+        }
         Command::SwapCombatants { body } => combat::interaction::exchange(state, body),
         Command::AutomaticBandage => {
             let member = state
@@ -52,15 +55,25 @@ pub(super) fn execute(
         Command::SelectCombatWeapon { slot } => {
             combat::controls::select_weapon(state, content, slot)
         }
-        Command::ViewCombatBody { body } => reference_views::combat_body(state, content, body),
+        Command::ViewCombatBody { body } => {
+            let events = reference_views::combat_body(state, content, body)?;
+            if body >= 10 {
+                state.invalidate_monster_work();
+            }
+            Ok(events)
+        }
         Command::Guard => combat::runtime::player_guard(state, content),
         Command::SelectSurvivor { row } => {
-            let combat = state.combat.as_ref().ok_or("survivor roster missing")?;
+            let records = if let Some(combat) = &state.combat {
+                combat.enemies.records.clone()
+            } else {
+                state.native_work.npc_backing.active_records()?
+            };
             state
                 .survivors
                 .as_mut()
                 .ok_or("survivor selection missing")?
-                .toggle(row, &combat.enemies.records, &mut state.random)
+                .toggle(row, &records, &mut state.random)
         }
         Command::EndTurn => {
             if let Some(body) = state.combat.as_ref().and_then(|arena| arena.active_body())
@@ -82,7 +95,7 @@ pub(super) fn execute(
         Command::AttackFriend { body } => {
             combat::runtime::player_attack_friend(state, content, body)
         }
-        Command::ShootEnemy { body } => combat::runtime::player_shoot(state, content, body),
+        Command::ShootEnemy { body } => combat::shooting::target_key(state, content, body),
         Command::ShootAt { x, y } => combat::shooting::fire_at(state, content, (x, y)),
         Command::FireSelectedTargets => combat::shooting::fire_selected(state, content),
         Command::CancelFireTargets => combat::shooting::cancel(state),

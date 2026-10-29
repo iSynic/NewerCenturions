@@ -1,17 +1,17 @@
-//! Support for combat/spells.
+//! Shared condition/healing resolution in resolvespell's body order.
 use super::{
-    AttackResult, DamageFlags, DamagePacket, DirectSpell, RandomState, RestrictionMemoryView,
-    RuleError, SupportSpellResult, monster_race_is_excluded, race_is_excluded,
-    resolve_damage_with_amount, spell_conditions, status_resisted,
+    DirectSpell, FieldUsage, RandomState, RestrictionMemoryView, RuleError, SupportSpellResult,
+    monster_race_is_excluded, race_is_excluded, status_resisted,
 };
-use centurions_content::combat::MonsterRecord;
 use centurions_content::{
     Warrior,
-    records::{
-        AttackPacket, Condition, EnemyRecord, EnemyRecordMut, WarriorRecord, WarriorRecordMut,
-    },
-    word,
+    combat::MonsterRecord,
+    records::{AttackPacket, WarriorRecord, WarriorRecordMut},
 };
+
+mod conditions;
+mod health;
+pub(super) mod target;
 
 pub fn resolve_player_support(
     warriors: &[Warrior],
@@ -50,7 +50,7 @@ pub fn resolve_support_with_context(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_support_for_caster(
+pub fn resolve_support_for_caster(
     warriors: &[Warrior],
     enemies: &[MonsterRecord],
     mask: &[i16],
@@ -59,55 +59,62 @@ pub(crate) fn resolve_support_for_caster(
     caller: (Option<i16>, Option<RestrictionMemoryView<'_>>),
     random: &mut RandomState,
 ) -> Result<SupportSpellResult, RuleError> {
-    let (caster, memory) = caller;
-    let DirectSpell {
-        packet,
-        count,
-        armor_filter,
-        weapon_sound,
-        ..
-    } = *context;
+    resolve_support_inner(warriors, enemies, mask, context, caller, None, random)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn resolve_support_inner(
+    warriors: &[Warrior],
+    enemies: &[MonsterRecord],
+    mask: &[i16],
+    context: &DirectSpell<'_>,
+    caller: (Option<i16>, Option<RestrictionMemoryView<'_>>),
+    mut usage: Option<&mut FieldUsage>,
+    random: &mut RandomState,
+) -> Result<SupportSpellResult, RuleError> {
     if !(1..=6).contains(&warriors.len())
         || enemies.len() > 100
         || mask.len() < 10 + enemies.len()
-        || packet.len() != 58
-        || !matches!(count, 1..=7)
+        || context.packet.len() != 58
         || !(0..7).contains(&context.level)
+        || warriors.iter().any(|w| w.bytes.len() != 3138)
+        || enemies.iter().any(|m| m.bytes.len() != 288)
     {
         return Err(RuleError::Invalid("support spell inputs".into()));
     }
-    let effect = AttackPacket(packet).effect()?;
-    if !(matches!(effect, 0..=41 | 51 | 57 | 64))
-        || AttackPacket(packet).saving_throw_mode() > 3
-        || !matches!(AttackPacket(packet).defense_category(), 7 | 8 | 10)
-        || (packet[20] as i8) < 0
-        || word(packet, 34)? != 0
-        || packet[23..30].iter().any(|v| *v != 0)
+    // resolvespell's movement (151418) and summon (1516ea) arms and spelllist's
+    // category-5 drain (15ba5a) replace this body loop. Every game caller routes
+    // them first; only the record-only public adapters, which no command reaches,
+    // can pass one here.
+    if !super::is_support(context.packet)? {
+        return Err(
+            "movement, summon or category-5 drain packet in a record-only body resolver".into(),
+        );
+    }
+    if mask[warriors.len()..10].iter().any(|flag| *flag > 0)
+        || mask[10 + enemies.len()..].iter().any(|flag| *flag > 0)
     {
         return Err(RuleError::Unsupported {
             action: "combat.spell.support",
-            dependency: "other support packet",
+            dependency: "condition target is an inactive warrior or unloaded NPC record",
         });
     }
-    for warrior in warriors {
-        centurions_content::span(&warrior.bytes, 0, 3138)?;
-    }
+    let attack = AttackPacket(context.packet);
+    let effect = attack.effect()?.wrapping_abs();
     let mut next_random = random.clone();
-    let mut amount = 0;
-    let (minimum, maximum) = AttackPacket(packet).duration_bounds();
+    let (minimum, maximum) = attack.duration_bounds();
     let mut duration = next_random.range(minimum, maximum);
-    let (additional_minimum, additional_maximum) =
-        AttackPacket(packet).additional_duration_bounds();
-    if additional_minimum != 0 {
-        for _ in 0..count {
-            duration =
-                duration.wrapping_add(next_random.range(additional_minimum, additional_maximum));
+    let (minimum, maximum) = attack.additional_duration_bounds();
+    if minimum != 0 {
+        for _ in 0..context.count {
+            duration = duration.wrapping_add(next_random.range(minimum, maximum));
         }
     }
     let mut result = SupportSpellResult {
+        total_delta: 0,
         warriors: warriors.to_vec(),
         enemies: enemies.to_vec(),
-        sounds: if matches!(AttackPacket(packet).targeting_mode(), 9 | 10) {
+        sounds: if matches!(attack.targeting_mode(), 9 | 10) {
             vec![6001]
         } else {
             vec![]
@@ -115,288 +122,86 @@ pub(crate) fn resolve_support_for_caster(
         targets: vec![],
         healed: false,
         recovered: 0,
+        race_excluded: vec![],
+        fatigue_reset: false,
+        area_shape: None,
+        forced_kills: vec![],
+        alias_writes: vec![],
     };
-    for (member, selected) in mask.iter().enumerate().take(result.warriors.len()) {
-        if *selected <= 0 {
-            continue;
-        }
-        let w = &mut result.warriors[member].bytes;
-        if race_is_excluded(packet, w, "combat.spell.support")? {
-            result.sounds.push(651);
-            continue;
-        }
-        if status_resisted(w, false, context, &mut next_random)? {
-            continue;
-        }
-        let damage = resolve_damage_with_amount(
-            w,
-            false,
-            &DamagePacket {
-                bytes: packet.to_vec(),
-                attack_count: count,
-            },
-            DamageFlags {
-                shield: true,
-                armor: true,
-                saves: true,
-                armor_filter,
-            },
-            amount,
-            &mut next_random,
-        )?
-        .total;
-        let damage = if effect == 28 { duration } else { damage };
-        amount = damage;
-        let mut sounds = vec![];
-        let mut follow_up = None;
-        // Authored effect0 has no spelllist work; effect41 returns presentation only.
-        if matches!(effect, 0 | 41) {
-            if effect == 41
-                && WarriorRecord::from_bytes(w).condition(Condition::ReflectingScans)? != 0
-            {
-                next_random.bound(100);
-            }
-            result.targets.push((
-                member,
-                AttackResult {
-                    feedback: None,
-                    damage: 0,
-                    killed: false,
-                    sounds: if effect == 41 {
-                        vec![AttackPacket(packet).impact_sound()?]
-                    } else {
-                        vec![]
-                    },
-                },
-            ));
-            continue;
-        }
-        if matches!(effect, 51 | 64) {
-            let target = if WarriorRecord::from_bytes(w).condition(Condition::ReflectingScans)? != 0
-                && next_random.bound(100) < 34
-            {
-                usize::try_from(caster.unwrap_or(member as i16))
-                    .map_err(|_| RuleError::Invalid("negative special-effect caster".into()))?
-            } else {
-                member
-            };
-            if effect == 51 {
-                let caster = usize::try_from(caster.ok_or("charm caller missing")?)
-                    .map_err(|_| RuleError::Invalid("negative charm caster".into()))?;
-                let delta = spell_conditions::change_allegiance(
-                    &mut result.warriors,
-                    &mut result.enemies,
-                    target,
-                    caster,
-                )?;
-                result.recovered = result.recovered.wrapping_sub(delta as u8);
-            } else if target < result.warriors.len() {
-                spell_conditions::follow_up(&mut result.warriors[target].bytes, false, effect)?;
-            } else {
-                // spelllist indexes warrior memory by body; past the party it is undefined.
-                return Err(RuleError::Unsupported {
-                    action: "combat.spell.support",
-                    dependency: "revival reflected onto an NPC caster",
-                });
-            }
-            result.targets.push((
-                member,
-                AttackResult {
-                    feedback: None,
-                    damage: 0,
-                    killed: false,
-                    sounds: vec![AttackPacket(packet).impact_sound()?],
-                },
-            ));
-            continue;
-        }
-        let mut healing_death = false;
-        if (1..=40).contains(&effect) {
-            spell_conditions::add_duration(w, false, effect, duration)?;
-            let reflected = WarriorRecord::from_bytes(w).condition(Condition::ReflectingScans)?
-                != 0
-                && next_random.bound(100) < 34;
-            follow_up = Some(if reflected {
-                caster.unwrap_or(member as i16)
-            } else {
-                member as i16
-            });
-            if damage == 0 {
-                sounds.push(AttackPacket(packet).impact_sound()?);
-            }
-        } else {
-            let previous = WarriorRecord::from_bytes(w).stamina()?;
-            if damage < 0 && previous > -10 {
-                let after = previous
-                    .wrapping_add(damage.wrapping_abs())
-                    .max(-10)
-                    .min(WarriorRecord::from_bytes(w).maximum_stamina()?);
-                // heal1287c2 calls killbody after the signed WORD addition wraps.
-                healing_death = previous > 0 && after < 1;
-                if previous <= 0 && after > 0 {
-                    result.recovered = result.recovered.wrapping_add(1);
-                }
-                if previous <= 0 && after < -9 {
-                    sounds.push(next_random.bound(2).wrapping_add(506));
-                }
-                WarriorRecordMut::from_bytes(w).set_stamina(after);
-                sounds.insert(0, AttackPacket(packet).impact_sound()?);
-                result.healed = true;
-            }
-        }
-        let previous = WarriorRecord::from_bytes(w).stamina()?;
-        if effect == 28 && damage > 0 && previous >= 0 {
-            WarriorRecordMut::from_bytes(w).set_stamina(previous.wrapping_sub(damage));
-            WarriorRecordMut::from_bytes(w).mark_damaged();
-            sounds.push(AttackPacket(packet).impact_sound()?);
-        }
-        result.targets.push((
-            member,
-            AttackResult {
-                feedback: None,
-                damage,
-                killed: healing_death
-                    || (effect == 28
-                        && previous > 0
-                        && WarriorRecord::from_bytes(w).stamina()? < 1),
-                sounds,
-            },
-        ));
-        if let Some(body) = follow_up {
-            if body < 10 {
-                let target = result
-                    .warriors
-                    .get_mut(
-                        usize::try_from(body)
-                            .map_err(|_| RuleError::Invalid("negative condition body".into()))?,
-                    )
-                    .ok_or("condition body outside party")?;
-                spell_conditions::follow_up(&mut target.bytes, false, effect)?;
-            } else {
-                let target = result
-                    .enemies
-                    .get_mut((body - 10) as usize)
-                    .ok_or("condition body outside enemies")?;
-                spell_conditions::follow_up(&mut target.bytes, true, effect)?;
-            }
-        }
+    if effect == 66 {
+        train_party(&mut result, &attack, mask, &mut next_random)?;
     }
-    for index in 0..result.enemies.len() {
-        if mask[index + 10] <= 0 {
+    let mut amount = 0;
+    for body in (0..warriors.len()).chain(10..10 + enemies.len()) {
+        if mask[body] <= 0 {
             continue;
         }
-        if matches!(effect, 0 | 41 | 51)
-            && AttackPacket(packet).race_restriction()? != 0
-            && monster_race_is_excluded(packet, index + 10, memory)?
-        {
-            result.sounds.push(651);
+        let record = if body < 10 {
+            &result.warriors[body].bytes
+        } else {
+            &result.enemies[body - 10].bytes
+        };
+        let excluded = if body < 10 {
+            race_is_excluded(context.packet, record, caller.1)?
+        } else {
+            attack.race_restriction()? != 0
+                && monster_race_is_excluded(context.packet, body, caller.1)?
+        };
+        if excluded {
+            result.race_excluded.push(body);
             continue;
         }
-        let m = &mut result.enemies[index].bytes;
-        centurions_content::span(m, 0, 288)?;
-        if status_resisted(m, true, context, &mut next_random)? {
+        if status_resisted(record, body >= 10, context, caller.1, &mut next_random)? {
             continue;
         }
-        let damage = resolve_damage_with_amount(
-            m,
-            true,
-            &DamagePacket {
-                bytes: packet.to_vec(),
-                attack_count: count,
-            },
-            DamageFlags {
-                shield: true,
-                armor: true,
-                saves: true,
-                armor_filter,
-            },
-            amount,
+        // Resistance precedes this shared byte, including already-used fields.
+        if let Some(usage) = usage.as_deref_mut() {
+            if usage.used[usage.slot + 1] != 0 {
+                continue;
+            }
+            usage.used[usage.slot + 1] = 1;
+        }
+        target::resolve(
+            &mut result,
+            body,
+            context,
+            effect,
+            duration,
+            &mut amount,
+            caller,
             &mut next_random,
         )?;
-        let total = if effect == 28 { duration } else { damage.total };
-        amount = total;
-        let mut sounds = if damage.shield_sound {
-            vec![206]
-        } else {
-            vec![]
-        };
-        if matches!(effect, 0 | 41) {
-            if effect == 41 {
-                sounds.push(AttackPacket(packet).impact_sound()?);
-            }
-            result.targets.push((
-                index + 10,
-                AttackResult {
-                    feedback: None,
-                    damage: 0,
-                    killed: false,
-                    sounds,
-                },
-            ));
-            continue;
-        }
-        if effect == 51 {
-            let caster = usize::try_from(caster.ok_or("charm caller missing")?)
-                .map_err(|_| RuleError::Invalid("negative charm caster".into()))?;
-            spell_conditions::change_allegiance(
-                &mut result.warriors,
-                &mut result.enemies,
-                index + 10,
-                caster,
-            )?;
-            result.targets.push((
-                index + 10,
-                AttackResult {
-                    feedback: None,
-                    damage: 0,
-                    killed: false,
-                    sounds: vec![AttackPacket(packet).impact_sound()?],
-                },
-            ));
-            continue;
-        }
-        if effect == 64 {
-            // spelllist revives warrior memory at the body index, never the NPC record.
-            return Err(RuleError::Unsupported {
-                action: "combat.spell.support",
-                dependency: "revival aimed at an NPC",
-            });
-        }
-        if (1..=40).contains(&effect) {
-            spell_conditions::apply(m, true, effect, duration, &mut next_random)?;
-            if total == 0 {
-                sounds.push(AttackPacket(packet).impact_sound()?);
-            }
-        }
-        if damage.total < 0 && EnemyRecord::from_bytes(m).stamina()? > 0 {
-            let health = EnemyRecord::from_bytes(m)
-                .stamina()?
-                .wrapping_sub(damage.total);
-            EnemyRecordMut::from_bytes(m).set_stamina(health);
-            EnemyRecordMut::from_bytes(m).mark_damaged();
-            sounds.push(AttackPacket(packet).impact_sound()?);
-            sounds.push(weapon_sound);
-            sounds.push(AttackPacket(packet).impact_sound()?);
-        }
-        if effect == 28 && total != 0 {
-            let health = EnemyRecord::from_bytes(m).stamina()?.wrapping_sub(total);
-            EnemyRecordMut::from_bytes(m).set_stamina(health);
-            EnemyRecordMut::from_bytes(m).mark_damaged();
-            sounds.push(AttackPacket(packet).impact_sound()?);
-            if health > 0 {
-                sounds.push(weapon_sound);
-            }
-        }
-        result.targets.push((
-            index + 10,
-            AttackResult {
-                feedback: None,
-                damage: total,
-                killed: effect == 28 && total != 0 && EnemyRecord::from_bytes(m).stamina()? < 1,
-                sounds,
-            },
-        ));
     }
     *random = next_random;
     Ok(result)
+}
+
+/// resolvespell15133c trains each selected party member before the body loop,
+/// whether or not combat mode is set.
+pub(super) fn train_party(
+    result: &mut SupportSpellResult,
+    attack: &AttackPacket,
+    mask: &[i16],
+    next_random: &mut RandomState,
+) -> Result<(), RuleError> {
+    let mut selector = attack.area_shape() as i8;
+    if selector == 0 {
+        selector = next_random.bound(5) as i8;
+        result.area_shape = Some(selector as u8);
+    }
+    for (warrior, selected) in result.warriors.iter_mut().zip(mask) {
+        if *selected == 0 {
+            continue;
+        }
+        WarriorRecordMut::from_bytes(&mut warrior.bytes).train_attribute(selector);
+        let view = WarriorRecord::from_bytes(&warrior.bytes);
+        if selector == 10 {
+            let value = view.maximum_stamina()?.wrapping_add(next_random.bound(8));
+            WarriorRecordMut::from_bytes(&mut warrior.bytes).set_maximum_stamina(value);
+        } else if selector == 11 && view.maximum_psi()? > 0 {
+            let value = view.maximum_psi()?.wrapping_add(next_random.bound(20));
+            WarriorRecordMut::from_bytes(&mut warrior.bytes).set_maximum_psi(value);
+        }
+    }
+    Ok(())
 }

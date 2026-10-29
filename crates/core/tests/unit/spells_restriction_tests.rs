@@ -1,21 +1,17 @@
+#[path = "../native/restriction_bit_reference.rs"]
+mod native_bits;
 #[test]
-fn signed_restriction_bits_match_all_16_original_source_instruction_controls() {
-    let fixture = crate::test_support::fixture("restricted-npc-spell.json");
-    let controls = fixture["historical_bit_boundary"]["controls"]
-        .as_array()
-        .unwrap();
-    for control in controls {
-        let input = crate::test_support::bytes(&control["input_bytes"]);
-        let mut packet = vec![0; 58];
-        packet[48..48 + input.len()].copy_from_slice(&input);
-        let index = control["index"].as_i64().unwrap() as i16;
-        assert_eq!(
-            super::restrictions::restriction_bit(&packet, index).unwrap(),
-            control["expected_result"].as_i64().unwrap() != 0,
-            "original signed index {index}"
-        );
+fn restriction_bits_past_the_packet_read_data_s() {
+    use super::restrictions::restriction_bit;
+    // Byte 58 onward is Data S at 443788; races below -399 read before the packet.
+    let mut data = vec![0; 0x5f28];
+    data[0] = 0x80;
+    data[4087] = 0x01;
+    for index in [64, i16::MAX] {
+        assert!(restriction_bit(&[0; 58], index, Some(&data)).unwrap());
+        assert!(restriction_bit(&[0; 58], index, None).is_err());
     }
-    for index in [-401, 64, i16::MIN, i16::MAX] {
-        assert!(super::restrictions::restriction_bit(&[0; 58], index).is_err());
+    for index in [-401, i16::MIN] {
+        assert!(restriction_bit(&[0; 58], index, Some(&data)).is_err());
     }
 }

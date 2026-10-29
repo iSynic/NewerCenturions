@@ -19,8 +19,8 @@ pub fn combat(snapshot: &Value) -> Combat {
     }
     combat.spell_fields = snapshot.bytes("fields");
     combat.field_used = snapshot.bytes("used");
-    combat.attack_packet = Some(snapshot.bytes("packet"));
-    combat.attack_identity = Some(snapshot.words("identity").try_into().unwrap());
+    combat.attack_packet = snapshot.bytes("packet");
+    combat.attack_identity = snapshot.words("identity").try_into().unwrap();
     combat.unavailable = snapshot.n("unavailable");
     combat
 }
@@ -33,8 +33,8 @@ pub fn compare(combat: &Combat, warriors: &[Warrior], snapshot: &Value, label: &
         words combat.map.tiles => &snapshot["map"], label;
         bytes combat.spell_fields => &snapshot["fields"], label;
         bytes combat.field_used => &snapshot["used"], label;
-        bytes combat.attack_packet.as_ref().unwrap() => &snapshot["packet"], label;
-        words combat.attack_identity.unwrap().to_vec() => &snapshot["identity"], label;
+        bytes combat.attack_packet => &snapshot["packet"], label;
+        words combat.attack_identity.to_vec() => &snapshot["identity"], label;
     }
     assert_eq!(
         combat.squad.positions,
@@ -51,7 +51,7 @@ pub fn compare(combat: &Combat, warriors: &[Warrior], snapshot: &Value, label: &
 /// These historical snapshots record the three item/ammunition work projections,
 /// not WORD4435d4. Its native controls and strict command/save comparison are separate.
 pub fn captured_work(mut work: WeaponWork) -> WeaponWork {
-    work.natural_attack_index = None;
+    work.natural_attack_index = 0;
     work
 }
 
@@ -59,7 +59,7 @@ pub fn compare_session(state: &Session, snapshot: &Value, label: &str) {
     let combat = state.combat.as_ref().unwrap();
     compare(combat, &state.warriors, snapshot, label);
     crate::support::native_expect! {
-        bytes state.native_work.psi_memory.as_ref().unwrap() => &snapshot["memory"], label;
+        bytes state.native_work.psi_memory => &snapshot["memory"], label;
         bytes state.party_buffs => &snapshot["party_buffs"], label;
         words combat.order => &snapshot["order"], label;
         scalar combat.cursor => &snapshot["cursor"], label;
@@ -69,7 +69,7 @@ pub fn compare_session(state: &Session, snapshot: &Value, label: &str) {
     }
     assert_eq!(
         state.native_work.loaded_item_field32,
-        Some(snapshot.n("item_context"))
+        snapshot.n::<i16>("item_context")
     );
     let expected = crate::native_common::psi_work(snapshot);
     assert_eq!(captured_work(combat.weapon_work), expected);

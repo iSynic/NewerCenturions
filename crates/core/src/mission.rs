@@ -1,19 +1,50 @@
 use crate::{Event, MapState, Presentation, RuleError, ScriptState, Session};
 use centurions_content::{Content, Warrior};
 
-/// partyloss 0x14913e closes the active mission; rule randomness is not reset by that UI flow.
-pub(crate) fn defeat(state: &mut Session, content: &Content) -> Vec<Event> {
-    let random = state.random.clone();
-    let library = (state.library_random_seed, state.library_random_draws);
-    let scenario_tail = state.scenario_duration_tail;
-    *state = Session::new(content);
-    state.random = random;
-    state.scenario_duration_tail = scenario_tail;
-    (state.library_random_seed, state.library_random_draws) = library;
-    vec![
+/// partyloss14913e clears its screen state, not killbody/heal's retained work.
+pub(crate) fn end(state: &mut Session, content: &Content) -> Result<(), RuleError> {
+    crate::combat::runtime::retain_last_defeated(state)?;
+    state.retain_combat_work();
+    state.clear_tactical_fields();
+    if let Some(combat) = &state.combat {
+        state.native_work.tactical_work = crate::combat::tactical_work::TacticalWork::capture(
+            combat,
+            &state.native_work.tactical_work,
+        );
+    }
+    state.retain_npcs();
+    let mut next = Session::new(content);
+    // partyloss14913e leaves work globals in place while clearing the active party.
+    std::mem::swap(&mut next.native_work, &mut state.native_work);
+    // partyloss has no writer for the menu records440edc or count44257c.
+    std::mem::swap(&mut next.allies, &mut state.allies);
+    next.ally_count = state.ally_count;
+    // cleartarget13822a clears110 WORDs at4434e0, including these six party entries.
+    next.clear_targets();
+    // partyloss1493aa clears WORD44374c, leaving total WORD4435c4 untouched.
+    next.native_work.victory_work.defeated = 0;
+    // partyloss1493b8 clears Ready WORD438760 independently of combat mode.
+    next.native_work.ready = 0;
+    let health = &mut next.native_work.health_context;
+    // 1493b0/1493dc/1493ec; last body, effect and affected words survive.
+    health.unavailable = 0;
+    health.marks_affected = false;
+    health.selected_warrior = 0;
+    next.confiscated = state.confiscated.take();
+    next.random = state.random.clone();
+    next.library_random_seed = state.library_random_seed;
+    next.library_random_draws = state.library_random_draws;
+    next.scenario_duration_tail = state.scenario_duration_tail;
+    *state = next;
+    Ok(())
+}
+
+pub(crate) fn defeat(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+    end(state, content)?;
+    Ok(vec![
         Event::Sound { resource_id: 26260 },
         Event::MissionEnded { defeated: true },
-    ]
+    ])
 }
 
 pub(crate) fn travel(
@@ -28,7 +59,8 @@ pub(crate) fn travel(
             RuleError::Invalid("destination scenario level or map unavailable".into())
         })?;
     let here = state.exploration.as_ref().ok_or("no active map")?.map;
-    if target.level != state.scenario_level || target.map != here {
+    let changed = target.level != state.scenario_level || target.map != here;
+    if changed {
         state.check_land_tile_set(content, target.level, target.map)?;
     }
     let position = state.exploration.as_mut().ok_or("no active map")?;
@@ -69,6 +101,9 @@ pub(crate) fn travel(
     }
     position.x = target.x;
     position.y = target.y;
+    if changed {
+        state.record_battle_land();
+    }
     Ok(())
 }
 

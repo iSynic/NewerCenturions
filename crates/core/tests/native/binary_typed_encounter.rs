@@ -8,7 +8,13 @@ use centurions_core::typed_encounter::{
 fn item_state(state: &mut Session, case: &Value) {
     native_common::restore_party(state, &serde_json::json!({"party": case["after"]}));
     state.native_work.ammunition_work.item = Some(case.bytes("item_work"));
-    state.native_work.loaded_item_field32 = Some(word(&case.bytes("item_work"), 32).unwrap());
+    state.native_work.loaded_item_field32 = word(&case.bytes("item_work"), 32).unwrap();
+    if state.combat.is_none() {
+        state
+            .native_work
+            .health_context
+            .selected_warrior = case.n("member");
+    }
 }
 
 #[test]
@@ -65,6 +71,21 @@ fn password_prefix_and_case_selection_match_original_comparison() {
 #[test]
 fn typed_branch_and_last_attempt_match_complete_original_script() {
     let fixture = support::fixture("typed-encounter.json");
+    let boundary = support::fixture("typed-selector-boundary.json");
+    for case in boundary.array("cases") {
+        let selected = case.n::<i8>("selector");
+        let plan = continuation(&boundary.bytes("record"), selected, 2);
+        if selected == 14 {
+            assert!(matches!(plan, Err(RuleError::Unsupported { .. })));
+            assert_eq!(case.n::<i16>("successor_menu"), 8224);
+            assert!(case.n::<i16>("successor_menu") > case.n::<i16>("supplied_menu_count"));
+        } else {
+            let TypedContinuation::Branch { body, .. } = plan.unwrap() else {
+                panic!("Native branch expected");
+            };
+            assert_eq!(body, case.bytes("script_after")[8..40]);
+        }
+    }
     for case in fixture.array("dispatch_cases") {
         let record = case.bytes("record");
         let before = case.bytes("before");
@@ -187,7 +208,13 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             apply(Command::Move { dx: 1, dy: 0 }, &mut state, &content).unwrap();
             assert_eq!(
                 state.movement_continuation,
-                Some(centurions_core::MovementContinuation::RegionalReturn { header: true })
+                Some(centurions_core::MovementContinuation::Boating(
+                    centurions_core::BoatMovement {
+                        tile: 0,
+                        property: 0,
+                        phase: centurions_core::BoatPhase::RegionalReturn,
+                    }
+                ))
             );
         } else {
             let mut script = vec![0; 42];
@@ -224,6 +251,8 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
         }
         if returned != 0 {
             if returned == 1 {
+                // This source-only return control has no current combat actor to refresh.
+                state.native_work.initiative_work.order[0] = -1;
                 state.combat_story = Some(centurions_core::combat::runtime::DeathStory {
                     shared_dispatch: true,
                     child_returned: true,
@@ -341,38 +370,6 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             assert!(cancelled.movement_continuation.is_none());
             assert_eq!(cancelled.random, before.random);
         }
-        if selector == -1 && !returning && case.n::<Vec<i16>>("sounds") == vec![655] {
-            let path = std::env::temp_dir().join(format!(
-                "centurions-item-return-{}.json",
-                std::process::id()
-            ));
-            save(&path, &state, &content).unwrap();
-            let mut legacy: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            legacy["schema_version"] = 5.into();
-            support::legacy_save(&mut legacy);
-            support::remove_field(&mut legacy["session"], "inventory_record");
-            std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
-            assert!(load(&path, &content).is_err());
-            support::remove_field(
-                &mut legacy["session"]["exploration"]["script"],
-                "item_return",
-            );
-            std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
-            let mut expected = state.clone();
-            expected.native_work.inventory_record = None;
-            expected.native_work.npc_backing = Default::default();
-            expected
-                .exploration
-                .as_mut()
-                .unwrap()
-                .script
-                .as_mut()
-                .unwrap()
-                .item_return = false;
-            support::same_captured_session(&load(&path, &content).unwrap(), &expected);
-            std::fs::remove_file(path).unwrap();
-        }
         let mut events = replay_command(
             Command::UseItem {
                 warrior: case.n("member"),
@@ -405,8 +402,11 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                 assert_eq!(case.n::<i16>("caller_stack_delta"), 14);
             }
             let mut expected = before;
+            let (work, slot) = (case.bytes("item_work"), case.n::<usize>("slot"));
+            let id = expected.warriors[case.n::<usize>("member")].inventory().unwrap()[slot].id();
+            let story = -word(&work, 50).unwrap() - 100;
+            expected.native_work.fire_item = if word(&work, 26).unwrap() == 23 { story } else { id };
             item_state(&mut expected, case);
-            expected.selected_warrior = case.n("member");
             expected
                 .native_work
                 .party_mask
@@ -424,6 +424,8 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                 assert_eq!(regional_return.n::<i16>("regional_stack_delta"), 16);
                 position.last_move = [regional_return.n("last_dx"), regional_return.n("last_dy")];
                 expected.movement_continuation = None;
+                // The resumed buttonchoice tail clears WORD443316 at109afe.
+                expected.bandage_ready = 0;
             }
             if calendar {
                 expected.time_continuation = None;
@@ -496,18 +498,6 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
         let pending = state.clone();
         assert!(apply(Command::Continue, &mut state, &content).is_err());
         support::same_session(&state, &pending);
-        let file = std::env::temp_dir().join(format!(
-            "centurions-encounter-action-migration-{}.json",
-            std::process::id()
-        ));
-        save(&file, &state, &content).unwrap();
-        let mut legacy: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-        legacy["schema_version"] = 5.into();
-        support::legacy_save(&mut legacy);
-        std::fs::write(&file, serde_json::to_vec(&legacy).unwrap()).unwrap();
-        assert!(load(&file, &content).is_err());
-        std::fs::remove_file(file).unwrap();
         for step in case.array("steps") {
             let mut resumed = support::checkpoint(&state, &content, "encounter-action-pending");
             let command = Command::EncounterActionControl {
@@ -651,6 +641,17 @@ fn typed_cancel_and_header_persistence_preserve_original_boundaries() {
             native.n("save_menu")
         };
         let mut state = support::mission_session(&content);
+        // This capture starts at cancel; compose its unchanged loaded record.
+        let table = if typed {
+            &content.map(0).unwrap().typed_encounters
+        } else {
+            &content.map(0).unwrap().menus
+        };
+        state
+            .native_work
+            .encounter_work
+            .load(table, id, typed)
+            .unwrap();
         let position = state.exploration.as_mut().unwrap();
         position.x = movement.n("x");
         position.y = movement.n("y");
@@ -706,5 +707,65 @@ fn typed_cancel_and_header_persistence_preserve_original_boundaries() {
             }
         );
         support::checkpoint(&state, &content, "typed-cancel-after");
+    }
+    // Separate original saveencounter receipts establish the complete header writes.
+    for (typed, cases) in [
+        (true, fixture.array("save_cases")),
+        (false, menus.array("save_cases")),
+    ] {
+        for case in cases {
+            let (id, offset) = if typed {
+                (case.n("id"), case.n::<usize>("offset"))
+            } else {
+                (case.n("menu"), case.n::<usize>("seek"))
+            };
+            let authored = if typed {
+                &content.map(0).unwrap().typed_encounters
+            } else {
+                &content.map(0).unwrap().menus
+            };
+            let mut expected = authored.clone();
+            let written = case.bytes("written");
+            expected[offset..offset + written.len()].copy_from_slice(&written);
+            let mut loaded = vec![0; if typed { 516 } else { 426 }];
+            loaded[..written.len()].copy_from_slice(&case.bytes("record"));
+            let mut state = support::mission_session(&content);
+            state
+                .native_work
+                .encounter_work
+                .load(&loaded, 0, typed)
+                .unwrap();
+            let mut script = ScriptState::scheduled(vec![0; 42], 0);
+            script.menu = Some(centurions_core::MenuContinuation {
+                id,
+                remaining: 1,
+                original: vec![0; 42],
+                typed,
+                eliminated: 0,
+            });
+            let position = state.exploration.as_mut().unwrap();
+            position.script = Some(script);
+            position.presentation = Some(if typed {
+                Presentation::Typed {
+                    id,
+                    text: String::new(),
+                }
+            } else {
+                Presentation::Menu {
+                    id,
+                    text: String::new(),
+                    labels: vec![],
+                }
+            });
+            let random = state.random.clone();
+            support::saved_command(Command::CancelMenu, &mut state, &content);
+            let actual = if typed {
+                &state.typed_encounters
+            } else {
+                &state.menus
+            };
+            assert_eq!(if actual.is_empty() { authored } else { actual }, &expected);
+            assert_eq!(state.random, random);
+        }
     }
 }

@@ -156,11 +156,15 @@ pub fn select(
         return Err(silent());
     };
     let combat = state.combat.as_mut().unwrap();
+    let prior_mechanical = combat.enemies.records[enemy].record().mechanical_state();
     let effects = resolve(
         &mut state.warriors[actor],
         &mut combat.enemies.records[enemy],
         &mut state.random,
     )?;
+    if prior_mechanical != 255 && combat.enemies.records[enemy].record().mechanical_state() == 255 {
+        combat.victory_work.add_total(-1);
+    }
     // The attack-limit warning returns before exitcapturemode in the original.
     if !effects
         .iter()

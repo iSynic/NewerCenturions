@@ -43,14 +43,28 @@ pub enum NativeFeedback {
     Warning {
         index: i16,
     },
+    EquipmentLevel {
+        level: i16,
+    },
     Combat {
         kind: CombatRefusal,
+    },
+    /// killbody12ebac..12ebe4 draws Pascal DATA403286/403294 at (400,30),
+    /// then delay(0) reads the original animation-delay preference.
+    OutdoorBodyStatus {
+        permanent: bool,
+        wait: i16,
     },
     CombatResult {
         body: i16,
         code: i16,
         amount: i16,
         audible: bool,
+    },
+    /// ShowResults -40 reads the retained ITEM condition label from STR#134.
+    CombatResourceResult {
+        resource_id: i16,
+        index: usize,
     },
     Sound {
         resource_id: i16,
@@ -82,6 +96,10 @@ pub fn script_pause() -> NativeFeedback {
 /// showresults 0x158454 fixed result branches; addresses reference Pascal DATA strings.
 pub fn combat_result(code: i16) -> Option<(u32, i16)> {
     Some(match code {
+        -8 => (0x400c98, 0),
+        -7 => (0x400c8c, 0),
+        -6 => (0x400c7c, 0),
+        -5 => (0x400c72, 0),
         -34 => (0x400e9a, 104),
         -33 => (0x400e8e, 624),
         -32 => (0x400e84, 630),
@@ -100,6 +118,8 @@ pub fn combat_result(code: i16) -> Option<(u32, i16)> {
         -16 => (0x400d8a, 618),
         -15 => (0x400d76, 360),
         -14 => (0x400cc2, 0),
+        -12 => (0x400ce2, 0),
+        -9 => (0x400cac, 0),
         -47 => (0x400d02, 631),
         -51 => (0x400d34, 629),
         -50 => (0x400d22, 629),

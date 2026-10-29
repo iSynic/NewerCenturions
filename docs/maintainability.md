@@ -16,6 +16,7 @@ evidence; a structural refactor does not improve their qualification by itself.
 | Click routing and occupied-cell continuations | core combat `interaction`, `occupied_cell` | record views, movement and shooting |
 | Attack, reaction, turn and round execution | core combat `runtime` submodules | recovered arithmetic and record adapters |
 | Spell selection, restrictions and effects | core combat `spells`, `player_psi` | packet, mask and native record rules |
+| Shared spell body execution | combat `spells::support` | ordered resistance, field usage, damage, immediate conditions and health owners |
 | Equipment and shops | core `equipment`, `shop` | record rules, inventory transactions and catalog |
 | Exploration and scripts | core `exploration` | movement, choices, script execution and return ownership |
 | Desktop screen lifecycle | desktop `application` submodules | the shared commands and screen-specific views |
@@ -93,13 +94,29 @@ The following boundaries are intended editing surfaces:
 | Player melee and reflection | combat `attack::warrior_enemy`, `warrior_attack`, `attack::melee_accuracy` | warrior/enemy conditions, weapon definitions and statistics |
 | Target hit/damage estimates | combat `estimates`, item display `estimate` | read-only game calculations and original panel drawing commands |
 | Actor choice and turn scheduling | runtime `enemy_actions`, `actor_turns`, `turns` | signed actor fields and native turn primitives |
+| General enemy turn story return | runtime `turn_stories` | shared initial/advance callers, accepted chance prefix and deferred NPC initialization |
+| NPC random weapon initialization | combat `monster_weapons` | recovered tables and caller-specific first/last range match |
+| Scripted tactical spell origins | story spell `targets` | native caller parameter and represented position aliases |
 | Equip/transfer/buy/sell | equipment `transactions`, shop `transactions` | `ItemDefinition`, `ShopRecord`, equipment `record_rules` |
 | Enhanced shop stock | shop `generated_stock` | named instance modifiers and bounded RNG draws |
 | Script operation and resumption | exploration `script_execution`, `ScriptState::restart_from` | named `Operation`, `StoryRecord`, operation-specific EXTRA views |
 | Death and battle-round stories | runtime `death`, combat `round_stories` | the same `Operation` names, each interpreter's own subset |
 | Retained native work globals | state `NativeWorkContext` | each field documents its global, reason and consumers |
+| Encounter headers and shared labels | story `EncounterWork` | loader, file-copy, replacement, redraw and saveencounter adapters |
 | Upgrade selection and drawing | desktop editor `controls`, warrior upgrade view | original DITL IDs and base/derived/purchase fields |
-| Save acceptance and restoration | persistence `compatibility::restore` | ordered compatibility steps for versions 1-14 |
+| Selected-battle reward windows | combat runtime `selected_rewards` | newland48's separate ordinary and additional loot returns |
+| Save acceptance and restoration | persistence `compatibility::restore` | ordered compatibility steps for versions 1-49 |
+
+The round interpreter keeps its specialized NPC and slot operations. At another
+recognized story operation it delegates the current action and remaining script
+to exploration's shared interpreter, just as the original round loop calls
+`newland` in mode -1. `RoundDispatch` holds the suspended caller until all modal
+pages and script replacements finish; returning advances the round slot once.
+Schema 17 accepts these additional saved entries. Earlier question continuations
+remain compatible. See [shared round operations](shared-round-operations.md).
+
+Schema 18 adds the clinic introduction's pending entry. Credits remain carried
+until its original textbox returns. See [clinic entry](clinic-introduction.md).
 
 Native arithmetic is still implemented by bounded routines such as firearm
 resolution, turn initialization and equipment record rules. Their purpose is to
@@ -311,6 +328,13 @@ centurions-tools replay . commands.json --from save.json --trace
 
 - `--from` starts from a saved session, so a player's save can be replayed
   directly. Without it, replay starts from a new game.
+- `--save OUTPUT` writes a versioned save through the production save writer.
+  It also saves the actual valid state at a rejected command boundary, including
+  deliberate partial effects, while retaining the nonzero process exit. With
+  this option that rejected state is the last stdout JSON line. Without it,
+  existing rejection output is unchanged. JSON parsing and input-save loading
+  failures create no output save; missing or duplicate output arguments and
+  filesystem write failures remain errors.
 - Each command prints its trace entries, then its events. The final session
   follows as JSON. Trace entries are:
   - `draw`: every RNG draw, labelled with the call site, its bound or range, and
@@ -397,6 +421,12 @@ pending during the combat phase.
 
 ## Local acceptance
 
+The [reconstruction toolkit](toolkit.md) combines native/source comparison,
+bounded probe execution, validation receipts, scenario/backlog navigation and
+build-bound acceptance records. Generated reports remain private under analysis;
+tool output does not change the distinction between source, native and observed
+acceptance evidence.
+
 Headless comparisons cover state, RNG, ordered events, save/load continuations
 and handler behavior. The following checks require a user-operated desktop:
 
@@ -415,3 +445,45 @@ and handler behavior. The following checks require a user-operated desktop:
   - error messages reworded for equipment wear and generated stock;
   - heat, cold, psionic and atomic natural attacks against warriors;
   - the desktop `--audit-log` trace output.
+
+Schema21 distinguishes initial NPC turn returns from advancement and admits the original signed item mode/WORD power domain. Schema20 frames keep the advancement default; earlier documents cannot claim the new continuations. Readers accept versions1 through21 with ordered compatibility validation.
+
+Retained health work belongs to `story_health` and `NativeWorkContext`. Fresh work copies initialized DATA; Session consumers use the fallible retained accessor, while the public record-only helper keeps its existing default contract. A command epilogue may refresh known work but must not convert absent legacy work into a fabricated origin.
+
+Calendar recovery and food consumption belong to `time/recovery.rs`; clock and schedule routing stay in `time.rs`. Recovery emits deterministic original status feedback and returns immediately after mission defeat. Keep native presentation addresses in the feedback owner and preserve heal/partyloss effect order.
+
+Schema24 keeps zero-time calendar return ownership in `time::zero`: the parent
+cursor and locals survive while its instruction record is replaced by the final
+shared child DOOR. The ordinary positive-time recovery continuation stays separate.
+`NativeWorkContext::ready` records supported outdoor writers; unrecovered tactical
+histories are unknown. Presentation reads the same admission as replay.
+
+While combat is live, `Combat::ready` owns WORD438760. Session-level writers use
+`set_ready`; record/turn/cast owners update the live copy at their recovered
+write boundaries. Teardown carries that global value instead of a parent snapshot.
+Schema25 keeps older omitted tactical values unknown.
+
+Death scripts use the shared exploration interpreter; `runtime::death` owns
+their queue and return frames. A death caller saves only DOOR actions/parameters,
+so its suspended record follows the child's shared header and level byte. Keep
+the loop and early/normal return retention points together. See
+[death script returns](death-script-returns.md).
+
+Literal queue/callback bytes belong to `NativeWorkContext::death_processing`,
+not the lifetime of `DeathStory` or `DeathQueue::processing`. New queue calls and
+resumed local scans have different writer boundaries. `story_combat` reads the
+actual queue byte before selecting a live or retained origin; keep missing
+history explicit. See [death processing work](death-processing-context.md).
+
+Death callback refresh belongs to `runtime::death_return`. Its rule-side item
+loads and firing-mode correction read current initiative, not the saved attacker.
+`combat::retained::InitiativeWork` holds the native order/cursor after teardown;
+a live Combat owns those WORDs while present. Keep compatibility-only record
+helpers separate from Session callers that have literal processing/Ready work.
+
+Shared neighbor rows and the body-list/party-mask alias belong to
+`combat::neighbor_work`. The caller owns its local loop count and cursor;
+`NativeWorkContext` retains the globals through teardown. Session work entry
+points supply the selected warrior and shared mask explicitly. Record-only
+helpers keep their existing contracts. Do not reconstruct a before-move row
+from the current map or restore a parent copy after a child call.

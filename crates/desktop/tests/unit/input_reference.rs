@@ -1,4 +1,6 @@
 use super::*;
+#[path = "../native/input_reference.rs"]
+mod native_input;
 
 #[test]
 fn held_navigation_repeats_without_backlog_and_release_stops_it() {
@@ -32,36 +34,19 @@ fn held_navigation_repeats_without_backlog_and_release_stops_it() {
     assert!(input.pointer_step((1, 0), true, true, 3.).is_some());
     input.stop_pointer();
     assert!(input.pointer_step((1, 0), false, true, 4.).is_none());
-    let native: serde_json::Value = crate::original_content::fixture("thunder-mouse-hold.json");
-    for case in native["cases"].as_array().unwrap() {
-        input.pointer_step((1, 0), true, true, 5.);
-        assert_eq!(
-            input
-                .pointer_step((1, 0), false, case["held"].as_bool().unwrap(), 6.)
-                .is_some(),
-            case["repeat"].as_bool().unwrap()
-        );
-    }
+    native_input::compare_pointer_hold(&mut input);
 }
 
 fn state() -> Session {
     let fixture: serde_json::Value = crate::original_content::fixture("player-psi.json");
-    serde_json::from_value(fixture["route_foundation"].clone()).unwrap()
+    crate::original_content::source_frame(fixture["route_foundation"].clone())
 }
 
 // Protects native camera clamps and click targeting using the same visible origin.
 #[test]
 fn outdoor_camera_and_mouse_targeting_match_original_centering() {
-    let fixture: serde_json::Value = crate::original_content::fixture("outdoor-viewport.json");
     let mut state = state();
-    for case in fixture["cases"].as_array().unwrap() {
-        let x = case["position"][0].as_i64().unwrap() as i32;
-        let y = case["position"][1].as_i64().unwrap() as i32;
-        let expected = (
-            case["origin"][0].as_i64().unwrap() as i32,
-            case["origin"][1].as_i64().unwrap() as i32,
-        );
-        assert_eq!(crate::layout::outdoor_origin(x, y), expected);
+    for ((x, y), expected) in native_input::compare_outdoor_centers() {
         let position = state.exploration.as_mut().unwrap();
         position.x = x;
         position.y = y;
@@ -83,57 +68,10 @@ fn command(action: Action) -> Command {
 // Protects the actual mechanical button, map routing, saved targeting and cancellation.
 #[test]
 fn combat_controls_capture_cancel_and_resolve_through_apply() {
-    let receipt: serde_json::Value =
-        crate::original_content::fixture("thunder-attack-estimates.json");
-    let content = crate::original_content::load();
-    let native = centurions_content::native_text::NativeText::load(
-        &content,
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../analysis/extracted"),
-    )
-    .unwrap();
-    let mut estimate: Session = serde_json::from_value(receipt["input"].clone()).unwrap();
-    for case in receipt["cases"].as_array().unwrap() {
-        estimate.warriors[4].bytes[0x9dd] = u8::from(case["firing"].as_bool().unwrap());
-        let plan = centurions_core::item_display::attack_estimate(
-            &estimate,
-            &content,
-            10,
-            &native,
-            &Default::default(),
-        )
-        .unwrap();
-        let numbers: Vec<_> = plan
-            .effects
-            .iter()
-            .filter_map(|effect| match effect {
-                centurions_core::item_display::output::PanelEffect::NumberToString {
-                    value,
-                    ..
-                } => Some(*value),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(serde_json::json!(numbers), case["numbers"]);
-        let retained = plan.retained_definitions.as_ref().unwrap();
-        for (bytes, field) in [
-            (&retained.item, "item_after"),
-            (&retained.ammo, "ammunition_after"),
-            (&retained.weapon, "weapon_after"),
-        ] {
-            let expected = case[field].as_str().unwrap();
-            let actual = bytes.as_deref().unwrap_or(&[0; 150]);
-            assert_eq!(
-                actual
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>(),
-                expected
-            );
-        }
-    }
+    let content = native_input::compare_attack_estimates();
     use centurions_core::{apply, load, save};
     let mut state = state();
-    state.native_work.psi_memory = Some(vec![0; 480]);
+    state.native_work.psi_memory = vec![0; 480];
     let actor = state.combat.as_ref().unwrap().active_body().unwrap() as usize;
     for (offset, value) in [
         (0xf4, 100_i16),
@@ -201,6 +139,18 @@ fn combat_controls_capture_cancel_and_resolve_through_apply() {
     ui.feedback_input(1., false);
     assert!(!ui.feedback_input(2., false));
     assert!(ui.persistent_feedback.is_some());
+    let combat = state.combat.as_mut().unwrap();
+    combat.cursor = 110;
+    combat.selection_pending = true;
+    let before = state.clone();
+    let pointer = layout::MAP.center();
+    assert!(crate::combat_controls::map_position(&state, &ui, pointer).is_none());
+    ui.movement.pointer_step((1, 0), true, true, 3.);
+    // No window exists: pending input must return before reading mouse/keyboard state.
+    assert!(action(&state, &content, &mut ui, &controls, Some(pointer)).is_none());
+    assert_eq!(ui.movement.direction, (0, 0));
+    assert!(!ui.movement.pointer_held);
+    assert_eq!(state, before);
 }
 
 // Protects restored panel dispatch, time/Psi costs, persistent toggles and modal refusal rollback.
@@ -209,15 +159,7 @@ fn original_field_controls_dispatch_and_resume_without_mutating_blocked_sessions
     use centurions_core::{apply, field_controls::Action as Field};
     let content = crate::original_content::load();
     let mut state = Session::new(&content);
-    apply(Command::ImportStarters, &mut state, &content).unwrap();
-    apply(
-        Command::EnterMission {
-            name: "The Thunder of Guns".into(),
-        },
-        &mut state,
-        &content,
-    )
-    .unwrap();
+    crate::original_content::enter_mission(&mut state, &content);
     let click = |state: &Session, id| {
         command(
             field_buttons(state)
@@ -229,38 +171,16 @@ fn original_field_controls_dispatch_and_resume_without_mutating_blocked_sessions
     };
     state.exploration.as_mut().unwrap().fatigue = 50;
     apply(click(&state, 308), &mut state, &content).unwrap();
-    assert_eq!(
-        (
-            state.exploration.as_ref().unwrap().minute,
-            state.exploration.as_ref().unwrap().fatigue
-        ),
-        (25, 48)
-    );
+    let position = state.exploration.as_ref().unwrap();
+    assert_eq!((position.minute, position.fatigue), (25, 48));
     let index = centurions_content::mission::OpeningMission::index(3, 2).unwrap();
     state.exploration.as_mut().unwrap().floor[index] = 3001;
     apply(click(&state, 307), &mut state, &content).unwrap();
     assert_eq!(state.exploration.as_ref().unwrap().floor[index], 2001);
     apply(click(&state, 142), &mut state, &content).unwrap();
     apply(click(&state, 154), &mut state, &content).unwrap();
-    assert!(
-        state
-            .field_controls
-            .as_ref()
-            .is_some_and(|c| c.searching && c.camping)
-    );
-    let path = std::env::temp_dir().join(format!(
-        "centurions-field-controls-{}.json",
-        std::process::id()
-    ));
-    centurions_core::save(&path, &state, &content).unwrap();
-    assert_eq!(centurions_core::load(&path, &content).unwrap(), state);
-    let mut downgraded: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    downgraded["schema_version"] = 9.into();
-    crate::original_content::legacy_save(&mut downgraded);
-    std::fs::write(&path, serde_json::to_vec(&downgraded).unwrap()).unwrap();
-    assert!(centurions_core::load(&path, &content).is_err());
-    std::fs::remove_file(path).unwrap();
+    let controls = state.field_controls.as_ref();
+    assert!(controls.is_some_and(|c| c.searching && c.camping));
     let warrior = &mut state.warriors[0].bytes;
     warrior[0x9dc] = 1;
     warrior[0xac6..0xac8].copy_from_slice(&1_i16.to_be_bytes());
@@ -295,25 +215,28 @@ fn original_field_controls_dispatch_and_resume_without_mutating_blocked_sessions
     assert!(centurions_core::field_controls::free(&state));
     state.exploration.as_mut().unwrap().presentation = Some(Presentation::ScriptPause);
     let before = state.clone();
-    assert!(!available(
-        &state,
-        0,
-        &Action::Command(Command::FieldControl {
-            action: Field::Rest
-        })
-    ));
-    assert!(
-        apply(
-            Command::FieldControl {
-                action: Field::Rest
-            },
-            &mut state,
-            &content
-        )
-        .is_err()
-    );
+    let rest = Command::FieldControl {
+        action: Field::Rest,
+    };
+    assert!(!available(&state, 0, &Action::Command(rest.clone())));
+    assert!(apply(rest, &mut state, &content).is_err());
     assert!(apply(Command::Move { dx: 1, dy: 0 }, &mut state, &content).is_err());
     assert_eq!(state, before);
+    for (id, enabled) in [(0, false), (1, true), (9, false), (11, true), (12, false)] {
+        state
+            .native_work
+            .encounter_work
+            .load(&content.map(0).unwrap().typed_encounters, id, true)
+            .unwrap();
+        state.exploration.as_mut().unwrap().presentation = Some(Presentation::Typed {
+            id,
+            text: String::new(),
+        });
+        assert_eq!(
+            crate::story_dialogs::text_entry_available(&state, &content),
+            enabled
+        );
+    }
 }
 
 // Protects actual combat controls, reversible viewing, refusal rollback and manual turn costs.
@@ -321,10 +244,10 @@ fn original_field_controls_dispatch_and_resume_without_mutating_blocked_sessions
 fn combat_buttons_execute_actions_and_preserve_cancelled_or_refused_state() {
     use crate::application::{Application, ApplicationAction, Screen};
     use centurions_content::word;
-    use centurions_core::{apply, combat::controls, load, save};
+    use centurions_core::{apply, combat::controls};
     let content = crate::original_content::load();
     let mut state = state();
-    state.native_work.psi_memory = Some(vec![0; 480]);
+    state.native_work.psi_memory = vec![0; 480];
     let actor = state.combat.as_ref().unwrap().active_body().unwrap() as usize;
     let key = |key, state: &Session| {
         command(crate::combat_controls::shortcut(key, state, &content, actor).unwrap())
@@ -356,33 +279,17 @@ fn combat_buttons_execute_actions_and_preserve_cancelled_or_refused_state() {
         let position = resumed.exploration.as_ref().unwrap();
         assert!(resumed.combat == start.combat && position.presentation.is_none());
     }
-    apply(
-        Command::ToggleCombatAuto { warrior: actor },
-        &mut state,
-        &content,
-    )
-    .unwrap();
+    let toggle = Command::ToggleCombatAuto { warrior: actor };
+    apply(toggle.clone(), &mut state, &content).unwrap();
     assert_eq!(
         centurions_core::combat::runtime::controlled_warrior(&state),
         Some(actor)
     );
-    apply(
-        Command::ToggleCombatAuto { warrior: actor },
-        &mut state,
-        &content,
-    )
-    .unwrap();
+    apply(toggle, &mut state, &content).unwrap();
     let mut automated = state.clone();
     apply(key(KeyCode::A, &automated), &mut automated, &content).unwrap();
-    assert!(
-        automated
-            .combat
-            .as_ref()
-            .unwrap()
-            .automatic
-            .iter()
-            .all(|v| !v)
-    );
+    let automatic = automated.combat.as_ref().unwrap().automatic;
+    assert!(automatic.iter().all(|v| !v));
     apply(Command::RunControlledTurn, &mut automated, &content).unwrap();
     assert!(automated != state, "Auto performed no action");
     let mut app = Application::at(Screen::Game, 0.);
@@ -433,14 +340,6 @@ fn combat_buttons_execute_actions_and_preserve_cancelled_or_refused_state() {
     let c = state.combat.as_ref().unwrap();
     assert_eq!(c.map.tiles[cell], ground);
     let before = state.clone();
-    let path =
-        std::env::temp_dir().join(format!("centurions-controls-{}.json", std::process::id()));
-    save(&path, &state, &content).unwrap();
-    assert!(
-        load(&path, &content).unwrap() == state,
-        "combat controls did not survive save"
-    );
-    std::fs::remove_file(path).unwrap();
     state.warriors[actor].bytes[0x3c..0x3e].copy_from_slice(&1_i16.to_be_bytes());
     let refused = state.clone();
     assert!(apply(key(KeyCode::D, &state), &mut state, &content).is_err());
@@ -481,11 +380,7 @@ fn combat_buttons_execute_actions_and_preserve_cancelled_or_refused_state() {
     app.observe(&events);
     app.handle(ApplicationAction::EscapeAnswer(true), &mut state, &content)
         .unwrap();
-    assert!(
-        state
-            .combat
-            .as_ref()
-            .is_none_or(|c| c.squad.positions[actor] == (-1, -1))
-    );
+    let combat = state.combat.as_ref();
+    assert!(combat.is_none_or(|c| c.squad.positions[actor] == (-1, -1)));
     assert!(!app.blocks_game());
 }

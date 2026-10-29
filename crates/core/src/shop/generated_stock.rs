@@ -12,22 +12,15 @@ enum Increment {
     Random { bound: i16, base: i16 },
 }
 
+/// Every draw belongs to a finite attempt count, so stock generation always ends.
 struct Rolls {
     state: RandomState,
-    remaining: usize,
 }
 impl Rolls {
     fn draw(&mut self, bound: i16) -> Result<i16, RuleError> {
-        if self.remaining == 0 {
-            return Err(RuleError::Unsupported {
-                action: "randomitem",
-                dependency: "generated stock needs more draws than the reconstruction bound",
-            });
-        }
         if self.state.draws == u64::MAX {
             return Err(RuleError::Invalid("random-draw counter overflow".into()));
         }
-        self.remaining -= 1;
         Ok(self.state.bound(bound))
     }
     fn improve(
@@ -71,7 +64,6 @@ pub(super) fn generate(
     }
     let mut rolls = Rolls {
         state: random.clone(),
-        remaining: 1024,
     };
     let generated = randomize(items, definition, enhancement, difficulty, &mut rolls)?;
     // The caller copies level and these eight modifiers, but not melee accuracy,

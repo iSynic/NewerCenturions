@@ -132,9 +132,31 @@ impl NpcBattleExtra<'_> {
 /// 88-byte map treasure record read by booty (0x105c68..0x105f18).
 pub struct TreasureRecord<'a>(pub &'a [u8]);
 
+pub struct TreasureRecordMut<'a>(pub &'a mut [u8]);
+
+impl TreasureRecordMut<'_> {
+    /// booty105c68 consumes positive item slots, leaving signed nonitems and awards.
+    pub fn consume_items(&mut self) -> Result<(), ContentError> {
+        span(self.0, 0, TreasureRecord::BYTES)?;
+        for slot in 0..TreasureRecord::SLOTS {
+            if word(self.0, slot * 2)? > 0 {
+                super::put_word(self.0, slot * 2, 0);
+                super::put_word(self.0, 40 + slot * 2, 0);
+            }
+        }
+        Ok(())
+    }
+}
+
 impl<'a> TreasureRecord<'a> {
     pub const BYTES: usize = 88;
     pub const SLOTS: usize = 20;
+
+    pub fn experience_award(amount: i32) -> [u8; 88] {
+        let mut record = [0; Self::BYTES];
+        record[80..84].copy_from_slice(&amount.to_be_bytes());
+        record
+    }
 
     pub fn new(record: &'a [u8]) -> Result<Self, ContentError> {
         Ok(Self(span(record, 0, Self::BYTES)?))

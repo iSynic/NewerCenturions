@@ -65,6 +65,11 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                         let shop = state.shops.get_mut(&0).unwrap();
                         shop[..2].copy_from_slice(&1_i16.to_be_bytes());
                         shop[2000] = 1;
+                        // This assisted screen input declares both the file and
+                        // current work before the independent native consumer.
+                        state.native_work.shop_work = serde_json::from_value(serde_json::json!({
+                            "bytes": shop[..3002].to_vec()
+                        })).unwrap();
                         state.shop_access = Some(centurions_core::shop::Access {
                             level: 0,
                             id: 0,
@@ -93,7 +98,7 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                         &content,
                     )
                     .unwrap();
-                    assert_eq!(state.native_work.inventory_record.as_ref(), Some(&record));
+                    assert_eq!(state.native_work.inventory_record, record);
                     if stock {
                         apply(Command::CloseShop, &mut state, &content).unwrap();
                     }
@@ -174,7 +179,7 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                 }
                 if case.get("selected_after").is_some() {
                     support::native_expect! {
-                        bytes &state.native_work.inventory_record.as_ref().unwrap().0 => &case.bytes("selected_after"), "retained inventory work";
+                        bytes &state.native_work.inventory_record.0 => &case.bytes("selected_after"), "retained inventory work";
                     };
                 }
                 support::checkpoint(&state, &content, "story-charge-after");
@@ -238,4 +243,103 @@ fn authored_treasure_matches_original_full_loot_and_rng_for_both_seeds() {
             bytes records(&normalize_story_loot(&warriors(case.text("before"))).unwrap()) => &case["after"], "binary_story_inventory";
         }
     }
+}
+
+#[test]
+fn weighted_quest_item_pickup_and_transfer_preserve_quantity_and_weight() {
+    use centurions_content::records::ItemDefinition;
+    let content = content();
+    let mut state = support::mission_session(&content);
+    let item = ItemDefinition(&content.items[832]).fresh_stock().unwrap();
+    let weights: Vec<_> = state
+        .warriors
+        .iter()
+        .map(|w| w.record().carried_weight().unwrap())
+        .collect();
+    let random = state.random.clone();
+    state.booty_items[0] = item.clone();
+    state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
+    let events = support::saved_command(
+        Command::TakeLoot {
+            slot: 0,
+            warrior: 0,
+        },
+        &mut state,
+        &content,
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::CollectionRejected { .. }))
+    );
+    let slot = state.warriors[0].inventory().unwrap().len() - 1;
+    assert_eq!(state.warriors[0].record().inventory_slot(slot), item);
+    assert_eq!(
+        state.warriors[0].record().carried_weight().unwrap(),
+        weights[0] + 25
+    );
+    assert_eq!(state.booty_items[0].id(), 0);
+    state.exploration.as_mut().unwrap().presentation = None;
+    support::saved_command(
+        Command::TransferItem {
+            from: 0,
+            to: 1,
+            slot,
+        },
+        &mut state,
+        &content,
+    );
+    assert_eq!(
+        state.warriors[0].record().carried_weight().unwrap(),
+        weights[0]
+    );
+    assert_eq!(
+        state.warriors[1].record().carried_weight().unwrap(),
+        weights[1] + 25
+    );
+    assert_eq!(state.warriors[1].inventory().unwrap().last(), Some(&item));
+    // booty108fbc merges before admission and retains the owned row's quality.
+    // Even refusal keeps those effects and leaves the loot available.
+    state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
+    let retained = state.native_work.inventory_record.clone();
+    for refused in [false, true] {
+        let weight = state.warriors[1].record().carried_weight().unwrap();
+        if refused {
+            state.warriors[1].record_mut().set_weight_capacity(weight);
+        }
+        let count = state.warriors[1].inventory().unwrap().len();
+        let mut expected = state.warriors[1].record().inventory_slot(count - 1);
+        expected.set_quantity(expected.quantity().unwrap() + 2);
+        let mut incoming = item.clone();
+        incoming.set_quantity(2);
+        incoming.set_editor_modifier(1, 7);
+        state.booty_items[0] = incoming.clone();
+        let events = support::saved_command(
+            Command::TakeLoot {
+                slot: 0,
+                warrior: 1,
+            },
+            &mut state,
+            &content,
+        );
+        assert_eq!(
+            events.contains(&Event::CollectionRejected { warning: 19 }),
+            refused
+        );
+        assert_eq!(state.warriors[1].inventory().unwrap().len(), count);
+        assert_eq!(
+            state.warriors[1].record().inventory_slot(count - 1),
+            expected
+        );
+        assert_eq!(
+            state.warriors[1].record().carried_weight().unwrap(),
+            weight + 2
+        );
+        if !refused {
+            incoming.clear_id();
+        }
+        assert_eq!(state.booty_items[0], incoming);
+        assert_eq!(state.native_work.inventory_record, retained);
+    }
+    assert_eq!(state.random, random);
 }

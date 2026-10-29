@@ -6,10 +6,24 @@ pub(super) fn finish_victory(
     state: &mut Session,
     content: &Content,
 ) -> Result<Vec<Event>, RuleError> {
-    if let Some(events) = begin_survivors(state)? {
+    if super::selected_rewards::awaiting_battle(state) {
+        return super::selected_rewards::after_battle(state, content);
+    }
+    let (mode, mut events) = super::ordinary_rewards::begin(state, content)?;
+    if mode == 10 {
+        events.extend(super::ordinary_rewards::storage(state, content)?);
         return Ok(events);
     }
-    confirm_survivors(state, content)
+    if mode == 2 {
+        return crate::story_cleanup::begin_ordinary(state, content);
+    }
+    state.clear_tactical_fields();
+    if let Some(survivors) = begin_survivors(state)? {
+        events.extend(survivors);
+    } else {
+        events.extend(confirm_survivors(state, content)?);
+    }
+    Ok(events)
 }
 
 pub(crate) fn begin_survivors(state: &mut Session) -> Result<Option<Vec<Event>>, RuleError> {
@@ -40,39 +54,21 @@ pub(crate) fn begin_survivors(state: &mut Session) -> Result<Option<Vec<Event>>,
 }
 
 pub fn confirm_survivors(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
-    let combat = state
-        .combat
-        .as_mut()
-        .ok_or_else(|| RuleError::Invalid("combat missing".into()))?;
-    let synchronization = if let Some(selection) = state.survivors.take() {
-        crate::combat::allies::commit_survivors(
-            &state.allies,
-            state.ally_count,
-            &mut combat.enemies.records,
-            Some(&selection),
-        )?
-    } else if state.suppress_allies != 0 {
-        crate::combat::allies::AllySynchronization {
-            menu: state.allies.clone(),
-            count: state.ally_count,
-            modal: false,
-            sounds: vec![],
-        }
-    } else {
-        crate::combat::allies::synchronize(
-            &state.allies,
-            state.ally_count,
-            &mut combat.enemies.records,
-            &mut state.random,
-        )?
-    };
-    state.allies = synchronization.menu;
-    state.ally_count = synchronization.count;
-    let mut events: Vec<_> = synchronization
-        .sounds
-        .into_iter()
-        .map(|resource_id| Event::Sound { resource_id })
-        .collect();
+    if super::selected_rewards::awaiting_battle(state) {
+        return super::selected_rewards::after_battle(state, content);
+    }
+    let (mode, mut events) = super::ordinary_rewards::begin(state, content)?;
+    if mode == 10 {
+        events.extend(super::ordinary_rewards::storage(state, content)?);
+        return Ok(events);
+    }
+    if mode == 2 {
+        return crate::story_cleanup::begin_ordinary(state, content);
+    }
+    if state.selected_battle_treasure.is_some() {
+        events.extend(refit_after_combat(state, content)?);
+    }
+    events.extend(super::reward_context::survivors(state)?);
     state.exploration.as_mut().unwrap().presentation = None;
     if let Some(start) = state.battle_npc.as_ref() {
         let script = state
@@ -84,60 +80,40 @@ pub fn confirm_survivors(state: &mut Session, content: &Content) -> Result<Vec<E
             .ok_or_else(|| RuleError::Invalid("NPC battle continuation missing".into()))?;
         script.cursor = start.restore(&mut script.record, false)?.unwrap() as u8;
     }
-    let rewards = crate::combat::rewards::prepare(
+    let count = state.combat.as_ref().unwrap().enemies.records.len() as i16;
+    let rewards = crate::combat::rewards::prepare_mode(
         &state.warriors,
-        &combat.enemies.records,
+        &state.combat.as_ref().unwrap().enemies.records,
         content,
-        state.difficulty,
-        0,
-        state.party_currency,
+        crate::combat::rewards::RewardContext {
+            difficulty: state.difficulty,
+            npc_denominator: 0,
+            currency: state.party_currency,
+            mode: crate::combat::rewards::RewardMode::select(
+                mode,
+                &state.native_work.treasure_record,
+            )?,
+        },
         &mut state.random,
     )?;
-    combat.unavailable = rewards.unavailable;
-    if let Some(id) = rewards.last_item_id {
-        state.native_work.loaded_item_field32 =
-            Some(state.native_work.ammunition_work.load_item(content, id)?);
-    }
-    state.warriors = rewards.warriors;
-    if let Some(record) = rewards.inventory_record {
-        state.native_work.inventory_record = Some(record);
-    }
-    combat.enemies.records = rewards.enemies;
-    state.party_currency = rewards.currency;
-    for item in &mut state.booty_items {
-        item.0.fill(0);
-    }
-    for (index, item) in rewards.items.into_iter().enumerate() {
-        if index >= state.booty_items.len() {
-            return Err(RuleError::Invalid(
-                "battle loot exceeds booty capacity".into(),
-            ));
-        }
-        state.booty_items[index] = item;
-    }
+    super::ordinary_rewards::install(state, content, mode, rewards)?;
+    let combat = state.combat.as_ref().unwrap();
     // booty105748 enters its reward window even when the crate is empty.
     state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
     events.push(Event::Sound {
         resource_id: crate::feedback::BOOTY_SOUND,
     });
-    state.native_work.attack_packet = combat.attack_packet.clone();
-    state.native_work.attack_identity = combat.attack_identity;
-    state.native_work.weapon_work = combat.weapon_work;
-    let mut health = crate::story_health::context(
-        &state.warriors,
+    let mut health = crate::story_health::retained_context(
         state.selected_warrior,
-        state.native_work.health_context.as_ref(),
+        &state.native_work.health_context,
     );
     health.unavailable = combat.unavailable;
-    if let Some(packet) = combat.attack_packet.as_ref() {
-        health.effect = packet[18] as i8;
-    }
-    state.native_work.health_context = Some(health);
-    state.native_work.selected_enemy = combat.selected_enemy;
-    state.native_work.script_enemy = combat.script_enemy;
-    state.native_work.npc_backing.capture(combat);
-    state.native_work.retained_death_queue = Some(combat.death_queue.clone());
-    state.combat = None;
+    let packet = &combat.attack_packet;
+    health.effect = packet[18] as i8;
+    state.native_work.health_context = health;
+    super::reward_context::detach(state)?;
+    super::reward_cleanup::finish(state, count, mode)?;
+    state.reload_battle_land()?;
     if !state
         .combat_story
         .as_ref()
@@ -149,6 +125,13 @@ pub fn confirm_survivors(state: &mut Session, content: &Content) -> Result<Vec<E
     }
     state.handled_deaths.clear();
     state.phase = Phase::Exploration;
+    if state.selected_battle_treasure.is_some() {
+        super::selected_rewards::defer(state)?;
+        return Ok(events);
+    }
+    if super::ordinary_rewards::defer(state) {
+        return Ok(events);
+    }
     events.extend(finish_battle_wrapper(state, content)?);
     Ok(events)
 }
@@ -172,7 +155,7 @@ pub(crate) fn refit_after_combat(
                 },
                 &state.native_work.ammunition_work,
                 &mut state.random,
-                state.native_work.inventory_record.as_ref(),
+                Some(&state.native_work.inventory_record),
             )?;
             events.extend(crate::ammunition::commit_result(state, member, result)?);
         }
@@ -184,7 +167,44 @@ pub(super) fn finish_battle_wrapper(
     state: &mut Session,
     content: &Content,
 ) -> Result<Vec<Event>, RuleError> {
-    let mut events = refit_after_combat(state, content)?;
+    if super::selected_rewards::awaiting_battle(state) {
+        return super::selected_rewards::after_battle(state, content);
+    }
+    if state.ordinary_battle_rewards.is_some() {
+        return super::ordinary_rewards::outer(state, content);
+    }
+    if state.battle_treasure != 0 {
+        return Err(RuleError::from("battle treasure without its reward caller"));
+    }
+    finish_wrapper(state, content, true, true)
+}
+
+pub(super) fn finish_prepared_battle_wrapper(
+    state: &mut Session,
+    content: &Content,
+) -> Result<Vec<Event>, RuleError> {
+    finish_wrapper(state, content, false, true)
+}
+
+pub(super) fn finish_selected_battle_wrapper(
+    state: &mut Session,
+    content: &Content,
+    retreated: bool,
+) -> Result<Vec<Event>, RuleError> {
+    finish_wrapper(state, content, false, !retreated)
+}
+
+fn finish_wrapper(
+    state: &mut Session,
+    content: &Content,
+    refit: bool,
+    victory: bool,
+) -> Result<Vec<Event>, RuleError> {
+    let mut events = if refit {
+        refit_after_combat(state, content)?
+    } else {
+        vec![]
+    };
     if state.battle_npc.take().is_some() {
         crate::story_npc_battle::finish(
             crate::story_npc_battle::NpcBattleReturn::Reward,
@@ -195,7 +215,7 @@ pub(super) fn finish_battle_wrapper(
     let failure_script = state.battle_group_script.take().unwrap_or(0);
     state.warriors =
         crate::story_party::group_return(&state.warriors, false, failure_script)?.warriors;
-    events.push(Event::BattleEnded { victory: true });
+    events.push(Event::BattleEnded { victory });
     if state.battle_after_message != 0 {
         let map = state.land(content).unwrap();
         events.push(Event::Message {
@@ -204,44 +224,35 @@ pub(super) fn finish_battle_wrapper(
         });
     }
     state.battle_after_message = 0;
-    if state.battle_treasure != 0 {
-        let map = state.land(content).unwrap();
-        let treasure = centurions_content::span(
-            &map.treasure,
-            state.battle_treasure.unsigned_abs() as usize * 88,
-            88,
-        )?;
-        for item in crate::story_inventory::grant_story_treasure(
-            treasure,
-            content,
-            &mut state.random,
-            state.difficulty,
-        )? {
-            state.load_item_work(content, item.id())?;
-            let slot = state
-                .booty_items
-                .iter()
-                .position(|item| item.id() == 0)
-                .ok_or_else(|| {
-                    RuleError::Invalid("battle treasure exceeds booty capacity".into())
-                })?;
-            state.booty_items[slot] = item;
-        }
-        state.battle_treasure = 0;
-        if state.booty_items.iter().any(|item| item.id() != 0) {
-            state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
-        }
-    }
-    if state.combat_story.is_none()
-        && state
-            .exploration
-            .as_ref()
-            .is_some_and(|position| position.presentation.is_none() && position.script.is_some())
+    state.battle_treasure = 0;
+    if state
+        .exploration
+        .as_ref()
+        .is_some_and(|position| position.presentation.is_none() && position.script.is_some())
         && !events
             .iter()
             .any(|event| matches!(event, Event::Message { .. }))
     {
-        events.extend(crate::exploration::run_script(state, content)?);
+        super::resume_turn_child(state)?;
+        let dispatch_owns = state
+            .turn_dispatch
+            .as_ref()
+            .is_some_and(|frame| frame.owns_script(state))
+            || state
+                .round_dispatch
+                .as_ref()
+                .is_some_and(|frame| frame.owns_script(state));
+        if state.combat.is_none()
+            && !dispatch_owns
+            && state
+                .combat_story
+                .as_ref()
+                .is_some_and(|story| story.waiting_child)
+        {
+            events.extend(super::continue_death(state, content)?);
+        } else if state.combat_story.is_none() || dispatch_owns {
+            events.extend(crate::exploration::run_script(state, content)?);
+        }
     }
     Ok(events)
 }

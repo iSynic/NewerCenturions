@@ -32,6 +32,7 @@ pub(super) fn execute(
                     .encounters,
             )
             .record(parameter.unsigned_abs() as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             state.warriors = story_party::adjust_statistics(
                 &state.warriors,
                 &state.native_work.party_mask,
@@ -71,18 +72,24 @@ pub(super) fn execute(
                     .encounters,
             )
             .record(parameter.unsigned_abs() as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let clinic = ClinicExtra(extra);
             let percent = clinic.percent()?;
             let sound = clinic.sound()?;
             let text = clinic.text()?;
-            if text != 0 {
-                return Err(RuleError::Unsupported {
-                    action: "story.clinic",
-                    dependency: "clinic introductory textbox caller",
-                });
-            }
+            state.field_controls.get_or_insert_default().clinic = Some(percent);
             if sound != 0 {
                 effects.push(Event::Sound { resource_id: sound });
+            }
+            if text != 0 {
+                let text_body = super::super::dialogue(map, &state.warriors, text)?;
+                state.exploration.as_mut().unwrap().presentation =
+                    Some(Presentation::ClinicEntry { percent });
+                effects.push(Event::Message {
+                    id: text,
+                    text: text_body,
+                });
+                return Ok(ScriptStep::Pause);
             }
             effects.extend(crate::clinic::visit(state, percent)?);
             return Ok(ScriptStep::Pause);
@@ -107,10 +114,10 @@ pub(super) fn execute(
         Operation::SelectedHealth | Operation::PartyHealth => {
             let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
                 .record(parameter.unsigned_abs() as usize)?;
-            let context = crate::story_health::context(
-                &state.warriors,
+            state.native_work.extra_record = extra.to_vec();
+            let context = crate::story_health::retained_context(
                 state.selected_warrior,
-                state.native_work.health_context.as_ref(),
+                &state.native_work.health_context,
             );
             let outcome = crate::story_health::party_health(
                 &state.warriors,
@@ -121,7 +128,7 @@ pub(super) fn execute(
                 &mut state.random,
             )?;
             state.warriors = outcome.warriors;
-            state.native_work.health_context = Some(outcome.context);
+            state.native_work.health_context = outcome.context;
             let mut party_lost = false;
             for event in outcome.events {
                 match event {
@@ -168,7 +175,7 @@ pub(super) fn execute(
                 }
             }
             if party_lost {
-                effects.extend(crate::mission::defeat(state, content));
+                effects.extend(crate::mission::defeat(state, content)?);
                 return Ok(ScriptStep::Pause);
             }
             if position.presentation.is_some() {
@@ -178,12 +185,20 @@ pub(super) fn execute(
         Operation::FilterParty => {
             let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
                 .record(parameter.unsigned_abs() as usize)?;
+            state.native_work.extra_record = extra.to_vec();
+            let memory = crate::combat::spells::RestrictionMemoryView::ordinary_startup(
+                &map.item_cache,
+                crate::combat::spells::retained_item_alias(&state.native_work.ammunition_work)?,
+            )
+            .with_alias_owners(crate::combat::warrior_alias::session_owners!(state))
+            .with_definitions(&content.items);
             state.native_work.party_mask = crate::story_party::filter_party(
                 &state.warriors,
                 state.native_work.party_mask,
                 cursor,
                 extra,
                 &mut state.random,
+                memory,
             )?;
         }
         Operation::SetRecoveryRestrictions => {
@@ -194,6 +209,7 @@ pub(super) fn execute(
                     .encounters,
             )
             .record(parameter.unsigned_abs() as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let restrictions = RecoveryRestrictions::decode(extra);
             state.psi_disabled = restrictions.psi;
             state.enemy_spell_disabled = restrictions.enemy_spells;
@@ -202,6 +218,7 @@ pub(super) fn execute(
         Operation::ChangeFatigue => {
             let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
                 .record(parameter.unsigned_abs() as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             position.fatigue = match FatigueChange::decode(extra)? {
                 FatigueChange::Set(value) => value,
                 // Native order divides first, then multiplies with WORD wrapping.
@@ -262,6 +279,7 @@ pub(super) fn execute(
         Operation::LimitedShopOrTreasure => {
             let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
                 .record(parameter.unsigned_abs() as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let limited = LimitedTreasureExtra(extra);
             let id = limited.treasure()?;
             if id <= 0 {
@@ -283,6 +301,7 @@ pub(super) fn execute(
         Operation::GiveCondition => {
             let extra =
                 ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let slot = usize::try_from(word(extra, 2)?)
                 .ok()
                 .filter(|&slot| slot < 40)
@@ -325,6 +344,7 @@ pub(super) fn execute(
         Operation::PickByTrait => {
             let extra =
                 ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let (mode, gender, code) = (word(extra, 0)?, word(extra, 2)?, word(extra, 4)?);
             let mut mask = [0; 6];
             for (member, warrior) in state.warriors.iter().enumerate() {
@@ -349,6 +369,7 @@ pub(super) fn execute(
         Operation::PickByCaste => {
             let extra =
                 ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let (caste, family, check) = (word(extra, 0)?, word(extra, 2)?, word(extra, 4)?);
             let families: &[i16] = match family {
                 1 => &[1, 3, 4],
@@ -374,6 +395,7 @@ pub(super) fn execute(
         Operation::DropMemberCredits => {
             let extra =
                 ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let picked_only = word(extra, 2)? != 0;
             for (member, warrior) in state.warriors.iter_mut().enumerate() {
                 if !picked_only || state.native_work.party_mask[member] != 0 {
@@ -387,6 +409,7 @@ pub(super) fn execute(
         Operation::TakeVictoryPoints => {
             let extra =
                 ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let amount = word(extra, 0)?;
             let share = match word(extra, 2)? {
                 1 => {
@@ -416,11 +439,15 @@ pub(super) fn execute(
         Operation::DropAllEquipment => {
             let mut warriors = state.warriors.clone();
             let mut loaded = None;
+            let mut globals = vec![];
             for warrior in &mut warriors {
-                let (emptied, last) = crate::equipment::drop_all(warrior, content, map, effects)?;
+                let (emptied, last, writes) =
+                    crate::equipment::drop_all(warrior, content, map, effects)?;
                 *warrior = emptied;
                 loaded = last.or(loaded);
+                globals.extend(writes);
             }
+            state.apply_equipment_globals(&globals)?;
             state.warriors = warriors;
             if let Some(item) = loaded {
                 state.load_item_work(content, item)?;
@@ -429,6 +456,7 @@ pub(super) fn execute(
         Operation::AlterShop => {
             let extra =
                 ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             crate::shop::alter(state, content, extra)?;
         }
         // newland65 fills the booty buffer that opcode 10 reads from Data TD with |e1|
@@ -438,6 +466,7 @@ pub(super) fn execute(
         Operation::RandomTreasure => {
             let extra =
                 ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
+            state.native_work.extra_record = extra.to_vec();
             let requested = word(extra, 0)?;
             if !(-44..=44).contains(&requested) {
                 return Err(unsupported("story.opcode", "random items past the record"));
@@ -465,6 +494,13 @@ pub(super) fn execute(
             let awarded =
                 story_inventory::award_story_experience(&state.warriors, i32::from(parameter))?;
             state.warriors = awarded.warriors;
+            // newland11 stores the amount in LONG 0x443392 before booty(12, 0).
+            state.booty_tally = crate::BootyTally {
+                credits: 0,
+                share: awarded.share,
+                experience: i32::from(parameter),
+            };
+            let position = state.exploration.as_mut().unwrap();
             position.presentation = Some(Presentation::Loot);
             effects.push(Event::StoryPresented);
             return Ok(ScriptStep::Pause);

@@ -285,9 +285,7 @@ pub fn select_weapon(
         .position(|item| *item == selected)
         .ok_or("combat weapon moved unexpectedly")?;
     state.load_item_work(content, selected.id())?;
-    if state.native_work.inventory_record.is_some() {
-        state.native_work.inventory_record = Some(selected.clone());
-    }
+    state.native_work.inventory_record = selected.clone();
     let mut worn = crate::equipment::wear(
         &state.warriors[member],
         content,
@@ -295,6 +293,7 @@ pub fn select_weapon(
         slot,
         false,
     )?;
+    state.apply_equipment_globals(&worn.global_writes)?;
     events.extend(
         worn.sounds
             .drain(..)

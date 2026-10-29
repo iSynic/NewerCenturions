@@ -15,19 +15,27 @@ impl Application {
         let mut events = Vec::new();
         match action {
             ApplicationAction::ExchangeChoice(choice) => {
-                let body = self
-                    .exchange_offer
-                    .ok_or("no occupied-cell choice is open")?;
-                if let Some(exchange) = choice {
+                if state.retained_walk_choice.is_some() {
                     events = apply(
-                        if exchange {
-                            Command::SwapCombatants { body }
-                        } else {
-                            Command::AttackFriend { body }
-                        },
+                        self.command(Command::AnswerOccupiedChoice { exchange: choice }),
                         state,
                         content,
                     )?;
+                } else {
+                    let body = self
+                        .exchange_offer
+                        .ok_or("no occupied-cell choice is open")?;
+                    if let Some(exchange) = choice {
+                        events = apply(
+                            if exchange {
+                                Command::SwapCombatants { body }
+                            } else {
+                                Command::AttackFriend { body }
+                            },
+                            state,
+                            content,
+                        )?;
+                    }
                 }
                 self.exchange_offer = None;
             }

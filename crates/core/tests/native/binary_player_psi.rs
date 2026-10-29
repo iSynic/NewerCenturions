@@ -15,8 +15,6 @@ fn controlled(case: &Value) -> Combat {
     combat.enemies.positions = positions(case.text("monster_positions"));
     combat.order = order;
     combat.spell_fields = case.bytes("fields_before");
-    combat.attack_packet = None;
-    combat.attack_identity = None;
     combat
 }
 fn verify(
@@ -78,12 +76,12 @@ fn verify(
     }
     assert_eq!(
         combat.attack_packet,
-        Some(case["resolutions"][0].bytes("packet")),
+        case["resolutions"][0].bytes("packet"),
         "{context} packet"
     );
     assert_eq!(
         combat.attack_identity,
-        Some([id / 1000 - 1, id % 1000 / 100 - 1, id % 100 - 1]),
+        [id / 1000 - 1, id % 1000 / 100 - 1, id % 100 - 1],
         "{context} descriptor"
     );
     support::assert_rng(&random, &case["seed_after"], &case["rng_draws"]);
@@ -130,12 +128,22 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
         support::fixture("startup.json")["initialized_sha256"]
     );
     let retained = centurions_core::combat::weapon_work::WeaponWork {
-        natural_attack_index: Some(0),
-        sound: Some(word(&startup, 0x453776 - 0x3fe210).unwrap()),
-        weapon_armor_filter: Some(word(&startup, 0x4537f0 - 0x3fe210).unwrap()),
-        ammunition_armor_filter: Some(word(&startup, 0x45375a - 0x3fe210).unwrap()),
+        natural_attack_index: 0,
+        sound: word(&startup, 0x453776 - 0x3fe210).unwrap(),
+        weapon_armor_filter: word(&startup, 0x4537f0 - 0x3fe210).unwrap(),
+        ammunition_armor_filter: word(&startup, 0x45375a - 0x3fe210).unwrap(),
     };
     assert_eq!(Session::new(&content).native_work.weapon_work, retained);
+    let health = HealthContext {
+        unavailable: startup[0x442739 - 0x3fe210] as i8,
+        selected_warrior: usize::from(startup[0x44273f - 0x3fe210]),
+        effect: startup[0x443760 - 0x3fe210] as i8,
+        last_body: word(&startup, 0x408574 - 0x3fe210).unwrap(),
+        marks_affected: startup[0x442750 - 0x3fe210] != 0,
+        affected: std::array::from_fn(|index| word(&startup, 0x442798 - 0x3fe210 + index * 2).unwrap()),
+    };
+    assert_eq!(Session::new(&content).native_work.health_context, health);
+
     let foundation = &data["route_foundation"];
     let combat: Combat = serde_json::from_value(foundation["combat"].clone()).unwrap();
     let mission = content
@@ -173,8 +181,8 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
             .map(|case| (case.n::<i16>("spell"), 1, false, Some(case))),
     ) {
         let mut state: Session = serde_json::from_value(foundation.clone()).unwrap();
-        state.native_work.psi_memory = Some(vec![0; 480]);
-        state.bandage_ready = Some(gate);
+        state.native_work.psi_memory = vec![0; 480];
+        state.bandage_ready = gate;
         let actor = 1;
         let overflow = spell == 1101;
         let power = if ray_case.is_some() {
@@ -272,6 +280,7 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
                 vec![centurions_core::feedback::NativeFeedback::Sound { resource_id: sound }],
             );
         }
+        crate::native_common::source_victory_context(&mut state);
         let target_before = state.warriors[0].bytes.clone();
         let before = state.warriors[actor].psi_points().unwrap();
         let mut resumed = support::checkpoint(&state, &content, "learned-family-before");
@@ -333,8 +342,8 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
             support::native_expect! {
                 records &state.warriors => &case["warriors_after"], "movement party";
                 words combat.map.tiles => &case["map_after"], "movement terrain";
-                bytes state.native_work.psi_memory.as_ref().unwrap() => &case["memory_after"], "movement memory";
-                scalar state.bandage_ready.unwrap() => &case["gate_after"], "movement gate";
+                bytes state.native_work.psi_memory => &case["memory_after"], "movement memory";
+                scalar state.bandage_ready => &case["gate_after"], "movement gate";
                 scalar state.random.draws => &case["draws"], "movement draws";
             }
             assert_eq!(combat.squad.positions, positions(&case["positions_after"]));
@@ -357,7 +366,7 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
                 bytes support::record_bytes(&current_combat(&state).enemies.records) => &case["records_after"], "Psi NPCs";
             }
             if charm {
-                support::expect(state.bandage_ready.unwrap(), &case["gate_after"]);
+                support::expect(state.bandage_ready, &case["gate_after"]);
             }
         }
         if overflow {

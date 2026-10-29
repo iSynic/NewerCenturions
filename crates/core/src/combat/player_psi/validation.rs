@@ -4,6 +4,7 @@ use super::{
     CastRequest, Combat, RuleError, can_cast, cost, in_range, lifecycle, mode_allowed, packet,
     range,
 };
+use crate::combat::map_alias::MapAliases;
 use centurions_content::mission::OpeningMission;
 use centurions_content::{Warrior, records::AttackPacket};
 
@@ -14,7 +15,14 @@ pub fn validate(
     disabled: u8,
     request: CastRequest,
 ) -> Result<(), RuleError> {
-    validate_target(combat, warriors, mission, disabled, request, None)
+    validate_target(
+        combat,
+        warriors,
+        mission,
+        disabled,
+        request,
+        (None, MapAliases::of_mission(mission)),
+    )
 }
 
 pub fn validate_warrior(
@@ -42,7 +50,7 @@ pub fn validate_warrior(
             power,
             target: Some(target),
         },
-        Some(warrior as i16),
+        (Some(warrior as i16), MapAliases::of_mission(mission)),
     )
 }
 
@@ -52,7 +60,7 @@ pub(super) fn validate_target(
     mission: &OpeningMission,
     disabled: u8,
     request: CastRequest,
-    body: Option<i16>,
+    (body, aliases): (Option<i16>, MapAliases<'_>),
 ) -> Result<(), RuleError> {
     if !COMBAT_SPELLS.contains(&request.spell) || !(1..=7).contains(&request.power) {
         return Err(RuleError::Unsupported {
@@ -165,18 +173,17 @@ pub(super) fn validate_target(
     let area = centurions_content::span(&mission.areas, (shape - 1) * 49, 49)?;
     for y in 0..7 {
         for x in 0..7 {
-            if area[y * 7 + x] != 0
-                && (!(0..90).contains(&(center.0 - 3 + x as i32))
-                    || !(0..90).contains(&(center.1 - 3 + y as i32)))
-            {
-                return Err(RuleError::Unsupported {
-                    action: "combat.player_psi",
-                    dependency: "spell area outside tactical map",
-                });
-            }
+            // spelltargets indexes MULU.W column*90 plus a signed row, so a row past
+            // either edge reads the neighbouring column or the memory beside the map.
+            let column = i32::from((center.0 - 3 + x as i32) as i16 as u16);
+            let index = column * 90 + (center.1 - 3 + y as i32);
             if request.spell == 1305 && area[y * 7 + x] != 0 {
-                let body = combat.map.tiles
-                    [(center.0 - 3 + x as i32) as usize * 90 + (center.1 - 3 + y as i32) as usize]
+                let body = aliases
+                    .read(&combat.map, index)?
+                    .ok_or(RuleError::Unsupported {
+                        action: "combat.player_psi",
+                        dependency: "spell area outside the map and the represented memory beside it",
+                    })?
                     .wrapping_abs();
                 if (6..10).contains(&body) {
                     return Err(RuleError::Invalid("empty support body".into()));

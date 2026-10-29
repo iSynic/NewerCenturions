@@ -1,5 +1,5 @@
 //! Enemy natural melee (attack2 0x102038), including reflected conditions.
-use super::{AttackResult, melee_accuracy, resolve_reflected_attack};
+use super::{AttackResult, melee_accuracy};
 use crate::{
     RandomState, RuleError,
     combat::{
@@ -18,18 +18,16 @@ pub(super) fn resolve(
     attacker: &mut MonsterRecord,
     attack_index: usize,
     random: &mut RandomState,
-    mut packet: Vec<u8>,
+    packet: Vec<u8>,
     buffs: &[u8],
     difficulty: i16,
-) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
+) -> Result<(AttackResult, Vec<u8>, bool, i16), RuleError> {
     if attack_index >= 6 {
         return Err(RuleError::Invalid("natural attack outside record".into()));
     }
-    let natural = attacker.record().natural_attack(attack_index);
     let weapon = attacker.record().melee_weapon()?;
     if !matches!(weapon, 0 | 9)
         || (weapon == 9 && !matches!(attacker.record().selected_item()?, 0 | 9))
-        || !matches!(natural.condition, 0..=17 | 19)
     {
         return Err(RuleError::Unsupported {
             action: "combat.attack",
@@ -37,6 +35,37 @@ pub(super) fn resolve(
         });
     }
     attacker.record_mut().set_selected_item(0);
+    resolve_prepared(
+        defender,
+        attacker,
+        attack_index,
+        random,
+        packet,
+        buffs,
+        difficulty,
+        weapon != 0,
+    )
+}
+
+/// attack2 after its caller has loaded natural work and committed selection writers.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_prepared(
+    defender: &mut Warrior,
+    attacker: &mut MonsterRecord,
+    attack_index: usize,
+    random: &mut RandomState,
+    mut packet: Vec<u8>,
+    buffs: &[u8],
+    difficulty: i16,
+    fallback: bool,
+) -> Result<(AttackResult, Vec<u8>, bool, i16), RuleError> {
+    // attack2 reads natural attack n at 0x93 + 4n of its 0x120-byte record copy, so
+    // n up to 34 stays inside the record.
+    if attack_index >= 35 {
+        return Err(RuleError::Invalid("natural attack outside record".into()));
+    }
+    let natural = attacker.record().natural_attack(attack_index);
+    party_buffs::validate(buffs)?;
     let chance = melee_accuracy::enemy_against_warrior(&attacker.record(), &defender.record(), 0)?;
     let hit = random.bound(100)
         <= chance.clamp(
@@ -58,20 +87,20 @@ pub(super) fn resolve(
         .melee_bonus()?
         .wrapping_add(attacker.record().condition(Condition::BonusDamage));
     // Rejected default weapon 9 reloads weapon-zero damage, not natural bounds.
-    let rejected_weapon = weapon == 9;
+    let rejected_weapon = fallback;
     AttackPacketMut(&mut packet).set_damage_bounds(
         bonus.wrapping_add(if rejected_weapon { 1 } else { natural.minimum }),
         bonus.wrapping_add(if rejected_weapon { 0 } else { natural.maximum }),
     );
-    AttackPacketMut(&mut packet).set_impact_sound(if rejected_weapon {
-        0
-    } else if natural.impact_sound == 0 {
-        100
-    } else {
-        natural.impact_sound
-    });
+    if !rejected_weapon {
+        AttackPacketMut(&mut packet).set_impact_sound(if natural.impact_sound == 0 {
+            100
+        } else {
+            natural.impact_sound
+        });
+    }
     if reflected {
-        let result = resolve_reflected_attack(
+        let (result, total_delta) = super::resolve_reflected_attack_with_victory(
             &mut attacker.bytes,
             &packet,
             attack_index,
@@ -79,7 +108,7 @@ pub(super) fn resolve(
             None,
             random,
         )?;
-        return Ok((result, packet, true));
+        return Ok((result, packet, true, total_delta));
     }
     let resolved = resolve_damage(
         &mut defender.bytes,
@@ -99,6 +128,7 @@ pub(super) fn resolve(
         defender.record_mut().count_avoided_attack();
         return Ok(no_damage(packet, reflected));
     }
+    let prior_faction = defender.record().faction()?;
     let effect = natural_conditions::warrior_attack_effect(
         &mut defender.bytes,
         &attacker.bytes,
@@ -125,6 +155,7 @@ pub(super) fn resolve(
     record.mark_damaged();
     Ok((
         AttackResult {
+            icon: resolved.sound,
             feedback: effect.feedback,
             damage,
             killed: health < 1,
@@ -132,12 +163,14 @@ pub(super) fn resolve(
         },
         packet,
         false,
+        i16::from(natural.condition == 10 && effect.applied && prior_faction == 0),
     ))
 }
 
-fn no_damage(packet: Vec<u8>, reflected: bool) -> (AttackResult, Vec<u8>, bool) {
+fn no_damage(packet: Vec<u8>, reflected: bool) -> (AttackResult, Vec<u8>, bool, i16) {
     (
         AttackResult {
+            icon: 0,
             feedback: None,
             damage: 0,
             killed: false,
@@ -145,5 +178,6 @@ fn no_damage(packet: Vec<u8>, reflected: bool) -> (AttackResult, Vec<u8>, bool) 
         },
         packet,
         reflected,
+        0,
     )
 }

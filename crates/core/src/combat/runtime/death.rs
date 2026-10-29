@@ -1,6 +1,5 @@
 //! Death in the original combat execution order.
 use super::{alive, end_turn, finish_battle_wrapper, finish_victory, select_turn};
-use crate::exploration::Operation;
 use crate::{Event, Phase, Presentation, RuleError, ScriptState, Session};
 use centurions_content::Content;
 use centurions_content::records::EnemyRecord;
@@ -35,6 +34,8 @@ pub(super) fn enemy_death_feedback(
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeathStory {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_to: Option<Box<super::CombatReturn>>,
     #[serde(default)]
     pub direct: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -55,6 +56,10 @@ pub struct DeathStory {
     pub outer_after_message: i16,
     #[serde(default)]
     pub outer_treasure: i16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outer_rewards: Option<super::OrdinaryBattleRewards>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outer_selected: Option<super::SelectedBattleTreasure>,
     #[serde(default)]
     pub outer_group: Option<i16>,
     #[serde(default)]
@@ -89,6 +94,15 @@ impl DeathStory {
                     "invalid combat story continuation".into(),
                 ));
             }
+            if let Some(caller) = &story.return_to {
+                if !story.direct {
+                    return Err("queued story owns an immediate combat return".into());
+                }
+                caller.validate()?;
+            }
+            if let Some(selected) = &story.outer_selected {
+                selected.validate_suspended()?;
+            }
             if let Some(script) = &story.suspended_script
                 && (!story.shared_dispatch
                     || script.record.len() != 42
@@ -114,6 +128,18 @@ impl DeathStory {
     }
 }
 
+/// Each killbody frame saves DOOR actions locally, while its header stays global.
+pub(crate) fn retain_death_header(state: &mut Session, record: &[u8]) {
+    let mut current = state.combat_story.as_mut();
+    while let Some(story) = current {
+        if let Some(caller) = story.suspended_script.as_mut() {
+            centurions_content::records::StoryRecordMut(&mut caller.record)
+                .copy_return_header(record);
+        }
+        current = story.parent.as_deref_mut();
+    }
+}
+
 pub(crate) fn finish_player_action(
     state: &mut Session,
     content: &Content,
@@ -128,8 +154,23 @@ pub(super) fn finish_action(
     actor: i16,
     resume_turn: bool,
 ) -> Result<Vec<Event>, RuleError> {
+    process_action(state, content, actor, resume_turn, QueueScan::Begin)
+}
+
+enum QueueScan {
+    Begin,
+    Resume,
+}
+
+fn process_action(
+    state: &mut Session,
+    content: &Content,
+    actor: i16,
+    resume_turn: bool,
+    queue: QueueScan,
+) -> Result<Vec<Event>, RuleError> {
     state.target_quantity = None;
-    retain_last_defeated(state);
+    retain_last_defeated(state)?;
     let c = state
         .combat
         .as_mut()
@@ -147,42 +188,20 @@ pub(super) fn finish_action(
         c.death_queue.processing = true;
         Some(((body - 10) as usize, entry, true, None))
     } else {
-        if !c.death_queue.processing {
+        if matches!(queue, QueueScan::Begin) {
             c.death_queue.begin();
+            state.native_work.death_processing.queue = 1;
         }
         c.death_queue
             .current()
             .map(|(index, entry)| (0, entry, false, Some(index - 1)))
     };
-    if let Some((body, entry, direct, queue_cursor)) = pending {
-        let parent = state.combat_story.take().map(Box::new);
-        state.combat_story = Some(DeathStory {
-            body,
-            direct,
-            queue_cursor,
-            script: entry.script,
-            cursor: 0,
-            actor,
-            resume_turn,
-            entry,
-            waiting_child: false,
-            child_returned: false,
-            outer_after_message: state.battle_after_message,
-            outer_treasure: state.battle_treasure,
-            outer_group: state.battle_group_script,
-            outer_npc: state.battle_npc.clone(),
-            shared_dispatch: false,
-            suspended_script: None,
-            parent,
-        });
-        return continue_death(state, content);
+    if let Some(pending) = pending {
+        return begin_callback(state, content, actor, resume_turn, pending, None);
     }
     c.death_queue.finish();
-    if c.enemies.records.iter().all(|m| {
-        m.stamina().unwrap_or(0) <= 0
-            || m.record().mechanical_state() == 255
-            || m.record().faction().unwrap_or(1) == 0
-    }) {
+    state.native_work.death_processing.queue = 0;
+    if !c.victory_work.has_remaining() {
         return finish_victory(state, content);
     }
     if resume_turn {
@@ -197,21 +216,101 @@ pub(super) fn finish_action(
     Ok(vec![])
 }
 
-pub(crate) fn retain_last_defeated(state: &mut Session) {
-    let Some(body) = state
+pub(super) fn suspend_reaction(
+    state: &mut Session,
+    content: &Content,
+    actor: i16,
+    caller: super::CombatReturn,
+) -> Result<Vec<Event>, RuleError> {
+    caller.validate()?;
+    state.retain_npc_work();
+    retain_last_defeated(state)?;
+    let combat = state
         .combat
         .as_mut()
-        .and_then(|combat| combat.pending_last_defeated.take())
+        .ok_or("reaction callback combat missing")?;
+    let (body, entry) = combat
+        .direct_death
+        .take()
+        .ok_or("reaction callback entry missing")?;
+    combat.script_enemy = (body - 10) as usize;
+    combat.death_queue.processing = true;
+    begin_callback(
+        state,
+        content,
+        actor,
+        false,
+        ((body - 10) as usize, entry, true, None),
+        Some(Box::new(caller)),
+    )
+}
+
+fn begin_callback(
+    state: &mut Session,
+    content: &Content,
+    actor: i16,
+    resume_turn: bool,
+    pending: (
+        usize,
+        crate::combat::death_scripts::DeathEntry,
+        bool,
+        Option<usize>,
+    ),
+    return_to: Option<Box<super::CombatReturn>>,
+) -> Result<Vec<Event>, RuleError> {
+    let (body, entry, direct, queue_cursor) = pending;
+    state.native_work.death_processing.callback = 1;
+    let parent = state.combat_story.take().map(Box::new);
+    state.combat_story = Some(DeathStory {
+        return_to,
+        body,
+        direct,
+        queue_cursor,
+        script: entry.script,
+        cursor: 0,
+        actor,
+        resume_turn,
+        entry,
+        waiting_child: false,
+        child_returned: false,
+        outer_after_message: state.battle_after_message,
+        outer_treasure: state.battle_treasure,
+        outer_rewards: state.ordinary_battle_rewards.clone(),
+        outer_selected: state.selected_battle_treasure.clone(),
+        outer_group: state.battle_group_script,
+        outer_npc: state.battle_npc.clone(),
+        shared_dispatch: false,
+        suspended_script: None,
+        parent,
+    });
+    continue_death(state, content)
+}
+
+pub(crate) fn retain_last_defeated(state: &mut Session) -> Result<(), RuleError> {
+    state.retain_monster_work();
+    let Some(body) = state
+        .combat
+        .as_ref()
+        .and_then(|combat| combat.pending_last_defeated)
     else {
-        return;
+        return Ok(());
     };
-    let mut context = crate::story_health::context(
-        &state.warriors,
+    // Immediate newland runs before the native availability test.
+    if state
+        .combat
+        .as_ref()
+        .is_some_and(|combat| combat.direct_death.is_none())
+    {
+        crate::combat::reward_work::after_death(state)?;
+    }
+    let mut context = crate::story_health::retained_context(
         state.selected_warrior,
-        state.native_work.health_context.as_ref(),
+        &state.native_work.health_context,
     );
     context.last_body = body;
-    state.native_work.health_context = Some(context);
+    state.native_work.health_context = context;
+    state.combat.as_mut().unwrap().pending_last_defeated = None;
+    Ok(())
 }
 
 pub(crate) fn finish_death_story(
@@ -222,12 +321,19 @@ pub(crate) fn finish_death_story(
         .combat_story
         .take()
         .ok_or_else(|| RuleError::Invalid("death continuation missing".into()))?;
+    if story.direct {
+        state.native_work.script_enemy = 0;
+        if let Some(combat) = state.combat.as_mut() {
+            combat.script_enemy = 0;
+        }
+    }
+    super::death_return::refresh_actor(state, content)?;
     if story.shared_dispatch {
         state.exploration.as_mut().unwrap().script = story.suspended_script.clone();
     }
+    state.native_work.death_processing.callback = 0;
     if let Some(combat) = state.combat.as_mut() {
         if story.direct {
-            combat.script_enemy = 0;
             combat.death_queue.processing = false;
         } else {
             if let Some(cursor) = story.queue_cursor {
@@ -244,9 +350,42 @@ pub(crate) fn finish_death_story(
                 0
             },
         )?;
+        if story.direct {
+            crate::combat::lifecycle::finish_if_party_unavailable(combat, &state.warriors);
+            crate::combat::reward_work::after_death(state)?;
+        }
         state.combat_story = story.parent.map(|parent| *parent);
-        finish_action(state, content, story.actor, story.resume_turn)
+        if let Some(caller) = story.return_to {
+            return super::movement_return::resume(state, content, *caller);
+        }
+        // A queued callback returns to emptyque's local loop, without rewriting584.
+        // A direct callback returns to the ordinary action's subsequent queue call.
+        process_action(
+            state,
+            content,
+            story.actor,
+            story.resume_turn,
+            if story.direct {
+                QueueScan::Begin
+            } else {
+                QueueScan::Resume
+            },
+        )
     } else {
+        if let Some(caller) = story.return_to {
+            if story.outer_selected.is_some()
+                || matches!(caller.as_ref(), super::CombatReturn::NpcAction(_))
+            {
+                state.selected_battle_treasure = story.outer_selected;
+                state.battle_after_message = story.outer_after_message;
+                state.battle_treasure = story.outer_treasure;
+                state.ordinary_battle_rewards = story.outer_rewards;
+                state.battle_group_script = story.outer_group;
+                state.battle_npc = story.outer_npc;
+            }
+            state.combat_story = story.parent.map(|parent| *parent);
+            return super::movement_return::resume(state, content, *caller);
+        }
         if !story.direct
             && let Some(queue) = state.native_work.retained_death_queue.as_mut()
         {
@@ -255,6 +394,7 @@ pub(crate) fn finish_death_story(
             }
             queue.acknowledge()?;
             queue.finish();
+            state.native_work.death_processing.queue = 0;
         }
         // Child combat replaces the global roster. The outer reward sees count zero.
         for item in &mut state.booty_items {
@@ -262,13 +402,21 @@ pub(crate) fn finish_death_story(
         }
         state.battle_after_message = story.outer_after_message;
         state.battle_treasure = story.outer_treasure;
+        state.ordinary_battle_rewards = story.outer_rewards;
+        state.selected_battle_treasure = story.outer_selected;
         state.battle_group_script = story.outer_group;
         state.battle_npc = story.outer_npc;
         state.combat_story = story.parent.map(|parent| *parent);
         state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
-        let mut events = vec![Event::Sound {
-            resource_id: crate::feedback::BOOTY_SOUND,
-        }];
+        let mut events = if state.ordinary_battle_rewards.is_some()
+            || state.selected_battle_treasure.is_some()
+        {
+            vec![]
+        } else {
+            vec![Event::Sound {
+                resource_id: crate::feedback::BOOTY_SOUND,
+            }]
+        };
         events.extend(finish_battle_wrapper(state, content)?);
         Ok(events)
     }
@@ -289,23 +437,7 @@ pub(crate) fn retain_death_parent(state: &mut Session, parent: Option<DeathStory
 }
 
 pub fn continue_death(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
-    let mut step = None;
-    run_death_story(state, content, &mut step).map_err(|error| match step {
-        Some((script, opcode, cursor)) => {
-            error.with_context(|| format!("death script {script} opcode {opcode} cursor {cursor}"))
-        }
-        None => error,
-    })
-}
-
-/// `step` names the instruction being executed when an error leaves it.
-fn run_death_story(
-    state: &mut Session,
-    content: &Content,
-    step: &mut Option<(i16, i16, usize)>,
-) -> Result<Vec<Event>, RuleError> {
-    retain_last_defeated(state);
-    let mut events = vec![];
+    retain_last_defeated(state)?;
     if state
         .combat_story
         .as_ref()
@@ -325,104 +457,24 @@ fn run_death_story(
         story.waiting_child = false;
         story.child_returned = true;
     }
-    state.exploration.as_mut().unwrap().presentation = None;
-    if state
+    let map = state.land(content).ok_or("death story map missing")?;
+    let story = state
         .combat_story
-        .as_ref()
-        .is_some_and(|story| story.shared_dispatch)
-    {
-        return crate::exploration::run_script(state, content);
-    }
-    let map = state.land(content).unwrap();
-    if state
-        .combat_story
-        .as_ref()
-        .is_some_and(|story| story.cursor == 0)
-    {
-        let stamp = map.script(state.combat_story.as_ref().unwrap().script)?[41];
-        crate::exploration::retain_script_stamp(state, stamp);
-    }
-    for _ in 0..8 {
-        let story = state.combat_story.as_mut().unwrap();
-        if story.cursor >= 8 {
-            *step = None;
-            events.extend(finish_death_story(state, content)?);
-            return Ok(events);
+        .as_mut()
+        .ok_or("death continuation missing")?;
+    let position = state
+        .exploration
+        .as_mut()
+        .ok_or("death story position missing")?;
+    position.presentation = None;
+    if !story.shared_dispatch {
+        let mut record = map.script(story.script)?.to_vec();
+        if let Some(caller) = position.script.as_ref() {
+            record[..8].copy_from_slice(centurions_content::span(&caller.record, 0, 8)?);
         }
-        let record = map.script(story.script)?;
-        let (opcode, parameter) =
-            centurions_content::records::StoryRecord(&record).instruction(story.cursor)?;
-        *step = Some((story.script, opcode, story.cursor));
-        crate::trace::story(
-            "death",
-            i32::from(story.script),
-            story.cursor,
-            opcode,
-            parameter,
-        );
-        story.cursor += 1;
-        match Operation::from_native(opcode) {
-            Operation::NoAction | Operation::Unarmed(_) => {}
-            Operation::ContinueIfMonster => {
-                let combat = state.combat.as_ref().ok_or("death story roster missing")?;
-                if !crate::story_combat::monster_present(combat, parameter)? {
-                    *step = None;
-                    events.extend(finish_death_story(state, content)?);
-                    return Ok(events);
-                }
-            }
-            Operation::EndCombat
-            | Operation::NeutralizeActors
-            | Operation::SetFactionCondition
-            | Operation::SummonActors
-            | Operation::RemoveActorClass => {
-                let (effects, stopped) =
-                    crate::story_combat::apply(state, content, opcode, parameter)?;
-                events.extend(effects);
-                if stopped {
-                    events.extend(finish_death_story(state, content)?);
-                    return Ok(events);
-                }
-            }
-            Operation::Dialogue => {
-                state.exploration.as_mut().unwrap().presentation = Some(Presentation::Dialogue {
-                    id: parameter,
-                    text: map.dialogue(parameter)?,
-                });
-                events.push(Event::StoryPresented);
-                return Ok(events);
-            }
-            Operation::Sound => events.push(Event::Sound {
-                resource_id: parameter,
-            }),
-            Operation::SetMissionFlag => {
-                state.flags = crate::story::set_mission_flag(&state.flags, parameter)?
-            }
-            Operation::Battle => {
-                events.extend(crate::exploration::begin_story_battle(
-                    state,
-                    content,
-                    crate::exploration::StoryBattle::Ordinary,
-                    parameter,
-                )?);
-                return Ok(events);
-            }
-            _ => {
-                let mut record = map.script(story.script)?.to_vec();
-                if let Some(parent) = state.exploration.as_ref().unwrap().script.as_ref() {
-                    record[..8].copy_from_slice(centurions_content::span(&parent.record, 0, 8)?);
-                }
-                let cursor = story.cursor - 1;
-                story.shared_dispatch = true;
-                story.suspended_script = state.exploration.as_mut().unwrap().script.take();
-                state.exploration.as_mut().unwrap().script =
-                    Some(ScriptState::scheduled(record, cursor as u8));
-                events.extend(crate::exploration::run_script(state, content)?);
-                return Ok(events);
-            }
-        }
+        story.shared_dispatch = true;
+        story.suspended_script = position.script.take();
+        position.script = Some(ScriptState::scheduled(record, story.cursor as u8));
     }
-    *step = None;
-    events.extend(finish_death_story(state, content)?);
-    Ok(events)
+    crate::exploration::run_script(state, content)
 }

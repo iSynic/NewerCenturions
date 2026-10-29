@@ -107,7 +107,7 @@ pub(super) fn draw_survivors(state: &Session, assets: &Assets, controls: &mut Ve
         enabled: true,
         action: Action::Command(Command::Continue),
     });
-    let (Some(selection), Some(combat)) = (&state.survivors, &state.combat) else {
+    let Some(selection) = &state.survivors else {
         return;
     };
     for row in 0..32 {
@@ -120,7 +120,10 @@ pub(super) fn draw_survivors(state: &Session, assets: &Assets, controls: &mut Ve
         let Some(index) = selection.eligible.get(row) else {
             continue;
         };
-        let record = combat.enemies.records[*index].record();
+        let Some(record) = state.survivor_record(*index) else {
+            continue;
+        };
+        let record = record.record();
         if record.survivor_marker().unwrap_or(0) == -1
             && let Some(icon) = assets.icons.get(&2003)
         {

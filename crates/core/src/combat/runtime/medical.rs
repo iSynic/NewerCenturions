@@ -36,6 +36,14 @@ pub(crate) fn refresh_active_item_context(
     let Some(body) = state.combat.as_ref().and_then(Combat::active_body) else {
         return Ok(());
     };
+    refresh_item_context(state, content, body)
+}
+
+pub(crate) fn refresh_item_context(
+    state: &mut Session,
+    content: &Content,
+    body: i16,
+) -> Result<(), RuleError> {
     if body >= 10 {
         let combat = state.combat.as_ref().unwrap();
         let item = combat.enemies.records[(body - 10) as usize]
@@ -57,18 +65,15 @@ pub(crate) fn refresh_active_item_context(
     } else {
         warrior.record().melee_weapon()?
     };
-    if warrior.record().firing_mode()
-        && !warrior
-            .inventory()?
-            .iter()
-            .any(|record| record.id() == item && record.equipment_flag() == 1)
-    {
-        return Err(RuleError::Unsupported {
-            action: "combat.medical_aid",
-            dependency: "missing selected secondary during native item refresh",
-        });
-    }
+    let clear_firing = warrior.record().firing_mode() && item == 0;
+    // combatupdate2 11f662 loads the secondary WORD without an inventory lookup.
     state.load_item_work(content, item)?;
+    if clear_firing {
+        // combatupdate2's missing-secondary branch11fb7a clears the mode byte.
+        state.warriors[body as usize]
+            .record_mut()
+            .set_firing_mode(false);
+    }
     Ok(())
 }
 
@@ -78,19 +83,10 @@ pub fn stop_bleeding(
     warrior: Option<usize>,
 ) -> Result<Vec<Event>, RuleError> {
     medical_turn(state)?;
-    match state.bandage_ready {
-        None => {
-            return Err(RuleError::Unsupported {
-                action: "combat.stop_bleeding",
-                dependency: "unreconstructable original interaction marker",
-            });
-        }
-        Some(0) => {
-            return Err(RuleError::Invalid(
-                "Stop Bleeding is unavailable after the previous action".into(),
-            ));
-        }
-        Some(_) => {}
+    if state.bandage_ready == 0 {
+        return Err(RuleError::Invalid(
+            "Stop Bleeding is unavailable after the previous action".into(),
+        ));
     }
     if warrior.is_some_and(|member| member >= state.warriors.len()) {
         return Err(RuleError::Invalid("bandaging target outside squad".into()));
@@ -114,60 +110,7 @@ pub fn begin_medical_item(
     slot: usize,
 ) -> Result<Vec<Event>, RuleError> {
     medical_turn(state)?;
-    let actor = state
-        .warriors
-        .get_mut(warrior)
-        .ok_or_else(|| RuleError::Invalid("medical warrior outside squad".into()))?;
-    let selected = actor
-        .inventory()?
-        .get(slot)
-        .cloned()
-        .ok_or_else(|| RuleError::Invalid("medical inventory slot missing".into()))?;
-    crate::items::compact(actor)?;
-    if actor.inventory()?.get(slot) != Some(&selected) {
-        return Err(RuleError::Unsupported {
-            action: "combat.medical_aid",
-            dependency: "inventory selection moved during item pane initialization",
-        });
-    }
-    crate::equipment::calculate_weight(actor, content)?;
-    for member in &mut state.warriors {
-        member.record_mut().set_turn_skip_duration(0);
-    }
-    let result = crate::combat::medical::begin(
-        state,
-        content,
-        crate::combat::medical::BeginRequest { warrior, slot },
-    )?;
-    state.warriors[warrior] = result.warrior;
-    state.selected_warrior = warrior;
-    state.native_work.loaded_item_field32 = Some(result.loaded_item_field32);
-    state.native_work.attack_count = result.count;
-    state.native_work.ammunition_work.weapon =
-        Some(crate::ammunition::definition(content, selected.id())?);
-    state.native_work.ammunition_work.ammo = Some(crate::ammunition::definition(content, 0)?);
-    state.native_work.party_mask.fill(0);
-    let mut health = crate::story_health::context(
-        &state.warriors,
-        warrior,
-        state.native_work.health_context.as_ref(),
-    );
-    health.marks_affected = false;
-    health.effect = centurions_content::records::AttackPacket(&result.packet).health_effect();
-    state.native_work.health_context = Some(health);
-    let combat = state.combat.as_mut().unwrap();
-    combat.attack_packet = Some(result.packet);
-    combat.attack_identity = Some(result.identity);
-    combat.weapon_work = result.weapon_work;
-    state.medical_continuation = Some(crate::MedicalContinuation {
-        origin: crate::MedicalOrigin::OwnedNeedle,
-        actor: warrior,
-        item: selected.id(),
-        spell: 1401,
-        power: result.count,
-    });
-    refresh_active_item_context(state, content)?;
-    Ok(result.events)
+    crate::combat::item_activation::ordinary::begin(state, content, warrior, slot)
 }
 
 pub fn begin_learned_heal(
@@ -176,6 +119,7 @@ pub fn begin_learned_heal(
     power: i16,
 ) -> Result<Vec<Event>, RuleError> {
     let actor = medical_turn(state)?;
+    crate::combat::player_psi::select_native_caster(state);
     if state.psi_menu_choices[actor]
         .as_ref()
         .is_some_and(|choice| {
@@ -197,14 +141,14 @@ pub fn begin_learned_heal(
     let previous_power = state.psi_menu_choices[actor]
         .as_ref()
         .map_or(1, |choice| choice.power);
-    result
-        .events
-        .retain(|event| !matches!(event, Event::Sound { resource_id: 137 }));
+    result.events.retain(|event| event.sound() != Some(137));
     if power != previous_power {
         result.events.push(Event::Sound { resource_id: 137 });
     }
     state.warriors[actor] = result.warrior;
     state.selected_warrior = actor;
+    // castspell 0x10d328 stores the cast power in WORD 0x437a7a + 2 * member.
+    state.native_work.psi_powers[actor] = None;
     state.psi_menu_choices[actor] = Some(crate::PsiMenuChoice {
         row: 0,
         column: 0,
@@ -212,18 +156,16 @@ pub fn begin_learned_heal(
     });
     state.native_work.attack_count = result.count;
     state.native_work.party_mask.fill(0);
-    let mut health = crate::story_health::context(
-        &state.warriors,
-        actor,
-        state.native_work.health_context.as_ref(),
-    );
+    let mut health =
+        crate::story_health::retained_context(actor, &state.native_work.health_context);
     health.affected[actor] = 1;
     health.effect = centurions_content::records::AttackPacket(&result.packet).health_effect();
-    state.native_work.health_context = Some(health);
+    state.native_work.health_context = health;
     let combat = state.combat.as_mut().unwrap();
-    combat.attack_packet = Some(result.packet);
-    combat.attack_identity = Some(result.identity);
+    combat.attack_packet = result.packet;
+    combat.attack_identity = result.identity;
     combat.weapon_work = result.weapon_work;
+    state.set_ready(1);
     state.medical_continuation = Some(crate::MedicalContinuation {
         origin: crate::MedicalOrigin::LearnedHeal,
         actor,
@@ -245,6 +187,19 @@ pub fn select_medical_target(
         .medical_continuation
         .clone()
         .ok_or_else(|| RuleError::Invalid("no medical target selection is pending".into()))?;
+    if pending.origin == crate::MedicalOrigin::OwnedItem
+        && let crate::MedicalTarget::LivingPoint { x, y } = selection
+    {
+        state.medical_continuation = None;
+        state.psi_selection = Some(crate::combat::psi_selection::Selection {
+            actor: pending.actor,
+            spell: pending.spell,
+            power: pending.power,
+            targets: vec![],
+            item: Some(pending.item),
+        });
+        return crate::combat::item_activation::ordinary::fire_at(state, content, (x, y), 0);
+    }
     let mission = state
         .land(content)
         .ok_or_else(|| RuleError::Invalid("medical map missing".into()))?;
@@ -256,40 +211,29 @@ pub fn select_medical_target(
         &pending,
         &selection,
     )?;
-    let packet = state
-        .combat
-        .as_ref()
-        .unwrap()
-        .attack_packet
-        .as_ref()
-        .unwrap();
-    if let Some(health) = state.native_work.health_context.as_mut() {
-        health.effect = centurions_content::records::AttackPacket(packet).health_effect();
-    }
+    let packet = &state.combat.as_ref().unwrap().attack_packet;
+    let health = &mut state.native_work.health_context;
+    health.effect = centurions_content::records::AttackPacket(packet).health_effect();
     if pending.origin == crate::MedicalOrigin::LearnedHeal
         && matches!(selection, crate::MedicalTarget::Portrait { .. })
     {
-        if state.native_work.psi_memory.is_none() {
-            state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
-        }
-        let memory = state.native_work.psi_memory.as_mut().unwrap();
+        let memory = &mut state.native_work.psi_memory;
         centurions_content::records::PsiSelectionMemoryMut(memory)
             .remember_portrait_heal(pending.actor, pending.power);
     }
     state.medical_continuation = None;
     state.native_work.party_mask.fill(0);
     let mut events = resolution.events;
-    if let Some(health) = state.native_work.health_context.as_mut() {
-        health.unavailable = state.combat.as_ref().unwrap().unavailable;
-        if health.marks_affected {
-            for event in &events {
-                if let Event::SpellResolved { target, damage, .. } = event
-                    && *damage < 0
-                    && (0..state.warriors.len() as i16).contains(target)
-                    && state.warriors[*target as usize].record().stamina()? > -10
-                {
-                    health.affected[*target as usize] = -1;
-                }
+    let health = &mut state.native_work.health_context;
+    health.unavailable = state.combat.as_ref().unwrap().unavailable;
+    if health.marks_affected {
+        for event in &events {
+            if let Event::SpellResolved { target, damage, .. } = event
+                && *damage < 0
+                && (0..state.warriors.len() as i16).contains(target)
+                && state.warriors[*target as usize].record().stamina()? > -10
+            {
+                health.affected[*target as usize] = -1;
             }
         }
     }

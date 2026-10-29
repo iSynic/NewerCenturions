@@ -30,17 +30,17 @@ fn combat(case: &serde_json::Value, distance: i16) -> Combat {
         .npc_backing;
     combat.retained_npcs.origin = (5, 5);
     for slot in combat.retained_npcs.slots.iter_mut().flatten() {
-        slot.position = (5, 5);
+        slot.position = Some((5, 5));
     }
     if let Some(position) = case.get("retained_slot99") {
         let [x, y]: [i32; 2] = serde_json::from_value(position.clone()).unwrap();
-        combat.retained_npcs.slots[99].as_mut().unwrap().position = (x + 5, y + 5);
+        combat.retained_npcs.slots[99].as_mut().unwrap().position = Some((x + 5, y + 5));
     }
     if let Some(target) = case.get("retained_target") {
         let [x, y]: [i32; 2] = target.n("position");
         let slot = combat.retained_npcs.slots[98].as_mut().unwrap();
         slot.record.bytes = target.bytes("record");
-        slot.position = (x + 5, y + 5);
+        slot.position = Some((x + 5, y + 5));
     }
     combat.order = vec![-1, 10];
     combat
@@ -95,13 +95,26 @@ fn scientist_turn_matches_original_records_map_and_rng() {
             continue;
         }
         let mut state = support::mission_session(&content);
-        state.warriors = support::warriors(&case.bytes("warriors_before"));
+        state.exploration.as_mut().unwrap().presentation = None;
+        state.exploration.as_mut().unwrap().script = None;
+        state.native_work.loaded_item_field32 = case.n("item_context");
+        // The capture records field32, not the ITEM work record it came from.
+        state.native_work.ammunition_work.item = None;
+        // Controlled original turn frame after Modify Squad / Done, without
+        // an intervening inventory inspection that could hide lost item work.
+        support::saved_command(
+            Command::ReplaceSquad {
+                warriors: support::warriors(&case.bytes("warriors_before")),
+            },
+            &mut state,
+            &content,
+        );
         let mut command_combat = combat(case, case.n("distance"));
         command_combat.order.resize(110, -1);
         command_combat.order[2] = 0;
         state.combat = Some(command_combat);
+        crate::native_common::source_victory_context(&mut state);
         state.phase = centurions_core::Phase::Combat;
-        state.native_work.loaded_item_field32 = Some(case.n("item_context"));
         state.random = RandomState::new(12);
         if case["mode"] == 3 {
             let mut legacy = state.clone();
@@ -118,7 +131,7 @@ fn scientist_turn_matches_original_records_map_and_rng() {
             bytes state.native_work.ammunition_work.item.as_ref().unwrap() => &expected["item_after"], "rifle item work";
             bytes state.native_work.ammunition_work.weapon.as_ref().unwrap() => &expected["weapon_after"], "rifle weapon work";
             bytes state.native_work.ammunition_work.ammo.as_ref().unwrap() => &expected["ammo_after"], "rifle ammo work";
-            bytes state.native_work.attack_packet.as_ref().unwrap() => &expected["packet_after"], "rifle packet";
+            bytes state.native_work.attack_packet => &expected["packet_after"], "rifle packet";
             scalar state.native_work.attack_count => &expected["count_after"], "rifle count";
             scalar actual.cursor => &expected["cursor_after"], "rifle next turn";
             scalar state.selected_warrior => &expected["selected_after"], "rifle selected warrior";

@@ -41,7 +41,7 @@ pub fn reload_command(
             },
             &state.native_work.ammunition_work,
             &mut state.random,
-            state.native_work.inventory_record.as_ref(),
+            Some(&state.native_work.inventory_record),
         )?;
         return crate::ammunition::commit_result(state, index, result);
     }
@@ -56,6 +56,13 @@ pub fn reload_command(
     if work.item.is_none() {
         work.item = Some(crate::ammunition::definition(content, 0)?);
     }
+    let rounds = centurions_content::records::ItemDefinition(work.weapon.as_deref().unwrap())
+        .rounds_per_shot()?;
+    let insufficient = warrior.inventory()?.iter().any(|record| {
+        record.id() == id
+            && record.equipment_flag() != 0
+            && record.quantity().is_ok_and(|quantity| quantity < rounds)
+    });
     let result = crate::ammunition::refit_with_record(
         warrior,
         &state.ammunition,
@@ -68,11 +75,15 @@ pub fn reload_command(
         },
         &work,
         &mut state.random,
-        state.native_work.inventory_record.as_ref(),
+        Some(&state.native_work.inventory_record),
     )?;
     let complete = result.completed_refit();
     let mut events = crate::ammunition::commit_result(state, index, result)?;
     if !complete {
+        // doreload14ee40 writes only after an insufficient-load, failed refit.
+        if insufficient {
+            state.set_ready(0);
+        }
         state.warriors[index].record_mut().set_automatic_mode(0);
         if !events.iter().any(|event| {
             matches!(

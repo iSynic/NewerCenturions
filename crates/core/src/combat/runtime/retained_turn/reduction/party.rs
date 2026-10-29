@@ -1,0 +1,177 @@
+//! Party conditions and outdoor death feedback during detached Getup.
+use crate::{
+    Content, Event, RuleError, Session, combat::runtime::TurnFlow, feedback::NativeFeedback,
+    story_health,
+};
+use centurions_content::records::Condition;
+
+pub(super) fn apply(
+    state: &mut Session,
+    content: &Content,
+    member: usize,
+    events: &mut Vec<Event>,
+) -> Result<TurnFlow, RuleError> {
+    let warrior = state.warriors[member].record();
+    let regeneration = warrior.condition(Condition::Regenerating)?;
+    if regeneration != 0
+        && warrior.stamina()? > -10
+        && warrior.stamina()? < warrior.maximum_stamina()?
+        && warrior.automatic_mode()? == 0
+    {
+        let context = &state.native_work.health_context;
+        let affected = context.affected[member];
+        let mut healed = story_health::heal_outdoors(
+            &state.warriors,
+            member,
+            regeneration.wrapping_abs(),
+            false,
+            context,
+            &mut state.random,
+        )?;
+        if healed
+            .events
+            .contains(&story_health::HealthEvent::PartyLost)
+        {
+            // heal's final affected mark follows the nonreturning partyloss call.
+            healed.context.affected[member] = affected;
+        }
+        if commit_health(state, content, healed, events)? == TurnFlow::Terminated {
+            return Ok(TurnFlow::Terminated);
+        }
+    }
+    for condition in [
+        Condition::Diseased,
+        Condition::SeventhLevelProtection,
+        Condition::Speedy,
+        Condition::Poisoned,
+    ] {
+        let before = state.warriors[member].stamina()?;
+        let record = state.warriors[member].record();
+        let active = before > 0
+            && record.condition(condition)? != 0
+            && (!matches!(condition, Condition::Diseased | Condition::Poisoned)
+                || record.condition(Condition::ComputerControl)? >= 0);
+        if active {
+            let packet = &mut state.native_work.attack_packet;
+            centurions_content::records::AttackPacketMut(packet).set_health_effect(7);
+            state.native_work.health_context.effect = 7;
+        }
+        let context = &state.native_work.health_context;
+        let outcome = match condition {
+            Condition::Diseased => crate::combat::natural_conditions::disease_outdoors(
+                &state.warriors,
+                member,
+                context,
+                &mut state.random,
+            )?,
+            Condition::Poisoned => crate::combat::natural_conditions::poison_outdoors(
+                &state.warriors,
+                member,
+                context,
+                &mut state.random,
+            )?,
+            _ => {
+                let amount = state.warriors[member].record().condition(condition)?;
+                if amount == 0 || before < 1 {
+                    continue;
+                }
+                let health = before.wrapping_sub(if matches!(condition, Condition::Speedy) {
+                    2
+                } else {
+                    amount.wrapping_abs()
+                });
+                state.warriors[member].record_mut().set_stamina(health);
+                let context = &mut state.native_work.health_context;
+                context.effect = 7;
+                if health < 1 {
+                    context.unavailable = context.unavailable.wrapping_add(1);
+                    context.last_body = member as i16;
+                    events.push(Event::Sound {
+                        resource_id: state.random.bound(2).wrapping_add(506),
+                    });
+                    events.push(Event::Feedback(NativeFeedback::OutdoorBodyStatus {
+                        permanent: health < -9,
+                        wait: state.command_preferences.animation_delay,
+                    }));
+                    if context.unavailable > state.warriors.len() as i8 - 1 {
+                        events.extend(crate::mission::defeat(state, content)?);
+                        return Ok(TurnFlow::Terminated);
+                    }
+                }
+                if before > 0 && health < 1 {
+                    flash(events, condition);
+                }
+                continue;
+            }
+        };
+        if commit_health(state, content, outcome, events)? == TurnFlow::Terminated {
+            return Ok(TurnFlow::Terminated);
+        }
+        if before > 0 && state.warriors[member].stamina()? < 1 {
+            flash(events, condition);
+        }
+    }
+    crate::story_reduce::energy(
+        &mut state.warriors[member].bytes,
+        state.energy_recovery_disabled,
+    )?;
+    if state.warriors[member].record().confusion_duration()? != 0
+        && state.warriors[member].record().faction()? != 0
+    {
+        state.warriors[member].record_mut().set_faction(0);
+        let health = &mut state.native_work.health_context;
+        health.unavailable = health.unavailable.wrapping_sub(1);
+        state.native_work.victory_work.add_total(-1);
+    }
+    state.warriors[member]
+        .record_mut()
+        .decrement_temporary_conditions()?;
+    Ok(TurnFlow::Returned)
+}
+
+fn commit_health(
+    state: &mut Session,
+    content: &Content,
+    outcome: story_health::HealthOutcome,
+    events: &mut Vec<Event>,
+) -> Result<TurnFlow, RuleError> {
+    state.warriors = outcome.warriors;
+    state.native_work.health_context = outcome.context;
+    let mut status = None;
+    for event in outcome.events {
+        match event {
+            story_health::HealthEvent::Defeated { permanent, .. } => status = Some(permanent),
+            story_health::HealthEvent::Sound(resource_id) => {
+                events.push(Event::Sound { resource_id });
+                if let Some(permanent) = status.take() {
+                    events.push(Event::Feedback(NativeFeedback::OutdoorBodyStatus {
+                        permanent,
+                        wait: state.command_preferences.animation_delay,
+                    }));
+                }
+            }
+            story_health::HealthEvent::PartyLost => {
+                events.extend(crate::mission::defeat(state, content)?);
+                return Ok(TurnFlow::Terminated);
+            }
+            _ => return Err("unexpected retained reduction presentation".into()),
+        }
+    }
+    Ok(TurnFlow::Returned)
+}
+
+fn flash(events: &mut Vec<Event>, condition: Condition) {
+    let (address, sound) = match condition {
+        Condition::Diseased => (0x401960, 10122),
+        Condition::SeventhLevelProtection => (0x401948, 10122),
+        Condition::Speedy => (0x40193a, 10122),
+        _ => (0x401922, 684),
+    };
+    events.push(Event::Feedback(NativeFeedback::Flash {
+        address,
+        x: 100,
+        y: 30,
+        wait: 100,
+        sound,
+    }));
+}

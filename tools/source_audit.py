@@ -153,7 +153,7 @@ def accounting(root):
         for path in sorted(test_root.rglob("*")):
             if path.is_file() and path.suffix in (".rs", ".py", ".ps1", ".java"):
                 add_count(totals, inventory, path.relative_to(root), path.read_text(encoding="utf-8"), "tests")
-    for name in ("Run-Tests.ps1", "Run-Cargo.ps1", "Build.ps1", "build_portable.py", "source_audit.py", "engine_inventory.py", "check_menu_boundary.py",
+    for name in ("Run-Tests.ps1", "Run-Cargo.ps1", "Build.ps1", "build_portable.py", "source_audit.py", "engine_inventory.py", "engine_diagnostics.py", "unsupported_ledger.py", "check_menu_boundary.py",
                  "audit_public.py", "oracle_cache.py", "capture_reference.py", "reference.py",
                  "reference_debug.py", "registration_status.py", "verify_mace3_audio.py",
                  "Setup-Reference.ps1"):
@@ -163,7 +163,7 @@ def accounting(root):
     native = root / "tools" / "ghidra"
     probes = set(native.glob("Verify*.java"))
     probes.update(native / name for name in ("ActionOracleHarness.java", "RecordNativeContext.java",
-                  "ResultAudioBoundary.java", "SaneBoundary.java", "SubmitMusicBoundary.java"))
+                  "ResultAudioBoundary.java", "SaneBoundary.java", "SubmitMusicBoundary.java", "ToolkitProbeHarness.java"))
     for path in sorted(probes):
         if path.is_file():
             add_count(totals, inventory, path.relative_to(root), path.read_text(encoding="utf-8"), "tests")
@@ -188,7 +188,7 @@ TEST_TARGET = 0.25
 # Ratchet on maintained test code lines: they may not grow. Lower it whenever
 # consolidation removes lines. A count rather than a ratio, so that simplifying
 # production code never fails the gate.
-MAINTAINED_TEST_CEILING = 6827
+MAINTAINED_TEST_CEILING = 6549
 
 # Recovered execution bodies, the routine catalog and expanded translations, all in the
 # private archive workspace.
@@ -215,6 +215,7 @@ REFERENCE_TESTS = {
     "tools/registration_status.py",
     "tests/python/test_reference_capture.py",
     "tests/python/test_translation_plan.py",
+    "tests/python/native_menu_reference.py",
 }
 
 
@@ -237,7 +238,7 @@ def layer(path, role):
     if (name in REFERENCE_TESTS or name.startswith("tools/ghidra/")
             or name.startswith("archive/crates/reference/tests/")):
         return "reference"
-    if name.startswith("crates/core/tests/native/") or name in NATIVE_EVIDENCE_HELPERS:
+    if name.startswith(("crates/core/tests/native/", "crates/desktop/tests/native/", "crates/content/tests/native/")) or name in NATIVE_EVIDENCE_HELPERS:
         return "native"
     return "maintained"
 

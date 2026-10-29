@@ -1,7 +1,24 @@
 //! Map for combat.
 use super::TacticalMap;
+use super::map_alias::MapAliases;
 use crate::{RandomState, RuleError};
-use centurions_content::word;
+
+/// movemonster13e276 reads column × 90 + row with signed arithmetic and no clipping.
+pub(super) fn movement_tile(
+    map: &TacticalMap,
+    aliases: MapAliases<'_>,
+    position: (i16, i16),
+    offset: (i16, i16),
+) -> Result<i16, RuleError> {
+    let x = i32::from(position.0) + i32::from(map.shift.0) + 5 + i32::from(offset.0);
+    let y = i32::from(position.1) + i32::from(map.shift.1) + 5 + i32::from(offset.1);
+    aliases
+        .read(map, x * 90 + y)?
+        .ok_or(RuleError::Unsupported {
+            action: "combat.move",
+            dependency: "native map read outside the map and the represented memory beside it",
+        })
+}
 
 pub fn build_tactical_map(
     mission: &centurions_content::mission::OpeningMission,
@@ -9,12 +26,8 @@ pub fn build_tactical_map(
     edge_word: i16,
     random: &mut RandomState,
 ) -> Result<TacticalMap, RuleError> {
-    let properties = &mission.tile_properties;
     let property = |tile: i16, offset: usize| -> Result<i16, RuleError> {
-        if !(0..300).contains(&tile) {
-            return Err(RuleError::Invalid(format!("tactical property tile {tile}")));
-        }
-        Ok(word(properties, tile as usize * 40 + offset)?)
+        Ok(mission.tile_word(tile, offset)?)
     };
     centurions_content::mission::OpeningMission::index(position.0, position.1)?;
     let requested = (position.0 - 15, position.1 - 15);

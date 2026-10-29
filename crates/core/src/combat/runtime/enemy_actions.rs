@@ -1,7 +1,7 @@
 //! Enemy actions in the original combat execution order.
 use super::{
-    FireOutcome, alive, check_neighbors_with_items, collide_fields, enemy_fire, enemy_spell,
-    move_actor_with_reactions, position, select_enemy_target,
+    FireOutcome, alive, check_neighbors_with_items, collide_fields_with_work, enemy_fire,
+    enemy_spell, move_actor_with_reactions, position, select_enemy_target,
 };
 use crate::combat::Combat;
 use crate::{Event, RandomState, RuleError};
@@ -26,28 +26,84 @@ pub fn enemy_action(
 }
 
 pub struct EnemyWork {
-    pub item_context: Option<i16>,
+    pub item_context: i16,
     pub attack_count: i16,
-    pub packet: Option<Vec<u8>>,
-    pub identity: Option<[i16; 3]>,
+    pub packet: Vec<u8>,
+    pub identity: [i16; 3],
     pub spell_attempt: i8,
     pub spell_disabled: u8,
     pub buffers: crate::ammunition::WorkBuffers,
     // Legacy helper fixtures omit combatupdate2. Session execution includes its writers.
     pub display_writers: bool,
+    pub selected_warrior: usize,
+    /// WORD438786, the movement-spell marker (zero at launch).
+    pub movement_gate: i16,
+    pub neighbor_mask: Option<[i16; 6]>,
+    /// The party duration table at 442562 for an NPC global (mode7) cast.
+    pub party_buffs: Option<Vec<u8>>,
+    /// The animation-delay preference that lengthens a ray's step count.
+    pub animation_delay: i16,
+    /// The scenario-directory tail WORD44263e when it does not overlap the path text.
+    pub scenario_tail: Option<i16>,
+    /// The story flag BYTEs 44258c an indexed mode-7 duration can reach.
+    pub flags: Option<Vec<u8>>,
+    /// The current land's objects and events beside the map, for reads past its edges.
+    pub land: Option<crate::combat::map_alias::Land>,
+    /// Shop work 478288, written by an effect26/64 NPC alias.
+    pub shop_work: Option<crate::shop::ShopWork>,
+    /// The current map header 478e42, written by an effect26/64 NPC alias.
+    pub event_headers: Option<Vec<u8>>,
+    /// Warrior table records outside the squad; NPC bodies 10..13 index the backup.
+    pub warrior_table: Option<crate::state::WarriorTable>,
 }
 impl Default for EnemyWork {
     fn default() -> Self {
         Self {
-            item_context: None,
+            item_context: 0,
             attack_count: 0,
-            packet: Some(vec![0; 58]),
-            identity: Some([0; 3]),
+            packet: crate::combat::attack_packet_startup(),
+            identity: [0; 3],
             spell_attempt: 0,
             spell_disabled: 0,
             buffers: Default::default(),
             display_writers: false,
+            selected_warrior: 0,
+            movement_gate: 0,
+            neighbor_mask: None,
+            party_buffs: None,
+            animation_delay: 0,
+            scenario_tail: None,
+            flags: None,
+            land: None,
+            shop_work: None,
+            event_headers: None,
+            warrior_table: None,
         }
+    }
+}
+
+impl EnemyWork {
+    /// Copies of the owners an effect26/64 NPC alias reads during one spell attempt.
+    pub(crate) fn alias_snapshot(&self) -> crate::combat::warrior_alias::Snapshot {
+        crate::combat::warrior_alias::Snapshot::new(crate::combat::warrior_alias::Owners {
+            item_work: self.buffers.item.as_deref(),
+            shop_work: self.shop_work.as_ref(),
+            header: self.event_headers.as_deref(),
+            warriors: None,
+            table: self.warrior_table.as_ref(),
+        })
+    }
+
+    /// Moves the attempt's pending writes into this work's owner copies.
+    pub(crate) fn take_alias_writes(&mut self, c: &mut Combat) -> Result<(), RuleError> {
+        let writes = std::mem::take(&mut c.alias_writes);
+        crate::combat::warrior_alias::commit(
+            self.buffers.item.as_mut(),
+            self.shop_work.as_mut(),
+            self.warrior_table.as_mut(),
+            self.event_headers.as_mut(),
+            &writes,
+        )
     }
 }
 
@@ -81,8 +137,7 @@ pub fn enemy_action_with_work_and_buffs(
 
 pub(super) fn record_attack_context(work: &mut EnemyWork) -> Result<(), RuleError> {
     if let Some(item) = work.buffers.item.as_ref() {
-        work.item_context =
-            Some(centurions_content::records::ItemDefinition(item).retained_field32()?);
+        work.item_context = centurions_content::records::ItemDefinition(item).retained_field32()?;
     }
     Ok(())
 }
@@ -174,7 +229,7 @@ pub(super) fn enemy_action_with_context(
         let adjacent =
             if fleeing || skip_neighbors || c.enemies.records[e].record().turn_skip_duration() != 0
             {
-                vec![]
+                super::reaction_calls::ReactionResult::default()
             } else {
                 check_neighbors_with_items(
                     c,
@@ -187,13 +242,25 @@ pub(super) fn enemy_action_with_context(
                     buffs,
                     &mut work.buffers,
                     work.display_writers,
+                    work.neighbor_mask.as_mut().map(|mask| {
+                        crate::combat::neighbor_work::NativeNeighbors {
+                            selected_warrior: work.selected_warrior,
+                            party_mask: mask,
+                            aliases: crate::combat::map_alias::land_aliases(
+                                mission,
+                                work.land.as_ref(),
+                            ),
+                            table: work.warrior_table.as_ref(),
+                        }
+                    }),
                 )?
             };
         interrupted |= adjacent
+            .events
             .iter()
             .any(|event| matches!(event, Event::AttackResolved { .. }));
         record_attack_context(work)?;
-        events.extend(adjacent);
+        events.extend(adjacent.events);
         let mut movement_failed = false;
         for _ in 0..128 {
             if reactions_stopped {
@@ -201,6 +268,14 @@ pub(super) fn enemy_action_with_context(
             }
             if !alive(c, w, body) || !w.iter().any(|w| w.record().active_flag() != 0) {
                 break;
+            }
+            let moving = if work.neighbor_mask.is_some() {
+                c.victory_work.movement_admitted()
+            } else {
+                crate::combat::lifecycle::hostiles_remain(c)
+            };
+            if !moving {
+                return Ok(events);
             }
             let monster = &c.enemies.records[e];
             if monster.record().movement_points() <= 0
@@ -220,6 +295,17 @@ pub(super) fn enemy_action_with_context(
                 buffs,
                 &mut work.buffers,
                 work.display_writers,
+                work.neighbor_mask.as_mut().map(|mask| {
+                    crate::combat::neighbor_work::NativeNeighbors {
+                        selected_warrior: work.selected_warrior,
+                        party_mask: mask,
+                        aliases: crate::combat::map_alias::land_aliases(
+                            mission,
+                            work.land.as_ref(),
+                        ),
+                        table: work.warrior_table.as_ref(),
+                    }
+                }),
                 &mut events,
             )?;
             events.extend(
@@ -235,13 +321,20 @@ pub(super) fn enemy_action_with_context(
                     x: p.0,
                     y: p.1,
                 });
-                events.extend(collide_fields(
+                events.extend(collide_fields_with_work(
                     c,
                     w,
                     mission,
                     &mut work.attack_count,
                     random,
-                    body,
+                    (
+                        body,
+                        crate::combat::spells::retained_item_alias(&work.buffers)?,
+                        work.selected_warrior,
+                        &mut work.movement_gate,
+                    ),
+                    &mut [0; 6],
+                    Some((items, &mut work.buffers)),
                 )?);
             }
             let adjacent = check_neighbors_with_items(
@@ -255,12 +348,24 @@ pub(super) fn enemy_action_with_context(
                 buffs,
                 &mut work.buffers,
                 work.display_writers,
+                work.neighbor_mask.as_mut().map(|mask| {
+                    crate::combat::neighbor_work::NativeNeighbors {
+                        selected_warrior: work.selected_warrior,
+                        party_mask: mask,
+                        aliases: crate::combat::map_alias::land_aliases(
+                            mission,
+                            work.land.as_ref(),
+                        ),
+                        table: work.warrior_table.as_ref(),
+                    }
+                }),
             )?;
             interrupted |= adjacent
+                .events
                 .iter()
                 .any(|event| matches!(event, Event::AttackResolved { .. }));
             record_attack_context(work)?;
-            events.extend(adjacent);
+            events.extend(adjacent.events);
             if !moved.moved {
                 movement_failed = true;
                 break;

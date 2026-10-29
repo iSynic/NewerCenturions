@@ -181,12 +181,7 @@ pub fn calculate_movement(warrior: &mut Warrior, race_movement: i8) -> Result<()
         .wrapping_add(record.brawn()?.wrapping_mul(100))
         .wrapping_add(record.brawn_upgrades()?.wrapping_mul(10));
     let available = maximum.wrapping_sub(record.carried_weight()?) as u16;
-    if maximum == 0 {
-        return Err(RuleError::Unsupported {
-            action: "combat.movement",
-            dependency: "SANE division by zero",
-        });
-    }
+    // A wrapped zero capacity divides by zero: 65535/0 is infinite and 0/0 is NaN.
     let mut movement =
         ((available as f64 / (maximum as u16) as f64) as f32 as f64 * race_movement as f64) as f32;
     movement = (movement as f64 - record.condition(Condition::Entangled)? as f64) as f32;
@@ -198,13 +193,8 @@ pub fn calculate_movement(warrior: &mut Warrior, race_movement: i8) -> Result<()
     }
     movement = (movement as f64 + record.movement_bonus()? as f64) as f32;
     movement = ((movement as f64 + 0.5) as f32).max(5.0);
-    if !movement.is_finite() || movement as f64 > i32::MAX as f64 {
-        return Err(RuleError::Unsupported {
-            action: "combat.movement",
-            dependency: "SANE integer overflow",
-        });
-    }
-    let movement = (movement.trunc() as i32) as i16;
+    // The record keeps the low WORD of the LONG conversion.
+    let movement = crate::rules::sane_long(f64::from(movement.trunc())) as i16;
     warrior.record_mut().set_weight_capacity(maximum);
     warrior.record_mut().set_movement_per_round(movement);
     Ok(())

@@ -4,6 +4,16 @@ use crate::{
 };
 
 pub(super) fn check(command: &Command, state: &mut Session) -> Result<(), RuleError> {
+    if state.retained_walk_choice.is_some() {
+        return if matches!(command, Command::AnswerOccupiedChoice { .. }) {
+            Ok(())
+        } else {
+            Err(RuleError::Refused { feedback: vec![] })
+        };
+    }
+    if matches!(command, Command::AnswerOccupiedChoice { .. }) {
+        return Err(RuleError::Refused { feedback: vec![] });
+    }
     if state
         .combat
         .as_ref()
@@ -28,6 +38,7 @@ pub(super) fn check(command: &Command, state: &mut Session) -> Result<(), RuleEr
             Command::ClinicControl { .. }
                 | Command::ViewWarrior { .. }
                 | Command::UpgradeWarrior { .. }
+                | Command::EnterWarriorUpgrade { .. }
                 | Command::EditWarriorUpgrade { .. }
         )
     {
@@ -37,6 +48,7 @@ pub(super) fn check(command: &Command, state: &mut Session) -> Result<(), RuleEr
         command,
         Command::SetWarriorAppearance { .. }
             | Command::UpgradeWarrior { .. }
+            | Command::EnterWarriorUpgrade { .. }
             | Command::EditWarriorUpgrade { .. }
             | Command::EditCarriedItem { .. }
             | Command::EditWarriorLevel { .. }
@@ -180,6 +192,16 @@ pub(super) fn check(command: &Command, state: &mut Session) -> Result<(), RuleEr
                 | Command::EncounterActionControl { .. }
                 | Command::UseItem { .. }
                 | Command::InspectInventory { .. }
+                | Command::OpenInventory { .. }
+                | Command::SwitchInventoryOwner { .. }
+                | Command::ScrollInventory { .. }
+                | Command::HighlightInventoryRow { .. }
+                | Command::ShowItemInformation { .. }
+                | Command::RetargetItemInformation { .. }
+                | Command::ListItemUsers { .. }
+                | Command::ShowLootItemInformation { .. }
+                | Command::ShowDraggedItemInformation { .. }
+                | Command::ChooseAmmunition { .. }
                 | Command::CancelMenu
                 | Command::DropItem { .. }
                 | Command::TakeLoot { .. }

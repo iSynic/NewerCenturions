@@ -65,7 +65,9 @@ pub(crate) fn begin(
         return Err("actor replacement requires an unsuspended combat script".into());
     }
     state.actor_replacement = Some(Replacement::Before(id));
-    let introduction = extra(state, content, id)?.introduction()?;
+    let record = extra(state, content, id)?;
+    state.native_work.extra_record = record.0.to_vec();
+    let introduction = record.introduction()?;
     if introduction != 0 {
         return Ok((page(state, content, introduction)?, Progress::Waiting));
     }

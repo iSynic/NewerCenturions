@@ -1,7 +1,5 @@
 use crate::{prelude::*, support};
 
-use centurions_core::combat::*;
-
 fn session(content: &Content) -> Session {
     let mut state = support::mission_session(content);
     state.random = centurions_core::RandomState::new(12);
@@ -30,7 +28,7 @@ fn leader_death_stories_match_original_complete_enemy_map_and_order_records() {
         let positions = support::positions(case.text("positions"));
         let mut health = centurions_core::story_health::context(&state.warriors, 0, None);
         health.last_body = 10; // VerifyOpeningStories sets native DAT408574 to body10.
-        state.native_work.health_context = Some(health);
+        state.native_work.health_context = health;
         let mut combat = support::battle();
         combat.battle = 1;
         combat.map.tiles = words(case.text("map_before"));
@@ -39,6 +37,7 @@ fn leader_death_stories_match_original_complete_enemy_map_and_order_records() {
         combat.enemies.positions = positions;
         combat.order = words(case.text("order_before"));
         state.combat = Some(combat);
+        crate::native_common::source_victory_context(&mut state);
         state.combat_story = Some(runtime::DeathStory {
             body: 0,
             script: case.n::<i16>("script"),

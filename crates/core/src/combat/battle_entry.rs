@@ -1,8 +1,7 @@
 //! Battle entry for combat.
 use crate::combat::{
-    Combat, EncounterBattle, allies, build_tactical_map, direction_offset, empty_field_used,
-    empty_spell_fields, entry_party, place_enemies_with_allies, place_squad, round_stories,
-    runtime,
+    Combat, EncounterBattle, allies, build_tactical_map, direction_offset, entry_party,
+    place_enemies_with_allies, place_squad, round_stories, runtime,
 };
 use crate::{Event, Phase, RandomState, RuleError, Session};
 use centurions_content::combat::{BattleRecord, MonsterRecord};
@@ -49,6 +48,7 @@ pub fn begin(
         usize::from(encounter_id.unsigned_abs()) * 10,
         10,
     )?;
+    state.native_work.extra_record = encounter.to_vec();
     let plan = encounter_battle(encounter, &mut state.random)?;
     let mut effects = vec![];
     let sound = plan.sound;
@@ -62,8 +62,15 @@ pub fn begin(
             text: mission.dialogue(message)?,
         });
     }
-    effects.extend(begin_battle(state, content, plan.battle, 0)?);
-    state.battle_treasure = plan.treasure;
+    effects.extend(begin_battle_with_group(
+        state,
+        content,
+        plan.battle,
+        0,
+        false,
+        None,
+        Some(plan.treasure),
+    )?);
     Ok(effects)
 }
 
@@ -73,7 +80,7 @@ pub fn begin_battle(
     id: i16,
     advantage: i16,
 ) -> Result<Vec<Event>, RuleError> {
-    begin_battle_with_group(state, content, id, advantage, false)
+    begin_battle_with_group(state, content, id, advantage, false, None, None)
 }
 
 pub fn begin_group(
@@ -98,6 +105,30 @@ pub(super) fn begin_group_inner(
     parameter: i16,
     treasure: bool,
 ) -> Result<Vec<Event>, RuleError> {
+    begin_group_return(state, content, parameter, treasure, false)
+}
+
+pub(crate) fn begin_selected_child(
+    state: &mut Session,
+    content: &Content,
+    parameter: i16,
+) -> Result<Vec<Event>, RuleError> {
+    begin_group_return(state, content, parameter, true, true)
+}
+
+fn begin_group_return(
+    state: &mut Session,
+    content: &Content,
+    parameter: i16,
+    treasure: bool,
+    child_return: bool,
+) -> Result<Vec<Event>, RuleError> {
+    if treasure && state.combat.is_some() && !child_return {
+        return Err(RuleError::Unsupported {
+            action: "story.selected_battle",
+            dependency: "child battle without a suspended selected caller",
+        });
+    }
     let map = content
         .map(
             state
@@ -112,13 +143,16 @@ pub(super) fn begin_group_inner(
         parameter.unsigned_abs() as usize * 10,
         10,
     )?;
+    state.native_work.extra_record = extra.to_vec();
     let plan = crate::story_party::group_encounter(extra, &mut state.random)?;
-    if treasure && plan.failure_script != 0 {
-        return Err(RuleError::Unsupported {
-            action: "story.selected_battle",
-            dependency: "additional post-battle treasure continuation",
-        });
-    }
+    let additional = if treasure {
+        Some(runtime::SelectedBattleTreasure::new(
+            state,
+            plan.failure_script,
+        )?)
+    } else {
+        None
+    };
     let mut events = vec![];
     if plan.sound != 0 {
         events.push(Event::Sound {
@@ -137,8 +171,10 @@ pub(super) fn begin_group_inner(
         plan.battle,
         0,
         true,
+        additional,
+        None,
     )?);
-    state.battle_group_script = Some(plan.failure_script);
+    state.battle_group_script = Some(if treasure { 0 } else { plan.failure_script });
     Ok(events)
 }
 
@@ -163,6 +199,7 @@ pub fn begin_npc(
         parameter.unsigned_abs() as usize * 10,
         10,
     )?;
+    state.native_work.extra_record = extra.to_vec();
     let mut start = crate::story_npc_battle::NpcBattleStart::capture(
         extra,
         &script.record,
@@ -192,8 +229,18 @@ pub(super) fn begin_battle_with_group(
     id: i16,
     advantage: i16,
     group: bool,
+    additional: Option<runtime::SelectedBattleTreasure>,
+    ordinary: Option<i16>,
 ) -> Result<Vec<Event>, RuleError> {
+    if state.selected_battle_treasure.is_some() {
+        return Err(RuleError::Unsupported {
+            action: "story.selected_battle",
+            dependency: "child battle without a suspended selected caller",
+        });
+    }
     state.retain_npcs();
+    // combatsetup11d452 resets the selected WORD before the first Getup.
+    state.selected_warrior = 0;
     let mission = state
         .land(content)
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
@@ -206,8 +253,17 @@ pub(super) fn begin_battle_with_group(
         .exploration
         .as_ref()
         .ok_or_else(|| RuleError::Invalid("exploration missing".into()))?;
+    let mut land = exploration.map_state();
+    if let Some(combat) = &state.combat {
+        land.floor.clone_from(&combat.map.tiles);
+    }
+    let saved_land = super::tactical_work::BattleLand {
+        level: state.scenario_level,
+        map: exploration.map,
+        records: land,
+    };
     let mut active_mission = mission.clone();
-    active_mission.floor.clone_from(&exploration.floor);
+    active_mission.floor.clone_from(&saved_land.records.floor);
     active_mission.events.clone_from(&exploration.events);
     let mut effects = vec![];
     if battle.before_message != 0 {
@@ -271,17 +327,15 @@ pub(super) fn begin_battle_with_group(
         .map(|monster| monster.speed())
         .collect::<Result<Vec<_>, _>>()?;
     let advantage = if id < 0 { -1 } else { advantage };
-    let unavailable = state.combat.as_ref().map_or_else(
-        || {
-            crate::story_health::context(
-                &state.warriors,
-                state.selected_warrior,
-                state.native_work.health_context.as_ref(),
-            )
-            .unavailable
-        },
-        |combat| combat.unavailable,
-    );
+    let unavailable = if let Some(combat) = state.combat.as_ref() {
+        combat.unavailable
+    } else {
+        crate::story_health::retained_context(
+            state.selected_warrior,
+            &state.native_work.health_context,
+        )
+        .unavailable
+    };
     let party_order = entry_party::initiative(
         &state.warriors,
         &enemy_speeds,
@@ -317,9 +371,15 @@ pub(super) fn begin_battle_with_group(
                 .unwrap_or_default()
         });
     death_queue.reset_for_battle();
+    state.native_work.death_processing.queue = 0;
+    state.native_work.battle_rewards_suppressed = 0;
+    // combatsetup reads the battle record over the bestiary loop's tail at43979c.
+    state.native_work.bestiary.battle_record_cold = false;
+    state.native_work.early_booty = 0;
     state.handled_deaths.clear();
     state.combat_story = None;
-    state.battle_treasure = 0;
+    state.battle_treasure = ordinary.unwrap_or(0);
+    state.ordinary_battle_rewards = ordinary.map(|_| runtime::OrdinaryBattleRewards::default());
     state.battle_after_message = battle.after_message;
     state.battle_group_script = None;
     state.battle_npc = None;
@@ -339,57 +399,61 @@ pub(super) fn begin_battle_with_group(
         ),
         |combat| (combat.selected_enemy, combat.script_enemy),
     );
-    state.combat = Some(Combat {
-        difficulty: state.difficulty,
-        battle: id,
-        map,
-        squad,
-        enemies,
-        retained_npcs: state.native_work.npc_backing.clone(),
-        direct_deaths: false,
-        direct_death: None,
-        order,
-        cursor,
-        round: 0,
-        inactive_rounds: 0,
-        selection_pending: false,
-        script_enemy,
-        selected_enemy,
-        round_scripts: round_stories::RoundScripts::read(
-            &mission.combat.as_ref().unwrap().battles,
-            id,
-        )?,
-        death_queue,
-        spell_fields: empty_spell_fields(),
-        field_used: empty_field_used(),
-        attack_packet,
-        attack_identity,
-        weapon_work: state.native_work.weapon_work,
-        unavailable,
-        pending_last_defeated: None,
-        firearm_selection: None,
-        capture_actor: None,
-        automatic: [false; 6],
-        turn_origin: None,
-    });
-    if let Some(packet) = state.combat.as_mut().unwrap().attack_packet.as_mut() {
-        packet[19] = 0;
-    }
+    let ready = state
+        .combat
+        .as_ref()
+        .map_or(state.native_work.ready, |combat| combat.ready);
+    // combatsetup counts each newly created nonzero-faction NPC; getbattleorder
+    // then clears the defeated WORD. This is an entry writer, not a live recount.
+    let total = enemies.records.iter().try_fold(0_i16, |total, enemy| {
+        Ok::<_, RuleError>(total.wrapping_add(i16::from(enemy.record().faction()? != 0)))
+    })?;
+    let mut combat = Combat::from_records(map, squad, enemies);
+    combat.victory_work = super::victory_work::VictoryWork { total, defeated: 0 };
+    combat.neighbor_work = state.native_work.neighbor_work.clone();
+    combat.ready = ready;
+    combat.difficulty = state.difficulty;
+    combat.battle = id;
+    combat.retained_npcs = state.native_work.npc_backing.clone();
+    combat.order = order;
+    combat.cursor = cursor;
+    combat.script_enemy = script_enemy;
+    combat.selected_enemy = selected_enemy;
+    combat.round_scripts =
+        round_stories::RoundScripts::read(&mission.combat.as_ref().unwrap().battles, id)?;
+    combat.death_queue = death_queue;
+    combat.attack_packet = attack_packet;
+    combat.attack_identity = attack_identity;
+    combat.weapon_work = state.native_work.weapon_work;
+    combat.unavailable = unavailable;
+    // combatsetup leaves the target mask; live combat carries its tail.
+    combat
+        .target_tail
+        .clone_from(&state.native_work.spell_target_tail);
+    combat.target_work = state.native_work.target_work;
+    let work = &state.native_work.tactical_work;
+    combat.spell_fields.clone_from(&work.spell_fields);
+    combat.field_used.clone_from(&work.field_used);
+    let mut work = super::tactical_work::TacticalWork::capture(&combat, work);
+    work.saved_land = Some(saved_land);
+    state.native_work.tactical_work = work;
+    state.combat = Some(combat);
+    state.combat.as_mut().unwrap().attack_packet[19] = 0;
     state.phase = Phase::Combat;
-    state.bandage_ready = Some(1);
-    state.native_work.party_mask.fill(0);
+    state.selected_battle_treasure = additional;
+    state.bandage_ready = 1;
+    // getup 125a92 clears WORD44719a.
+    state.native_work.fire_item = 0;
+    // getup 125a50 calls cleartarget.
+    state.clear_targets();
     effects.push(Event::CombatStarted {
         battle: id,
         enemies: count,
     });
-    let (turn, skipped) = runtime::initialize_active_turn(
-        state.combat.as_mut().unwrap(),
-        &mut state.warriors,
-        mission,
-        &mut state.random,
-    )?;
+    let (turn, initialized) =
+        runtime::initialize_session_turn(state, content, runtime::TurnCaller::Initial)?;
     effects.extend(turn);
-    if skipped {
+    if matches!(initialized, runtime::TurnInitialization::Ready(true)) {
         effects.extend(runtime::end_turn(state, content)?);
     }
     Ok(effects)

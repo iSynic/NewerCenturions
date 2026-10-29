@@ -1,10 +1,9 @@
 //! Masks for combat/spells.
 use super::{Combat, RandomState, RuleError, SpellContext, SpellMask, SpellTarget, position};
+use crate::combat::map_alias::MapAliases;
 use centurions_content::Warrior;
 use centurions_content::combat::MonsterRecord;
-use centurions_content::records::{
-    AttackPacket, AttackPacketMut, Condition, SpellField, SpellFieldMut,
-};
+use centurions_content::records::{AttackPacket, Condition, SpellField, SpellFieldMut};
 
 pub struct GlobalSpellTargets {
     pub caster: MonsterRecord,
@@ -32,30 +31,45 @@ pub fn global_targets(
     let side = caster.record().faction()?;
     let mut result = GlobalSpellTargets {
         caster: caster.clone(),
-        mask: [0; 110],
+        mask: global_target_mask(
+            warriors,
+            &combat.enemies.records,
+            side,
+            AttackPacket(packet).targeting_mode(),
+        )?,
     };
-    for (member, warrior) in warriors.iter().enumerate() {
-        if warrior.record().active_flag() != 0
-            && (AttackPacket(packet).targeting_mode() == 12
-                || (warrior.record().faction()? == side)
-                    == (AttackPacket(packet).targeting_mode() == 9))
-        {
-            result.mask[member] = 1;
-        }
-    }
-    for (index, enemy) in combat.enemies.records.iter().enumerate() {
-        if enemy.record().stamina()? > 0
-            && (AttackPacket(packet).targeting_mode() == 12
-                || (enemy.record().faction()? == side)
-                    == (AttackPacket(packet).targeting_mode() == 9))
-        {
-            result.mask[index + 10] = 1;
-        }
-    }
     if AttackPacket(packet).targeting_mode() != 12 {
         result.caster.record_mut().set_reaction_ready(false);
     }
     Ok(result)
+}
+
+/// The active NPC prefix and the selected caster's fixed slot are independent.
+pub(crate) fn global_target_mask(
+    warriors: &[Warrior],
+    enemies: &[MonsterRecord],
+    side: i16,
+    mode: u8,
+) -> Result<[i16; 110], RuleError> {
+    if !matches!(mode, 9 | 10 | 12) || warriors.len() > 6 || enemies.len() > 100 {
+        return Err(RuleError::Invalid("global spell targets".into()));
+    }
+    let mut mask = [0; 110];
+    for (member, warrior) in warriors.iter().enumerate() {
+        if warrior.record().active_flag() != 0
+            && (mode == 12 || (warrior.record().faction()? == side) == (mode == 9))
+        {
+            mask[member] = 1;
+        }
+    }
+    for (index, enemy) in enemies.iter().enumerate() {
+        if enemy.record().stamina()? > 0
+            && (mode == 12 || (enemy.record().faction()? == side) == (mode == 9))
+        {
+            mask[index + 10] = 1;
+        }
+    }
+    Ok(mask)
 }
 
 pub fn target_mask(
@@ -98,7 +112,7 @@ pub fn target_mask_rotated(
         context,
         fields,
         random,
-        rotation,
+        (rotation, MapAliases::default()),
     )
 }
 
@@ -111,39 +125,14 @@ pub(crate) fn target_mask_rotated_with_origin(
     context: &SpellContext<'_>,
     fields: &[u8],
     random: &mut RandomState,
-    rotation: u8,
+    (rotation, aliases): (u8, MapAliases<'_>),
 ) -> Result<SpellMask, RuleError> {
     if rotation > 3 {
         return Err(RuleError::Invalid("spell rotation".into()));
     }
-    let mut packet = context.packet.to_vec();
-    if packet.len() != 58 {
-        return Err(RuleError::Invalid("spell packet size".into()));
-    }
-    let rotated = AttackPacket(&packet).has_randomized_animation();
-    if rotated {
-        AttackPacketMut(&mut packet)
-            .rotate_area(rotation)
-            .ok_or("spell pattern overflow")?;
-    }
-    let adjusted = SpellContext {
-        packet: &packet,
-        ..*context
-    };
-    let mut result =
-        target_mask_with_origin(combat, warriors, areas, targets, &adjusted, fields, random)?;
-    if rotated
-        && AttackPacket(&packet).field_kind() != 0
-        && !context.collision
-        && let Some(slot) = fields
-            .as_chunks::<20>()
-            .0
-            .iter()
-            .position(|f| SpellField(f).duration() == 0)
-    {
-        SpellFieldMut(&mut result.fields[slot * 20..slot * 20 + 20]).set_rotation(rotation);
-    }
-    Ok(result)
+    target_mask_inner(
+        combat, warriors, areas, targets, context, fields, random, aliases, rotation,
+    )
 }
 
 pub fn target_mask_with_origin(
@@ -154,6 +143,47 @@ pub fn target_mask_with_origin(
     context: &SpellContext<'_>,
     fields: &[u8],
     random: &mut RandomState,
+) -> Result<SpellMask, RuleError> {
+    target_mask_inner(
+        combat,
+        warriors,
+        areas,
+        targets,
+        context,
+        fields,
+        random,
+        MapAliases::default(),
+        0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn target_mask_with_map_aliases(
+    combat: &Combat,
+    warriors: &[Warrior],
+    areas: &[u8],
+    targets: (&SpellTarget, &SpellTarget),
+    context: &SpellContext<'_>,
+    fields: &[u8],
+    random: &mut RandomState,
+    aliases: MapAliases<'_>,
+) -> Result<SpellMask, RuleError> {
+    target_mask_inner(
+        combat, warriors, areas, targets, context, fields, random, aliases, 0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn target_mask_inner(
+    combat: &Combat,
+    warriors: &[Warrior],
+    areas: &[u8],
+    targets: (&SpellTarget, &SpellTarget),
+    context: &SpellContext<'_>,
+    fields: &[u8],
+    random: &mut RandomState,
+    aliases: MapAliases<'_>,
+    rotation: u8,
 ) -> Result<SpellMask, RuleError> {
     let (target, origin) = targets;
     let p = context.packet;
@@ -166,51 +196,32 @@ pub fn target_mask_with_origin(
             dependency: "rotated shapes or summon targeting",
         });
     }
-    let shape = match AttackPacket(p).targeting_mode() {
-        3 => usize::from(AttackPacket(p).area_shape()),
-        4 => context.count as usize,
-        _ => 1,
-    };
-    if shape == 0 {
-        return Err(RuleError::Unsupported {
-            action: "combat.spell.mask",
-            dependency: "zero-area spell pattern",
-        });
+    if rotation > 3 {
+        return Err(RuleError::Invalid("spell rotation".into()));
     }
-    let pattern = centurions_content::span(areas, (shape - 1) * 49, 49)?;
+    let shape = shape(p, context.count, rotation)?;
+    // Compatibility policy shared with spell selection: the original WORD
+    // underflow reads outside Mac RAM, which reads as an empty pattern. See
+    // evidence/hive-memory-verification.md.
+    let empty = [0; 49];
+    let pattern = if shape == 0 {
+        &empty[..]
+    } else {
+        centurions_content::span(areas, (shape - 1) * 49, 49)?
+    };
     let mut next_random = random.clone();
     let mut result = SpellMask {
         mask: [0; 110],
         fields: fields.to_vec(),
     };
-    if AttackPacket(p).field_kind() != 0
-        && !context.collision
-        && let Some(slot) = fields
-            .as_chunks::<20>()
-            .0
-            .iter()
-            .position(|f| SpellField(f).duration() == 0)
-    {
-        let mut field = SpellFieldMut(&mut result.fields[slot * 20..slot * 20 + 20]);
-        field.set_initiative(context.initiative);
-        field.set_power(context.count);
-        field.set_level(context.id % 1000 / 100 - 1);
-        field.set_rotation(0);
-        field.set_shape(shape);
-        field.set_center((origin.first, origin.second));
-        field.set_spell(context.id);
-        let mut duration = next_random.range(
-            AttackPacket(p).duration_bounds().0,
-            AttackPacket(p).duration_bounds().1,
-        ) as u8;
-        for _ in 0..context.count {
-            duration = duration.wrapping_add(next_random.range(
-                AttackPacket(p).additional_duration_bounds().0,
-                AttackPacket(p).additional_duration_bounds().1,
-            ) as u8);
-        }
-        field.set_duration(duration);
-        field.set_kind(AttackPacket(p).field_kind());
+    if !context.collision {
+        create_field(
+            &mut result.fields,
+            context,
+            (shape, rotation),
+            origin,
+            &mut next_random,
+        )?;
     }
     let center = if AttackPacket(p).targeting_mode() >= 2 && target.kind == 3 {
         (target.first, target.second)
@@ -229,15 +240,18 @@ pub fn target_mask_with_origin(
             if pattern[y * 7 + x] == 0 {
                 continue;
             }
-            let ax = center.0 - 3 + x as i16;
-            let ay = center.1 - 3 + y as i16;
-            if !(0..90).contains(&ax) || !(0..90).contains(&ay) {
-                return Err(RuleError::Unsupported {
+            let ax = center.0.wrapping_sub(3).wrapping_add(x as i16);
+            let ay = center.1.wrapping_sub(3).wrapping_add(y as i16);
+            // spelltargets uses MULU.W for x and a signed row, without clipping
+            // either coordinate. Negative rows can still address the map owner.
+            let index = i32::from(ax as u16) * 90 + i32::from(ay);
+            let body = aliases
+                .read(&combat.map, index)?
+                .ok_or(RuleError::Unsupported {
                     action: "combat.spell.mask",
-                    dependency: "spell area outside tactical map",
-                });
-            }
-            let body = combat.map.tiles[ax as usize * 90 + ay as usize].wrapping_abs();
+                    dependency: "spell area outside the map and the represented memory beside it",
+                })?
+                .wrapping_abs();
             if !(0..110).contains(&body) {
                 continue;
             }
@@ -287,4 +301,87 @@ pub fn target_mask_with_origin(
     }
     *random = next_random;
     Ok(result)
+}
+
+/// spelltargets15cb0e's shape WORD: the area byte for mode 3, the count for mode 4 and 1
+/// otherwise, plus the rotation for a byte-7 packet.
+fn shape(packet: &[u8], count: i16, rotation: u8) -> Result<usize, RuleError> {
+    let mut shape = match AttackPacket(packet).targeting_mode() {
+        3 => usize::from(AttackPacket(packet).area_shape()),
+        4 => count as usize,
+        _ => 1,
+    };
+    if AttackPacket(packet).has_randomized_animation() {
+        shape += usize::from(rotation);
+    }
+    Ok(shape)
+}
+
+/// spelltargets15cb3a..15cc8e: the first expired record becomes a field at the target-0
+/// centre with the drawn duration; the rotation byte is stored only for a byte-7 packet.
+fn create_field(
+    fields: &mut [u8],
+    context: &SpellContext<'_>,
+    (shape, rotation): (usize, u8),
+    origin: &SpellTarget,
+    random: &mut RandomState,
+) -> Result<(), RuleError> {
+    let p = context.packet;
+    let Some(slot) = fields
+        .as_chunks::<20>()
+        .0
+        .iter()
+        .position(|f| SpellField(f).duration() == 0)
+    else {
+        return Ok(());
+    };
+    if AttackPacket(p).field_kind() == 0 {
+        return Ok(());
+    }
+    let mut field = SpellFieldMut(&mut fields[slot * 20..slot * 20 + 20]);
+    field.set_initiative(context.initiative);
+    field.set_power(context.count);
+    field.set_level(context.id % 1000 / 100 - 1);
+    field.set_rotation(if AttackPacket(p).has_randomized_animation() {
+        rotation
+    } else {
+        0
+    });
+    field.set_shape(shape);
+    field.set_center((origin.first, origin.second));
+    field.set_spell(context.id);
+    let mut duration = random.range(
+        AttackPacket(p).duration_bounds().0,
+        AttackPacket(p).duration_bounds().1,
+    ) as u8;
+    for _ in 0..context.count {
+        duration = duration.wrapping_add(random.range(
+            AttackPacket(p).additional_duration_bounds().0,
+            AttackPacket(p).additional_duration_bounds().1,
+        ) as u8);
+    }
+    field.set_duration(duration);
+    field.set_kind(AttackPacket(p).field_kind());
+    Ok(())
+}
+
+/// Effect58's spelltargets pass: the shape adds 0x2007, so a field stores that WORD's low
+/// BYTE, and the pattern read past the supplied table is empty (the summon arm ignores it).
+pub(crate) fn summon_field(
+    fields: &[u8],
+    context: &SpellContext<'_>,
+    origin: &SpellTarget,
+    random: &mut RandomState,
+    rotation: u8,
+) -> Result<Vec<u8>, RuleError> {
+    if rotation > 3 || fields.len() != 1200 {
+        return Err(RuleError::Invalid("summon field inputs".into()));
+    }
+    let mut shape = usize::from(AttackPacket(context.packet).area_shape()) + 0x2007;
+    if AttackPacket(context.packet).has_randomized_animation() {
+        shape += usize::from(rotation);
+    }
+    let mut fields = fields.to_vec();
+    create_field(&mut fields, context, (shape, rotation), origin, random)?;
+    Ok(fields)
 }

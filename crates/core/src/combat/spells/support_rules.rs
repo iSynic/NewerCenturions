@@ -1,6 +1,6 @@
 //! Support rules for combat/spells.
 use super::{
-    AttackResult, BodySpellResult, DamageFlags, DamagePacket, DirectSpell, RandomState,
+    AttackResult, BodySpellResult, DamageFlags, DamagePacket, DirectSpell, FieldUsage, RandomState,
     RestrictionMemoryView, RuleError, monster_race_is_excluded, race_is_excluded,
     resolve_damage_with_amount,
 };
@@ -8,30 +8,167 @@ use centurions_content::combat::MonsterRecord;
 use centurions_content::{
     Warrior,
     records::{
-        AttackPacket, Condition, EnemyRecord, EnemyRecordMut, WarriorRecord, WarriorRecordMut,
+        AttackPacket, Condition, EnemyRecord, EnemyRecordMut, SavingThrow, WarriorRecord,
+        WarriorRecordMut,
     },
 };
 
-/// resist150588..150742 for nonphysical status categories7,8,10.
+/// resist150432..150580 runs the mental save before the general save-mode gate.
+fn mental_resisted(
+    target: &[u8],
+    monster: bool,
+    packet: &[u8],
+    count: i16,
+    memory: Option<RestrictionMemoryView<'_>>,
+    random: &mut RandomState,
+) -> Result<bool, RuleError> {
+    let category = AttackPacket(packet).defense_category();
+    // resist150420: a negative animation byte other than -9 skips the category test.
+    let animation = AttackPacket(packet).effect_animation();
+    if category != 0 && (animation >= 0 || animation == -9) {
+        return Ok(false);
+    }
+    let threshold = if category != 0 {
+        let level = if monster {
+            EnemyRecord::from_bytes(target).level()?
+        } else {
+            WarriorRecord::from_bytes(target).level()?
+        };
+        let caster = memory
+            .and_then(RestrictionMemoryView::resist_caster_level)
+            .ok_or(RuleError::Unsupported {
+                action: "combat.spell",
+                dependency: "negative effect animation reads a caster level outside the represented records",
+            })?;
+        level
+            .wrapping_mul(5)
+            .wrapping_add(35)
+            .wrapping_sub(caster.wrapping_mul(5))
+    } else if monster {
+        let record = EnemyRecord::from_bytes(target);
+        record.level()?.wrapping_mul(4).wrapping_add(
+            if record.has_creature_category(EnemyRecord::MECHANICAL_CATEGORY) {
+                1035
+            } else {
+                35
+            },
+        )
+    } else {
+        let record = WarriorRecord::from_bytes(target);
+        record
+            .saving_throw(SavingThrow::Mental)?
+            .wrapping_add(if record.race()? == 3 { 1000 } else { 0 })
+    };
+    Ok(random.bound(100)
+        <= threshold.wrapping_add(
+            AttackPacket(packet)
+                .save_bonus_per_attack()
+                .wrapping_mul(count),
+        ))
+}
+
+/// resist1501a0..15040e: category 9 replaces every save with the missile hit test.
+fn physical_resisted(
+    target: &[u8],
+    monster: bool,
+    memory: Option<RestrictionMemoryView<'_>>,
+    random: &mut RandomState,
+) -> Result<bool, RuleError> {
+    let (mut hit, difficulty) = memory
+        .and_then(RestrictionMemoryView::physical_accuracy)
+        .ok_or(RuleError::Unsupported {
+            action: "combat.spell",
+            dependency: "category-9 resist reads the accuracy of an inactive warrior or unloaded NPC",
+        })?;
+    if monster {
+        let record = EnemyRecord::from_bytes(target);
+        if record.turn_skip_duration() != 0 {
+            return Ok(false);
+        }
+        let level = record.level()?;
+        hit = hit
+            .wrapping_sub(record.missile_dodge_bonus()?)
+            .wrapping_sub(random.bound(record.speed()? / 3))
+            .wrapping_sub(level.wrapping_mul(3))
+            .wrapping_sub(i16::from(record.guarding()).wrapping_mul(level))
+            .wrapping_add(match record.size()?.wrapping_abs() {
+                0 => -5,
+                1 | 2 => 5,
+                3 => 10,
+                _ => 0,
+            });
+    } else {
+        let record = WarriorRecord::from_bytes(target);
+        if record.turn_skip_duration()? != 0 {
+            return Ok(false);
+        }
+        hit = hit
+            .wrapping_sub(record.missile_dodge()?)
+            .wrapping_sub(5)
+            .wrapping_sub(random.bound(record.quickness()? / 3))
+            .wrapping_sub(record.guarding()?.wrapping_mul(record.level()?));
+    }
+    let hit = crate::rules::pin(
+        hit,
+        15_i16.wrapping_sub(difficulty.wrapping_mul(5)),
+        90_i16.wrapping_sub(difficulty.wrapping_mul(5)),
+    );
+    Ok(random.bound(100) > hit)
+}
+
+/// resist's ordered saves for condition and healing packets.
 pub(super) fn status_resisted(
     target: &[u8],
     monster: bool,
     context: &DirectSpell<'_>,
+    memory: Option<RestrictionMemoryView<'_>>,
     random: &mut RandomState,
 ) -> Result<bool, RuleError> {
-    if context.armor_filter || !matches!(AttackPacket(context.packet).saving_throw_mode(), 0 | 2) {
+    status_resisted_with_feedback(target, monster, context, memory, random, &mut false)
+}
+
+pub(super) fn status_resisted_with_feedback(
+    target: &[u8],
+    monster: bool,
+    context: &DirectSpell<'_>,
+    memory: Option<RestrictionMemoryView<'_>>,
+    random: &mut RandomState,
+    mental_feedback: &mut bool,
+) -> Result<bool, RuleError> {
+    *mental_feedback = false;
+    if context.armor_filter {
         return Ok(false);
     }
-    if AttackPacket(context.packet).defense_category() <= 6
+    if AttackPacket(context.packet).defense_category() == 9 {
+        return physical_resisted(target, monster, memory, random);
+    }
+    if mental_resisted(
+        target,
+        monster,
+        context.packet,
+        context.count,
+        memory,
+        random,
+    )? {
+        *mental_feedback = true;
+        return Ok(true);
+    }
+    // resist150588 compares the category as a signed BYTE; a negative one indexes
+    // the NPC save bytes backwards, still inside the record.
+    let category = AttackPacket(context.packet).defense_category() as i8;
+    if category <= 6
         && monster
-        && (EnemyRecord::from_bytes(target)
-            .saving_throw(usize::from(AttackPacket(context.packet).defense_category()))
-            > 100
+        && (target[(0x8b + isize::from(category)) as usize] as i8 > 100
             || EnemyRecord::from_bytes(target).magic_immunity()? > 100)
     {
         return Ok(true);
     }
-    if AttackPacket(context.packet).defense_category() == 5
+    // The mode is signed too: only 1 and 3..127 skip the save, except category -9.
+    let mode = AttackPacket(context.packet).saving_throw_mode() as i8;
+    if (mode == 1 || mode > 2) && category != -9 {
+        return Ok(false);
+    }
+    if matches!(AttackPacket(context.packet).defense_category(), 0 | 5)
         && if monster {
             EnemyRecord::from_bytes(target).condition(Condition::ComputerControl) != 0
         } else {
@@ -40,16 +177,19 @@ pub(super) fn status_resisted(
     {
         return Ok(true);
     }
-    let immune = (context.level..7).any(|level| {
-        if monster {
-            EnemyRecord::from_bytes(target).level_protection(level as usize) != 0
+    let mut immune = false;
+    for level in context.level..7 {
+        let protected = if monster {
+            EnemyRecord::from_bytes(target)
+                .signed_level_protection(level)
+                .map(i16::from)
         } else {
-            WarriorRecord::from_bytes(target)
-                .level_protection(level as usize)
-                .unwrap_or(1)
-                != 0
+            WarriorRecord::from_bytes(target).signed_level_protection(level)
         }
-    });
+        // resolve_support_inner admits levels 0..6, so 0x7e + 2 * level stays inside.
+        .map_err(|_| RuleError::Invalid("signed level protection level".into()))?;
+        immune |= protected != 0;
+    }
     let resistance = if monster {
         EnemyRecord::from_bytes(target).magic_immunity()?
     } else {
@@ -71,6 +211,7 @@ pub(super) fn status_resisted(
 /// resolvespell151022 and spelllist15bd50 retain the original Psi-drain ordering.
 /// Party targets clear the amount before Siphon's transfer; NPC targets transfer
 /// the negative half before clearing it. Neither branch applies stamina damage.
+/// `caster` is the current initiative body; a collision passes its usage bytes.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_psi_drain(
     warriors: &[Warrior],
@@ -78,7 +219,7 @@ pub(crate) fn resolve_psi_drain(
     mask: &[i16],
     context: &DirectSpell<'_>,
     caster: i16,
-    memory: RestrictionMemoryView<'_>,
+    (memory, mut usage): (RestrictionMemoryView<'_>, Option<&mut FieldUsage>),
     random: &mut RandomState,
 ) -> Result<BodySpellResult, RuleError> {
     let packet = context.packet;
@@ -92,11 +233,9 @@ pub(crate) fn resolve_psi_drain(
         return Err(RuleError::Invalid("Psi drain inputs".into()));
     }
     let effect = AttackPacket(packet).effect()?;
+    // Drains in other categories are support packets (is_support).
     if !matches!(effect, 60 | 61) || AttackPacket(packet).defense_category() != 5 {
-        return Err(RuleError::Unsupported {
-            action: "combat.spell.drain",
-            dependency: "other Psi-drain packet category",
-        });
+        return Err(RuleError::Invalid("not a category-5 Psi drain".into()));
     }
     let caster =
         usize::try_from(caster).map_err(|_| RuleError::Invalid("negative Psi caster".into()))?;
@@ -110,6 +249,7 @@ pub(crate) fn resolve_psi_drain(
     }
     let mut next_random = random.clone();
     let mut result = BodySpellResult {
+        total_delta: 0,
         warriors: warriors.to_vec(),
         enemies: enemies.to_vec(),
         sounds: vec![],
@@ -134,15 +274,22 @@ pub(crate) fn resolve_psi_drain(
             AttackPacket(packet).race_restriction()? != 0
                 && monster_race_is_excluded(packet, body, Some(memory))?
         } else {
-            race_is_excluded(packet, &result.warriors[body].bytes, "combat.spell.drain")?
+            race_is_excluded(packet, &result.warriors[body].bytes, Some(memory))?
         };
         if excluded {
             result.race_excluded.push(body);
             continue;
         }
         let target = spell_body(&mut result.warriors, &mut result.enemies, body)?;
-        if status_resisted(target, monster, context, &mut next_random)? {
+        if status_resisted(target, monster, context, Some(memory), &mut next_random)? {
             continue;
+        }
+        // Resistance precedes collide's usage byte WORD4358c2, as in the body loop.
+        if let Some(usage) = usage.as_deref_mut() {
+            if usage.used[usage.slot + 1] != 0 {
+                continue;
+            }
+            usage.used[usage.slot + 1] = 1;
         }
         let damage = resolve_damage_with_amount(
             target,
@@ -174,13 +321,26 @@ pub(crate) fn resolve_psi_drain(
         }
         set_psi_points(target, actual >= 10, points);
         if effect == 61 && actual >= 10 {
-            let target = spell_body(&mut result.warriors, &mut result.enemies, caster)?;
-            let points = psi_points(target, caster >= 10)?.wrapping_add(amount / 2);
-            set_psi_points(target, caster >= 10, points);
+            // 15bb0c: a party initiative body credits WORD4435d2; an NPC one credits
+            // WORD447196, which live NPC turns hold at the acting NPC.
+            let recipient = if caster < 9 {
+                memory
+                    .selected_warrior()
+                    .map(usize::try_from)
+                    .transpose()
+                    .map_err(|_| RuleError::Invalid("negative Siphon recipient".into()))?
+                    .unwrap_or(caster)
+            } else {
+                caster
+            };
+            let target = spell_body(&mut result.warriors, &mut result.enemies, recipient)?;
+            let points = psi_points(target, recipient >= 10)?.wrapping_add(amount / 2);
+            set_psi_points(target, recipient >= 10, points);
         }
         result.targets.push((
             body,
             AttackResult {
+                icon: 0,
                 feedback: None,
                 damage: 0,
                 killed: false,

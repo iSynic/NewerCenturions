@@ -291,11 +291,11 @@ fn required_endgame_firearm_whole_caller_matches_native_cast_order_records_and_w
         combat.enemies.records = support::monsters(&before_records);
         combat.enemies.positions = positions;
         combat.order = case.words("order_before");
-        combat.attack_packet = Some(case.bytes("packet_before"));
-        combat.attack_identity = Some(case.n::<Vec<i16>>("identity_before").try_into().unwrap());
+        combat.attack_packet = case.bytes("packet_before");
+        combat.attack_identity = case.n::<Vec<i16>>("identity_before").try_into().unwrap();
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let mut work = runtime::EnemyWork {
-            item_context: Some(case.n::<i16>("item_context_before")),
+            item_context: case.n::<i16>("item_context_before"),
             attack_count: case.n::<i16>("attack_count_before"),
             packet: combat.attack_packet.clone(),
             identity: combat.attack_identity,
@@ -328,12 +328,12 @@ fn required_endgame_firearm_whole_caller_matches_native_cast_order_records_and_w
         );
         assert_eq!(
             combat.attack_packet,
-            Some(case.bytes("packet_after")),
+            case.bytes("packet_after"),
             "case{index} packet"
         );
         assert_eq!(
             combat.attack_identity,
-            Some(case.n::<Vec<i16>>("identity_after").try_into().unwrap()),
+            <[i16; 3]>::try_from(case.n::<Vec<i16>>("identity_after")).unwrap(),
             "case{index} identity"
         );
         assert_eq!(combat.map.tiles, case.words("map_after"), "case{index} map");
@@ -345,7 +345,7 @@ fn required_endgame_firearm_whole_caller_matches_native_cast_order_records_and_w
         support::expect(combat.unavailable, &case["unavailable_after"]);
         assert_eq!(
             work.item_context,
-            Some(case.n::<i16>("item_context_after")),
+            case.n::<i16>("item_context_after"),
             "case{index} item context"
         );
         support::native_expect! {
@@ -418,6 +418,7 @@ fn required_endgame_firearm_whole_caller_matches_native_cast_order_records_and_w
                     target,
                     damage,
                     defeated,
+                    ..
                 } => Some((*attacker, *target, *damage, *defeated)),
                 _ => None,
             })

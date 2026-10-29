@@ -21,6 +21,9 @@ pub(crate) fn use_item(
     {
         return Err("modifier use requires inventory access".into());
     }
+    if state.combat.is_none() {
+        state.set_warrior_selector(warrior);
+    }
     let records = state.warriors[warrior].inventory()?;
     let selected = records.get(slot).ok_or("modifier slot unavailable")?;
     let item = selected.id();
@@ -58,7 +61,8 @@ pub(crate) fn use_item(
         return refusal(feedback);
     }
     let map = crate::exploration::active_map(state, content)?;
-    crate::equipment::drop(&mut state.warriors[warrior], slot, content, map)?;
+    let globals = crate::equipment::drop(&mut state.warriors[warrior], slot, content, map)?;
+    state.apply_equipment_globals(&globals)?;
     state.load_item_work(content, item)?;
     Ok(vec![
         Event::Sound { resource_id: sound },

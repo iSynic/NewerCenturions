@@ -75,6 +75,7 @@ pub fn filter_party(
     action: usize,
     extra: &[u8],
     random: &mut RandomState,
+    memory: crate::combat::spells::RestrictionMemoryView<'_>,
 ) -> Result<[i16; 6], RuleError> {
     if warriors.len() > 6 {
         return Err("party exceeds six warriors".into());
@@ -92,17 +93,22 @@ pub fn filter_party(
         }
         mask[member] = 0;
         let matched = if extra.test_word()? == 0 {
-            let source = warriors.get(action).ok_or(RuleError::Unsupported {
-                action: "story.filter_party",
-                dependency: "native action-index skill alias beyond party records",
-            })?;
             let skill = usize::try_from(selector)
                 .map_err(|_| RuleError::Invalid("negative skill selector".into()))?;
-            let chance = source
-                .record()
-                .special_skill(skill)?
-                .wrapping_add(source.record().special_skill_bonus(skill)?)
-                .wrapping_add(extra.test_word()?);
+            // The skill WORDs +0xf4 and +0xb62 are read from warrior record `action`, the
+            // script's instruction index, through whatever owns 0x448aa0 + action * 0xc42.
+            let (value, bonus) = if let Some(source) = warriors.get(action) {
+                (
+                    source.record().special_skill(skill)?,
+                    source.record().special_skill_bonus(skill)?,
+                )
+            } else {
+                (
+                    memory.alias_word(action, 0xf4 + skill * 2, skill_alias_missing)?,
+                    memory.alias_word(action, 0xb62 + skill * 2, skill_alias_missing)?,
+                )
+            };
+            let chance = value.wrapping_add(bonus).wrapping_add(extra.test_word()?);
             random.bound(100) <= chance
         } else if (0..=6).contains(&selector) {
             Field::Attribute(ATTRIBUTES[selector as usize]).read(&warrior.bytes)?
@@ -126,6 +132,26 @@ pub fn select_party(
     selected_warrior: usize,
     extra: &[u8],
     context: PartySaveContext,
+    random: &mut RandomState,
+) -> Result<[i16; 6], RuleError> {
+    select_party_with_ready(
+        warriors,
+        selected_warrior,
+        extra,
+        context,
+        i16::from(context.casting),
+        random,
+    )
+}
+
+/// newland145a36 reads the live Ready WORD through savevs13a3ae.
+/// Legacy direct callers supply that predicate through PartySaveContext::casting.
+pub(crate) fn select_party_with_ready(
+    warriors: &[Warrior],
+    selected_warrior: usize,
+    extra: &[u8],
+    context: PartySaveContext,
+    ready: i16,
     random: &mut RandomState,
 ) -> Result<[i16; 6], RuleError> {
     if warriors.len() > 6 {
@@ -165,7 +191,8 @@ pub fn select_party(
             3 => next_random.bound(100) <= value,
             4 => !character::save_against_attribute(warrior, value, &mut next_random)?,
             5 => {
-                if context.casting && context.packet_type > 1 {
+                let skip_save = context.packet_type >= 2 && ready != 0;
+                if skip_save {
                     true
                 } else {
                     if !(0..9).contains(&value) {
@@ -326,4 +353,18 @@ pub fn group_return(
             StoryContinuation::Continue
         },
     })
+}
+
+fn skill_alias_missing(alias: crate::combat::warrior_alias::Alias) -> RuleError {
+    if alias == crate::combat::warrior_alias::Alias::AboveA5 {
+        RuleError::Unsupported {
+            action: "story.filter_party",
+            dependency: "native action-index skill alias above the A5 world",
+        }
+    } else {
+        RuleError::Unsupported {
+            action: "story.filter_party",
+            dependency: "native action-index skill alias outside the represented owners",
+        }
+    }
 }

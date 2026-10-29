@@ -210,3 +210,238 @@ fn spell_target_masks_reflection_and_fields_match_original_complete_buffers() {
         }
     }
 }
+
+#[test]
+fn reached_retained_packets_match_original_resolution_and_random_order() {
+    let fixture = support::fixture("campaign-spell-boundaries.json");
+    for case in fixture.array("cases").iter().take(3) {
+        let state: Session = serde_json::from_value(case["session"].clone()).unwrap();
+        let combat = state.combat.as_ref().unwrap();
+        let packet = case.n::<Vec<u8>>("packet");
+        let mask = case.n::<Vec<i16>>("mask");
+        let mut random = state.random.clone();
+        let (warriors, enemies, sounds) = if word(&packet, 40).unwrap() == 36 {
+            let result = spells::resolve_support_for_caster(
+                &state.warriors,
+                &combat.enemies.records,
+                &mask,
+                1703,
+                &DirectSpell {
+                    packet: &packet,
+                    level: 6,
+                    count: case.n("count"),
+                    armor_filter: false,
+                    weapon_sound: 0,
+                },
+                (combat.active_body(), None),
+                &mut random,
+            )
+            .unwrap();
+            let sounds = result
+                .sounds
+                .into_iter()
+                .chain(
+                    result
+                        .targets
+                        .into_iter()
+                        .flat_map(|(_, target)| target.sounds),
+                )
+                .collect::<Vec<_>>();
+            (result.warriors, result.enemies, sounds)
+        } else {
+            let result = resolve_bodies(
+                &state.warriors,
+                &combat.enemies.records,
+                &mask,
+                &DirectSpell {
+                    packet: &packet,
+                    level: case["identity"][1].as_i64().unwrap() as i16,
+                    count: case.n("count"),
+                    armor_filter: false,
+                    weapon_sound: 0,
+                },
+                &mut random,
+            )
+            .unwrap();
+            let sounds = result
+                .sounds
+                .into_iter()
+                .chain(
+                    result
+                        .targets
+                        .into_iter()
+                        .flat_map(|(_, target)| target.sounds),
+                )
+                .collect::<Vec<_>>();
+            (result.warriors, result.enemies, sounds)
+        };
+        let native = &case["native"];
+        support::native_expect! {
+            records &warriors => &native["party_after"], case.text("name");
+            records &enemies => &native["records_after"], case.text("name");
+        };
+        assert_eq!(random.seed, native.n::<u32>("seed"), "{}", case["name"]);
+        assert_eq!(random.draws - state.random.draws, native.n::<u64>("draws"));
+        support::expect_array(&sounds, &native["sounds"]);
+    }
+    let content = content();
+    for case in fixture
+        .array("cases")
+        .iter()
+        .filter(|c| c.text("name").starts_with("script"))
+    {
+        let (state, context_content) = campaign_boundary_context(case, &content);
+        let combat = state.combat.as_ref().unwrap();
+        let map = context_content
+            .map_at(
+                state.mission.as_deref(),
+                state.scenario_level,
+                state.exploration.as_ref().unwrap().map,
+            )
+            .unwrap();
+        let point = words(&case["native"].bytes("point_alias"));
+        let target = spells::SpellTarget {
+            first: point[0] + combat.map.shift.0 + 5,
+            second: point[1] + combat.map.shift.1 + 5,
+            kind: 3,
+        };
+        let origin = spells::SpellTarget {
+            first: case.get("first").map_or(63, |v| v.as_i64().unwrap() as i16),
+            second: case
+                .get("second")
+                .map_or(38, |v| v.as_i64().unwrap() as i16),
+            kind: 0,
+        };
+        let packet = case.n::<Vec<u8>>("packet");
+        let mut random = state.random.clone();
+        let position = state.exploration.as_ref().unwrap();
+        let aliases = centurions_core::combat::map_alias::MapAliases::of_mission(map)
+            .with_land(&position.objects, &position.events)
+            .with_stages(&context_content.scenario.as_ref().unwrap().stages);
+        let result = spells::target_mask_with_map_aliases(
+            combat,
+            &state.warriors,
+            &map.areas,
+            (&target, &origin),
+            &spells::SpellContext {
+                packet: &packet,
+                id: 2606,
+                count: 2,
+                caster: state.combat_story.as_ref().unwrap().actor,
+                initiative: combat.cursor as i16,
+                collision: false,
+            },
+            &combat.spell_fields,
+            &mut random,
+            aliases,
+        )
+        .unwrap();
+        assert_eq!(result.mask.as_slice(), words(&case["native"].bytes("mask")));
+        assert_eq!(result.fields, case["native"].bytes("fields_after"));
+        assert_eq!(random.seed, case["native"].n::<u32>("seed"));
+        assert_eq!(
+            random.draws - state.random.draws,
+            case["native"].n::<u64>("draws")
+        );
+    }
+}
+
+#[test]
+fn recovered_campaign_boundaries_resume_without_interventions() {
+    let fixture = support::fixture("campaign-spell-boundaries.json");
+    let content = content();
+    let path = std::env::temp_dir().join(format!(
+        "centurions-campaign-boundary-{}.json",
+        std::process::id()
+    ));
+    for (index, case) in fixture.array("cases").iter().enumerate() {
+        if case["guest"].as_bool().unwrap_or(false)
+            && case.get("mission_sentinel").is_none()
+            && case.get("event_sentinel").is_none()
+        {
+            continue;
+        }
+        let (mut state, content) = campaign_boundary_context(case, &content);
+        if index == 3 {
+            let mut unknown = state.clone();
+            unknown.combat_story.as_mut().unwrap().entry.x = 64;
+            let before = unknown.clone();
+            let error = apply(Command::Continue, &mut unknown, &content).unwrap_err();
+            assert!(matches!(error.root(), RuleError::Unsupported { .. }));
+            assert_eq!(unknown, before);
+        }
+        if index == 6 {
+            let mut unknown = state.clone();
+            unknown.combat.as_mut().unwrap().map.shift.0 = -9;
+            let before = unknown.clone();
+            let error = apply(Command::Continue, &mut unknown, &content).unwrap_err();
+            assert!(matches!(error.root(), RuleError::Unsupported { .. }));
+            assert_eq!(unknown, before);
+        }
+        save(&path, &state, &content).unwrap();
+        let mut resumed = load(&path, &content).unwrap();
+        let mut command = if case.text("name").starts_with("script") {
+            Command::Continue
+        } else {
+            Command::RunEnemyTurn
+        };
+        if case["small_field"].as_bool().unwrap_or(false) {
+            command = Command::WithPreferences {
+                command: Box::new(command),
+                preferences: centurions_core::CommandPreferences {
+                    small_combat_field: true,
+                    ..Default::default()
+                },
+            };
+        }
+        let events = apply(command.clone(), &mut state, &content).unwrap();
+        assert_eq!(apply(command, &mut resumed, &content).unwrap(), events);
+        assert_eq!(resumed, state);
+        if case.get("mission_sentinel").is_some() || case.get("event_sentinel").is_some() {
+            assert!(events.iter().any(|event| matches!(
+                event,
+                Event::SpellResolved {
+                    spell: 2606,
+                    target: 1,
+                    ..
+                }
+            )));
+        }
+        if case.text("name").starts_with("last-hostile") {
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, Event::AttackResolved { defeated: true, .. }))
+            );
+        }
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+fn campaign_boundary_context(case: &Value, content: &Content) -> (Session, Content) {
+    let mut state = support::source_frame(
+        case.get("command_session")
+            .unwrap_or(&case["session"])
+            .clone(),
+    );
+    let mut content = content.clone();
+    if let Some(address) = case["native"]["layout"]["mission_sentinel_address"].as_str() {
+        let offset = usize::from_str_radix(address, 16).unwrap() - 0x41d1c4;
+        content.scenario.as_mut().unwrap().stages[offset / 464].record
+            [offset % 464..offset % 464 + 2]
+            .copy_from_slice(&1_i16.to_be_bytes());
+    }
+    if let Some(address) = case["native"]["layout"]["event_sentinel_address"].as_str() {
+        let offset = usize::from_str_radix(address, 16).unwrap() - 0x410448;
+        let value = &mut state.exploration.as_mut().unwrap().events[offset / 4];
+        *value = if offset.is_multiple_of(4) {
+            (*value as u32 & 0xffff) | 0x10000
+        } else {
+            (*value as u32 & 0xffff0000) | 1
+        } as i32;
+    }
+    // VerifyCampaignSpells loads the cold A5 zero pair before its declared entry.
+    let selected = state.combat.as_ref().unwrap().selected_enemy;
+    crate::native_common::npc_command_input(&mut state, selected, [0, 0]);
+    (state, content)
+}

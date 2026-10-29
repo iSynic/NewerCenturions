@@ -35,6 +35,7 @@ fn state(fixture: &Value, case: &Value, pane: &str) -> Session {
     )
     .unwrap();
     install(&mut state, &case[pane]);
+    crate::native_common::source_victory_context(&mut state);
     state
 }
 use support::event_sounds as sounds;
@@ -78,16 +79,16 @@ fn native_owned_needle_preparations_match_complete_party_records() {
         let combat = current_combat(&state);
         assert_party(warriors, &party(&case["prepared"]["party"]));
         assert_eq!(
-            combat.attack_packet.as_ref().unwrap(),
-            &case["prepared"].bytes("packet")
+            combat.attack_packet,
+            case["prepared"].bytes("packet")
         );
         assert_eq!(
-            combat.attack_identity.unwrap(),
+            combat.attack_identity,
             case["prepared"].words("identity")[..3]
         );
         support::expect(state.native_work.attack_count, &case["prepared"]["count"]);
         assert_eq!(
-            state.native_work.loaded_item_field32.unwrap(),
+            state.native_work.loaded_item_field32,
             word(&case["prepared"].bytes("item_work"), 32).unwrap()
         );
         let mut expected_work = current_combat(&state).weapon_work;
@@ -99,18 +100,6 @@ fn native_owned_needle_preparations_match_complete_party_records() {
             .unwrap();
         assert_eq!(combat.weapon_work, expected_work);
         assert_eq!(sounds(&events), if index == 0 { vec![] } else { vec![655] });
-        if case["item"] == 701 {
-            let state = support::checkpoint(&state, &content, "higher-medical");
-            let path =
-                std::env::temp_dir().join(format!("medical-legacy-{}.json", std::process::id()));
-            save(&path, &state, &content).unwrap();
-            let mut legacy: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            legacy["schema_version"] = 5.into();
-            support::legacy_save(&mut legacy);
-            std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
-            assert!(load(&path, &content).is_err());
-            std::fs::remove_file(path).unwrap();
-        }
         if case["low_ap"] == true {
             let mut resumed = support::checkpoint(&state, &content, "one-ap-medical");
             let point = current_combat(&state).squad.positions[0];
@@ -193,6 +182,86 @@ fn native_living_heals_and_cancel_match_complete_medical_rule_state() {
                 medical::FollowUp::FinishPlayerAction
             }
         );
+    }
+}
+
+// Derived command regressions; the modified layouts are not native receipts.
+#[test]
+fn medical_selection_survives_pane_compaction_and_natural_required_levels() {
+    use centurions_content::records::{EquipmentStat, InventorySlotsMut, ItemDefinition};
+    let content = support::content();
+    let fixture = support::fixture("earned-combat-medical.json");
+    for combat in [true, false] {
+        for (id, duplicate, slot) in [
+            (700, false, 0),
+            (701, false, 0),
+            (701, true, 0),
+            (701, true, 1),
+        ] {
+            let mut state = state(&fixture, &fixture["cases"][0], "pane_opened");
+            state.movement_continuation = None;
+            state.exploration.as_mut().unwrap().script = None;
+            if !combat {
+                state.phase = Phase::Exploration;
+                state.combat = None;
+            }
+            let mut needle = ItemDefinition(&content.items[id]).fresh_stock().unwrap();
+            assert_eq!(needle.0[13], if id == 701 { 3 } else { 1 });
+            if duplicate {
+                needle.set_quantity(2);
+            }
+            let mut shield = ItemDefinition(&content.items[637]).fresh_stock().unwrap();
+            shield.set_equipment_flag(1);
+            let second = if duplicate {
+                needle.clone()
+            } else {
+                ItemDefinition(&content.items[1]).fresh_stock().unwrap()
+            };
+            let ration = ItemDefinition(&content.items[800]).fresh_stock().unwrap();
+            let actor = &mut state.warriors[4];
+            for (index, item) in [needle, second, shield, ration].iter().enumerate() {
+                actor.record_mut().set_inventory_slot(index, item);
+            }
+            InventorySlotsMut(&mut actor.bytes).set_count(4);
+            for (kind, item) in [(15, 0), (2, 0), (20, 637)] {
+                EquipmentStat::Equipment(kind).write(actor, item).unwrap();
+            }
+            actor.record_mut().set_firing_mode(false);
+            let random = state.random.clone();
+            apply(Command::UseItem { warrior: 4, slot }, &mut state, &content).unwrap();
+            let items = state.warriors[4].inventory().unwrap();
+            let actual: Vec<_> = items
+                .iter()
+                .map(|item| (item.id(), item.quantity().unwrap()))
+                .collect();
+            if duplicate {
+                // The selected Items action consumes its literal row.
+                let consumed_row = slot;
+                assert_eq!(
+                    actual[..2],
+                    [
+                        (701, if consumed_row == 0 { 1 } else { 2 }),
+                        (701, if consumed_row == 1 { 1 } else { 2 })
+                    ]
+                );
+                assert_eq!(items[2].id(), 637);
+            } else {
+                assert_eq!(
+                    items.iter().map(InventoryRecord::id).collect::<Vec<_>>(),
+                    [1, 637, 800]
+                );
+            }
+            assert_eq!(state.random, random);
+            let selected = if combat {
+                state
+                    .medical_continuation
+                    .as_ref()
+                    .map(|pending| pending.item)
+            } else {
+                state.outdoor_psi.as_ref().and_then(|pending| pending.item)
+            };
+            assert_eq!(selected, Some(id as i16));
+        }
     }
 }
 

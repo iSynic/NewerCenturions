@@ -1,7 +1,6 @@
 use super::apply_inner;
 use crate::{
-    Command, Event, Presentation, RuleError, Session, combat, exploration, feedback,
-    field_controls, story_health,
+    Command, Event, Presentation, RuleError, Session, combat, exploration, feedback, field_controls,
 };
 use centurions_content::Content;
 
@@ -44,29 +43,51 @@ pub fn apply(
     let Some(command) = normalize(command, state)? else {
         return Ok(vec![]);
     };
-    let kind = ExecutionKind::of(&command);
+    let kind = ExecutionKind::of(&command, state);
     let mut candidate = state.clone();
+    candidate.command_return = false;
     if let Some(combat) = candidate.combat.as_mut() {
         combat.direct_deaths = kind.melee_input;
     }
+    candidate.scope_monster_template();
     let mut events = match apply_inner(command, &mut candidate, content) {
         Ok(events) => events,
         Err(error @ RuleError::RefusedAfterEffects { .. }) => {
+            candidate.commit_alias_writes()?;
+            candidate.store_spell_fatigue();
+            candidate.command_return = false;
             if let Some(combat) = candidate.combat.as_mut() {
                 combat.direct_deaths = false;
             }
+            candidate.retain_npc_work();
+            candidate.retain_monster_work();
+            candidate.release_monster_template();
             candidate.validate(content)?;
             *state = candidate;
             return Err(error);
         }
         Err(error) => return Err(error),
     };
-    if kind.targeting_only {
+    events.extend(combat::runtime::resume_deferred_getup(
+        &mut candidate,
+        content,
+    )?);
+    events.extend(combat::runtime::resume_npc_action(&mut candidate, content)?);
+    // Every live caster commits its writes at once; this keeps none past the boundary.
+    candidate.commit_alias_writes()?;
+    candidate.store_spell_fatigue();
+    candidate.retain_npc_work();
+    candidate.retain_monster_work();
+    candidate.release_monster_template();
+    let direct_return = std::mem::take(&mut candidate.command_return);
+    if kind.targeting_only || kind.retained_getup_return || direct_return {
         candidate.validate(content)?;
         *state = candidate;
         return Ok(events);
     }
     finish_action(&mut candidate, content, &mut events, &kind)?;
+    candidate.commit_alias_writes()?;
+    candidate.retain_npc_work();
     candidate.validate(content)?;
     *state = candidate;
     Ok(events)
@@ -93,12 +114,22 @@ fn normalize(mut command: Command, state: &Session) -> Result<Option<Command>, R
 
 struct ExecutionKind {
     targeting_only: bool,
+    retained_getup_return: bool,
     editing: bool,
     melee_input: bool,
     physical_work_input: bool,
 }
 impl ExecutionKind {
-    fn of(command: &Command) -> Self {
+    fn of(command: &Command, state: &Session) -> Self {
+        let retained_getup_return =
+            matches!(command, Command::Continue | Command::SelectSurvivor { .. })
+                && matches!(
+                    state.scripted_cleanup,
+                    Some(
+                        crate::story_cleanup::Stage::RetainedGetupSurvivors { .. }
+                            | crate::story_cleanup::Stage::RetainedSelectedSurvivors { .. }
+                    )
+                );
         let targeting_only = matches!(
             command,
             Command::BeginCapture
@@ -132,16 +163,32 @@ impl ExecutionKind {
                 | Command::SetWarriorAppearance { .. }
                 | Command::ViewWarrior { .. }
                 | Command::InspectInventory { .. }
+                | Command::OpenInventory { .. }
+                | Command::SwitchInventoryOwner { .. }
+                | Command::ScrollInventory { .. }
+                | Command::HighlightInventoryRow { .. }
+                | Command::ShowItemInformation { .. }
+                | Command::RetargetItemInformation { .. }
+                | Command::ListItemUsers { .. }
+                | Command::ShowLootItemInformation { .. }
+                | Command::ShowDraggedItemInformation { .. }
+                | Command::ChooseAmmunition { .. }
                 | Command::ViewCreature { .. }
                 | Command::ViewNote { .. }
                 | Command::UpgradeWarrior { .. }
+                | Command::EnterWarriorUpgrade { .. }
                 | Command::EditCarriedItem { .. }
                 | Command::EditWarriorLevel { .. }
                 | Command::EditWarriorScans { .. }
         );
         let melee_input = matches!(
             command,
-            Command::AttackEnemy { .. } | Command::AttackFriend { .. } | Command::Move { .. }
+            Command::AttackEnemy { .. }
+                | Command::AttackFriend { .. }
+                | Command::Move { .. }
+                | Command::AnswerOccupiedChoice {
+                    exchange: Some(false)
+                }
         );
         let physical_work_input = matches!(
             command,
@@ -150,9 +197,13 @@ impl ExecutionKind {
                 | Command::Move { .. }
                 | Command::RunEnemyTurn
                 | Command::RunControlledTurn
+                | Command::AnswerOccupiedChoice {
+                    exchange: Some(false)
+                }
         );
         Self {
             targeting_only,
+            retained_getup_return,
             editing,
             melee_input,
             physical_work_input,
@@ -169,19 +220,34 @@ fn finish_action(
     for event in events.iter() {
         match event {
             Event::Feedback(feedback::NativeFeedback::CombatResult { .. }) => {
-                candidate.bandage_ready = Some(0)
+                candidate.bandage_ready = 0;
+                if let Some(combat) = candidate.combat.as_mut() {
+                    combat.neighbor_work.departure = 0;
+                } else {
+                    candidate.native_work.neighbor_work.departure = 0;
+                }
             }
             Event::AttackResolved { damage, .. } if kind.melee_input || *damage > 0 => {
-                candidate.bandage_ready = Some(0);
+                candidate.bandage_ready = 0;
             }
             Event::SpellResolved { spell, damage, .. } if *damage > 0 || *spell == 1305 => {
-                candidate.bandage_ready = Some(0);
+                candidate.bandage_ready = 0;
             }
-            Event::TurnStarted { .. } => candidate.bandage_ready = Some(1),
+            Event::TurnStarted { body, .. } => {
+                candidate.bandage_ready = 1;
+                if (0..6).contains(body) {
+                    if let Some(combat) = candidate.combat.as_mut() {
+                        combat.neighbor_work.departure = 0;
+                    } else {
+                        candidate.native_work.neighbor_work.departure = 0;
+                    }
+                }
+            }
             _ => {}
         }
     }
-    if !kind.editing
+    if candidate.retained_walk_choice.is_none()
+        && !kind.editing
         && !events
             .iter()
             .any(|event| matches!(event, Event::ItemUpgraded { .. }))
@@ -189,6 +255,7 @@ fn finish_action(
             .iter()
             .any(|event| matches!(event, Event::Message { .. }))
     {
+        events.extend(crate::time::resume_owned(candidate, content)?);
         events.extend(exploration::resume_movement(candidate, content)?);
         events.extend(field_controls::resume(candidate, content)?);
     }
@@ -196,26 +263,10 @@ fn finish_action(
         && let Some(item) = candidate.native_work.ammunition_work.item.as_ref()
     {
         candidate.native_work.loaded_item_field32 =
-            Some(centurions_content::records::ItemDefinition(item).retained_field32()?);
+            centurions_content::records::ItemDefinition(item).retained_field32()?;
     }
-    combat::runtime::retain_last_defeated(candidate);
-    if let Some(combat) = candidate.combat.as_ref() {
-        candidate.native_work.selected_enemy = combat.selected_enemy;
-        candidate.native_work.script_enemy = combat.script_enemy;
-        candidate.native_work.attack_packet = combat.attack_packet.clone();
-        candidate.native_work.attack_identity = combat.attack_identity;
-        candidate.native_work.weapon_work = combat.weapon_work;
-        let mut health = story_health::context(
-            &candidate.warriors,
-            candidate.selected_warrior,
-            candidate.native_work.health_context.as_ref(),
-        );
-        health.unavailable = combat.unavailable;
-        if let Some(packet) = combat.attack_packet.as_ref() {
-            health.effect = centurions_content::records::AttackPacket(packet).health_effect();
-        }
-        candidate.native_work.health_context = Some(health);
-    }
+    combat::runtime::retain_last_defeated(candidate)?;
+    candidate.retain_combat_work();
     let pages: Vec<_> = events
         .iter()
         .filter_map(|event| {

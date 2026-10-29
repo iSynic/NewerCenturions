@@ -13,7 +13,9 @@ impl UiState {
         now: f64,
     ) -> Result<Option<Action>, centurions_core::RuleError> {
         match action {
-            Some(Action::Collection(action)) => Ok(crate::collection::resolve(action, state, self)),
+            Some(Action::Collection(action)) => {
+                Ok(crate::collection::resolve(action, state, content, self))
+            }
             Some(Action::Inventory(command)) => {
                 let category = matches!(command, crate::inventory::InventoryAction::Category(_));
                 let result = self.inventory.handle(command, state, content, now)?;
@@ -52,6 +54,16 @@ impl UiState {
         }
     }
     pub fn failure(&mut self, error: centurions_core::RuleError) {
+        if matches!(
+            &error,
+            centurions_core::RuleError::Unsupported {
+                action: "inventory.open" | "inventory.scroll",
+                ..
+            }
+        ) && self.inspection == Some(super::Inspection::Items)
+        {
+            self.inspection = None;
+        }
         if let centurions_core::RuleError::Refused { feedback }
         | centurions_core::RuleError::RefusedAfterEffects { feedback } = error
         {
@@ -86,13 +98,8 @@ impl UiState {
                 self.feedback.push_back(feedback.clone());
             }
             if let Event::Delay { ticks } = event {
-                self.delay_until = self.delay_until.max(get_time())
-                    + f64::from(*ticks)
-                        / if self.preferences.enabled(10) {
-                            120.
-                        } else {
-                            60.
-                        };
+                self.delay_until =
+                    self.delay_until.max(get_time()) + f64::from(*ticks) / crate::TICKS_PER_SECOND;
             }
             if let Event::OutdoorEffect {
                 effect,
@@ -112,12 +119,7 @@ impl UiState {
                     y: *y,
                     size: *size,
                     started,
-                    frame_seconds: f64::from((*delay).max(1))
-                        / if self.preferences.enabled(9) {
-                            120.
-                        } else {
-                            60.
-                        },
+                    frame_seconds: f64::from((*delay).max(1)) / crate::TICKS_PER_SECOND,
                 });
             }
             match event {

@@ -18,7 +18,16 @@ pub fn handle(
     audio: Option<&Audio>,
 ) -> bool {
     match action {
-        Action::CombatView(view) => ui.combat_view.change(state, view),
+        Action::CombatView(view) => {
+            ui.combat_view.change(state, view);
+            // showrange 0x1583e6: sound(0x89) once the lines are drawn.
+            if matches!(view, crate::combat_controls::ViewAction::Reveal)
+                && ui.combat_view.reveal
+                && let Some(audio) = audio
+            {
+                audio.play(&[Event::Sound { resource_id: 0x89 }]);
+            }
+        }
         Action::PanCombat(x, y) => ui.combat_view.pan(state, (x, y)),
         Action::Select(i) => {
             ui.selected = i;
@@ -28,6 +37,13 @@ pub fn handle(
             }
         }
         Action::InformationInspection(member, inspection) => {
+            if inspection == presentation::Inspection::Items
+                && let Err(error) =
+                    enter_items(state, content, application, ui, member, false, audio)
+            {
+                ui.failure(error);
+                return false;
+            }
             ui.selected = member;
             ui.return_information = Some(member);
             if inspection == presentation::Inspection::FireTargets {
@@ -56,12 +72,6 @@ pub fn handle(
                     }
                 }
             }
-            if inspection == presentation::Inspection::Items {
-                ui.inventory.open(member, state.warriors.len());
-                if let Err(error) = apply(ui.inventory.context_command(), state, content) {
-                    ui.failure(error);
-                }
-            }
         }
         Action::Open(inspection) => {
             if matches!(
@@ -81,21 +91,13 @@ pub fn handle(
             }
             if inspection == presentation::Inspection::Items
                 && state.phase == centurions_core::Phase::Combat
-            {
-                if let Some(body) = state
+                && let Some(body) = state
                     .combat
                     .as_ref()
                     .and_then(|arena| arena.active_body())
                     .filter(|body| (0..6).contains(body))
-                {
-                    ui.selected = body as usize;
-                }
-                if let Some(audio) = audio {
-                    audio.play(&[
-                        Event::Sound { resource_id: 141 },
-                        Event::Sound { resource_id: 20001 },
-                    ]);
-                }
+            {
+                ui.selected = body as usize;
             }
             if inspection == presentation::Inspection::Psi {
                 ui.psi_choice = None;
@@ -116,6 +118,15 @@ pub fn handle(
                 }
                 ui.estimate_target = None;
             }
+            let owner = ui.selected;
+            let item_button = state.phase == centurions_core::Phase::Combat;
+            if inspection == presentation::Inspection::Items
+                && let Err(error) =
+                    enter_items(state, content, application, ui, owner, item_button, audio)
+            {
+                ui.failure(error);
+                return false;
+            }
             ui.inspection = Some(inspection);
             ui.page = 0;
             if inspection == presentation::Inspection::Psi {
@@ -133,12 +144,6 @@ pub fn handle(
                     if state.warriors[actor].knows_spell(spell).unwrap_or(false) {
                         ui.psi_choice = Some((spell, ui.psi_power.clamp(1, 7)));
                     }
-                }
-            }
-            if inspection == presentation::Inspection::Items {
-                ui.inventory.open(ui.selected, state.warriors.len());
-                if let Err(error) = apply(ui.inventory.context_command(), state, content) {
-                    ui.failure(error);
                 }
             }
         }
@@ -241,4 +246,49 @@ pub fn handle(
         _ => unreachable!("non-viewing action reached the viewing controller"),
     }
     true
+}
+
+fn enter_items(
+    state: &mut Session,
+    content: &Content,
+    application: &mut Application,
+    ui: &mut UiState,
+    owner: usize,
+    button_sound: bool,
+    audio: Option<&Audio>,
+) -> Result<(), centurions_core::RuleError> {
+    let events = if crate::inventory::Inventory::shop(state) {
+        ui.inventory.open(owner, state.warriors.len());
+        apply(ui.inventory.context_command(), state, content)?
+    } else {
+        let quick_info = application.native_preferences.enabled(22);
+        let events = match apply(
+            Command::OpenInventory {
+                warrior: owner,
+                quick_info,
+            },
+            state,
+            content,
+        ) {
+            Ok(events) => events,
+            Err(error) => {
+                if ui.inspection == Some(presentation::Inspection::Items) {
+                    ui.inspection = None;
+                }
+                return Err(error);
+            }
+        };
+        ui.inventory.open(owner, state.warriors.len());
+        ui.inventory.quick_info = quick_info;
+        events
+    };
+    ui.events(&events);
+    application.observe(&events);
+    if let Some(audio) = audio {
+        if button_sound {
+            audio.play(&[Event::Sound { resource_id: 141 }]);
+        }
+        audio.play(&events);
+    }
+    Ok(())
 }

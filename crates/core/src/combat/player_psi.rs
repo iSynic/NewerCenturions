@@ -1,6 +1,16 @@
 use crate::combat::{Combat, lifecycle, runtime, spells};
 use crate::{Event, RandomState, RuleError, Session};
 
+/// castspell10b944 copies the tactical selection only while COMBAT is set.
+pub(crate) fn select_native_caster(state: &mut Session) {
+    if state.combat.is_some() {
+        state.set_warrior_selector(state.selected_warrior);
+        // Combatchoice's cast tail 1192bc..1192ca runs showspellinfo for a chosen
+        // column WORD4435ca >= 0 (every combat Psi), clearing WORD44719a at 15939a.
+        state.native_work.fire_item = 0;
+    }
+}
+
 pub const COMBAT_SPELLS: &[i16] = &[
     1101, 1106, 1201, 1202, 1203, 1204, 1205, 1206, 1207, 1301, 1302, 1303, 1304, 1305, 1306, 1307,
     1401, 1402, 1403, 1404, 1405, 1406, 1407, 1502, 1503, 1504, 1505, 1506, 1507, 1601, 1602, 1603,
@@ -28,6 +38,7 @@ pub use admission::{
     CastAdmission, CastRequest, admission, can_cast, cost, in_range, mode_allowed, range,
 };
 mod party;
+pub(crate) use party::prepare_party;
 pub use party::{PartyCastRequest, PartyCastResult, cast_party, validate_party};
 mod validation;
 pub(crate) use validation::selected_body;
@@ -35,6 +46,9 @@ use validation::validate_target;
 pub use validation::{validate, validate_warrior};
 mod casting;
 pub use casting::cast;
-pub(crate) use casting::{CastContext, cast_prepared_at, cast_selection, cast_with_buffs};
+pub(crate) use casting::{
+    CastContext, cast_item, cast_prepared_at, cast_selection, cast_with_buffs,
+};
 mod effects;
-use effects::{cast_ray, move_caster, resolve_mask};
+pub(crate) use effects::{MoveArena, land_mover, resolve_mask};
+use effects::{cast_ray, move_caster};

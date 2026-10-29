@@ -1,11 +1,17 @@
 #[cfg(all(test, feature = "original-fixtures"))]
 use crate::*;
 use crate::{Event, Phase, RuleError, ScriptState, Session, TimeContinuation, story_allies};
+mod recovery;
 use centurions_content::Content;
 use centurions_content::records::{
-    Condition, EnemyRecord, EnemyRecordMut, ItemDefinition, ScheduleEntry, ScheduleEntryMut,
-    ScheduleRegion, ScheduledScripts, WarriorRecord, WarriorRecordMut,
+    EnemyRecord, EnemyRecordMut, ScheduleEntry, ScheduleEntryMut, ScheduleRegion, ScheduledScripts,
+    WarriorRecord, WarriorRecordMut,
 };
+use recovery::recover;
+
+mod zero;
+pub use zero::{ZeroOwners, ZeroTimeReturn};
+pub(crate) use zero::{resume_owned, retain_zero_work, validate_zero, zero_tick};
 
 pub(crate) fn advance(
     state: &mut Session,
@@ -13,6 +19,9 @@ pub(crate) fn advance(
     ticks: u8,
     minutes_per_tick: i16,
 ) -> Result<Vec<Event>, RuleError> {
+    if ticks == 0 {
+        return zero_tick(state, content);
+    }
     let mut events = Vec::new();
     for tick in 0..ticks {
         let position = state.exploration.as_mut().unwrap();
@@ -22,10 +31,9 @@ pub(crate) fn advance(
         }
         // CODE 1 timeclick: reduce precedes the hour, fatigue and energy updates.
         crate::combat::party_buffs::reduce(&mut state.party_buffs)?;
-        let context = crate::story_health::context(
-            &state.warriors,
+        let context = crate::story_health::retained_context(
             state.selected_warrior,
-            state.native_work.health_context.as_ref(),
+            &state.native_work.health_context,
         );
         let reduced = crate::story_reduce::reduce_outdoors(
             &state.warriors,
@@ -37,8 +45,20 @@ pub(crate) fn advance(
             .events
             .iter()
             .any(|event| matches!(event, crate::story_health::HealthEvent::PartyLost));
+        let control_returns = state.warriors.iter().zip(&reduced.warriors).try_fold(
+            0_i16,
+            |delta, (before, after)| {
+                Ok::<_, RuleError>(
+                    delta
+                        - i16::from(
+                            before.record().faction()? != 0 && after.record().faction()? == 0,
+                        ),
+                )
+            },
+        )?;
+        state.native_work.victory_work.add_total(control_returns);
         state.warriors = reduced.warriors;
-        state.native_work.health_context = Some(reduced.context);
+        state.native_work.health_context = reduced.context;
         events.extend(reduced.events.into_iter().filter_map(|event| match event {
             crate::story_health::HealthEvent::Sound(resource_id) => {
                 Some(Event::Sound { resource_id })
@@ -55,11 +75,11 @@ pub(crate) fn advance(
             _ => None,
         }));
         if lost {
-            events.extend(crate::mission::defeat(state, content));
+            events.extend(crate::mission::defeat(state, content)?);
             return Ok(events);
         }
         position.minute -= 60;
-        position.hour += 1;
+        position.hour = position.hour.wrapping_add(1);
         position.fatigue = position.fatigue.saturating_add(1).clamp(4, 135);
         for warrior in &mut state.warriors {
             let bytes = &mut warrior.bytes;
@@ -106,7 +126,10 @@ pub(crate) fn advance(
                 return Ok(events);
             }
         } else if position.hour == 12 {
-            recover(state, content)?;
+            recover(state, content, &mut events)?;
+            if state.phase != Phase::Exploration {
+                return Ok(events);
+            }
         }
         let position = state.exploration.as_ref().unwrap();
         events.push(Event::TimeAdvanced {
@@ -126,7 +149,10 @@ fn scheduled_events(
 ) -> Result<bool, RuleError> {
     loop {
         let selected = scan_schedule(state, &mut pending.schedule_cursor, events)?;
-        recover(state, content)?;
+        recover(state, content, events)?;
+        if state.phase != Phase::Exploration {
+            return Ok(true);
+        }
         let Some(script_id) = selected else {
             return Ok(false);
         };
@@ -144,7 +170,10 @@ fn scheduled_events(
             .record(script_id.unsigned_abs())?
             .to_vec();
         state.exploration.as_mut().unwrap().script = Some(ScriptState::scheduled(record, 0));
+        // Keep the caller visible while a child executes a nested time opcode.
+        state.time_continuation = Some(pending.clone());
         events.extend(super::exploration::run_script(state, content)?);
+        state.time_continuation = None;
         if state.phase != Phase::Exploration
             || state
                 .exploration
@@ -157,6 +186,9 @@ fn scheduled_events(
 }
 
 pub(crate) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+    if state.zero_time.is_some() {
+        return zero::resume(state, content);
+    }
     let Some(mut pending) = state.time_continuation.take() else {
         return Ok(vec![]);
     };
@@ -183,83 +215,6 @@ pub(crate) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event
         pending.minutes_per_tick,
     )?);
     Ok(events)
-}
-
-fn recover(state: &mut Session, content: &Content) -> Result<(), RuleError> {
-    for index in 0..state.warriors.len() {
-        let bytes = &state.warriors[index].bytes;
-        let stamina = WarriorRecord::from_bytes(bytes).stamina()?;
-        let maximum = WarriorRecord::from_bytes(bytes).maximum_stamina()?;
-        if stamina <= -10 || stamina >= maximum {
-            continue;
-        }
-        let level = WarriorRecord::from_bytes(bytes).level()?;
-        let mut amount = if WarriorRecord::from_bytes(bytes).race()? == 3 {
-            level
-        } else {
-            level / 4
-        } as i8;
-        if !consume_food(state, content)? {
-            amount /= 2;
-        }
-        let healing = i16::from(amount.max(1)).wrapping_add(
-            state.warriors[index]
-                .record()
-                .condition(Condition::Regenerating)?,
-        );
-        let context = crate::story_health::context(
-            &state.warriors,
-            state.selected_warrior,
-            state.native_work.health_context.as_ref(),
-        );
-        let healed = crate::story_health::heal_outdoors(
-            &state.warriors,
-            index,
-            healing,
-            false,
-            &context,
-            &mut state.random,
-        )?;
-        if !healed.events.is_empty() {
-            return Err(RuleError::Unsupported {
-                action: "time.recover",
-                dependency: "terminal recovery presentation",
-            });
-        }
-        state.warriors = healed.warriors;
-        state.native_work.health_context = Some(healed.context);
-    }
-    Ok(())
-}
-
-fn consume_food(state: &mut Session, content: &Content) -> Result<bool, RuleError> {
-    for warrior in &mut state.warriors {
-        for (slot, item) in warrior.inventory()?.iter().enumerate() {
-            if item.id() != 800 {
-                continue;
-            }
-            let quantity = item.quantity()?;
-            if quantity <= 0 {
-                return Ok(false);
-            }
-            let definition = content
-                .items
-                .get(800)
-                .ok_or_else(|| RuleError::Invalid("food definition unavailable".into()))?;
-            let weight = ItemDefinition(definition).unit_weight()?;
-            let carried = warrior.record().carried_weight()?.wrapping_sub(weight);
-            warrior.record_mut().set_carried_weight(carried);
-            warrior
-                .record_mut()
-                .set_inventory_quantity(slot, quantity - 1);
-            if quantity == 1 && ItemDefinition(definition).discarded_when_empty()? != 0 {
-                super::items::remove_inventory_slot(warrior, slot)?;
-            }
-            state.load_item_work(content, 800)?;
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn scan_schedule(

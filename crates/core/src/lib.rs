@@ -1,9 +1,11 @@
 use centurions_content::{Content, InventoryRecord};
+pub mod bestiary;
 pub mod character_display;
 pub mod confiscation;
 pub mod creation;
 pub mod feedback;
 pub mod item_display;
+pub mod loot_recovery;
 pub mod native_save;
 pub mod outdoor_psi;
 pub mod reference_views;
@@ -63,6 +65,18 @@ pub mod rules {
         base.wrapping_add(i16::from(dx != 0))
             .wrapping_add(i16::from(dy != 0))
     }
+
+    /// SANE X2L or FPU FMOVE.L of a floating result to a signed LONG.
+    ///
+    /// Exceptional results differ between original machines: an FPU Mac
+    /// saturates through its trap handler while software SANE returns other
+    /// values. The reconstruction follows modern IEEE-754 evaluation, as
+    /// recompiled Realmz ports do: infinities and out-of-range values saturate
+    /// to the LONG bounds and NaN becomes zero. Callers keep their recovered
+    /// rounding: in-range values truncate toward zero.
+    pub fn sane_long(value: f64) -> i32 {
+        value as i32
+    }
 }
 
 fn warrior_management_available(state: &Session) -> bool {
@@ -82,7 +96,7 @@ pub mod editor_items;
 pub mod equipment;
 mod exploration;
 pub mod party;
-pub use exploration::{needs_spell_confirmation, typed_record};
+pub use exploration::{BootyTally, needs_spell_confirmation, typed_record};
 pub mod clinic;
 pub mod field_controls;
 mod item_modifiers;
@@ -92,6 +106,7 @@ pub mod story;
 pub mod story_actor;
 pub mod story_allies;
 pub mod story_cleanup;
+pub mod story_clock;
 pub mod story_collection;
 mod story_combat;
 pub mod story_delay;
@@ -113,6 +128,7 @@ mod story_spell;
 pub mod story_treasure;
 pub mod story_variables;
 mod time;
+pub use time::{ZeroOwners, ZeroTimeReturn};
 pub mod travel;
 pub mod typed_encounter;
 pub mod walking_header;
@@ -125,14 +141,16 @@ mod persistence;
 mod random;
 mod session;
 mod state;
-pub use command::Command;
+pub use command::{Command, ItemInformationList};
 use defaults::{
     empty_allies, empty_ammunition, empty_notes, empty_party_buffs, initial_flags,
     initial_library_seed, initial_psi_memory, menu_length, no_notes, normal_difficulty, zero_level,
     zero_word,
 };
 pub use error::RuleError;
-pub use event::Event;
+pub use event::{
+    Event, Flight, PresentationFlight, PresentationIcon, RayCrossing, SpellArea, SpellInfo,
+};
 pub use persistence::{atomic_write, load, save};
 pub use random::RandomState;
 pub use state::*;

@@ -1,4 +1,5 @@
-use crate::{prelude::*, snapshots, support};
+use crate::{native_common, prelude::*, snapshots, support};
+use centurions_core::combat::target_work::TargetWork;
 
 use support::buffer as bytes;
 
@@ -15,7 +16,7 @@ fn authored_healer_turn_returns_through_command_and_saved_suffix() {
         1101,
     )
     .unwrap();
-    let result = centurions_core::combat::spells::resolve_support_with_context(
+    let result = centurions_core::combat::spells::resolve_support_for_caster(
         &original.warriors,
         &current_combat(&original).enemies.records,
         &mask,
@@ -27,6 +28,15 @@ fn authored_healer_turn_returns_through_command_and_saved_suffix() {
             armor_filter: false,
             weapon_sound: 0,
         },
+        (
+            current_combat(&original).active_body(),
+            Some(
+                centurions_core::combat::spells::RestrictionMemoryView::ordinary_startup(
+                    &content.map(0).unwrap().item_cache,
+                    None,
+                ),
+            ),
+        ),
         &mut random,
     )
     .unwrap();
@@ -47,8 +57,10 @@ fn authored_healer_turn_returns_through_command_and_saved_suffix() {
         .copied()
         .collect();
     assert_eq!(&sounds[..native_sounds.len()], native_sounds);
-    // The original receipt preserves this assisted battle141 command boundary.
+    // The receipt bounds only healing resolution; this full AI caller is source-composed.
     let mut state = original;
+    // Source-composed full commands select NPC0 after the Getup zero writers.
+    native_common::npc_command_input(&mut state, 0, [0, 0]);
     assert_eq!(current_combat(&state).battle, 141);
     let mut resumed = support::checkpoint(&state, &content, "healer-before");
     let events = support::replay_command(Command::RunEnemyTurn, &mut state, &mut resumed, &content);
@@ -68,14 +80,14 @@ fn authored_healer_turn_returns_through_command_and_saved_suffix() {
     let receipt = support::fixture("npc-natural-spell-audio.json");
     for case in receipt.array("cases") {
         let mut state: Session = serde_json::from_value(receipt["input"].clone()).unwrap();
-        state.native_work.weapon_work.natural_attack_index = Some(case.n("index"));
+        state.native_work.weapon_work.natural_attack_index = case.n("index");
         state
             .combat
             .as_mut()
             .unwrap()
             .weapon_work
-            .natural_attack_index = Some(case.n("index"));
-        let before = state.clone();
+            .natural_attack_index = case.n("index");
+        native_common::npc_command_input(&mut state, 0, [0, 0]);
         let events = support::saved_command(Command::RunEnemyTurn, &mut state, &content);
         let expected = [
             Event::Sound { resource_id: 108 },
@@ -89,38 +101,9 @@ fn authored_healer_turn_returns_through_command_and_saved_suffix() {
             case["index"]
         );
         support::checkpoint(&state, &content, "natural-audio-after");
-        if case["index"] == 0 {
-            let path = std::env::temp_dir().join(format!(
-                "centurions-natural-context-{}.json",
-                std::process::id()
-            ));
-            save(&path, &before, &content).unwrap();
-            let mut document: Value =
-                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            assert_eq!(document["schema_version"], 15);
-            document["schema_version"] = 12.into();
-            std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
-            assert!(load(&path, &content).is_err());
-            document["session"] = serde_json::to_value(support::captured_session(&before)).unwrap();
-            std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
-            let mut legacy = load(&path, &content).unwrap();
-            let unchanged = legacy.clone();
-            assert!(apply(Command::RunEnemyTurn, &mut legacy, &content).is_err());
-            assert_eq!(
-                legacy, unchanged,
-                "unknown legacy audio context changed state"
-            );
-            document["schema_version"] = 13.into();
-            std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
-            assert_eq!(load(&path, &content).unwrap(), unchanged);
-            document["session"]["weapon_work"]["natural_attack_index"] = (-1).into();
-            std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
-            assert!(load(&path, &content).is_err());
-            std::fs::remove_file(path).unwrap();
-        }
     }
     let mut state: Session = serde_json::from_value(receipt["input"].clone()).unwrap();
-    state.native_work.weapon_work.natural_attack_index = Some(5);
+    state.native_work.weapon_work.natural_attack_index = 5;
     let combat = state.combat.as_mut().unwrap();
     combat.map = centurions_core::combat::footprint::restore_body(combat, 10).unwrap();
     let point = (combat.squad.positions[0].0 - 1, combat.squad.positions[0].1);
@@ -134,18 +117,21 @@ fn authored_healer_turn_returns_through_command_and_saved_suffix() {
     combat.map = placed.map;
     combat.enemies.positions[0] = point;
     combat.enemies.records[0] = placed.monster;
-    combat.weapon_work.natural_attack_index = Some(5);
+    // The controlled loop uses this relocated slot as its selected NPC.
+    combat.selected_enemy = 0;
+    combat.weapon_work.natural_attack_index = 5;
     let actor = &mut combat.enemies.records[0].bytes;
     actor[0x109] = 6;
     actor[0x106] = 30;
     actor[0x52..0x54].fill(0);
     actor[0x10e..0x110].fill(0);
+    native_common::npc_command_input(&mut state, 0, [0, 0]);
     support::saved_command(Command::RunEnemyTurn, &mut state, &content);
     let native = &receipt["loop_cases"][0];
     let combat = current_combat(&state);
     assert_eq!(
         combat.weapon_work.natural_attack_index,
-        Some(native.n("index_after"))
+        native.n::<i16>("index_after")
     );
     assert_eq!(
         combat.enemies.records[0].record().action_points(),
@@ -166,14 +152,28 @@ fn normalized_positions(f: &Value, snapshot: &Value, key: &str) -> Vec<(i16, i16
     )
 }
 
+// The receipt retains all110 target WORDs, including the separately modeled104-word tail.
+fn project_mask(state: &mut Session, f: &Value, snapshot: &Value) {
+    let mask = native_common::buffer_words(f, &snapshot["mask"]);
+    state.native_work.party_mask.copy_from_slice(&mask[..6]);
+    match state.combat.as_mut() {
+        Some(combat) => combat.target_tail = mask[6..].to_vec(),
+        None => state.native_work.spell_target_tail = mask[6..].to_vec(),
+    }
+}
+
 fn project_native(state: &mut Session, f: &Value, snapshot: &Value) {
     snapshots::npc_projection(state, f, snapshot, &f["cases"][0]["before"]);
+    project_mask(state, f, snapshot);
     state.native_work.weapon_work = snapshots::weapon_work(&|key| bytes(f, &snapshot[key]));
     state.combat.as_mut().unwrap().weapon_work = state.native_work.weapon_work;
 }
 
 fn initial(f: &Value, content: &Content) -> Session {
-    let state: Session = serde_json::from_value(f["foundation"]["session"].clone()).unwrap();
+    let mut state: Session = serde_json::from_value(f["foundation"]["session"].clone()).unwrap();
+    // The qualified before receipt records447196=11; the declared A5 inputs are zero.
+    native_common::npc_command_input(&mut state, f["cases"][0]["before"].n("npc_index"), [0, 0]);
+    project_mask(&mut state, f, &f["cases"][0]["before"]);
     state.validate(content).unwrap();
     let mut projected = state.clone();
     project_native(&mut projected, f, &f["cases"][0]["before"]);
@@ -202,10 +202,13 @@ fn expected_events() -> Vec<Event> {
                 target,
                 damage: 0,
                 defeated: false,
+                icon: Default::default(),
+                flight: Default::default(),
             },
         ]);
     }
     events.extend([
+        native_common::guard_result(21),
         Event::Sound { resource_id: 138 },
         Event::TurnStarted { body: 3, round: 1 },
     ]);
@@ -241,6 +244,24 @@ fn actual_npc_poison_actor_two_casts_and_getup_match_complete_native_state_and_r
 
     support::replay_rng(&mut receipt, case.array("rng"));
     assert_eq!(receipt, expected.random);
+    // The captured suffix executes getup125bda; Ready itself is not in the receipt.
+    // Compose only these newly represented fields from that explicit original writer.
+    expected.native_work.ready = 0;
+    // Getup125be6 also writes the selector WORD, absent from this older receipt.
+    expected.native_work.walking_confusion = 0;
+    expected.combat.as_mut().unwrap().ready = 0;
+    // The same captured Getup calls emptyque even with an empty queue; BYTE584 is omitted.
+    expected.native_work.death_processing.queue = 0;
+    // The captured result paths clear the new WORD; the command retains it.
+    expected.combat.as_mut().unwrap().neighbor_work.departure = 0;
+    expected.native_work.neighbor_work.departure = 0;
+    // The receipt omits the target WORDs: one decision triple, which cast's loop index
+    // passes, then getup125a50's cleartarget.
+    expected.combat.as_mut().unwrap().target_work = TargetWork {
+        cell: (-1, -1),
+        count: 1,
+        index: 1,
+    };
     let path = std::env::temp_dir().join(format!(
         "centurions-npc-poison-caller-{}.json",
         std::process::id()
@@ -253,7 +274,7 @@ fn actual_npc_poison_actor_two_casts_and_getup_match_complete_native_state_and_r
         apply(Command::RunEnemyTurn, &mut actual, &content).unwrap(),
         events
     );
-    assert_eq!(actual, expected);
+    support::same_session(&actual, &expected);
     assert_eq!(
         apply(Command::RunEnemyTurn, &mut resumed, &content).unwrap(),
         events

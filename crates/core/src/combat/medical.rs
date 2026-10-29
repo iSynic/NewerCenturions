@@ -10,7 +10,7 @@ use centurions_content::{
     },
 };
 
-mod preparation;
+pub(in crate::combat) mod preparation;
 use preparation::{prepared_packet, validate_packet};
 
 pub struct BeginRequest {
@@ -81,22 +81,7 @@ pub fn begin(
         .get(request.slot)
         .cloned()
         .ok_or_else(|| RuleError::Invalid("medical inventory slot missing".into()))?;
-    if !(700..=703).contains(&item.id())
-        || item.ammunition_id()? != 0
-        || item.capacity()? != 1
-        || item.0[8] != 0
-        || item.equipment_flag() != 0
-        || !matches!(item.category_code(), 24 | 28)
-        || item.0[11..13].iter().any(|value| *value != 0)
-        || item.0[13] != 1
-        || item.0[14..].iter().any(|value| *value != 0)
-    {
-        return Err(unsupported("other owned medical item"));
-    }
     let quantity = item.quantity()?;
-    if quantity <= 0 {
-        return Err(RuleError::Refused { feedback: vec![] });
-    }
     let mission = state
         .land(content)
         .ok_or_else(|| RuleError::Invalid("medical mission missing".into()))?;
@@ -107,23 +92,28 @@ pub fn begin(
     if !equipment::can_use(warrior, definition, mission)? {
         return Err(RuleError::Invalid("warrior cannot use medical item".into()));
     }
-    let packet = prepared_packet(content, mission, item.id())?;
+    if quantity <= 0 && ItemDefinition(definition).supplied_quantity()? >= 0 {
+        return Err(RuleError::Refused { feedback: vec![] });
+    }
+    let packet = prepared_packet(content, mission, item.id(), warrior)?;
     if !player_psi::mode_allowed(&packet, true)? {
         return Err(RuleError::Invalid(
             "medical item unavailable in combat".into(),
         ));
     }
     let mut result = warrior.clone();
-    result
-        .record_mut()
-        .set_inventory_quantity(request.slot, quantity.wrapping_sub(1));
-    let weight = result
-        .record()
-        .carried_weight()?
-        .wrapping_sub(ItemDefinition(definition).unit_weight()?);
-    result.record_mut().set_carried_weight(weight);
-    if quantity == 1 {
-        items::remove_inventory_slot(&mut result, request.slot)?;
+    if quantity > 0 {
+        result
+            .record_mut()
+            .set_inventory_quantity(request.slot, quantity.wrapping_sub(1));
+        let weight = result
+            .record()
+            .carried_weight()?
+            .wrapping_sub(ItemDefinition(definition).unit_weight()?);
+        result.record_mut().set_carried_weight(weight);
+        if quantity == 1 && ItemDefinition(definition).discarded_when_empty()? != 0 {
+            items::remove_inventory_slot(&mut result, request.slot)?;
+        }
     }
     let mut work = combat.weapon_work;
     work.prepare(definition, &content.items[0])?;
@@ -132,10 +122,13 @@ pub fn begin(
         weapon_work: work,
         loaded_item_field32: ItemDefinition(definition).retained_field32()?,
         packet,
-        identity: [0, 3, 0],
+        identity: {
+            let spell = ItemDefinition(definition).spell()?;
+            [spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1]
+        },
         // Combatchoice1190b8 replaces the outdoor power with the weapon burst count.
         count: ItemDefinition(definition).attack_count()?,
-        events: if quantity == 1 {
+        events: if quantity == 1 && ItemDefinition(definition).discarded_when_empty()? != 0 {
             vec![Event::Sound { resource_id: 655 }]
         } else {
             Vec::new()
@@ -191,7 +184,7 @@ pub fn begin_learned_heal(
             "insufficient psi for learned Heal".into(),
         ));
     }
-    combat.weapon_work.armor_filter()?;
+    combat.weapon_work.armor_filter();
     let mut result = warrior.clone();
     let remaining = result.record().psi_points()?.wrapping_sub(cost);
     result.record_mut().set_psi_points(remaining);
@@ -209,10 +202,7 @@ pub fn begin_learned_heal(
     Ok(BeginResult {
         warrior: result,
         weapon_work: combat.weapon_work,
-        loaded_item_field32: state
-            .native_work
-            .loaded_item_field32
-            .ok_or_else(|| unsupported("unreconstructable independent item context"))?,
+        loaded_item_field32: state.native_work.loaded_item_field32,
         packet,
         identity: [0, 0, 0],
         count: power,
@@ -243,37 +233,51 @@ pub fn resolve(
 ) -> Result<MedicalResolution, RuleError> {
     if pending.actor >= warriors.len()
         || !(1..=6).contains(&warriors.len())
-        || combat.active_body() != Some(pending.actor as i16)
+        || pending.origin != MedicalOrigin::OwnedItem
+            && combat.active_body() != Some(pending.actor as i16)
     {
         return Err(unsupported("other medical continuation"));
     }
-    let packet = combat
-        .attack_packet
-        .as_ref()
-        .ok_or_else(|| RuleError::Invalid("medical packet missing".into()))?;
+    let packet = &combat.attack_packet;
     match pending.origin {
         MedicalOrigin::OwnedNeedle => {
             if !(700..=703).contains(&pending.item)
                 || pending.spell != 1401
                 || pending.power != 1
-                || combat.attack_identity != Some([0, 3, 0])
+                || combat.attack_identity != [0, 3, 0]
             {
                 return Err(unsupported("other owned medical continuation"));
             }
             validate_packet(packet)?;
-            if combat.weapon_work.sound()? != 430 {
+            if combat.weapon_work.sound() != 430 {
                 return Err(unsupported("other retained medical weapon sound"));
             }
+        }
+        MedicalOrigin::OwnedItem => {
+            if pending.item <= 0
+                || pending.spell <= 1100
+                || combat.attack_identity
+                    != [
+                        pending.spell / 1000 - 1,
+                        pending.spell % 1000 / 100 - 1,
+                        pending.spell % 100 - 1,
+                    ]
+                || AttackPacket(packet).targeting_mode() != 1
+                || AttackPacket(packet).effect()? != 57
+            {
+                return Err("invalid owned item healing continuation".into());
+            }
+            validate_packet(packet)?;
         }
         MedicalOrigin::LearnedHeal => {
             if pending.item != 0
                 || !matches!(pending.power, 1..=7)
                 || combat.attack_identity
-                    != Some([
+                    != [
                         pending.spell / 1000 - 1,
                         pending.spell % 1000 / 100 - 1,
                         pending.spell % 100 - 1,
-                    ])
+                    ]
             {
                 return Err(unsupported("other learned medical continuation"));
             }
@@ -312,8 +316,10 @@ fn resolve_inner(
     pending: &MedicalContinuation,
     target: &MedicalTarget,
 ) -> Result<MedicalResolution, RuleError> {
+    let mut flights = vec![];
     let (member, portrait, mut events) = match *target {
         MedicalTarget::ConfirmedCancel => {
+            combat.ready = 0;
             let w = &mut warriors[pending.actor].bytes;
             let movement = WarriorRecord::from_bytes(w)
                 .movement_points()?
@@ -356,7 +362,7 @@ fn resolve_inner(
                 ));
             }
             let from = combat.squad.positions[pending.actor];
-            let packet = combat.attack_packet.as_ref().unwrap();
+            let packet = &combat.attack_packet;
             if !player_psi::in_range(from, (x, y), player_psi::range(packet, pending.power)?) {
                 return Err(RuleError::Refused {
                     feedback: vec![crate::feedback::NativeFeedback::Combat {
@@ -393,38 +399,60 @@ fn resolve_inner(
                 .wrapping_sub(2);
             WarriorRecordMut::from_bytes(w).set_movement_points(movement);
             WarriorRecordMut::from_bytes(w).set_action_points(ap);
+            // combatchoice 0x11af6c calls cast with the clicked warrior's triple:
+            // its launch sound, then the flight's draws before the body resolves.
+            let launch = Event::Sound {
+                resource_id: AttackPacket(&combat.attack_packet).launch_sound()?,
+            };
+            let jitter = spells::flight_jitter(&combat.attack_packet, random);
+            let triple = spells::SpellTarget {
+                first: body,
+                second: 0,
+                kind: 1,
+            };
+            flights.push((
+                1,
+                spells::flight(
+                    combat,
+                    pending.actor as i16,
+                    &triple,
+                    &combat.attack_packet,
+                    1,
+                    jitter,
+                ),
+            ));
             (
                 body as usize,
                 false,
-                vec![
-                    Event::Sound { resource_id: 145 },
-                    Event::Sound { resource_id: 431 },
-                ],
+                vec![Event::Sound { resource_id: 145 }, launch],
             )
         }
     };
     let mut mask = [0; 110];
     combat.inactive_rounds = 0;
     mask[member] = 1;
+    combat.ready = i16::from(!portrait);
     let result = spells::resolve_support_with_context(
         warriors,
         &combat.enemies.records,
         &mask,
         pending.spell,
         &spells::DirectSpell {
-            packet: combat.attack_packet.as_ref().unwrap(),
+            packet: &combat.attack_packet,
             level: pending.spell % 1000 / 100 - 1,
             count: pending.power,
-            armor_filter: combat.weapon_work.armor_filter()?,
+            armor_filter: combat.weapon_work.armor_filter(),
             weapon_sound: 0,
         },
         random,
     )?;
+    combat.ready = 0;
     warriors.clone_from_slice(&result.warriors);
+    combat.victory_work.add_total(result.total_delta);
     combat.enemies.records = result.enemies;
     combat.unavailable = combat.unavailable.wrapping_sub(result.recovered as i8);
     if result.healed {
-        combat.attack_packet.as_mut().unwrap()[18] = 4;
+        combat.attack_packet[18] = 4;
     }
     if !portrait && !result.targets.is_empty() {
         combat.field_used[0] = 1;
@@ -433,6 +461,7 @@ fn resolve_inner(
         result
             .sounds
             .into_iter()
+            .chain(result.race_excluded.into_iter().map(|_| 651))
             .map(|resource_id| Event::Sound { resource_id }),
     );
     for (body, outcome) in result.targets {
@@ -448,8 +477,11 @@ fn resolve_inner(
             target: body as i16,
             damage: outcome.damage,
             defeated: false,
+            icon: crate::event::PresentationIcon(outcome.icon),
+            flight: Default::default(),
         });
     }
+    crate::event::Flight::attach(&mut events, &flights);
     if portrait && warriors[member].record().stamina()? > 0 {
         restore_portrait(combat, warriors, mission, member)?;
         events.push(Event::Sound { resource_id: 631 });
@@ -477,7 +509,12 @@ fn restore_portrait(
         combat.map.shift.1.wrapping_add(5),
     );
     let mut placement = None;
-    for radius in 1_i16..=90 {
+    // The original widens the square without limit; past this radius every
+    // in-window cell has been tried, so finding none means it never ends.
+    let reach = |center: i32| (center - 7).max(83 - center).max(1);
+    let last = reach(i32::from(q.wrapping_add(r)) + 5 + i32::from(origin.0))
+        .max(reach(i32::from(q) + 5 + i32::from(origin.1)));
+    for radius in 1..=last.min(i32::from(i16::MAX)) as i16 {
         for dy in -radius..radius {
             for dx in -radius..radius {
                 let position = (
@@ -506,12 +543,14 @@ fn restore_portrait(
             break;
         }
     }
-    let (position, cell, terrain) =
-        placement.ok_or_else(|| unsupported("portrait revival has no verified placement"))?;
+    let (position, cell, terrain) = placement.ok_or_else(|| {
+        unsupported("portrait revival has no passable cell; the original search never ends")
+    })?;
+    // Slots 1..109 outnumber the 106 possible bodies, so one is always empty.
     let initiative = (1..110)
         .rev()
         .find(|index| combat.order[*index] == -1)
-        .ok_or_else(|| unsupported("portrait revival has no empty initiative slot"))?;
+        .ok_or_else(|| RuleError::Invalid("initiative order has no empty slot".into()))?;
     combat.squad.positions[member] = position;
     combat.squad.under_tiles[member] = terrain;
     combat.map.tiles[cell] = member as i16;

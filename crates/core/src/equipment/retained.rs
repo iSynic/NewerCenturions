@@ -1,5 +1,6 @@
 //! Silent wear/removal used by equipment commands, refit and retained item callers.
 //! These are game transactions over records, not a projected Mac address space.
+use super::globals::GlobalWrite;
 use super::modifiers::{self, change};
 use super::record_rules::{can_use, unsupported};
 use crate::RuleError;
@@ -7,7 +8,6 @@ use centurions_content::records::{
     EquipmentModifiers, EquipmentStat as Stat, RetainedEquipmentModifiers,
 };
 use centurions_content::{Content, InventoryRecord, Warrior, word};
-use std::collections::BTreeMap;
 
 pub(crate) struct RetainedEquipment {
     pub warrior: Warrior,
@@ -16,12 +16,15 @@ pub(crate) struct RetainedEquipment {
     pub warnings: Vec<i16>,
     pub native_warnings: Vec<i16>,
     pub native_return: u32,
+    pub level_refusal: Option<i16>,
+    /// Ordered party-wide writes for the Session caller to apply.
+    pub global_writes: Vec<GlobalWrite>,
 }
 
 struct Operation<'a> {
     result: RetainedEquipment,
     content: &'a Content,
-    global_effects: BTreeMap<i16, i16>,
+    global_effects: Vec<GlobalWrite>,
     editor_active: bool,
 }
 
@@ -45,9 +48,11 @@ pub(crate) fn apply(
             warnings: vec![],
             native_warnings: vec![],
             native_return: 0,
+            level_refusal: None,
+            global_writes: vec![],
         },
         content,
-        global_effects: BTreeMap::new(),
+        global_effects: vec![],
         editor_active: false,
     };
     if wearing {
@@ -56,8 +61,8 @@ pub(crate) fn apply(
         operation.remove(slot, forced)?;
         operation.result.warnings = operation.result.native_warnings.clone();
     }
-    modifiers::verify_globals(&operation.global_effects)?;
     Warrior::read(&operation.result.warrior.bytes)?;
+    operation.result.global_writes = operation.global_effects;
     Ok(operation.result)
 }
 
@@ -66,8 +71,7 @@ pub(crate) fn edit_record(
     content: &Content,
     slot: usize,
     control: u16,
-    difficulty: i16,
-) -> Result<(Warrior, InventoryRecord, i16), RuleError> {
+) -> Result<(Warrior, InventoryRecord, Vec<GlobalWrite>), RuleError> {
     content.map(0).and_then(|map| map.combat.as_ref()).ok_or(RuleError::Unsupported {
         action: "editor.item", dependency: "the reached presentation or arithmetic service is not part of item editing",
     })?;
@@ -81,9 +85,11 @@ pub(crate) fn edit_record(
             warnings: vec![],
             native_warnings: vec![],
             native_return: 0,
+            level_refusal: None,
+            global_writes: vec![],
         },
         content,
-        global_effects: BTreeMap::from([(40, difficulty)]),
+        global_effects: vec![],
         editor_active: true,
     };
     if equipped {
@@ -102,12 +108,11 @@ pub(crate) fn edit_record(
     if equipped {
         operation.wear(slot)?;
     }
-    modifiers::verify_globals(&operation.global_effects)?;
     Warrior::read(&operation.result.warrior.bytes)?;
     Ok((
         operation.result.warrior,
         operation.result.record,
-        operation.global_effects[&40],
+        operation.global_effects,
     ))
 }
 
@@ -142,12 +147,15 @@ impl Operation<'_> {
     }
 
     fn wear(&mut self, slot: usize) -> Result<(), RuleError> {
-        let mut remaining = 10000_usize;
+        // Each repeat follows a removal that unequips one of at most 101 searched
+        // slots. A further repeat means a removal kept its item worn, and the
+        // original loop would never end.
+        let mut remaining = 102_usize;
         loop {
             if remaining == 0 {
                 return Err(RuleError::Unsupported {
                     action: "equipment.processing",
-                    dependency: "equipment wear exceeded the reconstruction loop bound",
+                    dependency: "equipment wear repeats without unequipping; the original loop never ends",
                 });
             }
             remaining -= 1;
@@ -174,24 +182,16 @@ impl Operation<'_> {
             }
             if i16::from(item.editor_modifier(0)) > warrior.record().level()? && !self.editor_active
             {
-                // The previous silent caller has no source string mapped for this
-                // branch. Preserve its diagnostic; fixing it is a separate change.
-                return Err(RuleError::Invalid(
-                    "rendering memory unavailable at 00400548".into(),
-                ));
+                // wear returns zero after its level flash; refit keeps the charge
+                // and reserve changes and continues without equipping the battery.
+                self.result.level_refusal = Some(i16::from(item.required_level()));
+                return Ok(());
             }
             if definition.kind > 1 && self.read(Stat::Equipment(definition.kind))? != 0 {
                 let mut replaced = false;
                 let count = self.result.warrior.inventory()?.len();
                 // Native search includes the slot immediately after inventory.
                 for search in 0..=count {
-                    if remaining == 0 {
-                        return Err(RuleError::Unsupported {
-                            action: "equipment.processing",
-                            dependency: "equipment wear exceeded the reconstruction loop bound",
-                        });
-                    }
-                    remaining -= 1;
                     let old = self.item(search);
                     let previous = self.load(old.id())?;
                     if previous.kind == definition.kind && old.equipment_flag() != 0 {

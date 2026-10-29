@@ -99,9 +99,120 @@ pub(crate) fn follow_up(target: &mut [u8], monster: bool, effect: i16) -> Result
             WarriorRecordMut::from_bytes(target).set_automatic_mode(0);
             WarriorRecordMut::from_bytes(target).set_stamina(-9);
         }
+        // spelllist15ca1c clears condition indices 28 and 3.
+        110 => {
+            clear_duration(target, monster, 28);
+            clear_duration(target, monster, 3);
+        }
         _ => {}
     }
     Ok(())
+}
+
+/// spelllist15bc8e adds the duration to the turn-skip condition without a cap.
+pub(crate) fn stun(target: &mut [u8], monster: bool, duration: i16) -> Result<(), RuleError> {
+    if monster {
+        let skip = EnemyRecord::from_bytes(target).condition_duration(1) as i8;
+        EnemyRecordMut::from_bytes(target)
+            .set_condition_duration(1, skip.wrapping_add(duration as i8).into());
+        EnemyRecordMut::from_bytes(target).set_movement_points(0);
+    } else {
+        let skip = WarriorRecord::from_bytes(target).turn_skip_duration()?;
+        let mut record = WarriorRecordMut::from_bytes(target);
+        record.set_turn_skip_duration(skip.wrapping_add(duration));
+        record.set_action_points(0);
+        record.set_movement_points(0);
+    }
+    Ok(())
+}
+
+/// Party Psi stays within 0..maximum; NPC Psi is only floored at zero.
+pub(crate) fn move_psi(
+    warriors: &mut [Warrior],
+    enemies: &mut [MonsterRecord],
+    body: usize,
+    amount: i16,
+) -> Result<(), RuleError> {
+    if body < 10 {
+        let record = &mut warriors.get_mut(body).ok_or("Psi target missing")?.bytes;
+        let view = WarriorRecord::from_bytes(record);
+        let points = view
+            .psi_points()?
+            .wrapping_add(amount)
+            .max(0)
+            .min(view.maximum_psi()?);
+        WarriorRecordMut::from_bytes(record).set_psi_points(points);
+    } else {
+        let record = &mut enemies
+            .get_mut(body - 10)
+            .ok_or("Psi target missing")?
+            .bytes;
+        let points = EnemyRecord::from_bytes(record)
+            .psi_points()?
+            .wrapping_add(amount)
+            .max(0);
+        EnemyRecordMut::from_bytes(record).set_psi_points(points);
+    }
+    Ok(())
+}
+
+/// The siphon transfer is unclamped.
+pub(crate) fn add_psi(
+    warriors: &mut [Warrior],
+    enemies: &mut [MonsterRecord],
+    body: usize,
+    amount: i16,
+) -> Result<(), RuleError> {
+    if body < 10 {
+        let record = &mut warriors.get_mut(body).ok_or("Psi caster missing")?.bytes;
+        let points = WarriorRecord::from_bytes(record)
+            .psi_points()?
+            .wrapping_add(amount);
+        WarriorRecordMut::from_bytes(record).set_psi_points(points);
+    } else {
+        let record = &mut enemies
+            .get_mut(body - 10)
+            .ok_or("Psi caster missing")?
+            .bytes;
+        let points = EnemyRecord::from_bytes(record)
+            .psi_points()?
+            .wrapping_add(amount);
+        EnemyRecordMut::from_bytes(record).set_psi_points(points);
+    }
+    Ok(())
+}
+
+/// resolvespell1519a8 clears slot effect-101 for every selector above 99, without a
+/// bound: 100 clears the word (party) or byte (NPC) before the table, and 141..
+/// clear later record fields.
+pub(crate) fn clear_selector_slot(
+    target: &mut [u8],
+    monster: bool,
+    effect: i16,
+) -> Result<(), RuleError> {
+    let index = i32::from(effect) - 101;
+    let (offset, width) = if monster {
+        (0xb2 + index, 1)
+    } else {
+        (0x5e + index * 2, 2)
+    };
+    let slot = usize::try_from(offset)
+        .ok()
+        .and_then(|offset| target.get_mut(offset..offset + width))
+        .ok_or(RuleError::Unsupported {
+            action: "combat.spell",
+            dependency: "condition clear outside the target record",
+        })?;
+    slot.fill(0);
+    Ok(())
+}
+
+pub(crate) fn clear_duration(target: &mut [u8], monster: bool, index: usize) {
+    if monster {
+        EnemyRecordMut::from_bytes(target).set_condition_duration(index, 0);
+    } else {
+        WarriorRecordMut::from_bytes(target).set_condition_duration(index, 0);
+    }
 }
 
 /// spelllist 0x15c76a changes allegiance after the party reflection draw.
@@ -159,6 +270,22 @@ pub struct ConditionOutcome {
     pub sounds: Vec<i16>,
 }
 
+/// Packet contract of the authored 1703 fast path.
+pub(crate) fn is_1703_packet(packet: &[u8]) -> Result<bool, RuleError> {
+    if packet.len() != 58 {
+        return Ok(false);
+    }
+    Ok(packet[9] == 3
+        && packet[19] == 8
+        && packet[20] == 8
+        && packet[12] == 0
+        && packet[15] == 0
+        && packet[23..30].iter().all(|value| *value == 0)
+        && word(packet, 34)? == 0
+        && word(packet, 40)? == 36
+        && word(packet, 50)? == 0)
+}
+
 /// The authored 1703 packet bypasses resist saving throws and causes no damage.
 pub fn resolve_1703(
     warriors: &[Warrior],
@@ -172,21 +299,9 @@ pub fn resolve_1703(
         return Err(RuleError::Invalid("spell condition body inputs".into()));
     }
     span(packet, 0, 58)?;
-    if packet.len() != 58
-        || packet[9] != 3
-        || packet[19] != 8
-        || packet[20] != 8
-        || packet[12] != 0
-        || packet[15] != 0
-        || packet[23..30].iter().any(|value| *value != 0)
-        || word(packet, 34)? != 0
-        || word(packet, 40)? != 36
-        || word(packet, 50)? != 0
-    {
-        return Err(RuleError::Unsupported {
-            action: "combat.spell.condition",
-            dependency: "other spell condition packet",
-        });
+    // Callers route only this packet here; every other shape takes the support resolver.
+    if !is_1703_packet(packet)? {
+        return Err(RuleError::Invalid("not the 1703 condition packet".into()));
     }
     for warrior in warriors {
         span(&warrior.bytes, 0, 3138)?;

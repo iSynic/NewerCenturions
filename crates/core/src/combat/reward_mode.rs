@@ -1,0 +1,87 @@
+//! Integer prefix and mode selection for ordinary booty105748.
+use crate::{RandomState, RuleError, items};
+use centurions_content::{Content, InventoryRecord, records::TreasureRecord};
+
+#[derive(Default)]
+pub(super) struct RewardPrefix {
+    pub items: Vec<InventoryRecord>,
+    pub experience: i32,
+    pub credits: i32,
+    pub last_item: Option<i16>,
+}
+
+#[derive(Clone, Copy)]
+pub enum RewardMode<'a> {
+    Ordinary,
+    NoLoot,
+    Treasure(&'a [u8]),
+}
+
+impl<'a> RewardMode<'a> {
+    pub(crate) fn select(mode: i16, record: &'a [u8]) -> Result<Self, RuleError> {
+        match mode {
+            0 => Ok(Self::Ordinary),
+            5 => Ok(Self::NoLoot),
+            2 | 10 => Err(RuleError::Unsupported {
+                action: "combat.rewards",
+                dependency: "alternate ordinary battle cleanup mode",
+            }),
+            _ => Ok(Self::Treasure(record)),
+        }
+    }
+
+    pub(super) fn prefix(
+        self,
+        content: &Content,
+        difficulty: i16,
+        random: &mut RandomState,
+    ) -> Result<RewardPrefix, RuleError> {
+        let Self::Treasure(bytes) = self else {
+            return Ok(RewardPrefix::default());
+        };
+        let record = TreasureRecord::new(bytes)?;
+        let mut loot = vec![];
+        let mut last = None;
+        for slot in 0..TreasureRecord::SLOTS {
+            let id = record.item(slot)?;
+            if id > 0 {
+                let enhancement = record.enhancement(slot)?;
+                let enhancement = if enhancement == 0 {
+                    0
+                } else {
+                    enhancement.wrapping_add(difficulty).max(1)
+                };
+                loot.push(items::initialize_at_difficulty(
+                    id,
+                    enhancement,
+                    difficulty,
+                    content,
+                    random,
+                )?);
+                last = Some(id);
+            }
+        }
+        let mut award = |amount: i32| {
+            if amount < 0 {
+                i32::from(random.bound(((amount >> 16) as i16).wrapping_abs()))
+            } else {
+                amount
+            }
+        };
+        let experience = award(record.experience()?);
+        let credits = award(record.credits()?);
+        Ok(RewardPrefix {
+            items: loot,
+            experience,
+            credits,
+            last_item: last,
+        })
+    }
+}
+
+pub struct RewardContext<'a> {
+    pub difficulty: i16,
+    pub npc_denominator: i16,
+    pub currency: i32,
+    pub mode: RewardMode<'a>,
+}

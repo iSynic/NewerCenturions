@@ -64,6 +64,13 @@ pub fn menu(
     });
 }
 
+pub fn text_entry_available(state: &Session, content: &Content) -> bool {
+    // encounter2 0x121ae8 gates GetWord on the original password selector.
+    centurions_core::typed_record(state, content).is_ok_and(|record| {
+        centurions_content::records::TypedEncounterRecord(&record).password_selector() != 0
+    })
+}
+
 pub fn typed(
     content: &Content,
     state: &Session,
@@ -80,7 +87,7 @@ pub fn typed(
             2,
             Action::Open(Inspection::Psi),
             centurions_core::typed_record(state, content)
-                .is_ok_and(|record| centurions_content::word(record, 106).unwrap_or(0) != 0),
+                .is_ok_and(|record| centurions_content::word(&record, 106).unwrap_or(0) != 0),
         ),
         (
             4,
@@ -91,9 +98,13 @@ pub fn typed(
             5,
             Action::Open(Inspection::Items),
             centurions_core::typed_record(state, content)
-                .is_ok_and(|record| centurions_content::word(record, 136).unwrap_or(0) != 0),
+                .is_ok_and(|record| centurions_content::word(&record, 136).unwrap_or(0) != 0),
         ),
-        (6, Action::TextEntry(true), true),
+        (
+            6,
+            Action::TextEntry(true),
+            text_entry_available(state, content),
+        ),
         (7, Action::Command(Command::CancelMenu), true),
     ] {
         let rect = assets.dialog_rect(153, item);
@@ -106,7 +117,7 @@ pub fn typed(
             action,
         });
     }
-    if ui.typed_entry {
+    if ui.typed_entry && text_entry_available(state, content) {
         controls.clear();
         assets.draw_dialog(157);
         assets.wrapped_color(&ui.typed_text, assets.dialog_rect(157, 2), 12, 14., YELLOW);

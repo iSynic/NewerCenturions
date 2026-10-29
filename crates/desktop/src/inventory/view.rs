@@ -256,6 +256,7 @@ impl Inventory {
                     .is_some_and(|a| a.level == state.scenario_level),
                 action: Action::Inventory(InventoryAction::Shop),
             });
+            self.draw_ammunition_button(assets, controls);
         }
         assets.panel(175, Rect::new(375., 320., 50., 37.));
         for (rect, action) in [
@@ -263,6 +264,11 @@ impl Inventory {
             (Rect::new(375., 357., 50., 25.), InventoryAction::Refit(0)),
             (Rect::new(375., 382., 50., 25.), InventoryAction::Refit(1)),
             (Rect::new(375., 320., 50., 37.), InventoryAction::Stockpile),
+            // CNTL 140, the info button in the PICT 148 strip.
+            (
+                Rect::new(609., 412., 47., 35.),
+                InventoryAction::Information,
+            ),
         ] {
             controls.push(Control {
                 rect,
@@ -270,7 +276,12 @@ impl Inventory {
                     false
                 } else {
                     self.selected.is_some()
-                        || matches!(action, InventoryAction::Done | InventoryAction::Refit(_))
+                        || matches!(
+                            action,
+                            InventoryAction::Done
+                                | InventoryAction::Refit(_)
+                                | InventoryAction::Information
+                        )
                 },
                 action: Action::Inventory(action),
             });
@@ -281,5 +292,7 @@ impl Inventory {
         {
             self.detail(content, map, &item, side == 1 && Self::shop(state), assets);
         }
+        self.draw_information(content, state, assets, controls);
+        self.draw_ammunition(assets, controls);
     }
 }

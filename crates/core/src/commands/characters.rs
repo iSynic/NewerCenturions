@@ -1,7 +1,6 @@
 use crate::{
-    Command, Event, Phase, RuleError, Session, ammunition, character, combat, creation,
-    editor_items, feedback, initial_psi_memory, roster, story_promotion,
-    warrior_management_available,
+    Command, Event, Phase, RuleError, Session, character, combat, creation, editor_items, feedback,
+    initial_psi_memory, roster, story_promotion, warrior_management_available,
 };
 use centurions_content::Content;
 
@@ -31,7 +30,7 @@ pub(super) fn execute(
                 return Err(RuleError::Refused { feedback: vec![] });
             }
             state.warriors[0].record_mut().clear_learned_scans();
-            state.native_work.psi_memory = Some(initial_psi_memory(&state.warriors)?);
+            state.native_work.psi_memory = initial_psi_memory(&state.warriors)?;
             Ok(vec![])
         }
         Command::GenerateWarrior { request } => {
@@ -45,8 +44,9 @@ pub(super) fn execute(
                 &mut state.library_random_seed,
                 &mut state.library_random_draws,
             )?;
-            state.warriors = vec![warrior];
-            state.native_work.psi_memory = Some(initial_psi_memory(&state.warriors)?);
+            state.native_work.character_bare_hand_bonus = warrior.record().bare_hand_bonus()?;
+            state.replace_squad(vec![warrior])?;
+            state.native_work.psi_memory = initial_psi_memory(&state.warriors)?;
             Ok(vec![Event::Sound { resource_id: 130 }])
         }
         Command::SelectWarriors { warriors } => {
@@ -54,17 +54,17 @@ pub(super) fn execute(
                 return Err(RuleError::Refused { feedback: vec![] });
             }
             roster::validate_squad(&warriors)?;
-            state.warriors = warriors;
-            state.native_work.psi_memory = Some(initial_psi_memory(&state.warriors)?);
+            state.replace_squad(warriors)?;
+            state.native_work.psi_memory = initial_psi_memory(&state.warriors)?;
             for warrior in &state.warriors {
                 state.native_work.loaded_item_field32 =
-                    Some(combat::ally_turns::item_context_after_weight_calc(
+                    combat::ally_turns::item_context_after_weight_calc(
                         warrior,
                         &content.items,
-                        state.native_work.loaded_item_field32.unwrap_or(0),
-                    )?);
+                        state.native_work.loaded_item_field32,
+                    )?;
             }
-            state.native_work.ammunition_work.item = None;
+            weight_calc_item_work(state, content)?;
             Ok(vec![Event::StartersImported {
                 count: state.warriors.len(),
             }])
@@ -72,13 +72,21 @@ pub(super) fn execute(
         Command::ReplaceSquad { warriors } => {
             roster::admit_management(state)?;
             roster::validate_squad(&warriors)?;
-            state.warriors = warriors;
+            // partyselect1476cc clears BYTE44273f (1478dc) and moves BYTE442739 by one for each
+            // unavailable member it removes (1489d8) or adds (148f7e).
+            let context = &mut state.native_work.health_context;
+            let delta = unavailable_members(&warriors) - unavailable_members(&state.warriors);
+            context.unavailable = context.unavailable.wrapping_add(delta as i8);
+            context.selected_warrior = 0;
+            state.replace_squad(warriors)?;
             state.selected_warrior = 0;
-            state.native_work.psi_memory = Some(initial_psi_memory(&state.warriors)?);
+            state.native_work.psi_memory = initial_psi_memory(&state.warriors)?;
+            // partyselect clears the menu BYTEs 0x442580 but not the power WORDs.
+            let words = std::array::from_fn(|member| state.psi_power(member));
             state.psi_menu_choices = std::array::from_fn(|_| None);
-            state.native_work.health_context = None;
-            state.native_work.loaded_item_field32 = None;
-            state.native_work.ammunition_work = ammunition::WorkBuffers::default();
+            state.keep_psi_powers(words);
+            // partyselect Done (148206..148366) preserves the item/ammo/weapon
+            // work left by earlier actions; it does not reload the final squad.
             Ok(vec![])
         }
         Command::ReorderSquad { destinations } => {
@@ -93,12 +101,14 @@ pub(super) fn execute(
             }
             let before = state.warriors.clone();
             let choices = state.psi_menu_choices.clone();
+            let words = std::array::from_fn(|member| state.psi_power(member));
             for (member, destination) in destinations.into_iter().enumerate() {
                 state.warriors[destination] = before[member].clone();
                 state.psi_menu_choices[destination] = choices[member].clone();
             }
-            state.native_work.psi_memory = Some(initial_psi_memory(&state.warriors)?);
-            state.native_work.health_context = None;
+            // The power WORDs 0x437a7a stay with their member slots.
+            state.keep_psi_powers(words);
+            state.native_work.psi_memory = initial_psi_memory(&state.warriors)?;
             Ok(vec![])
         }
         Command::EditWarriorScans { warrior, controls } => {
@@ -140,6 +150,8 @@ pub(super) fn execute(
                 .attacks;
             state.warriors[warrior] = selection.finish(attacks)?;
             story_promotion::cache_scans(state, warrior, attacks)?;
+            state.native_work.character_bare_hand_bonus =
+                state.warriors[warrior].record().bare_hand_bonus()?;
             Ok(events)
         }
         Command::EditWarriorLevel { warrior } => {
@@ -161,6 +173,7 @@ pub(super) fn execute(
             };
             let information =
                 story_promotion::editor_level_up(record, &map.races, &map.profiles, &mut random)?;
+            state.native_work.character_bare_hand_bonus = record.record().bare_hand_bonus()?;
             state.library_random_seed = random.seed;
             state.library_random_draws = random.draws;
             Ok(vec![
@@ -222,6 +235,8 @@ pub(super) fn execute(
                     feedback: vec![feedback::NativeFeedback::Warning { index: 149 }],
                 });
             }
+            // The purchase copies the record to 0x44d42c before paying (0x163258..0x163276).
+            let scratch = record.bytes.clone();
             if !free_upgrade {
                 let map = crate::Session::land_in(
                     content,
@@ -247,10 +262,30 @@ pub(super) fn execute(
             record.record_mut().set_upgrade_count(selector, count);
             character::apply_upgrade(record, selector, 1)?;
             character::calculate_statistics(record)?;
+            state.native_work.warrior_table.store(6, scratch)?;
             Ok(vec![
                 Event::Sound { resource_id: 10129 },
                 Event::StatisticsCalculated { warrior },
             ])
+        }
+        Command::EnterWarriorUpgrade { warrior } => {
+            if warrior >= state.warriors.len() {
+                return Err(RuleError::Invalid(
+                    "editor warrior is outside the squad".into(),
+                ));
+            }
+            // 0x162376..0x1623e2: calcw, calcstats, BYTE44273f, then the record to character
+            // work 0x44721c (bare-hand WORD 0x447d96), 0x44e06e and 0x44d42c.
+            crate::items::calcw(state, content, warrior)?;
+            character::calculate_statistics(&mut state.warriors[warrior])?;
+            state.native_work.health_context.selected_warrior = warrior;
+            let record = state.warriors[warrior].bytes.clone();
+            state.native_work.character_bare_hand_bonus =
+                state.warriors[warrior].record().bare_hand_bonus()?;
+            let table = &mut state.native_work.warrior_table;
+            table.store(7, record.clone())?;
+            table.store(6, record)?;
+            Ok(vec![])
         }
         Command::ViewWarrior { warrior } => {
             if !(warrior_management_available(state)
@@ -258,9 +293,14 @@ pub(super) fn execute(
             {
                 return Err(RuleError::Refused { feedback: vec![] });
             }
-            state.warriors.get(warrior).ok_or_else(|| {
+            let record = state.warriors.get(warrior).ok_or_else(|| {
                 RuleError::Invalid("information warrior is outside the squad".into())
             })?;
+            state.native_work.character_bare_hand_bonus = record.record().bare_hand_bonus()?;
+            if state.combat.is_some() {
+                // Combatchoice11b766 restores the tactical selector after the view.
+                state.set_warrior_selector(state.selected_warrior);
+            }
             let mut presentation_random = state.random.clone();
             let first = presentation_random.bound(5) as usize - 1;
             let second = presentation_random.bound(5) as usize - 1;
@@ -298,24 +338,48 @@ pub(super) fn execute(
                     "select one to six distinct supplied warriors".into(),
                 ));
             }
-            state.warriors = indices
-                .iter()
-                .map(|i| content.warriors[*i].clone())
-                .collect();
-            state.native_work.psi_memory = Some(initial_psi_memory(&state.warriors)?);
+            state.replace_squad(
+                indices
+                    .iter()
+                    .map(|i| content.warriors[*i].clone())
+                    .collect(),
+            )?;
+            state.native_work.psi_memory = initial_psi_memory(&state.warriors)?;
             for warrior in &state.warriors {
                 state.native_work.loaded_item_field32 =
-                    Some(combat::ally_turns::item_context_after_weight_calc(
+                    combat::ally_turns::item_context_after_weight_calc(
                         warrior,
                         &content.items,
-                        state.native_work.loaded_item_field32.unwrap_or(0),
-                    )?);
+                        state.native_work.loaded_item_field32,
+                    )?;
             }
-            state.native_work.ammunition_work.item = None;
+            weight_calc_item_work(state, content)?;
             Ok(vec![Event::StartersImported {
                 count: state.warriors.len(),
             }])
         }
         _ => unreachable!("command routed to wrong subsystem"),
     }
+}
+
+/// partyselect counts a member with stamina below one or an automatic-mode WORD as unavailable.
+fn unavailable_members(warriors: &[centurions_content::Warrior]) -> i32 {
+    warriors
+        .iter()
+        .filter(|warrior| {
+            warrior.stamina().unwrap_or(0) < 1
+                || warrior.record().automatic_mode().unwrap_or(0) != 0
+        })
+        .count() as i32
+}
+
+/// calcweight loads every carried item through ITEM work, which keeps the last one.
+fn weight_calc_item_work(state: &mut Session, content: &Content) -> Result<(), RuleError> {
+    for warrior in &state.warriors {
+        if let Some(last) = warrior.inventory()?.last() {
+            state.native_work.ammunition_work.item =
+                Some(crate::ammunition::definition(content, last.id())?);
+        }
+    }
+    Ok(())
 }

@@ -122,6 +122,29 @@ impl MapState {
 }
 
 impl Exploration {
+    pub(crate) fn authored(index: i32, map: &centurions_content::mission::OpeningMission) -> Self {
+        Self {
+            map: index,
+            x: map.start.0,
+            y: map.start.1,
+            day: 1,
+            hour: 12,
+            minute: 0,
+            facing: 0,
+            last_move: [0; 2],
+            script: None,
+            presentation: None,
+            fatigue: 4,
+            event_headers: map.header.clone(),
+            schedule: map.schedule.clone(),
+            region_state: map.regions.clone(),
+            visibility: vec![0; 8100],
+            floor: map.floor.clone(),
+            objects: map.objects.clone(),
+            events: map.events.clone(),
+        }
+    }
+
     pub fn map_state(&self) -> MapState {
         MapState {
             event_headers: self.event_headers.clone(),

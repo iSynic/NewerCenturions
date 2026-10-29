@@ -42,6 +42,9 @@ pub struct AmmunitionResult {
     pub warnings: Vec<i16>,
     pub changed_ammo: bool,
     pub(crate) retained_record: Option<InventoryRecord>,
+    feedback: Vec<(usize, crate::Event)>,
+    /// Party-wide writes from battery removal and re-wear, applied on commit.
+    global_writes: Vec<crate::equipment::GlobalWrite>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -96,6 +99,8 @@ fn initial(
         warnings: vec![],
         changed_ammo: false,
         retained_record: None,
+        feedback: vec![],
+        global_writes: vec![],
     })
 }
 
@@ -104,8 +109,11 @@ pub(crate) fn commit_result(
     member: usize,
     result: AmmunitionResult,
 ) -> Result<Vec<crate::Event>, RuleError> {
+    state.apply_equipment_globals(&result.global_writes)?;
+    let show_level_refusals =
+        state.combat.is_none() || result.warrior.record().automatic_mode()? == 0;
     if let Some(item) = result.work.item.as_deref() {
-        state.native_work.loaded_item_field32 = Some(word(item, 32)?);
+        state.native_work.loaded_item_field32 = word(item, 32)?;
     }
     let projected = if let Some(combat) = state.combat.as_mut() {
         &mut combat.weapon_work
@@ -122,21 +130,29 @@ pub(crate) fn commit_result(
     state.ammunition = result.reserves;
     state.native_work.ammunition_work = result.work;
     if let Some(record) = result.retained_record {
-        state.native_work.inventory_record = Some(record);
+        state.native_work.inventory_record = record;
     }
-    Ok(result
-        .sounds
-        .into_iter()
-        .map(|resource_id| crate::Event::Sound { resource_id })
-        .chain(
-            result
-                .warnings
-                .into_iter()
-                .map(|warning| crate::Event::CollectionRejected { warning }),
-        )
-        .collect())
+    let mut feedback = result.feedback.into_iter().peekable();
+    let mut events = Vec::new();
+    for (index, sound) in result.sounds.iter().map(Some).chain([None]).enumerate() {
+        while feedback.peek().is_some_and(|(at, _)| *at == index) {
+            let (_, event) = feedback.next().unwrap();
+            if show_level_refusals
+                || !matches!(
+                    event,
+                    crate::Event::Feedback(crate::feedback::NativeFeedback::EquipmentLevel { .. })
+                )
+            {
+                events.push(event);
+            }
+        }
+        if let Some(&resource_id) = sound {
+            events.push(crate::Event::Sound { resource_id });
+        }
+    }
+    Ok(events)
 }
 
 #[cfg(all(test, feature = "original-fixtures"))]
-#[path = "../tests/unit/ammunition_work_tests.rs"]
+#[path = "../tests/native/ammunition_work_reference.rs"]
 mod work_tests;

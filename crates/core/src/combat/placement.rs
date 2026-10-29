@@ -70,12 +70,14 @@ pub(super) fn place_enemies_with_allies(
             if dice == 0 {
                 continue;
             }
-            if !(1..=127).contains(&dice) || EnemyRecord::from_bytes(bytes).selected_item()? < 0 {
+            // The native signed BYTE dice cursor cannot terminate above 127.
+            if dice > 127 {
                 return Err(RuleError::Unsupported {
                     action: "combat.enemies",
-                    dependency: "enemy level or random weapon tables",
+                    dependency: "enemy level outside recovered initialization range",
                 });
             }
+            super::monster_weapons::validate(bytes)?;
             EnemyRecordMut::from_bytes(bytes).set_target_body(-1);
             EnemyRecordMut::from_bytes(bytes).set_target_scan_excluded(false);
             EnemyRecordMut::from_bytes(bytes).set_reaction_ready(false);
@@ -121,9 +123,14 @@ pub(super) fn place_enemies_with_allies(
                 let hostile = i16::from(EnemyRecord::from_bytes(bytes).faction()? == 0);
                 EnemyRecordMut::from_bytes(bytes).set_faction(hostile);
             }
-            if EnemyRecord::from_bytes(bytes).selected_item()? == 0
-                && EnemyRecord::from_bytes(bytes).melee_weapon()? > 0
-            {
+            let selector = EnemyRecord::from_bytes(bytes).selected_item()?;
+            super::monster_weapons::initialize(
+                bytes,
+                random,
+                super::monster_weapons::MatchOrder::Last,
+            )?;
+            // The native table index replaces the local selector before this test.
+            if matches!(selector, 0 | -1) && EnemyRecord::from_bytes(bytes).melee_weapon()? > 0 {
                 let weapon = EnemyRecord::from_bytes(bytes).melee_weapon()?;
                 EnemyRecordMut::from_bytes(bytes).set_selected_item(weapon);
             }

@@ -1,4 +1,3 @@
-use super::selection::validate_instance;
 use super::{
     AmmunitionOutcome, AmmunitionResult, RefitFlags, WorkBuffers, definition, initial, unsupported,
 };
@@ -20,6 +19,12 @@ fn partial_warning(result: &mut AmmunitionResult, enabled: bool) {
     if enabled {
         result.warnings.push(REFIT_INCOMPLETE_WARNING);
         result.sounds.push(ERROR_SOUND);
+        result.feedback.push((
+            result.sounds.len(),
+            crate::Event::CollectionRejected {
+                warning: REFIT_INCOMPLETE_WARNING,
+            },
+        ));
     }
 }
 
@@ -74,9 +79,11 @@ fn refit_equipment(
     slot: usize,
     wearing: bool,
 ) -> Result<(), RuleError> {
-    let retained = result.retained_record.as_ref().ok_or_else(|| {
-        unsupported("unrepresented selected inventory record for battery re-wear")
-    })?;
+    // Sessions always hold the retained row; refit's helper selects the battery row.
+    let retained = result
+        .retained_record
+        .as_ref()
+        .ok_or("battery re-wear without a retained inventory record")?;
     let equipped = crate::editor_items::retained_equipment(
         &result.warrior,
         content,
@@ -87,8 +94,21 @@ fn refit_equipment(
     )?;
     result.warrior = equipped.warrior;
     result.retained_record = Some(equipped.record);
+    result.global_writes.extend(equipped.global_writes);
     result.work.item = Some(equipped.definition);
-    result.warnings.extend(equipped.warnings);
+    for warning in equipped.warnings {
+        result.warnings.push(warning);
+        result.feedback.push((
+            result.sounds.len(),
+            crate::Event::CollectionRejected { warning },
+        ));
+    }
+    if let Some(level) = equipped.level_refusal {
+        result.feedback.push((
+            result.sounds.len(),
+            crate::Event::Feedback(crate::feedback::NativeFeedback::EquipmentLevel { level }),
+        ));
+    }
     Ok(())
 }
 
@@ -106,7 +126,7 @@ fn admits_retained_item(
                     .work
                     .item
                     .as_deref()
-                    .ok_or_else(|| unsupported("unrepresented retained item class writer"))?
+                    .ok_or_else(|| RuleError::from("ITEM work missing"))?
             )
             .category()?,
             item_class::MELEE_WEAPON | item_class::MISSILE_WEAPON
@@ -150,16 +170,6 @@ pub(crate) fn refit_with_record(
     retained: Option<&InventoryRecord>,
 ) -> Result<AmmunitionResult, RuleError> {
     let inventory = warrior.inventory()?;
-    for record in inventory
-        .iter()
-        .filter(|record| record.equipment_flag() != 0)
-    {
-        let loaded = record.quantity()?;
-        let capacity = record.capacity()?;
-        if (loaded < capacity && record.ammunition_id()? != 0) || (loaded <= 0 && capacity > 0) {
-            validate_instance(record, content)?;
-        }
-    }
     let mut result = initial(warrior, reserves, work)?;
     result.retained_record = retained.cloned();
     let mut next_random = random.clone();
@@ -193,6 +203,11 @@ fn refill_existing_magazines(
         }
         if !admits_retained_item(result, record.id(), content, flags)? {
             continue;
+        }
+        if !(200..400).contains(&ammo) {
+            return Err(unsupported(
+                "selected ammunition outside represented reserves",
+            ));
         }
         result.work.ammo = Some(definition(content, ammo)?);
         let index = (ammo - 200) as usize;

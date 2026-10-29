@@ -52,7 +52,7 @@ pub fn item_context_after_weight_calc(
 }
 
 mod natural;
-pub(crate) use natural::natural_attack_enemy_with_target;
+pub(crate) use natural::{NpcMelee, Struck, natural_attack_enemy_with_processing, natural_core};
 pub use natural::{
     natural_attack_enemy, natural_attack_enemy_with_actor, natural_attack_enemy_with_packet,
     result_audio,
@@ -60,6 +60,9 @@ pub use natural::{
 
 mod firearm;
 use firearm::fire;
+pub(crate) use firearm::{
+    Duel, ScientistWorld, Shot, fire as fire_scientist, fire_in as fire_scientist_in,
+};
 
 pub fn scientist_turn_with_item_context(
     c: &mut Combat,
@@ -81,17 +84,18 @@ pub fn scientist_turn_with_item_context_and_buffs(
     item_context: i16,
     buffs: &[u8],
 ) -> Result<Vec<Event>, RuleError> {
-    scientist_turn_inner(
+    scientist_turn_with_work(
         c,
         w,
         mission,
         random,
         items,
-        item_context,
+        &mut runtime::EnemyWork {
+            item_context,
+            display_writers: false,
+            ..Default::default()
+        },
         buffs,
-        &mut Default::default(),
-        false,
-        &mut 0,
     )
 }
 
@@ -102,38 +106,10 @@ pub(crate) fn scientist_turn_with_work(
     mission: &centurions_content::mission::OpeningMission,
     random: &mut RandomState,
     items: &[Vec<u8>],
-    item_context: i16,
+    work: &mut runtime::EnemyWork,
     buffs: &[u8],
-    buffers: &mut crate::ammunition::WorkBuffers,
-    attack_count: &mut i16,
 ) -> Result<Vec<Event>, RuleError> {
-    scientist_turn_inner(
-        c,
-        w,
-        mission,
-        random,
-        items,
-        item_context,
-        buffs,
-        buffers,
-        true,
-        attack_count,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn scientist_turn_inner(
-    c: &mut Combat,
-    w: &mut [Warrior],
-    mission: &centurions_content::mission::OpeningMission,
-    random: &mut RandomState,
-    items: &[Vec<u8>],
-    mut item_context: i16,
-    buffs: &[u8],
-    buffers: &mut crate::ammunition::WorkBuffers,
-    display_writers: bool,
-    attack_count: &mut i16,
-) -> Result<Vec<Event>, RuleError> {
+    let mut item_context = work.item_context;
     let body = c
         .active_body()
         .ok_or_else(|| RuleError::Invalid("active scientist missing".into()))?;
@@ -165,6 +141,7 @@ fn scientist_turn_inner(
         actor.record_mut().set_reaction_ready(action_points >= 1);
         let m = actor.record();
         let fleeing = m.fleeing_duration() != 0;
+        let mut skip_neighbors = false;
         if !fleeing && random.bound(100) <= m.firearm_chance()? {
             if fire(
                 c,
@@ -174,31 +151,85 @@ fn scientist_turn_inner(
                 items,
                 &mut events,
                 (item_context, body),
-                buffers,
-                display_writers,
-                attack_count,
+                &mut work.buffers,
+                work.display_writers,
+                &mut work.attack_count,
             )? {
-                if let Some(item) = buffers.item.as_ref() {
+                if let Some(item) = work.buffers.item.as_ref() {
                     item_context = ItemDefinition(item).retained_field32()?;
+                    work.item_context = item_context;
                 }
                 continue;
             }
             attempt += 1;
         } else if !fleeing && random.bound(100) <= m.spell_chance()? {
-            return Err(RuleError::Unsupported {
-                action: "combat.scientist",
-                dependency: "ally spell",
-            });
+            if work.spell_disabled != 0 || m.spell_blocked_before_movement() {
+                skip_neighbors = true;
+            } else {
+                attempt += 1;
+                if runtime::enemy_spell(c, w, mission, random, (items, work), body, &mut events)? {
+                    if let Some(item) = work.buffers.item.as_ref() {
+                        item_context = ItemDefinition(item).retained_field32()?;
+                        work.item_context = item_context;
+                    }
+                    let m = c.enemies.records[e].record();
+                    if m.firearm_chance()? != 0
+                        && m.action_points() >= 2
+                        && attempt < 2
+                        && fire(
+                            c,
+                            w,
+                            mission,
+                            random,
+                            items,
+                            &mut events,
+                            (item_context, body),
+                            &mut work.buffers,
+                            work.display_writers,
+                            &mut work.attack_count,
+                        )?
+                    {
+                        if let Some(item) = work.buffers.item.as_ref() {
+                            item_context = ItemDefinition(item).retained_field32()?;
+                            work.item_context = item_context;
+                        }
+                        continue;
+                    }
+                    return Ok(events);
+                }
+            }
         }
-        events.extend(if fleeing {
+        events.extend(if fleeing || skip_neighbors {
             vec![]
-        } else if display_writers {
-            runtime::check_neighbors_with_work(c, w, random, body, items, attacks, buffs, buffers)?
+        } else if work.display_writers {
+            runtime::check_neighbors_with_work(
+                c,
+                w,
+                random,
+                body,
+                items,
+                attacks,
+                buffs,
+                &mut work.buffers,
+                work.neighbor_mask.as_mut().map(|mask| {
+                    crate::combat::neighbor_work::NativeNeighbors {
+                        selected_warrior: work.selected_warrior,
+                        party_mask: mask,
+                        aliases: crate::combat::map_alias::land_aliases(
+                            mission,
+                            work.land.as_ref(),
+                        ),
+                        table: work.warrior_table.as_ref(),
+                    }
+                }),
+            )?
+            .events
         } else {
             runtime::check_neighbors_with_buffs(c, w, random, body, items, attacks, buffs)?
         });
-        if let Some(item) = buffers.item.as_ref() {
+        if let Some(item) = work.buffers.item.as_ref() {
             item_context = ItemDefinition(item).retained_field32()?;
+            work.item_context = item_context;
         }
         for _ in 0..128 {
             if !alive(c, w, body) || !w.iter().any(|w| w.record().active_flag() != 0) {
@@ -217,8 +248,19 @@ fn scientist_turn_inner(
                 body,
                 items,
                 buffs,
-                buffers,
-                display_writers,
+                &mut work.buffers,
+                work.display_writers,
+                work.neighbor_mask.as_mut().map(|mask| {
+                    crate::combat::neighbor_work::NativeNeighbors {
+                        selected_warrior: work.selected_warrior,
+                        party_mask: mask,
+                        aliases: crate::combat::map_alias::land_aliases(
+                            mission,
+                            work.land.as_ref(),
+                        ),
+                        table: work.warrior_table.as_ref(),
+                    }
+                }),
                 &mut events,
             )?;
             events.extend(
@@ -235,59 +277,78 @@ fn scientist_turn_inner(
                     y: p.1,
                 });
             }
-            events.extend(if display_writers {
+            events.extend(if work.display_writers {
                 runtime::check_neighbors_with_work(
-                    c, w, random, body, items, attacks, buffs, buffers,
+                    c,
+                    w,
+                    random,
+                    body,
+                    items,
+                    attacks,
+                    buffs,
+                    &mut work.buffers,
+                    work.neighbor_mask.as_mut().map(|mask| {
+                        crate::combat::neighbor_work::NativeNeighbors {
+                            selected_warrior: work.selected_warrior,
+                            party_mask: mask,
+                            aliases: crate::combat::map_alias::land_aliases(
+                                mission,
+                                work.land.as_ref(),
+                            ),
+                            table: work.warrior_table.as_ref(),
+                        }
+                    }),
                 )?
+                .events
             } else {
                 runtime::check_neighbors_with_buffs(c, w, random, body, items, attacks, buffs)?
             });
-            if let Some(item) = buffers.item.as_ref() {
+            if let Some(item) = work.buffers.item.as_ref() {
                 item_context = ItemDefinition(item).retained_field32()?;
+                work.item_context = item_context;
             }
             if !moved.moved {
                 break;
             }
         }
         let m = c.enemies.records[e].record();
-        // combat115548 gates the movement-loop spell retry. The outer
-        // 115732..115776 branch separately retries a firearm, even while fleeing.
-        // Historical direct-helper receipts stop before that outer branch.
-        if m.spell_chance()? == 0 || m.action_points() < 2 || attempt > 1 {
-            if display_writers && m.firearm_chance()? != 0 && m.action_points() >= 2 && attempt < 2
-            {
-                fire(
-                    c,
-                    w,
-                    mission,
-                    random,
-                    items,
-                    &mut events,
-                    (item_context, body),
-                    buffers,
-                    display_writers,
-                    attack_count,
-                )?;
+        // combat115548..1155ee retries casting after movement, then reaches
+        // the distinct outer firearm retry at 0x115732.
+        if m.spell_chance()? != 0 && m.action_points() >= 2 && attempt < 2 {
+            c.enemies.records[e].record_mut().set_movement_points(0);
+            let m = c.enemies.records[e].record();
+            if work.spell_disabled == 0 && !m.spell_blocked_after_movement() {
+                attempt = 2;
+                runtime::enemy_spell(c, w, mission, random, (items, work), body, &mut events)?;
+                if let Some(item) = work.buffers.item.as_ref() {
+                    item_context = ItemDefinition(item).retained_field32()?;
+                    work.item_context = item_context;
+                }
             }
-            return Ok(events);
         }
-        attempt += 1;
-        if fire(
-            c,
-            w,
-            mission,
-            random,
-            items,
-            &mut events,
-            (item_context, body),
-            buffers,
-            display_writers,
-            attack_count,
-        )? {
-            if let Some(item) = buffers.item.as_ref() {
-                item_context = ItemDefinition(item).retained_field32()?;
+        work.item_context = item_context;
+        let m = c.enemies.records[e].record();
+        if work.display_writers && m.firearm_chance()? != 0 && m.action_points() >= 2 && attempt < 2
+        {
+            attempt += 1;
+            if fire(
+                c,
+                w,
+                mission,
+                random,
+                items,
+                &mut events,
+                (item_context, body),
+                &mut work.buffers,
+                work.display_writers,
+                &mut work.attack_count,
+            )? {
+                if let Some(item) = work.buffers.item.as_ref() {
+                    item_context = ItemDefinition(item).retained_field32()?;
+                    work.item_context = item_context;
+                }
+                continue;
             }
-            continue;
         }
         return Ok(events);
     }

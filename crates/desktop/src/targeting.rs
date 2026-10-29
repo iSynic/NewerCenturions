@@ -60,7 +60,7 @@ fn map_action(
     point: (i16, i16),
 ) -> Option<Action> {
     if state.psi_selection.is_some() {
-        if state.combat.as_ref()?.attack_packet.as_ref()?[1] != 0 {
+        if state.combat.as_ref()?.attack_packet[1] != 0 {
             return Some(Action::Command(Command::FirePreparedPsi {
                 x: point.0,
                 y: point.1,
@@ -175,8 +175,7 @@ pub fn input(
         {
             return Some(Action::Command(Command::FireSelectedTargets));
         }
-        if state.outdoor_psi.is_some() && state.native_work.party_mask.iter().any(|rank| *rank > 0)
-        {
+        if centurions_core::outdoor_psi::can_finish(state) {
             return Some(Action::Command(Command::FinishOutdoorPsi));
         }
     }
@@ -200,6 +199,46 @@ pub fn input(
     None
 }
 
+/// combatchoice's showspellinfo for the chosen spell, item or firearm (0x118e1e,
+/// 0x1192ca, and 0x11a622/0x11a794 after each quantity step). `power` is
+/// WORD4435cc, or for a category-9 packet WORD4435be.
+fn spell_info(
+    state: &Session,
+    content: &Content,
+    ui: &UiState,
+    power: i16,
+) -> Option<centurions_core::SpellInfo> {
+    let combat = state.combat.as_ref()?;
+    let (packet, identity) = match ui.psi_choice {
+        Some((spell, _)) if ui.inspection == Some(Inspection::PsiTargets) => {
+            let attacks = &state
+                .exploration
+                .as_ref()
+                .and_then(|position| content.map(position.map))?
+                .combat
+                .as_ref()?
+                .attacks;
+            (
+                centurions_core::combat::spells::load_packet(attacks, spell).ok()?,
+                [spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1],
+            )
+        }
+        _ => (combat.attack_packet.clone(), combat.attack_identity),
+    };
+    let work = &state.native_work.ammunition_work;
+    Some(centurions_core::SpellInfo::new(
+        &packet,
+        identity,
+        if state.target_quantity.is_some() {
+            state.native_work.attack_count
+        } else {
+            power
+        },
+        Some(power),
+        (work.weapon.as_deref(), work.item.as_deref()),
+    ))
+}
+
 fn marker(state: &Session, assets: &Assets, ui: &UiState, body: i16, rank: usize) {
     let Some(combat) = &state.combat else { return };
     let point = if body < 10 {
@@ -207,9 +246,15 @@ fn marker(state: &Session, assets: &Assets, ui: &UiState, body: i16, rank: usize
     } else {
         combat.enemies.positions.get((body - 10) as usize)
     };
-    if let Some(point) = point
-        && let Some((vx, vy)) = crate::combat_controls::origin(state, ui)
-    {
+    if let Some(point) = point {
+        cell_marker(state, assets, ui, *point, rank);
+    }
+}
+
+/// The target key plots cicn 14999 + WORD4435c0 over the cell's 32-pixel square
+/// (combatchoice 11b23a..11b262, 11b566..11b596); a location triple uses the cursor cell.
+fn cell_marker(state: &Session, assets: &Assets, ui: &UiState, point: (i16, i16), rank: usize) {
+    if let Some((vx, vy)) = crate::combat_controls::origin(state, ui) {
         let rect = Rect::new(
             (point.0 - vx) as f32 * 32.,
             20. + (point.1 - vy) as f32 * 32.,
@@ -279,7 +324,7 @@ pub fn draw(
             .iter()
             .take(state.warriors.len())
             .enumerate()
-            .filter(|(_, rank)| **rank > 0)
+            .filter(|(_, rank)| **rank != 0)
         {
             if let Some(image) = assets.icons.get(&(2200 + *rank)) {
                 draw_texture(image, 499., 29. + member as f32 * 50., WHITE);
@@ -312,9 +357,11 @@ pub fn draw(
         .map(|p| p.power)
         .or_else(|| state.medical_continuation.as_ref().map(|p| p.power))
         .or_else(|| ui.psi_choice.map(|p| p.1))
-        .or_else(|| centurions_core::combat::targeting::firearm_quantity(state, content).ok());
-    if let Some(power) = power {
-        assets.text(&power.to_string(), 708., 517., 12, RED);
+        .or_else(|| centurions_core::combat::targeting::firearm_ceiling(state, content).ok());
+    if let Some(power) = power
+        && let Some(info) = spell_info(state, content, ui, power)
+    {
+        crate::presentation::draw_info(assets, &info);
     }
     let finish = if state.psi_selection.is_some() {
         Command::FirePsiSelection
@@ -433,6 +480,15 @@ pub fn draw(
     if let Some(targets) = targets {
         for (rank, body) in targets.iter().enumerate() {
             marker(state, assets, ui, *body, rank);
+        }
+    }
+    if let Some(selection) = state
+        .combat
+        .as_ref()
+        .and_then(|c| c.firearm_selection.as_ref())
+    {
+        for (rank, location) in selection.locations.iter().enumerate() {
+            cell_marker(state, assets, ui, *location, rank);
         }
     }
 }

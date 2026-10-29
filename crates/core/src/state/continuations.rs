@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MovementContinuation {
+    Boating(BoatMovement),
     RegionalReturn {
         header: bool,
     },
@@ -15,6 +16,24 @@ pub enum MovementContinuation {
     },
     Header,
     Secrets,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BoatMovement {
+    pub tile: i16,
+    pub property: i16,
+    pub phase: BoatPhase,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BoatPhase {
+    Region { x: i16, y: i16, check: bool },
+    RegionalReturn,
+    Header,
+    AfterHeader,
+    Finish,
+    Board,
+    Leave,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -39,6 +58,7 @@ pub enum MedicalOrigin {
     #[default]
     OwnedNeedle,
     LearnedHeal,
+    OwnedItem,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -79,6 +99,20 @@ pub struct ScriptState {
     /// when it ends (newland's bVar6).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub chained: bool,
+    /// newland's position registers A4/A3 from its first two arguments: the party
+    /// cell for a walking header (buttonchoice 109884), 0,0 for other callers
+    /// (timeclick 15e8e4/15e8e6). newland45/20 replace each with a nonnegative
+    /// target (143c04, 143c1a). Schema 59.
+    #[serde(default, skip_serializing_if = "zero_cell")]
+    pub registers: (i16, i16),
+    /// PersistEvent's saved A4/A3 low bytes (locals -0x4b/-0x13, 144612..14461a);
+    /// the return copies DOOR into header row WORD4427c2 with them (146892..1468c0).
+    #[serde(default, skip_serializing_if = "zero_cell")]
+    pub persist_cell: (i16, i16),
+}
+
+fn zero_cell(cell: &(i16, i16)) -> bool {
+    *cell == (0, 0)
 }
 
 impl ScriptState {
@@ -95,6 +129,8 @@ impl ScriptState {
             origin: None,
             caller_action: None,
             chained: false,
+            registers: (0, 0),
+            persist_cell: (0, 0),
         }
     }
     pub(crate) fn restart_from(&mut self, replacement: &[u8]) {
@@ -139,8 +175,8 @@ pub struct MenuContinuation {
     pub original: Vec<u8>,
     #[serde(default)]
     pub typed: bool,
-    /// Complex-encounter branches newland44 eliminated in the loaded buffer, one bit
-    /// per branch; saveencounter writes them to the table when the encounter is left.
+    /// Historical branch marks, retained for saved-field compatibility. Current
+    /// newland44 writes the shared encounter header; later loads may replace it.
     #[serde(default, skip_serializing_if = "no_branches")]
     pub eliminated: u8,
 }
@@ -150,6 +186,9 @@ fn no_branches(eliminated: &u8) -> bool {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Presentation {
+    BoatQuestion {
+        boarding: bool,
+    },
     ScriptPause,
     Messages {
         pages: Vec<(i16, String)>,
@@ -181,6 +220,10 @@ pub enum Presentation {
     },
     Loot,
     Shop,
+    /// newland's introductory textbox returns to temple before credits are pooled.
+    ClinicEntry {
+        percent: i16,
+    },
     Clinic {
         member: usize,
         percent: i16,

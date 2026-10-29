@@ -10,3 +10,18 @@ fn movement_matches_instructions_with_bounded_sane_boundary() {
         assert_eq!(warrior.bytes, case.bytes("output"), "{}", warrior.name);
     }
 }
+
+// Wrapped zero capacity divides by zero; the modern IEEE policy matches the captured FPU route.
+#[test]
+fn zero_capacity_movement_follows_the_modern_ieee_policy() {
+    let fpu = support::fixture("sane-fpu-nonarithmetic.json");
+    for case in support::fixture("movement-boundary.json").array("cases") {
+        let mut warrior = Warrior::read(&case.bytes("warrior_before")).unwrap();
+        calculate_movement(&mut warrior, case.n("race_movement")).unwrap();
+        let mut rows = fpu.array("movement").iter();
+        let row = rows.find(|r| r["route"] == "FPU" && r["case"] == case["case"]);
+        let (record, case) = (warrior.record(), case.text("case"));
+        let actual = (record.weight_capacity().unwrap(), record.movement_per_round().unwrap());
+        assert_eq!(actual, (row.unwrap().n("capacity"), row.unwrap().n("movement")), "{case}");
+    }
+}

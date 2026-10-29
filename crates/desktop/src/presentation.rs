@@ -41,6 +41,8 @@ pub struct UiState {
     pub typed_text: String,
     pub typed_entry: bool,
     pub effects: VecDeque<OutdoorAnimation>,
+    /// The NPC steps and result pauses of the last combat command still being shown.
+    pub playback: Option<crate::combat_playback::Playback>,
     /// The PICT newland27 left over the map window.
     pub picture: Option<i16>,
     pub delay_until: f64,
@@ -53,6 +55,8 @@ pub struct UiState {
     pub estimate_target: Option<i16>,
     pub estimate: std::cell::RefCell<Option<crate::targeting::EstimateCache>>,
     pub medical_cancel: bool,
+    /// The logical pointer while the left button is held, for downbutton's look.
+    pub held_pointer: Option<Vec2>,
 }
 pub struct OutdoorAnimation {
     pub effect: i16,
@@ -104,10 +108,16 @@ use panels::{draw_clinic, draw_combat_information, draw_survivors, equipped_ammu
 
 mod state;
 
+mod bevel;
+mod bodies;
+mod flights;
 mod map;
+mod range_lines;
 use map::{draw_outdoor_effect, draw_story_picture, map};
 
 mod scene;
+mod spell_panel;
 pub use scene::draw;
+pub(crate) use spell_panel::draw_info;
 
 mod hud;

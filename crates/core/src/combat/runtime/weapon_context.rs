@@ -62,13 +62,13 @@ pub(super) fn load_melee_work(
 
 pub(crate) fn refresh_body_item(
     combat: &Combat,
-    warriors: &[Warrior],
+    warriors: &mut [Warrior],
     items: &[Vec<u8>],
     body: i16,
     buffers: &mut crate::ammunition::WorkBuffers,
 ) -> Result<(), RuleError> {
     let id = if (0..6).contains(&body) {
-        let warrior = &warriors[body as usize];
+        let warrior = &mut warriors[body as usize];
         let secondary = warrior.record().firing_mode();
         let id = if secondary {
             warrior.record().equipped_weapon()?
@@ -76,15 +76,15 @@ pub(crate) fn refresh_body_item(
             warrior.record().melee_weapon()?
         };
         if id == 0 {
+            // combatupdate2 loads item 0 only for the active actor (11f646/11f662);
+            // its missing-secondary branch 11fb7a then clears the mode byte.
+            if combat.active_body() == Some(body) {
+                buffers.load_item_from(items, id)?;
+            }
             if secondary {
-                return Err(RuleError::Unsupported {
-                    action: "combat.item_refresh",
-                    dependency: "missing selected secondary during native item refresh",
-                });
+                warrior.record_mut().set_firing_mode(false);
             }
-            if combat.active_body() != Some(body) {
-                return Ok(());
-            }
+            return Ok(());
         }
         id
     } else if body >= 10 {

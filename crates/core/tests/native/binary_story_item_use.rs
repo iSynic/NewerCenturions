@@ -87,6 +87,8 @@ fn scenario_item_use_matches_original_complete_party_ordered_costs_and_returns()
                 .unwrap();
             state = support::checkpoint(&state, &installed, "worn-script-item");
         }
+        let selected_warrior = state.selected_warrior;
+        state.native_work.health_context.affected.fill(9);
         apply(
             Command::UseItem {
                 warrior: 5,
@@ -96,7 +98,8 @@ fn scenario_item_use_matches_original_complete_party_ordered_costs_and_returns()
             &installed,
         )
         .unwrap();
-        assert_eq!(state.selected_warrior, 5);
+        assert_eq!(state.selected_warrior, selected_warrior);
+        assert_eq!(state.native_work.health_context.affected, [0; 6]);
         support::native_expect! {
             bytes &support::record_bytes(&state.warriors) => &case.bytes("after"), "original item caller before script216";
         };

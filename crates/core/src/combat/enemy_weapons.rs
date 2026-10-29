@@ -7,8 +7,10 @@ use centurions_content::Warrior;
 use centurions_content::combat::MonsterRecord;
 use centurions_content::records::{AttackPacket, ItemDefinition};
 use enemy_melee::resolve as melee_enemy_inner;
+pub(crate) use enemy_melee::weapon_core as melee_enemy_core;
 use firearm::PreparedFirearm;
 use warrior_melee::resolve as melee_inner;
+pub(crate) use warrior_melee::resolve as melee_party_prepared;
 
 pub fn ammo_id(enemy: &MonsterRecord, item_context: i16) -> Result<i16, RuleError> {
     Ok(if item_context == 0 {
@@ -28,25 +30,13 @@ pub fn prepare(
         return Err(RuleError::Invalid("enemy weapon record size".into()));
     }
     let id = enemy.record().primary_weapon()?;
-    if id <= 0
-        || !matches!(
-            ItemDefinition(weapon).spell()?,
-            crate::combat::firearm::POINT_TARGET_ATTACK
-                | crate::combat::firearm::AREA_TARGET_ATTACK
-        )
-    {
+    if id <= 0 || ItemDefinition(weapon).spell()? < 1101 {
         return Err(RuleError::Unsupported {
             action: "combat.enemy_firearm",
             dependency: "enemy firearm outside recovered definitions",
         });
     }
     let packet = firearm::prepare_packet(weapon, ammo, attacks)?;
-    if !AttackPacket(&packet).is_direct_weapon_damage()? {
-        return Err(RuleError::Unsupported {
-            action: "combat.enemy_firearm",
-            dependency: "enemy firearm status effects",
-        });
-    }
     enemy.record_mut().set_selected_item(id);
     Ok(PreparedFirearm {
         sound: AttackPacket(&packet).impact_sound()?,

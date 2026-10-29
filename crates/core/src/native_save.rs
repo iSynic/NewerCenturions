@@ -234,6 +234,10 @@ pub fn import(
     let selected_level = info.byte(0x44255f)?;
     let context = content.context(Some(name), selected_level)?;
     let mut state = Session::new(&context);
+    // A load right after launch leaves every work global the file omits at its
+    // startup value, which Session::new already holds.
+    state.native_work.boat = info.byte(0x442748)?;
+    state.native_work.boat_facing = info.byte(0x442740)? as i8;
     state.scenario_level = selected_level;
     let count = i16::from(info.byte(0x44273a)? as i8).wrapping_add(1);
     if !(1..=6).contains(&count) {
@@ -252,6 +256,14 @@ pub fn import(
             Ok(warrior)
         })
         .collect::<Result<_, RuleError>>()?;
+    // load 0x12f2fe reads all six party records; those past the squad stay in the table.
+    for body in count..6 {
+        let bytes = info.bytes(0x448aa0 + body as u32 * 3138, 3138)?;
+        state
+            .native_work
+            .warrior_table
+            .store(body as usize, bytes)?;
+    }
     crate::apply(
         crate::Command::EnterMission { name: name.into() },
         &mut state,
@@ -268,7 +280,7 @@ pub fn import(
     state.allies = info.bytes(0x440edc, 5760)?;
     state.ally_count = usize::try_from(info.word(0x44257c)?)
         .map_err(|_| RuleError::Invalid("invalid native ally count".into()))?;
-    state.native_work.psi_memory = Some(info.bytes(0x43788a, 480)?);
+    state.native_work.psi_memory = info.bytes(0x43788a, 480)?;
     state.psi_disabled = info.byte(0x442749)?;
     state.energy_recovery_disabled = info.byte(0x44274a)?;
     state.enemy_spell_disabled = info.byte(0x44274b)?;
@@ -358,6 +370,36 @@ pub fn import(
             }
         }
     }
+    state.native_work.encounter_work = crate::story::EncounterWork::startup();
+    for level in 0..3 {
+        let (menus, typed) = if level == selected_level {
+            (&state.menus, &state.typed_encounters)
+        } else if let Some(records) = state.visited_levels.get(&level) {
+            (&records.menus, &records.typed_encounters)
+        } else {
+            continue;
+        };
+        state
+            .native_work
+            .encounter_work
+            .copy_file(menus, false, false)?;
+        state
+            .native_work
+            .encounter_work
+            .copy_file(typed, true, false)?;
+    }
+    // Native load copies each provided Data E file through the shared shop buffer.
+    for level in 0..3 {
+        if let Some(records) = state
+            .native_import
+            .as_ref()
+            .unwrap()
+            .scenario_records
+            .get(&level)
+        {
+            state.native_work.shop_work.copy_file(records);
+        }
+    }
     state.suppress_allies = info.word(0x408578)?;
     let held_items = info
         .bytes(0x42e2ec, 13200)?
@@ -367,6 +409,7 @@ pub fn import(
         .map(|row| InventoryRecord(*row))
         .collect::<Vec<_>>();
     let held_money = info.long(0x44278c)?;
+    state.native_work.recovery_work.held_money = held_money;
     if held_money != 0 || held_items.iter().any(|item| item.id() != 0) {
         // The original reader does not deserialize the 0x4394b6 activation WORD.
         state.confiscated = Some(crate::confiscation::ConfiscatedEquipment {
@@ -382,6 +425,13 @@ pub fn import(
         .scenario_records
         .clone();
     if info.byte(0x442753)? != 0 {
+        let id = info.byte(0x44273b)?;
+        let records = &state.native_import.as_ref().unwrap().scenario_records[&selected_level];
+        state.native_work.shop_work.load(centurions_content::span(
+            records,
+            usize::from(id) * centurions_content::records::SHOP_BYTES,
+            centurions_content::records::SHOP_BYTES,
+        )?)?;
         state.shop_access = Some(crate::shop::Access {
             level: selected_level,
             id: info.byte(0x44273b)?,

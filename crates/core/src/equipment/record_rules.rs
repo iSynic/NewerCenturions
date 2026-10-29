@@ -17,6 +17,8 @@ pub struct EquipmentResult {
     pub sounds: Vec<i16>,
     pub warnings: Vec<i16>,
     pub record: Option<InventoryRecord>,
+    /// Ordered party-wide writes for the Session caller to apply.
+    pub(crate) global_writes: Vec<super::GlobalWrite>,
 }
 
 pub(super) fn unsupported(dependency: &'static str) -> RuleError {
@@ -134,75 +136,16 @@ pub fn collect_item(
     mission: &OpeningMission,
 ) -> Result<Collection, RuleError> {
     let definition = item_definition(content, item.id())?;
-    let mut result = Collection {
-        warrior: warrior.clone(),
-        item: item.clone(),
-        collected: false,
-        sounds: vec![ItemDefinition(definition).pickup_sound()?],
-        warnings: vec![],
-    };
-    let count = warrior.inventory()?.len();
-    let stacked = if item.id() == 700 {
-        warrior
-            .inventory()?
-            .iter()
-            .position(|record| record.id() == 700)
-    } else {
-        None
-    };
-    if let Some(slot) = stacked {
-        // Native stacking writes quantity and weight before the rejection gates.
-        let quantity = item.quantity()?;
-        let total = result
-            .warrior
-            .record()
-            .inventory_quantity(slot)?
-            .wrapping_add(quantity);
-        result
-            .warrior
-            .record_mut()
-            .set_inventory_quantity(slot, total);
-        let weight = result
-            .warrior
-            .record()
-            .carried_weight()?
-            .wrapping_add(quantity);
-        result.warrior.record_mut().set_carried_weight(weight);
-    }
-    if count >= 99 {
-        if earned_unloaded_firearm(item) {
-            result.sounds.push(6000);
-        }
-        result.warnings.push(147);
-        return Ok(result);
-    }
-    let needed = ItemDefinition(definition)
-        .supplied_quantity()?
-        .wrapping_mul(ItemDefinition(definition).unit_weight()?)
-        .wrapping_add(result.warrior.record().carried_weight()?)
-        .wrapping_add(ItemDefinition(definition).base_weight()?) as u16;
-    if needed > warrior.record().weight_capacity()? as u16 {
-        if earned_unloaded_firearm(item) {
-            result.sounds.push(6000);
-        }
-        result.warnings.push(19);
-        return Ok(result);
-    }
-    if stacked.is_some() {
-        combat::calculate_movement(&mut result.warrior, race_movement(warrior, mission)?)?;
-        result.item.clear_id();
-        result.collected = true;
-        return Ok(result);
-    }
-    InventorySlotsMut(&mut result.warrior.bytes).append_collected(
-        count,
+    let mut result = crate::story_collection::collect_inventory_item(
+        warrior,
         item,
-        ItemDefinition(definition),
+        content,
+        ItemDefinition(definition).pickup_sound()?,
+        earned_unloaded_firearm(item),
     )?;
-    calculate_weight(&mut result.warrior, content)?;
-    combat::calculate_movement(&mut result.warrior, race_movement(warrior, mission)?)?;
-    result.item.clear_id();
-    result.collected = true;
+    if result.collected {
+        combat::calculate_movement(&mut result.warrior, race_movement(warrior, mission)?)?;
+    }
     Ok(result)
 }
 
@@ -211,13 +154,15 @@ pub(crate) fn remove_inner(
     slot: usize,
     content: &Content,
     mission: &OpeningMission,
-) -> Result<(), RuleError> {
+) -> Result<Vec<super::GlobalWrite>, RuleError> {
     let shortcut = warrior.record().inventory_quantity(slot)? == -1;
-    *warrior = crate::editor_items::equipment_record(warrior, content, slot, false)?.0;
+    let (removed, _, globals) =
+        crate::editor_items::equipment_record(warrior, content, slot, false)?;
+    *warrior = removed;
     if !shortcut {
         combat::calculate_movement(warrior, race_movement(warrior, mission)?)?;
     }
-    Ok(())
+    Ok(globals)
 }
 
 /// newland91 0x141d0e empties an inventory through removeitem on a rising slot
@@ -230,14 +175,16 @@ pub(crate) fn drop_all(
     content: &Content,
     mission: &OpeningMission,
     events: &mut Vec<crate::Event>,
-) -> Result<(Warrior, Option<i16>), RuleError> {
+) -> Result<(Warrior, Option<i16>, Vec<super::GlobalWrite>), RuleError> {
     let mut warrior = warrior.clone();
     let mut loaded = None;
-    let remove = |warrior: &mut Warrior, slot: usize, events: &mut Vec<crate::Event>| {
+    let mut globals = vec![];
+    let mut remove = |warrior: &mut Warrior, slot: usize, events: &mut Vec<crate::Event>| {
         let record = warrior.record().inventory_slot(slot);
         let removed =
             crate::editor_items::retained_equipment(warrior, content, slot, false, false, &record)?;
         *warrior = removed.warrior;
+        globals.extend(removed.global_writes);
         events.extend(removed.warnings.iter().map(|&index| {
             crate::Event::Feedback(crate::feedback::NativeFeedback::Warning { index })
         }));
@@ -275,7 +222,7 @@ pub(crate) fn drop_all(
         let movement = race_movement(&warrior, mission)?;
         combat::calculate_movement(&mut warrior, movement)?;
     }
-    Ok((warrior, loaded))
+    Ok((warrior, loaded, globals))
 }
 
 /// dropitem 0x121152 retains the original 29-slot shift and empty-record fill.
@@ -284,7 +231,7 @@ pub(crate) fn drop(
     slot: usize,
     content: &Content,
     mission: &OpeningMission,
-) -> Result<(), RuleError> {
+) -> Result<Vec<super::GlobalWrite>, RuleError> {
     let item = warrior
         .inventory()?
         .get(slot)
@@ -298,9 +245,42 @@ pub(crate) fn force_drop(
     slot: usize,
     content: &Content,
     mission: &OpeningMission,
-) -> Result<(), RuleError> {
+) -> Result<Vec<super::GlobalWrite>, RuleError> {
     let item = InventorySlots(&warrior.bytes).slot(slot)?;
     drop_record(warrior, slot, &item, content, mission, true)
+}
+
+/// dropitem 0x121152 after its caller's loaditem: an unworn slot is weighed by
+/// that loaded definition. A worn slot's removal reloads its own definition, and
+/// a blocked removal warns and keeps the item. Returns the definition left loaded.
+pub(crate) fn drop_loaded(
+    warrior: &mut Warrior,
+    slot: usize,
+    loaded: i16,
+    content: &Content,
+    mission: &OpeningMission,
+    events: &mut Vec<crate::Event>,
+) -> Result<(i16, Vec<super::GlobalWrite>), RuleError> {
+    let record = InventorySlots(&warrior.bytes).slot(slot)?;
+    let mut globals = vec![];
+    let mut weighed = loaded;
+    if record.equipment_flag() != 0 {
+        let removed =
+            crate::editor_items::retained_equipment(warrior, content, slot, false, false, &record)?;
+        *warrior = removed.warrior;
+        globals = removed.global_writes;
+        weighed = record.id();
+        if !removed.warnings.is_empty() {
+            events.extend(removed.warnings.iter().map(|&index| {
+                crate::Event::Feedback(crate::feedback::NativeFeedback::Warning { index })
+            }));
+            return Ok((weighed, globals));
+        }
+    }
+    let mut item = InventorySlots(&warrior.bytes).slot(slot)?;
+    item.0[..2].copy_from_slice(&weighed.to_be_bytes());
+    globals.extend(drop_record(warrior, slot, &item, content, mission, false)?);
+    Ok((weighed, globals))
 }
 
 pub(super) fn drop_record(
@@ -310,12 +290,16 @@ pub(super) fn drop_record(
     content: &Content,
     mission: &OpeningMission,
     forced: bool,
-) -> Result<(), RuleError> {
+) -> Result<Vec<super::GlobalWrite>, RuleError> {
+    let mut globals = vec![];
     if item.equipment_flag() != 0 {
         if forced {
-            *warrior = crate::editor_items::equipment_record_forced(warrior, content, slot)?.0;
+            let (removed, _, writes) =
+                crate::editor_items::equipment_record_forced(warrior, content, slot)?;
+            *warrior = removed;
+            globals = writes;
         } else {
-            remove_inner(warrior, slot, content, mission)?;
+            globals = remove_inner(warrior, slot, content, mission)?;
         }
     }
     let definition = item_definition(content, item.id())?;
@@ -327,7 +311,8 @@ pub(super) fn drop_record(
     let total = warrior.record().carried_weight()?.wrapping_sub(weight);
     InventorySlotsMut(&mut warrior.bytes).remove_dropped_slot(slot, remaining);
     warrior.record_mut().set_carried_weight(total);
-    combat::calculate_movement(warrior, race_movement(warrior, mission)?)
+    combat::calculate_movement(warrior, race_movement(warrior, mission)?)?;
+    Ok(globals)
 }
 
 pub fn wear(
@@ -360,6 +345,7 @@ pub(super) fn wear_retained(
             sounds: vec![],
             warnings: vec![],
             record: retained.cloned(),
+            global_writes: vec![],
         });
     }
     let definition = item_definition(content, item.id())?;
@@ -369,6 +355,7 @@ pub(super) fn wear_retained(
         sounds: vec![],
         warnings: vec![],
         record: retained.cloned(),
+        global_writes: vec![],
     };
     if !can_use(warrior, definition, mission)? {
         result.warnings.push(29);
@@ -389,6 +376,7 @@ pub(super) fn wear_retained(
     )?;
     result.warrior = worn.warrior;
     result.warnings = worn.warnings;
+    result.global_writes = worn.global_writes;
     result.record = retained.map(|_| worn.record);
     if InventorySlots(&result.warrior.bytes).equipment_flag(slot) == 0 {
         result.changed = result.warrior != *warrior;
@@ -436,6 +424,7 @@ pub(super) fn remove_retained(
             sounds: vec![],
             warnings: vec![145],
             record: retained.cloned(),
+            global_writes: vec![],
         });
     }
     let mut result = EquipmentResult {
@@ -444,14 +433,16 @@ pub(super) fn remove_retained(
         sounds: vec![ItemDefinition(item_definition(content, item.id())?).pickup_sound()?],
         warnings: vec![],
         record: retained.cloned(),
+        global_writes: vec![],
     };
     if let Some(record) = retained {
         let removed =
             crate::editor_items::retained_equipment(warrior, content, slot, false, false, record)?;
         result.warrior = removed.warrior;
         result.record = Some(removed.record);
+        result.global_writes = removed.global_writes;
     } else {
-        remove_inner(&mut result.warrior, slot, content, mission)?;
+        result.global_writes = remove_inner(&mut result.warrior, slot, content, mission)?;
     }
     Ok(result)
 }

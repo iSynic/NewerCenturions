@@ -20,6 +20,11 @@ pub enum ApplicationAction {
     Member(usize),
     Add,
     Remove,
+    EraseWarrior,
+    ImportWarrior,
+    ViewRestrictions,
+    /// Items 17 and 18 move the roster list five rows up or down.
+    RosterScroll(bool),
     Done,
     Difficulty(i16),
     CloseIntro,
@@ -177,7 +182,8 @@ impl Application {
             music_request: Some(20128),
             current_music: None,
             playlist: [true; 13],
-            speed: 6,
+            // createpref 0x14c4fe: WORD43956a 5 (WORD439568 = 5 * 5 - 5 = 20).
+            speed: 5,
             menu: None,
             submenu: None,
             menu_scroll: 0,
@@ -193,6 +199,10 @@ impl Application {
 
     pub fn sync(&mut self, state: &Session, animate: bool) -> Result<(), String> {
         let now = get_time();
+        if let Some(choice) = &state.retained_walk_choice {
+            self.exchange_offer = Some(choice.body);
+            self.exchange_swap = choice.exchange;
+        }
         if self.screen == Screen::Game && state.phase == Phase::SquadSelection {
             self.screen = Screen::Title;
         }
@@ -319,6 +329,10 @@ impl Application {
             | ApplicationAction::Member(_)
             | ApplicationAction::Add
             | ApplicationAction::Remove
+            | ApplicationAction::EraseWarrior
+            | ApplicationAction::ImportWarrior
+            | ApplicationAction::ViewRestrictions
+            | ApplicationAction::RosterScroll(_)
             | ApplicationAction::Done) => self.handle_squad(action, state, content)?,
             action @ ApplicationAction::Menu(_, _) => {
                 self.handle_menu_actions(action, state, content)?

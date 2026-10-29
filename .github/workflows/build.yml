@@ -110,13 +110,13 @@ jobs:
               packages[0].rename(root / f'NewerCenturions-{tag}-{platform}{suffix}.zip')
           PY
           cat > release-notes.md <<'NOTES'
-          This beta replaces more of the active CPU-state machinery with named game logic. Attacks, reloads, Psi, equipment, shops, character development and story effects now have clearer rules and record views. Every story opcode in the original dispatch except 102 now follows the original instructions, including party picks, encounter elimination and land tile-set switches; spell-triggering melee weapons and conditions on reflected or warrior-against-warrior blows are also supported. Registration checks are not reimplemented and always pass. The public source contains the maintained game only; the instruction-level reference stays private. This is not a claim that every original behavior has been verified.
+          This beta brings combat presentation closer to the original. Enemy turns now play out step by step with the original movement delay, attack, cast and fire results show the original damage icons and text, spell and firearm flights and area effects animate, deaths play their frames, and Reveal Friends draws the edge lines for off-screen bodies. The party selection and booty screens are redrawn from the original routines, and firearm targeting follows more of the original fire-button rules. A combat initiative refusal when automatic warriors overflowed the living list is fixed. Registration checks are not reimplemented and always pass. The public source contains the maintained game only; the instruction-level reference stays private. This is not a claim that every original behavior has been verified.
 
           ### Compatibility and verification
 
-          New saves use schema 15; readers for versions 1-14 are kept. Keep backups when switching builds. Compatibility with populated original Mac saves remains unverified.
+          New saves use schema 62. Saves from earlier betas no longer load; original 1.3.2 imports are unchanged. Keep backups when switching builds. Compatibility with populated original Mac saves remains unverified.
 
-          Local verification passed 325 executable Rust cases, 17 Python checks and six assisted campaign routes with unchanged state, events and save/resume results. Formatting, Clippy and release compilation passed. All 293 original files are unchanged, and the 378 native fixtures pass with no existing fixture altered. Maintained test code is 11.77% of maintained production code; native comparison tests add another 33.16%.
+          Local verification passed 399 executable Rust cases, 16 Python checks and six assisted campaign routes with unchanged state, events and save/resume results. Formatting, Clippy and release compilation passed. All 293 original files are unchanged, and the 420 native fixtures pass. Maintained test code is 7.99% of maintained production code; native comparison tests add another 34.71%.
 
           ### Hive qualification
 

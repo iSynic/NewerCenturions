@@ -9,6 +9,14 @@ use centurions_content::records::{
 };
 use damage::{DamageFlags, DamagePacket, resolve_damage};
 
+/// Loaded WEAPON work and the attacker's separately retained melee-slot state.
+/// Bare attacks retain definition zero for immunity fields.
+#[derive(Clone, Copy)]
+pub(crate) struct PreparedMeleeWeapon<'a> {
+    pub definition: &'a [u8],
+    pub armed: bool,
+}
+
 /// Warrior-to-warrior branch of attack 0x100af0, including the unconditional reflection roll.
 /// The selector -10 condition is rolled against the target before the hit roll and lands on
 /// whichever warrior takes the damage.
@@ -30,25 +38,67 @@ pub(crate) fn attack(
         .clone();
     warriors.get(target).ok_or("melee target outside party")?;
     let weapon = weapon(&attacker.bytes, items)?;
-    let mut packet = base;
     if attacker.record().attacks_used()? >= attacker.record().attack_limit()? {
         return Ok((
             AttackResult {
+                icon: 0,
                 feedback: None,
                 damage: 0,
                 killed: false,
                 sounds: vec![45],
             },
-            packet,
+            base,
             target,
         ));
     }
     warriors[actor]
         .record_mut()
         .set_attacks_used(attacker.record().attacks_used()?.wrapping_add(1));
+    attack_prepared(
+        warriors,
+        actor,
+        target,
+        base,
+        0,
+        rolls_condition,
+        mind_shield,
+        weapon.map(|definition| PreparedMeleeWeapon {
+            definition,
+            armed: true,
+        }),
+        &attacker.bytes,
+        0,
+        difficulty,
+        random,
+    )
+}
+
+/// Prepared warrior-to-warrior arithmetic; the caller has admitted and counted the attack.
+/// `selected` supplies inventory-slot enhancement; the bare-hand bonus is retained work.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn attack_prepared(
+    warriors: &mut [Warrior],
+    actor: usize,
+    target: usize,
+    base: Vec<u8>,
+    attack_count: i16,
+    rolls_condition: bool,
+    mind_shield: bool,
+    weapon: Option<PreparedMeleeWeapon<'_>>,
+    selected: &[u8],
+    bare_hand_bonus: i16,
+    difficulty: i16,
+    random: &mut RandomState,
+) -> Result<(AttackResult, Vec<u8>, usize), RuleError> {
+    let attacker = warriors
+        .get(actor)
+        .ok_or("melee actor outside party")?
+        .clone();
+    warriors.get(target).ok_or("melee target outside party")?;
+    let mut packet = base;
     let condition = match weapon.filter(|_| rolls_condition) {
         Some(weapon) => admit_weapon_condition(
-            weapon,
+            weapon.definition,
             &mut warriors[target].bytes,
             DamageTargetKind::Warrior,
             mind_shield,
@@ -65,6 +115,7 @@ pub(crate) fn attack(
         warriors[actor].record_mut().count_miss();
         return Ok((
             AttackResult {
+                icon: 0,
                 feedback: None,
                 damage: 0,
                 killed: false,
@@ -81,14 +132,22 @@ pub(crate) fn attack(
     } else {
         target
     };
-    prepare_packet(&mut packet, &attacker.bytes, weapon, &attacker.bytes)?;
+    prepare_packet_with_context(
+        &mut packet,
+        &attacker.bytes,
+        weapon
+            .filter(|weapon| weapon.armed)
+            .map(|weapon| weapon.definition),
+        selected,
+        bare_hand_bonus,
+    )?;
     let victim = &mut warriors[actual];
     let result = resolve_damage(
         &mut victim.bytes,
         false,
         &DamagePacket {
             bytes: packet.clone(),
-            attack_count: 0,
+            attack_count,
         },
         DamageFlags {
             armor: true,
@@ -102,6 +161,7 @@ pub(crate) fn attack(
         warriors[actor].record_mut().count_miss();
         return Ok((
             AttackResult {
+                icon: 0,
                 feedback: None,
                 damage: 0,
                 killed: false,
@@ -131,11 +191,12 @@ pub(crate) fn attack(
     }
     Ok((
         AttackResult {
+            icon: result.sound,
             feedback,
             damage,
             killed: health < 1,
-            sounds: vec![match weapon {
-                Some(weapon) => ItemDefinition(weapon).impact_sound()?,
+            sounds: vec![match weapon.filter(|weapon| weapon.armed) {
+                Some(weapon) => ItemDefinition(weapon.definition).impact_sound()?,
                 None => random.bound(2).wrapping_add(401),
             }],
         },
@@ -291,8 +352,7 @@ pub(crate) fn spell_weapon(
             warned: current_turn,
         }));
     }
-    // attack adds the character work record's bare-hand bonus (0x447d96), which the
-    // session does not keep; prepare_packet likewise takes it as zero.
+    // This record-only compatibility entry has no retained character-work bonus.
     if warrior.record().bare_hand_damage()? >= 8 {
         return Ok(Some(SpellWeapon::Halt {
             packet,
@@ -341,5 +401,23 @@ pub(crate) fn prepare_packet(
         }
     }
     attack.write(packet);
+    Ok(())
+}
+
+/// attack 0x100af0 reads WORD447d96 only for an unequipped melee slot. Keep
+/// the weapon's Single-factor calculations in prepare_packet unchanged.
+pub(crate) fn prepare_packet_with_context(
+    packet: &mut [u8],
+    warrior: &[u8],
+    weapon: Option<&[u8]>,
+    selected: &[u8],
+    bare_hand_bonus: i16,
+) -> Result<(), RuleError> {
+    prepare_packet(packet, warrior, weapon, selected)?;
+    if weapon.is_none() {
+        let mut attack = centurions_content::records::WeaponAttackParameters::read(packet)?;
+        attack.physical.1 = attack.physical.1.wrapping_add(bare_hand_bonus);
+        attack.write(packet);
+    }
     Ok(())
 }

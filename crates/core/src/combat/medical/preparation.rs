@@ -1,63 +1,44 @@
-//! Medical item admission and unscaled prepattack composition.
-use super::unsupported;
-use crate::{
-    RuleError,
-    combat::{firearm, spells},
-};
-use centurions_content::{
-    Content,
-    mission::OpeningMission,
-    records::{ItemDefinition, WeaponAttackModifiers, WeaponAttackParameters},
-};
+//! Owned-item preparation through the shared prepattack kernel.
+use crate::{RuleError, combat::firearm};
+use centurions_content::records::{ItemDefinition, WeaponAttackParameters};
+use centurions_content::{Content, Warrior, mission::OpeningMission};
 
-pub(super) fn prepared_packet(
+pub(in crate::combat) fn prepared_packet(
     content: &Content,
     mission: &OpeningMission,
     item: i16,
+    warrior: &Warrior,
 ) -> Result<Vec<u8>, RuleError> {
-    let weapon = content
-        .items
-        .get(item as usize)
-        .ok_or_else(|| RuleError::Invalid("needle definition missing".into()))?;
-    let ammunition = content
-        .items
-        .first()
-        .ok_or_else(|| RuleError::Invalid("empty ammunition definition missing".into()))?;
-    if weapon.len() != 150
-        || ammunition.len() != 150
-        || ItemDefinition(weapon).category()? != 28
-        || ItemDefinition(weapon).effect_selector()? != 699 - item
-        || ItemDefinition(weapon).spell()? != 1401
-        || ItemDefinition(weapon).attack_count()? != 1
-        || ItemDefinition(weapon).unit_weight()? != 5
-        || ItemDefinition(weapon).discarded_when_empty()? != 1
-    {
-        return Err(unsupported("other medical item definition"));
-    }
+    let weapon = crate::ammunition::definition(content, item)?;
+    let ammunition = crate::ammunition::definition(content, 0)?;
     let attacks = &mission
         .combat
         .as_ref()
-        .ok_or_else(|| RuleError::Invalid("medical attack content missing".into()))?
+        .ok_or("item attack content missing")?
         .attacks;
-    let mut packet = spells::load_packet(attacks, 1401)?;
-    let mut attack = WeaponAttackParameters::read(&packet)?;
-    firearm::compose_item_attack(
-        &mut attack,
-        &WeaponAttackModifiers::read(weapon)?,
-        &WeaponAttackModifiers::read(ammunition)?,
-    );
-    attack.write(&mut packet);
-    validate_packet(&packet)?;
+    let packet = firearm::prepare_packet(&weapon, &ammunition, attacks)?;
+    let prepared = WeaponAttackParameters::read(&packet)?;
+    // prepattack(actor,1) retains D3 for its per-instance reads. A zero damage
+    // packet stays zero for every finite BYTE enhancement; range still needs
+    // the actual row. Ammunition enhancement could mask nonzero inputs.
+    let damage_uses_row = prepared.physical != (0, 0)
+        || prepared.elemental_maximum.iter().any(|damage| *damage != 0)
+        || ItemDefinition(&ammunition).damage_enhancement() != 0;
+    if (0..100).any(|index| {
+        let row = warrior.record().inventory_slot(index);
+        row.range_modifier() != 0 || damage_uses_row && row.damage_enhancement() != 0
+    }) {
+        return Err(RuleError::Unsupported {
+            action: "combat.item_activation",
+            dependency: "prepared item modifier row in combatchoice's register D3 at 1190a8",
+        });
+    }
     Ok(packet)
 }
 
 pub(super) fn validate_packet(packet: &[u8]) -> Result<(), RuleError> {
-    const PREPARED: [u8; 58] = [
-        1, 1, 4, 0, 0, 0, 0, 0, 0, 3, 0, 8, 16, 0, 0, 0, 0, 15, 6, 8, 8, 1, 1, 0, 0, 0, 0, 0, 0, 0,
-        10, 1, 0, 0, 0, 0, 1, 175, 1, 174, 0, 57, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0,
-    ];
-    if packet != PREPARED {
-        return Err(unsupported("other prepared medical attack"));
+    if packet.len() != 58 {
+        return Err("prepared medical packet size".into());
     }
     Ok(())
 }

@@ -20,6 +20,8 @@ pub struct View {
     pub body: Option<i16>,
     turn: Option<(i16, usize)>,
     point: Option<(i16, i16)>,
+    /// Reveal Friends: showrange(0) 0x1580be's frames and lines stay until its
+    /// WaitNextEvent loop 0x158416..0x15843c takes a mouseDown or keyDown.
     pub reveal: bool,
     pub move_target: bool,
 }
@@ -48,6 +50,12 @@ impl View {
             *self = Self::default();
         }
         self.turn = Some((c.round, c.cursor));
+        if let ViewAction::Reveal = action {
+            // combat 0x116350 keeps the view: showrange(0), then centerfield at
+            // the current centre WORD408570/408572 once a click or key arrives.
+            self.reveal = !self.reveal;
+            return;
+        }
         self.point = None;
         match action {
             ViewAction::Center => {
@@ -59,7 +67,7 @@ impl View {
                 self.body = c.active_body();
                 self.move_target = true;
             }
-            ViewAction::Reveal => self.reveal = !self.reveal,
+            ViewAction::Reveal => {}
             ViewAction::Next | ViewAction::Previous => {
                 let step = if matches!(action, ViewAction::Next) {
                     1
@@ -93,9 +101,13 @@ impl View {
 }
 
 pub fn origin(state: &Session, ui: &UiState) -> Option<(i16, i16)> {
-    let c = state.combat.as_ref()?;
+    if let Some(origin) = ui.playback.as_ref().and_then(|playback| playback.view) {
+        return Some(origin);
+    }
+    let live = state.combat.as_ref()?;
     let body = ui.combat_view.selected(state)?;
-    let point = if ui.combat_view.turn == Some((c.round, c.cursor))
+    let c = live;
+    let point = if ui.combat_view.turn == Some((live.round, live.cursor))
         && let Some(point) = ui.combat_view.point
     {
         point
@@ -104,11 +116,16 @@ pub fn origin(state: &Session, ui: &UiState) -> Option<(i16, i16)> {
     } else {
         *c.enemies.positions.get((body - 10) as usize)?
     };
+    Some(centered(c, point))
+}
+
+/// The view origin that puts a tactical position at the view's centre cell.
+pub fn centered(c: &centurions_core::combat::Combat, point: (i16, i16)) -> (i16, i16) {
     let shift = (c.map.shift.0 + 5, c.map.shift.1 + 5);
-    Some((
+    (
         (point.0 - 7).clamp(-shift.0, 75 - shift.0),
         (point.1 - 6).clamp(-shift.1, 77 - shift.1),
-    ))
+    )
 }
 
 pub fn buttons(

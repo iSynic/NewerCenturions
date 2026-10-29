@@ -147,6 +147,10 @@ impl ItemDefinition<'_> {
             amount: word(self.0, 50)?,
         }))
     }
+    /// ShowResults -40 uses retained ITEM word46 minus19 as a one-based STR#134 index.
+    pub fn condition_feedback_index(&self) -> Result<i16, ContentError> {
+        Ok(word(self.0, 46)?.wrapping_sub(19))
+    }
     pub fn price(&self) -> Result<i32, ContentError> {
         long(self.0, 142)
     }

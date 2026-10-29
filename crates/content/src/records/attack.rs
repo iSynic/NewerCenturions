@@ -67,8 +67,10 @@ impl AttackPacket<'_> {
     pub fn divides_shots_between_targets(&self) -> bool {
         self.0[1] == 0
     }
+    /// combatchoice, the NPC decision, cast and spelltargets compare the mode as a
+    /// signed BYTE, so modes 128..255 target bodies like 0 and 1.
     pub fn requires_area_mask(&self) -> bool {
-        self.0[1] >= 2
+        self.0[1] as i8 >= 2
     }
     /// castspell's animation setup consumes a draw even in headless callers.
     pub fn has_randomized_animation(&self) -> bool {
@@ -94,6 +96,9 @@ impl AttackPacket<'_> {
 pub struct AttackPacketMut<'a>(pub &'a mut [u8]);
 
 impl AttackPacketMut<'_> {
+    pub fn set_area_shape(&mut self, shape: u8) {
+        self.0[31] = shape;
+    }
     pub fn rotate_area(&mut self, rotation: u8) -> Option<()> {
         self.0[31] = self.0[31].checked_add(rotation)?;
         Some(())

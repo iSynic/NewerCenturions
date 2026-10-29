@@ -1,6 +1,7 @@
 use centurions_content::installation::Installation;
 use centurions_core::{Command, CommandPreferences, Session, apply};
 use std::path::PathBuf;
+mod acceptance;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -14,6 +15,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let content = installation.content;
     let resource_root = installation.resource_root;
     match action.as_str() {
+        "audit-resources" => {
+            println!("{}", acceptance::resources(&content, &resource_root));
+        }
+        "audit-import" => {
+            let original = PathBuf::from(
+                args.next()
+                    .ok_or("audit-import needs the original Data I1 path")?,
+            );
+            let commands = PathBuf::from(args.next().ok_or("audit-import needs command JSON")?);
+            let work = PathBuf::from(
+                args.next()
+                    .ok_or("audit-import needs a new analysis work directory")?,
+            );
+            println!(
+                "{}",
+                acceptance::import(&content, &original, &commands, &work)?
+            );
+        }
         "convert-assets" => {
             let output = root.join("analysis/assets");
             let mut receipts = Vec::new();
@@ -94,6 +113,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let path = PathBuf::from(args.next().ok_or("replay needs command JSON path")?);
             let options: Vec<String> = args.collect();
             let trace = options.iter().any(|arg| arg == "--trace");
+            let outputs: Vec<_> = options
+                .iter()
+                .enumerate()
+                .filter(|(_, arg)| *arg == "--save")
+                .collect();
+            if outputs.len() > 1 {
+                return Err("--save may be specified only once".into());
+            }
+            let output = outputs
+                .first()
+                .map(|(index, _)| {
+                    options
+                        .get(index + 1)
+                        .filter(|path| !path.starts_with("--"))
+                        .map(PathBuf::from)
+                        .ok_or("--save needs an output path")
+                })
+                .transpose()?;
             let commands: Vec<Command> = serde_json::from_slice(&std::fs::read(path)?)?;
             // `--from <save>` starts from a saved session instead of a new game.
             let mut session = match options.iter().position(|arg| arg == "--from") {
@@ -109,7 +146,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for entry in centurions_core::trace::take() {
                     println!("{}", serde_json::to_string(&entry)?);
                 }
-                println!("{}", serde_json::to_string(&events?)?);
+                match events {
+                    Ok(events) => println!("{}", serde_json::to_string(&events)?),
+                    Err(error) => {
+                        // Preserve the actual command boundary, including deliberate partial effects.
+                        if let Some(output) = &output {
+                            centurions_core::save(output, &session, &content)?;
+                            println!("{}", serde_json::to_string(&session)?);
+                        }
+                        return Err(error.into());
+                    }
+                }
+            }
+            if let Some(output) = &output {
+                centurions_core::save(output, &session, &content)?;
             }
             println!("{}", serde_json::to_string(&session)?);
         }

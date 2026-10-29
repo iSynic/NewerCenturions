@@ -20,7 +20,7 @@ fn unknown_retained_target_scan_stops_without_extra_random_draws() {
     let mission = OpeningMission {
         tile_properties: get("properties")[64..12064].to_vec(),
         shared: std::sync::Arc::new(centurions_content::mission::StoryTables {
-            ..support::stories()
+            ..Default::default()
         }),
         ..support::mission()
     };

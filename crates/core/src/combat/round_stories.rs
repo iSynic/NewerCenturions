@@ -19,10 +19,13 @@ pub enum RoundEffect {
 pub struct RoundCaller {
     pub active_enemy: usize,
     pub last_defeated: Option<i16>,
+    /// Party positions 0x44709a for every slot; a battle's squad holds only its own.
+    pub party_positions: [(i16, i16); 6],
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RoundOutcome {
+    pub extra_record: Option<Vec<u8>>,
     pub effects: Vec<RoundEffect>,
     pub hostile_additions: i16,
 }
@@ -81,6 +84,8 @@ pub struct RoundProgram {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RoundDispatch {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retained: bool,
     pub suspended_script: Option<crate::ScriptState>,
     #[serde(default)]
     pub child_battle: bool,
@@ -96,6 +101,10 @@ pub struct RoundDispatch {
 pub struct RoundBattleReturn {
     pub after_message: i16,
     pub treasure: i16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rewards: Option<super::runtime::OrdinaryBattleRewards>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected: Option<super::runtime::SelectedBattleTreasure>,
     pub group: Option<i16>,
     pub npc: Option<crate::story_npc_battle::NpcBattleStart>,
 }
@@ -136,16 +145,12 @@ impl RoundDispatch {
                 return Err(RuleError::Invalid("invalid round caller ownership".into()));
             }
             if let Some(outer) = &frame.outer_battle {
+                if let Some(selected) = &outer.selected {
+                    selected.validate_suspended()?;
+                }
                 let map = state.land(content).ok_or("round caller map unavailable")?;
                 if outer.after_message != 0 {
                     map.dialogue(outer.after_message)?;
-                }
-                if outer.treasure != 0 {
-                    span(
-                        &map.treasure,
-                        usize::from(outer.treasure.unsigned_abs()) * 88,
-                        88,
-                    )?;
                 }
                 if let Some(script) = outer.group {
                     map.script(script)?;
@@ -178,8 +183,16 @@ impl RoundDispatch {
             .as_ref()
             .is_none_or(|position| position.script.is_none())
             || (state.combat.is_none()
+                && !self.retained
                 && !self.child_battle
-                && state.scripted_cleanup != Some(crate::story_cleanup::Stage::Complete))
+                && !matches!(
+                    state.scripted_cleanup,
+                    Some(
+                        crate::story_cleanup::Stage::Complete
+                            | crate::story_cleanup::Stage::Rewards
+                            | crate::story_cleanup::Stage::RetainedSurvivors { .. }
+                    )
+                ))
             || (state.combat.is_some()
                 && !self.child_battle
                 && state
@@ -207,7 +220,7 @@ impl RoundProgram {
         let script = mission.script(self.script.ok_or("round script missing")?)?;
         let previous = usize::from(self.cursor) - 1;
         if self.delegated {
-            if self.text.is_some() || word(&script, 8 + previous * 2)? != 3 {
+            if self.text.is_some() || !shared_operation(word(&script, 8 + previous * 2)?) {
                 return Err(RuleError::Invalid("invalid delegated round script".into()));
             }
             return Ok(());
@@ -223,6 +236,25 @@ impl RoundProgram {
     }
 }
 
+/// getup125d74..125d8a calls newland(0, 0, -1, 0, 0) for each loaded round slot.
+/// Operations with round-local implementations stay here; the shared interpreter
+/// owns the rest of that script, including any modal continuation or replacement.
+pub(crate) fn shared_operation(opcode: i16) -> bool {
+    !matches!(
+        Operation::from_native(opcode),
+        Operation::NoAction
+            | Operation::Unarmed(_)
+            | Operation::EndScript
+            | Operation::ContinueIfMonster
+            | Operation::Dialogue
+            | Operation::Sound
+            | Operation::NeutralizeActors
+            | Operation::SummonActors
+            | Operation::RemoveActorClass
+            | Operation::ReplaceRoundScript
+    )
+}
+
 fn extra(extras: &[u8], id: i16) -> Result<&[u8], RuleError> {
     Ok(span(extras, usize::from(id.unsigned_abs()) * 10, 10)?)
 }
@@ -234,21 +266,51 @@ pub(crate) fn replacement(
     predicate: &[u8],
     random: &mut RandomState,
 ) -> Result<Option<i16>, RuleError> {
+    replacement_slot(
+        Some(state.counter),
+        Some(&mut state.slots),
+        Some(i16::from(slot)),
+        predicate,
+        random,
+    )
+}
+
+/// newland 0x7e clears WORD 0x439cec + 2 * slot; Getup's slot loop leaves WORD 0x408576
+/// at 5 when it finishes, and only clearing predicates write through it.
+pub(crate) fn replacement_slot(
+    counter: Option<i8>,
+    slots: Option<&mut [i16; 5]>,
+    slot: Option<i16>,
+    predicate: &[u8],
+    random: &mut RandomState,
+) -> Result<Option<i16>, RuleError> {
+    // BYTE44255c and WORD408576 are written only by battle setup and Getup's
+    // round scan; before either they keep their zero DATA launch values, as
+    // do WORDs439cec, so clearing an unloaded slot writes nothing new.
+    let counter = counter.unwrap_or(0);
     let mode = word(predicate, 0)?;
     let eligible = if mode == 1 {
         random.bound(100) <= word(predicate, 2)?
     } else {
-        mode != 0 || i16::from(state.counter) > word(predicate, 2)?
+        mode != 0 || i16::from(counter) > word(predicate, 2)?
     };
     if !eligible {
         return Ok(None);
     }
     let repeat = word(predicate, 4)?;
     if mode != 1 && repeat != 1 {
-        *state
-            .slots
-            .get_mut(usize::from(slot))
-            .ok_or("round slot unavailable")? = 0;
+        let slot = slot.unwrap_or(0);
+        match (slot, slots) {
+            (0..5, Some(slots)) => slots[slot as usize] = 0,
+            // Slot 5 is battle record WORD 0x439cf6, the distance BYTE. Its only readers
+            // (combatsetup 0x11d630, 0x11d66a and 0x11d6e6) follow the record fread at
+            // 0x11d5a2, and updatemonstermenu reads it only in the cold tail, which ends
+            // at the first battle; so the clear changes nothing any reader sees.
+            (0..=5, _) => {}
+            // Getup's loop (clr.w 0x125d3a, addq.w 0x125da8, cmpi.w #5 0x125dae) is the
+            // only writer of WORD 0x408576, and session validation holds it in 0..=5.
+            _ => return Err("round slot outside Getup's 0..=5 range".into()),
+        }
     }
     Ok(Some(if repeat == 2 {
         random.range(word(predicate, 6)?, word(predicate, 8)?)
@@ -258,17 +320,45 @@ pub(crate) fn replacement(
 }
 
 pub(crate) fn neutralize(combat: &mut Combat, extra: &[u8]) -> Result<(), RuleError> {
-    if word(extra, 2)? != 0 {
-        return Err(unsupported("native reverse-mode victory-counter context"));
-    }
-    for record in &mut combat.enemies.records {
-        if i16::from(record.record().definition_id()) == word(extra, 0)?
+    let reverse = word(extra, 2)? != 0;
+    let class = word(extra, 0)?;
+    for index in 0..100 {
+        let record = combat.story_record_mut(index)?;
+        if i16::from(record.record().definition_id()) == class
             && record.record().stamina()? > 0
+            && (record.record().faction()? == 0) == reverse
         {
+            // newland opcode122 writes zero in both arms, even in reverse mode.
             record.record_mut().set_faction(0);
+            combat
+                .victory_work
+                .add_defeated(if reverse { -1 } else { 1 });
         }
     }
     Ok(())
+}
+
+/// Party position 0x44709a + 4 * slot of killbody's body WORD 0x408574 (0x12e506).
+fn killbody_origin(
+    combat: &Combat,
+    body: i16,
+    party_positions: &[(i16, i16); 6],
+) -> Result<(i16, i16), RuleError> {
+    let slot = usize::try_from(body).map_err(|_| "killbody origin before the party positions")?;
+    if let Some(point) = combat.squad.positions.get(slot) {
+        return Ok(*point);
+    }
+    match slot {
+        // The battle squad holds only the warriors it entered with; combatsetup
+        // leaves the later slots as the last writer left them.
+        0..6 => Ok(party_positions[slot]),
+        // Slots 6 and 7 are the WORDs 0x4470b2..0x4470b7 that presentation shares.
+        6 | 7 => Err(unsupported(
+            "killbody origin in a presentation-shared party slot",
+        )),
+        // Slots 8 and 9 are initiative order rows 1..4 at 0x4470ba.
+        _ => combat.script_target_position(body, false, party_positions),
+    }
 }
 
 /// newland125 uses killbody's retained body, rather than the queued story origin.
@@ -276,27 +366,27 @@ pub(crate) fn destroy_class(
     combat: &mut Combat,
     extra: &[u8],
     last_defeated: Option<i16>,
+    party_positions: &[(i16, i16); 6],
     random: &mut RandomState,
 ) -> Result<Vec<i16>, RuleError> {
-    let body = last_defeated.ok_or_else(|| unsupported("retained killbody origin"))?;
-    let center = if body < 10 {
-        usize::try_from(body)
-            .ok()
-            .and_then(|index| combat.squad.positions.get(index))
-            .copied()
-            .ok_or_else(|| unsupported("retained killbody position"))?
-    } else {
-        combat.story_position((body - 10) as usize)?
-    };
-    let class = word(extra, 0)?;
     let count = match word(extra, 2)? {
         0 => 999,
         value if value < 0 => random.bound(value.wrapping_abs()),
         value => value,
     };
     if count < 0 {
-        return Err(unsupported("negative removal count and native active NPC"));
+        let index = combat.selected_enemy;
+        // destroymonster takes the selected NPC WORD 0x447196 into the 100 records;
+        // every writer stores an NPC body - 10 and combat validation keeps it below 100.
+        if index >= 100 {
+            return Err("selected NPC past the NPC array".into());
+        }
+        // Records past the battle roster are the retained NPC slots.
+        super::lifecycle::destroy_enemy(combat, index)?;
+        return Ok(vec![index as i16 + 10]);
     }
+    let class = word(extra, 0)?;
+    let mut center = None;
     let radius = match word(extra, 4)? {
         0 => 1000,
         value => value,
@@ -309,6 +399,20 @@ pub(crate) fn destroy_class(
             if record.stamina()? <= 0 || i16::from(record.record().definition_id()) != class {
                 continue;
             }
+            let center = match center {
+                Some(point) => point,
+                None => {
+                    let body = last_defeated
+                        .ok_or_else(|| RuleError::from("round caller without a killbody origin"))?;
+                    let point = if body < 10 {
+                        killbody_origin(combat, body, party_positions)?
+                    } else {
+                        combat.story_position((body - 10) as usize)?
+                    };
+                    center = Some(point);
+                    point
+                }
+            };
             let point = combat.enemies.positions[index];
             let dx = f64::from(point.0.wrapping_sub(center.0));
             let dy = f64::from(point.1.wrapping_sub(center.1));
@@ -335,6 +439,51 @@ pub fn advance(
     caller: RoundCaller,
     random: &mut RandomState,
 ) -> Result<RoundOutcome, RuleError> {
+    advance_inner(
+        combat,
+        state,
+        mission,
+        definitions,
+        extras,
+        caller,
+        random,
+        false,
+    )
+}
+
+/// Session predicates execute in the shared interpreter before their RNG draw.
+pub(crate) fn advance_for_session(
+    combat: &mut Combat,
+    state: &mut RoundScripts,
+    mission: &OpeningMission,
+    definitions: &[u8],
+    extras: &[u8],
+    caller: RoundCaller,
+    random: &mut RandomState,
+) -> Result<RoundOutcome, RuleError> {
+    advance_inner(
+        combat,
+        state,
+        mission,
+        definitions,
+        extras,
+        caller,
+        random,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn advance_inner(
+    combat: &mut Combat,
+    state: &mut RoundScripts,
+    mission: &OpeningMission,
+    definitions: &[u8],
+    extras: &[u8],
+    caller: RoundCaller,
+    random: &mut RandomState,
+    dispatch_predicates: bool,
+) -> Result<RoundOutcome, RuleError> {
     let mut step = None;
     let result = run(
         combat,
@@ -344,6 +493,7 @@ pub fn advance(
         extras,
         caller,
         random,
+        dispatch_predicates,
         &mut step,
     );
     result.map_err(|error| match step {
@@ -364,6 +514,7 @@ fn run(
     extras: &[u8],
     caller: RoundCaller,
     random: &mut RandomState,
+    dispatch_predicates: bool,
     step: &mut Option<(i16, i16, usize)>,
 ) -> Result<RoundOutcome, RuleError> {
     if combat.enemies.records.len() > 100
@@ -388,11 +539,8 @@ fn run(
     {
         return Err(RuleError::Invalid("invalid round continuation".into()));
     }
-    if combat.death_queue.processing {
-        return Err(unsupported(
-            "battle round invoked during death-script processing",
-        ));
-    }
+    // getup125a3a's slot loop runs each round macro without testing the queue byte
+    // 438584 or the killbody callback byte 438585.
     let mut next = combat.clone();
     let mut next_state = state.clone();
     let mut next_random = random.clone();
@@ -415,7 +563,11 @@ fn run(
         }
     });
     let mut completed = false;
-    for _ in 0..256 {
+    // Only a script replacement moves the cursor back, so every cycle passes a
+    // script entry. A repeated entry state means the original never leaves the
+    // loop; an RNG-driven loop keeps changing state and runs to its end.
+    let mut entries = std::collections::HashSet::new();
+    loop {
         if program.script.is_none() {
             while program.slot < 5 && next_state.slots[usize::from(program.slot)] == 0 {
                 program.slot += 1;
@@ -426,6 +578,18 @@ fn run(
             }
             program.script = Some(next_state.slots[usize::from(program.slot)]);
             program.cursor = 0;
+        }
+        if program.cursor == 0
+            && !entries.insert(serde_json::to_vec(&(
+                &program,
+                &next_state,
+                &next,
+                &next_random,
+            ))?)
+        {
+            return Err(unsupported(
+                "round script repeats without change; the original loop never ends",
+            ));
         }
         if program.cursor == 8 {
             program.slot += 1;
@@ -458,30 +622,33 @@ fn run(
                 break;
             }
             Operation::Sound => outcome.effects.push(RoundEffect::Sound(value)),
-            Operation::Question => {
-                program.delegated = true;
-                outcome.effects.push(RoundEffect::Dispatch {
-                    script: program.script.unwrap(),
-                    cursor: cursor as u8,
-                });
-                break;
+            Operation::NeutralizeActors => {
+                let record = extra(extras, value)?;
+                outcome.extra_record = Some(record.to_vec());
+                neutralize(&mut next, record)?;
             }
-            Operation::NeutralizeActors => neutralize(&mut next, extra(extras, value)?)?,
-            Operation::SummonActors => spawn(
-                &mut next,
-                mission,
-                definitions,
-                extra(extras, value)?,
-                caller.active_enemy,
-                &mut next_random,
-                &mut outcome,
-            )?,
+            Operation::SummonActors => {
+                let record = extra(extras, value)?;
+                outcome.extra_record = Some(record.to_vec());
+                spawn(
+                    &mut next,
+                    mission,
+                    definitions,
+                    record,
+                    caller.active_enemy,
+                    &mut next_random,
+                    &mut outcome,
+                )?;
+            }
             Operation::RemoveActorClass => {
+                let record = extra(extras, value)?;
+                outcome.extra_record = Some(record.to_vec());
                 outcome.effects.extend(
                     destroy_class(
                         &mut next,
-                        extra(extras, value)?,
+                        record,
                         caller.last_defeated,
+                        &caller.party_positions,
                         &mut next_random,
                     )?
                     .into_iter()
@@ -489,12 +656,10 @@ fn run(
                 );
             }
             Operation::ReplaceRoundScript => {
-                let Some(target) = replacement(
-                    &mut next_state,
-                    program.slot,
-                    extra(extras, value)?,
-                    &mut next_random,
-                )?
+                let record = extra(extras, value)?;
+                outcome.extra_record = Some(record.to_vec());
+                let Some(target) =
+                    replacement(&mut next_state, program.slot, record, &mut next_random)?
                 else {
                     program.cursor = 8;
                     continue;
@@ -502,8 +667,9 @@ fn run(
                 program.script = Some(target);
                 program.cursor = 0;
             }
-            Operation::ChanceBranch => {
+            Operation::ChanceBranch if !dispatch_predicates => {
                 let predicate = extra(extras, value)?;
+                outcome.extra_record = Some(predicate.to_vec());
                 if next_random.bound(100) <= word(predicate, 0)? {
                     match word(predicate, 2)? {
                         -2 | 2 => program.cursor = 8,
@@ -521,17 +687,17 @@ fn run(
                 }
             }
             _ => {
-                return Err(unsupported(
-                    "round instruction needs a connected command adapter",
-                ));
+                program.delegated = true;
+                outcome.effects.push(RoundEffect::Dispatch {
+                    script: program.script.unwrap(),
+                    cursor: cursor as u8,
+                });
+                break;
             }
         }
     }
     *step = None;
     if !completed {
-        if program.text.is_none() && !program.delegated {
-            return Err(unsupported("round instruction budget exhausted"));
-        }
         next_state.pending = Some(program);
     }
     *combat = next;

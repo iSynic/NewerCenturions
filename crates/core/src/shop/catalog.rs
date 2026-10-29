@@ -1,15 +1,34 @@
 //! Catalog for shop.
-use super::records;
+use super::access::current_work;
 use crate::{RuleError, Session};
-use centurions_content::records::{ItemDefinition, SHOP_SLOTS, ShopRecord};
+use centurions_content::records::{ItemDefinition, SHOP_SLOTS};
 use centurions_content::{Content, InventoryRecord};
 
 pub fn stock(state: &Session) -> Result<Vec<(usize, i16, u8)>, RuleError> {
-    let records = ShopRecord(records(state)?);
-    (0..SHOP_SLOTS)
-        .filter(|i| records.quantity(*i) != 0)
-        .map(|i| Ok((i, records.item(i)?, records.quantity(i))))
-        .collect()
+    stock_rows(state, 0..SHOP_SLOTS)
+}
+
+/// updateshop reads the selected 200-slot family, independently of the others.
+pub fn stock_family(state: &Session, family: usize) -> Result<Vec<(usize, i16, u8)>, RuleError> {
+    if family >= 5 {
+        return Err("shop family outside the native stock".into());
+    }
+    stock_rows(state, family * 200..(family + 1) * 200)
+}
+
+fn stock_rows(
+    state: &Session,
+    rows: std::ops::Range<usize>,
+) -> Result<Vec<(usize, i16, u8)>, RuleError> {
+    let work = current_work(state)?;
+    let mut stock = Vec::new();
+    for slot in rows {
+        let quantity = work.quantity(slot)?;
+        if quantity != 0 {
+            stock.push((slot, work.item(slot)?, quantity));
+        }
+    }
+    Ok(stock)
 }
 
 pub fn price(state: &Session, content: &Content, id: i16, selling: bool) -> Result<i32, RuleError> {
@@ -23,7 +42,7 @@ pub fn price(state: &Session, content: &Content, id: i16, selling: bool) -> Resu
             .checked_div(i32::from(state.difficulty.wrapping_mul(2).wrapping_add(10)))
             .ok_or("native shop division traps")?;
     }
-    super::pricing::percentage_price(cost, ShopRecord(records(state)?).price_percent()?, selling)
+    super::pricing::percentage_price(cost, current_work(state)?.read_word(3000)?, selling)
 }
 
 /// installitem 0x12c874 fresh-stock branch, without its randomized-loot branch.
@@ -40,9 +59,7 @@ pub(crate) fn display_record(
 ) -> Result<(), RuleError> {
     state.load_item_work(content, id)?;
     let item = crate::ammunition::definition(content, id)?;
-    let Some(record) = state.native_work.inventory_record.as_mut() else {
-        return Ok(());
-    };
+    let record = &mut state.native_work.inventory_record;
     Ok(ItemDefinition(&item).copy_display_stock_into(record)?)
 }
 
@@ -51,11 +68,17 @@ pub(super) fn enhanced_stock(
     content: &Content,
     id: i16,
 ) -> Result<InventoryRecord, RuleError> {
-    super::generated_stock::generate(
+    let enhancement = state.shop_access.as_ref().unwrap().enhancement;
+    let item = super::generated_stock::generate(
         &content.items,
         id,
-        state.shop_access.as_ref().unwrap().enhancement,
+        enhancement,
         state.difficulty,
         &mut state.random,
-    )
+    )?;
+    if enhancement != 0 {
+        // installitem randomizes scratch slot0 before installing the stock row.
+        state.native_work.loot_quality = None;
+    }
+    Ok(item)
 }

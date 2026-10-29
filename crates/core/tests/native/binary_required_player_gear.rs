@@ -207,8 +207,6 @@ fn replacement_firearm_preparation_shot_and_refill_match_four_native_callers() {
         }];
         combat.enemies.positions = vec![(20, 20)];
         combat.order = order;
-        combat.attack_packet = None;
-        combat.attack_identity = None;
         state.combat = Some(combat);
         state.random = RandomState::new(12);
         let events = runtime::player_shoot_action(&mut state, &content, 10).unwrap();

@@ -1,6 +1,11 @@
 use crate::RuleError;
 use centurions_content::{span, word};
 
+mod encounter_work;
+pub use encounter_work::EncounterWork;
+mod menu_mutation;
+pub use menu_mutation::replace_encounter_branch;
+
 pub const MENU_RECORD_BYTES: usize = 426;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

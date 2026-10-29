@@ -142,6 +142,8 @@ fn native_events(fixture: &Value, case: &Value) -> Vec<Event> {
                 target: *body as i16,
                 damage,
                 defeated: word(after, offset).unwrap() <= 0 && damage != 0,
+                icon: Default::default(),
+                flight: Default::default(),
             });
         }
         previous_party = party;
@@ -164,6 +166,10 @@ fn native_events(fixture: &Value, case: &Value) -> Vec<Event> {
         body: words(fixture, &after["order"])[number(after, "cursor") as usize],
         round,
     });
+    if bytes(fixture, &case["after"]["records"])[(actor - 10) as usize * MONSTER_BYTES + 0x104] != 0
+    {
+        result = native_common::turn_guard_events(result, actor);
+    }
     result
 }
 
@@ -253,34 +259,36 @@ fn current_seed12_target_selection_matches_the_original_count_and_ordered_target
     );
 
     // Controlled command linkage, not an earned route or a full native-turn receipt.
-    let mut rotated = state.clone();
-    let caster = &mut rotated.combat.as_mut().unwrap().enemies.records[6].bytes;
-    for slot in caster[0x12..0x26].as_chunks_mut::<2>().0 {
-        *slot = 2205_i16.to_be_bytes();
+    for spell in [2205_i16, 3602] {
+        let mut rotated = state.clone();
+        let caster = &mut rotated.combat.as_mut().unwrap().enemies.records[6].bytes;
+        for slot in caster[0x12..0x26].as_chunks_mut::<2>().0 {
+            *slot = spell.to_be_bytes();
+        }
+        caster[0x10e..0x110].copy_from_slice(&350_i16.to_be_bytes());
+        caster[0x7e] = 1;
+        let mut resumed = checkpoint(&rotated, &content, "rotated-npc-before");
+        let events = apply(Command::RunEnemyTurn, &mut rotated, &content).unwrap();
+        assert!(events.iter().any(
+            |event| matches!(event, Event::SpellResolved { spell: actual, .. } if *actual == spell)
+        ));
+        assert_eq!(
+            apply(Command::RunEnemyTurn, &mut resumed, &content).unwrap(),
+            events
+        );
+        same(&rotated, &resumed);
+        if spell == 2205 {
+            assert!(
+                current_combat(&rotated)
+                    .spell_fields
+                    .as_chunks::<20>()
+                    .0
+                    .iter()
+                    .any(|field| word(field, 8).unwrap() == 2205)
+            );
+        }
+        checkpoint(&rotated, &content, "rotated-npc-after");
     }
-    caster[0x10e..0x110].copy_from_slice(&350_i16.to_be_bytes());
-    caster[0x7e] = 1;
-    let mut resumed = checkpoint(&rotated, &content, "rotated-npc-before");
-    let events = apply(Command::RunEnemyTurn, &mut rotated, &content).unwrap();
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, Event::SpellResolved { spell: 2205, .. }))
-    );
-    assert_eq!(
-        apply(Command::RunEnemyTurn, &mut resumed, &content).unwrap(),
-        events
-    );
-    same(&rotated, &resumed);
-    assert!(
-        current_combat(&rotated)
-            .spell_fields
-            .as_chunks::<20>()
-            .0
-            .iter()
-            .any(|field| word(field, 8).unwrap() == 2205)
-    );
-    checkpoint(&rotated, &content, "rotated-npc-after");
 }
 
 #[test]
@@ -386,4 +394,40 @@ fn each_captured_resolution_matches_native_targets_damage_and_rng_interval() {
             before_npcs = expected_npcs;
         }
     }
+}
+
+#[test]
+fn npc_mode7_indexed_duration_writes_its_information_owner_or_commits_nothing() {
+    let fixture = support::fixture("current-terrain-restricted-npc-spell.json");
+    let mut state = initial(&fixture, &fixture["cases"][0]);
+    let caster = &mut state.combat.as_mut().unwrap().enemies.records[6].bytes;
+    for slot in caster[0x12..0x26].as_chunks_mut::<2>().0 {
+        *slot = 2205_i16.to_be_bytes();
+    }
+    caster[0x10e..0x110].copy_from_slice(&350_i16.to_be_bytes());
+    caster[0x7e] = 1;
+    state.flags[0..2].copy_from_slice(&3_i16.to_be_bytes());
+    let map = state.exploration.as_ref().unwrap().map as usize;
+    // Controlled linkage: spell 2205 as a mode7 packet with a fixed duration of 9.
+    let cast = |effect: i16| {
+        let mut content = content();
+        let scenario = content.scenario.as_mut().unwrap();
+        let tables = std::sync::Arc::make_mut(&mut scenario.maps[map].shared);
+        let attacks = &mut tables.combat.as_mut().unwrap().attacks;
+        let packet = &mut attacks[2842 + 406 + 4 * 58..][..58];
+        packet[1] = 7;
+        packet[13..16].copy_from_slice(&[9, 9, 0]);
+        packet[40..42].copy_from_slice(&effect.to_be_bytes());
+        let mut candidate = state.clone();
+        (apply(Command::RunEnemyTurn, &mut candidate, &content), candidate)
+    };
+    // resolvespell15133c: effect 21 max-writes WORD44258c, the first story flag WORD.
+    let (result, owned) = cast(21);
+    result.unwrap();
+    assert_eq!(word(&owned.flags, 0).unwrap(), 9);
+    assert_eq!(owned.flags[2..], state.flags[2..]);
+    // Effect 20 reaches WORD44258a, which no session owner represents.
+    let (result, unowned) = cast(20);
+    assert!(matches!(result, Err(RuleError::Unsupported { .. })));
+    same(&unowned, &state);
 }

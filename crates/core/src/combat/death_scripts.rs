@@ -2,6 +2,21 @@ use crate::{RuleError, combat::Combat};
 use centurions_content::{Warrior, records::FootprintCell};
 use serde::{Deserialize, Serialize};
 
+/// Literal native bytes, independent of saved caller depth and queue ownership.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeathProcessing {
+    /// BYTE438584: emptyque sets1/0; combatsetup clears it even inside a callback.
+    pub queue: u8,
+    /// BYTE438585: killbody sets1 before newland and0 after returning, without a pop.
+    pub callback: u8,
+}
+
+impl DeathProcessing {
+    pub(crate) fn immediate(self, ready: i16) -> bool {
+        self.callback == 0 && ready == 0
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeathEntry {
     pub monster: i16,
@@ -156,6 +171,16 @@ pub fn cleanup_enemy(
     warriors: &mut [Warrior],
     body: i16,
 ) -> Result<DeathCleanup, RuleError> {
+    let result = cleanup_enemy_before_story(combat, warriors, body)?;
+    clear_body_references(combat, warriors, body)?;
+    Ok(result)
+}
+
+pub(crate) fn cleanup_enemy_before_story(
+    combat: &mut Combat,
+    warriors: &[Warrior],
+    body: i16,
+) -> Result<DeathCleanup, RuleError> {
     let index = usize::try_from(body.checked_sub(10).unwrap_or(-1))
         .map_err(|_| RuleError::Invalid("invalid defeated enemy".into()))?;
     let record = combat
@@ -219,6 +244,9 @@ pub fn cleanup_enemy(
                 .map_err(RuleError::from)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if increment_kills {
+        combat.victory_work.add_defeated(1);
+    }
     combat.enemies.records[index]
         .record_mut()
         .set_movement_points(0);
@@ -233,7 +261,6 @@ pub fn cleanup_enemy(
             *entry = -1;
         }
     }
-    clear_body_references(combat, warriors, body)?;
     Ok(DeathCleanup {
         entry,
         increment_kills,

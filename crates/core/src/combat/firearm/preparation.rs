@@ -1,4 +1,4 @@
-use super::{AREA_TARGET_ATTACK, MEDIUM_LASER, POINT_TARGET_ATTACK, PreparedFirearm, SMALL_LASER};
+use super::{MEDIUM_LASER, POINT_TARGET_ATTACK, PreparedFirearm, SMALL_LASER};
 use crate::RuleError;
 use centurions_content::records::{
     AttackPacket, AttackPacketMut, ItemDefinition, WeaponAttackModifiers, WeaponAttackParameters,
@@ -42,23 +42,10 @@ pub fn prepare(
             "firearm ammunition definition mismatch".into(),
         ));
     }
-    let descriptor = ItemDefinition(weapon).spell()?;
-    if !matches!(descriptor, POINT_TARGET_ATTACK | AREA_TARGET_ATTACK) {
-        return Err(RuleError::Unsupported {
-            action: "combat.firearm.prepare",
-            dependency: "other attack descriptors",
-        });
-    }
     let mut p = prepare_packet_with_enhancement(weapon, ammo, attacks, item.damage_enhancement())?;
     AttackPacketMut(&mut p).add_range_modifier(item.range_modifier());
     let rounds = ItemDefinition(weapon).rounds_per_shot()?;
     let impact = AttackPacket(&p).impact_sound()?;
-    if !AttackPacket(&p).is_direct_weapon_damage()? {
-        return Err(RuleError::Unsupported {
-            action: "combat.firearm.prepare",
-            dependency: "nonphysical firearm effects",
-        });
-    }
     Ok(PreparedFirearm {
         packet: p,
         slot,
@@ -81,28 +68,33 @@ pub(crate) fn prepare_packet(
     prepare_packet_with_enhancement(weapon, ammo, attacks, 0)
 }
 
-fn prepare_packet_with_enhancement(
+pub(crate) fn prepare_packet_with_enhancement(
     weapon: &[u8],
     ammo: &[u8],
     attacks: &[u8],
     enhancement: i8,
 ) -> Result<Vec<u8>, RuleError> {
     let descriptor = ItemDefinition(weapon).spell()?;
-    if !matches!(descriptor, POINT_TARGET_ATTACK | AREA_TARGET_ATTACK) {
-        return Err(RuleError::Unsupported {
-            action: "combat.firearm.prepare",
-            dependency: "other attack descriptors",
-        });
-    }
-    let offset = 3 * 2842 + (descriptor - POINT_TARGET_ATTACK) as usize * 58;
-    let mut p = centurions_content::span(attacks, offset, 58)?.to_vec();
     let weapon = WeaponAttackModifiers::read(weapon)?;
     let ammunition = WeaponAttackModifiers::read(ammo)?;
+    // prepattack14c818 copies the Data S base packet (14ca0c) for a descriptor below 1101
+    // instead of loadspell2 and the weapon/ammunition field writes.
+    if descriptor < 1101 {
+        let mut p = crate::combat::spells::load_packet(attacks, FALLBACK_ATTACK)?;
+        let mut attack = WeaponAttackParameters::read(&p)?;
+        scale_firearm_attack(&mut attack, &weapon, &ammunition, enhancement);
+        attack.write(&mut p);
+        return Ok(p);
+    }
+    let mut p = crate::combat::spells::load_packet(attacks, descriptor)?;
     let mut attack = WeaponAttackParameters::read(&p)?;
     compose_weapon_attack(&mut attack, &weapon, &ammunition, enhancement);
     attack.write(&mut p);
     Ok(p)
 }
+
+/// Data S offset 8642 (0x44594a), the base packet attack, attack2 and prepattack copy.
+const FALLBACK_ATTACK: i16 = 4103;
 
 pub fn prepare_enemy(
     enemy: &mut MonsterRecord,
@@ -153,6 +145,16 @@ pub(in crate::combat) fn compose_weapon_attack(
     enhancement: i8,
 ) {
     compose_item_attack(attack, weapon, ammunition);
+    scale_firearm_attack(attack, weapon, ammunition, enhancement);
+}
+
+/// prepattack's shared suffix after locationlog4 (14ca2a): rounds then enhancement scaling.
+fn scale_firearm_attack(
+    attack: &mut WeaponAttackParameters,
+    weapon: &WeaponAttackModifiers,
+    ammunition: &WeaponAttackModifiers,
+    enhancement: i8,
+) {
     attack.physical.0 = attack.physical.0.wrapping_mul(weapon.rounds);
     attack.physical.1 = attack.physical.1.wrapping_mul(weapon.rounds);
     for damage in &mut attack.elemental_maximum {

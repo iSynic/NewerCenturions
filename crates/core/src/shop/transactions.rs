@@ -1,15 +1,9 @@
 //! Transactions for shop.
-use super::RECORD;
-use super::{active, enhanced_stock, preview, price, records, refused};
+use super::access::current_work;
+use super::{active, enhanced_stock, preview, price, refused};
 use crate::{Event, Presentation, RuleError, Session, equipment};
 use centurions_content::Content;
-use centurions_content::records::{ItemDefinition, SHOP_SLOTS, ShopRecord, ShopRecordMut};
-
-pub(super) fn mutate_stock(state: &mut Session) -> &mut [u8] {
-    let access = state.shop_access.as_ref().unwrap();
-    &mut state.shops.get_mut(&access.level).unwrap()
-        [access.id as usize * RECORD..(access.id as usize + 1) * RECORD]
-}
+use centurions_content::records::{ItemDefinition, SHOP_SLOTS};
 
 pub(crate) fn buy(
     state: &mut Session,
@@ -22,11 +16,11 @@ pub(crate) fn buy(
     if access.enhancement != 0 && access.remaining == 0 {
         return Err(refused(159));
     }
-    let records = ShopRecord(records(state)?);
-    if slot >= SHOP_SLOTS || records.quantity(slot) == 0 {
+    let work = current_work(state)?;
+    if slot >= SHOP_SLOTS || work.quantity(slot)? == 0 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
-    let id = records.item(slot)?;
+    let id = work.item(slot)?;
     let cost = price(state, content, id, false)?;
     let item = preview(content, id)?;
     let recipient = state
@@ -106,7 +100,7 @@ pub(crate) fn buy(
     {
         access.remaining = access.remaining.wrapping_sub(1);
     }
-    ShopRecordMut(mutate_stock(state)).buy_one(slot);
+    state.native_work.shop_work.buy_one(slot)?;
     Ok(events)
 }
 
@@ -147,8 +141,9 @@ pub(crate) fn sell(
         .ok_or("shop item unavailable")?;
     let cost = price(state, content, item.id(), true)?;
     let mission = content.map(0).ok_or("shop scenario unavailable")?;
-    equipment::drop(&mut state.warriors[warrior], slot, content, mission)?;
-    ShopRecordMut(mutate_stock(state)).accept_sale(item.id());
+    let globals = equipment::drop(&mut state.warriors[warrior], slot, content, mission)?;
+    state.apply_equipment_globals(&globals)?;
+    state.native_work.shop_work.accept_sale(item.id())?;
     state.party_currency = state.party_currency.wrapping_add(cost);
     Ok(vec![Event::Sound { resource_id: 83 }])
 }

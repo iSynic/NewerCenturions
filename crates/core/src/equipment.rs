@@ -1,9 +1,11 @@
+mod globals;
 mod modifiers;
 mod record_rules;
 mod retained;
+pub(crate) use globals::{GlobalWrite, require_none as require_no_globals};
 pub(crate) use record_rules::drop_all;
 pub use record_rules::{EquipmentResult, can_use, collect_item, remove, wear};
-pub(crate) use record_rules::{calculate_weight, drop, force_drop, removal_blocked};
+pub(crate) use record_rules::{calculate_weight, drop, drop_loaded, force_drop, removal_blocked};
 use record_rules::{item_definition, race_movement, remove_retained, unsupported, wear_retained};
 pub(crate) use retained::edit_record;
 pub(crate) use retained::{RetainedEquipment, apply as retained_equipment};

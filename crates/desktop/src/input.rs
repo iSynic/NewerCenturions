@@ -145,8 +145,25 @@ pub fn action(
     controls: &[Control],
     pointer: Option<Vec2>,
 ) -> Option<Action> {
+    if state.combat.as_ref().is_some_and(|c| c.selection_pending) {
+        // The automatic resume owns this frame; no actor/camera is selected yet.
+        ui.movement.reset();
+        ui.movement.stop_pointer();
+        return None;
+    }
     if !is_mouse_button_down(MouseButton::Left) || ui.inspection.is_some() {
         ui.movement.stop_pointer();
+    }
+    if ui.combat_view.reveal && state.combat.is_some() {
+        // showrange 0x158416: the mouseDown or keyDown that ends Reveal Friends
+        // is consumed; nothing else is handled while it waits.
+        ui.movement.reset();
+        let pressed = is_mouse_button_pressed(MouseButton::Left)
+            || is_mouse_button_pressed(MouseButton::Right)
+            || !get_keys_pressed().is_empty();
+        return pressed.then_some(Action::CombatView(
+            crate::combat_controls::ViewAction::Reveal,
+        ));
     }
     if crate::collection::active(state, ui) && state.promotion.is_none() {
         if let Some(action) = crate::collection::input(state, ui, pointer) {
@@ -164,6 +181,14 @@ pub fn action(
                     crate::collection::CollectionAction::Store(slot),
                 ));
             }
+            if let Action::Collection(crate::collection::CollectionAction::Item(slot)) =
+                control.action
+                && (is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt))
+            {
+                return Some(Action::Collection(
+                    crate::collection::CollectionAction::Information(slot),
+                ));
+            }
             return control.enabled.then(|| control.action.clone());
         }
         return None;
@@ -177,6 +202,17 @@ pub fn action(
         .is_some_and(|p| p.presentation == Some(Presentation::Shop))
         || ui.inspection == Some(Inspection::Items) && !crate::collection::active(state, ui)
     {
+        if is_mouse_button_pressed(MouseButton::Left)
+            && (is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt))
+            && let Some(point) = pointer
+            && let Some(control) = controls.iter().rev().find(|c| c.rect.contains(point))
+            && let Action::Inventory(crate::inventory::InventoryAction::Item { side, slot }) =
+                control.action
+        {
+            return Some(Action::Inventory(
+                crate::inventory::InventoryAction::DragInformation { side, slot },
+            ));
+        }
         if is_mouse_button_released(MouseButton::Left)
             && let Some(action) = ui.inventory.release(pointer)
         {
@@ -323,9 +359,7 @@ pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
                 )
                 .unwrap_or(false)
         }
-        Action::Open(Inspection::Bandage) => {
-            free && state.bandage_ready.is_some_and(|ready| ready != 0)
-        }
+        Action::Open(Inspection::Bandage) => free && state.bandage_ready != 0,
         Action::Open(Inspection::FireTargets) => {
             free && state
                 .warriors
@@ -603,6 +637,7 @@ fn action_inner(
         if matches!(
             p,
             Presentation::Question { .. }
+                | Presentation::BoatQuestion { .. }
                 | Presentation::Avoidance { .. }
                 | Presentation::StageChange { .. }
         ) {
@@ -626,7 +661,7 @@ fn action_inner(
             return is_key_pressed(KeyCode::Escape).then_some(Action::Command(Command::CancelMenu));
         }
         if matches!(p, Presentation::Typed { .. }) {
-            if !ui.typed_entry {
+            if !ui.typed_entry || !crate::story_dialogs::text_entry_available(state, content) {
                 while get_char_pressed().is_some() {}
                 return is_key_pressed(KeyCode::Escape)
                     .then_some(Action::Command(Command::CancelMenu));
@@ -766,7 +801,7 @@ fn action_inner(
         let x = ((p.x - layout::MAP.x) / 32.) as i32;
         let y = ((p.y - layout::MAP.y) / 32.) as i32;
         if state.combat.is_some() {
-            let (x, y) = crate::combat_controls::map_position(state, ui, p).unwrap();
+            let (x, y) = crate::combat_controls::map_position(state, ui, p)?;
             return Some(Action::Command(Command::CombatClick { x, y }));
         } else {
             return outdoor_move(state, x, y);

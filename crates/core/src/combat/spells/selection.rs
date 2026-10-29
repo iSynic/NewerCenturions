@@ -1,11 +1,16 @@
 //! Selection for combat/spells.
-use super::{Combat, RandomState, RuleError, firearm, lifecycle, validate_direct};
+use super::{Combat, RandomState, RuleError, firearm, validate_direct};
 use centurions_content::combat::MonsterRecord;
 use centurions_content::{
     Warrior,
     records::{AttackPacket, EnemyRecord},
 };
 
+mod view;
+use crate::combat::map_alias::{Land, MapAliases, land_aliases};
+pub(crate) use view::SelectionView;
+
+/// One target triple at 443722 + 6 * n: its first, second and kind WORDs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpellTarget {
     pub first: i16,
@@ -55,7 +60,7 @@ pub(super) fn faction(
 }
 
 pub(super) fn best_choice(
-    combat: &Combat,
+    (combat, aliases): (&Combat, MapAliases<'_>),
     warriors: &[Warrior],
     areas: &[u8],
     shape: usize,
@@ -102,13 +107,16 @@ pub(super) fn best_choice(
                 }
                 let ax = combat.map.shift.0 + 5 + center.0 - 3 + x as i16;
                 let ay = combat.map.shift.1 + 5 + center.1 - 3 + y as i16;
-                if !(0..90).contains(&ax) || !(0..90).contains(&ay) {
-                    return Err(RuleError::Unsupported {
+                // bestchoice1363e4 indexes MULU.W column*90 plus a signed row, so a row
+                // past either edge reads the neighbouring column or the memory beside the map.
+                let index = i32::from(ax as u16) * 90 + i32::from(ay);
+                let body = aliases
+                    .read(&combat.map, index)?
+                    .ok_or(RuleError::Unsupported {
                         action: "combat.spell.target",
-                        dependency: "spell area outside tactical map",
-                    });
-                }
-                let body = combat.map.tiles[ax as usize * 90 + ay as usize].wrapping_abs();
+                        dependency: "spell area outside the map and the represented memory beside it",
+                    })?
+                    .wrapping_abs();
                 if !(0..110).contains(&body) {
                     continue;
                 }
@@ -156,32 +164,62 @@ pub fn select_targets(
     packet: &[u8],
     random: &mut RandomState,
 ) -> Result<SpellSelection, RuleError> {
-    if packet.len() == 58 && AttackPacket(packet).effect()? == 36 {
-        if AttackPacket(packet).saving_throw_mode() != 3
-            || AttackPacket(packet).defense_category() != 8
-            || packet[20] != 8
-            || AttackPacket(packet).race_restriction()? != 0
-        {
-            return Err(RuleError::Unsupported {
-                action: "combat.spell.target",
-                dependency: "other spell condition packet",
-            });
-        }
-    } else if !(AttackPacket(packet).effect()? == 57
-        && AttackPacket(packet).saving_throw_mode() == 3
-        && AttackPacket(packet).defense_category() == 8
-        && packet[20] == 8
-        && packet[4] == 0)
-    {
+    if !super::is_support(packet)? {
         validate_direct(packet)?;
     }
     select_targets_impl(
-        combat,
+        (combat, MapAliases::of_mission(mission)),
         warriors,
         mission,
         areas,
         caster_index,
         (packet, None),
+        random,
+    )
+}
+
+/// select_targets with the current land arrays beside the map.
+pub(crate) fn select_targets_beside(
+    combat: &Combat,
+    warriors: &[Warrior],
+    (mission, land): (&centurions_content::mission::OpeningMission, Option<&Land>),
+    caster_index: usize,
+    packet: &[u8],
+    random: &mut RandomState,
+) -> Result<SpellSelection, RuleError> {
+    if !super::is_support(packet)? {
+        validate_direct(packet)?;
+    }
+    select_targets_impl(
+        (combat, land_aliases(mission, land)),
+        warriors,
+        mission,
+        &mission.areas,
+        caster_index,
+        (packet, None),
+        random,
+    )
+}
+
+/// select_firearm_targets with the current land arrays beside the map.
+pub(crate) fn select_firearm_targets_beside(
+    combat: &Combat,
+    warriors: &[Warrior],
+    (mission, land): (&centurions_content::mission::OpeningMission, Option<&Land>),
+    caster_index: usize,
+    prepared: &firearm::PreparedFirearm,
+    random: &mut RandomState,
+) -> Result<SpellSelection, RuleError> {
+    if prepared.packet.len() != 58 || AttackPacket(&prepared.packet).defense_category() != 9 {
+        return Err(RuleError::Invalid("firearm target packet".into()));
+    }
+    select_targets_impl(
+        (combat, land_aliases(mission, land)),
+        warriors,
+        mission,
+        &mission.areas,
+        caster_index,
+        (&prepared.packet, Some(prepared.shots)),
         random,
     )
 }
@@ -199,7 +237,7 @@ pub fn select_firearm_targets(
         return Err(RuleError::Invalid("firearm target packet".into()));
     }
     select_targets_impl(
-        combat,
+        (combat, MapAliases::of_mission(mission)),
         warriors,
         mission,
         areas,
@@ -223,7 +261,7 @@ pub fn select_retained_targets(
     }
     let count = (AttackPacket(&prepared.packet).defense_category() == 9).then_some(prepared.shots);
     select_targets_impl(
-        combat,
+        (combat, MapAliases::of_mission(mission)),
         warriors,
         mission,
         areas,
@@ -234,7 +272,93 @@ pub fn select_retained_targets(
 }
 
 pub(super) fn select_targets_impl(
-    combat: &Combat,
+    (combat, aliases): (&Combat, MapAliases<'_>),
+    warriors: &[Warrior],
+    mission: &centurions_content::mission::OpeningMission,
+    areas: &[u8],
+    caster_index: usize,
+    targeting: (&[u8], Option<i16>),
+    random: &mut RandomState,
+) -> Result<SpellSelection, RuleError> {
+    select_from_view(
+        &view::LiveSelection(combat, aliases),
+        warriors,
+        mission,
+        areas,
+        caster_index,
+        targeting,
+        random,
+    )
+}
+
+pub(crate) fn select_firearm_from_view(
+    view: &impl SelectionView,
+    warriors: &[Warrior],
+    mission: &centurions_content::mission::OpeningMission,
+    areas: &[u8],
+    caster_index: usize,
+    prepared: &firearm::PreparedFirearm,
+    random: &mut RandomState,
+) -> Result<SpellSelection, RuleError> {
+    if prepared.packet.len() != 58 || AttackPacket(&prepared.packet).defense_category() != 9 {
+        return Err(RuleError::Invalid("firearm target packet".into()));
+    }
+    select_from_view(
+        view,
+        warriors,
+        mission,
+        areas,
+        caster_index,
+        (&prepared.packet, Some(prepared.shots)),
+        random,
+    )
+}
+
+/// enemy_fire's retained-packet selection: the shot count applies only to category 9.
+pub(crate) fn select_retained_from_view(
+    view: &impl SelectionView,
+    warriors: &[Warrior],
+    mission: &centurions_content::mission::OpeningMission,
+    areas: &[u8],
+    caster_index: usize,
+    prepared: &firearm::PreparedFirearm,
+    random: &mut RandomState,
+) -> Result<SpellSelection, RuleError> {
+    let count = (AttackPacket(&prepared.packet).defense_category() == 9).then_some(prepared.shots);
+    select_from_view(
+        view,
+        warriors,
+        mission,
+        areas,
+        caster_index,
+        (&prepared.packet, count),
+        random,
+    )
+}
+
+/// The enemy decision's spell targeting over retained records.
+pub(crate) fn select_spell_from_view(
+    view: &impl SelectionView,
+    warriors: &[Warrior],
+    mission: &centurions_content::mission::OpeningMission,
+    areas: &[u8],
+    caster_index: usize,
+    packet: &[u8],
+    random: &mut RandomState,
+) -> Result<SpellSelection, RuleError> {
+    select_from_view(
+        view,
+        warriors,
+        mission,
+        areas,
+        caster_index,
+        (packet, None),
+        random,
+    )
+}
+
+fn select_from_view(
+    view: &impl SelectionView,
     warriors: &[Warrior],
     mission: &centurions_content::mission::OpeningMission,
     areas: &[u8],
@@ -243,21 +367,13 @@ pub(super) fn select_targets_impl(
     random: &mut RandomState,
 ) -> Result<SpellSelection, RuleError> {
     let (packet, firearm_count) = targeting;
-    if !matches!(
-        AttackPacket(packet).targeting_mode(),
-        0 | 1 | 3 | 6 | 9 | 10 | 12
-    ) {
-        return Err(RuleError::Unsupported {
-            action: "combat.spell.target",
-            dependency: "other spell targeting",
-        });
-    }
-    let caster = combat
-        .enemies
-        .records
-        .get(caster_index)
-        .ok_or_else(|| RuleError::Invalid("spell caster index".into()))?;
-    let start = combat.enemies.positions[caster_index];
+    // combat114e16 compares the mode as a signed BYTE and aims every mode above 1 at
+    // bestchoice's body; spelltargets15cb0e shapes only modes 3 and 4 and resolvespell's
+    // mode7 arm ignores the mask. Modes 128.. are negative: they fail every signed
+    // test (114cd0, 114dde, 114efa) like mode 0 but not its equality test (114c56).
+    let mode = AttackPacket(packet).targeting_mode() as i8;
+    let caster = view.npc(caster_index)?;
+    let start = view.position(caster_index + 10)?;
     let side = caster.record().faction()?;
     let mut next_random = random.clone();
     let mut count = next_random.bound(7);
@@ -282,22 +398,21 @@ pub(super) fn select_targets_impl(
         rotation: 0,
     };
     let mut available = 0;
-    for body in (0..warriors.len()).chain(10..10 + combat.enemies.records.len()) {
+    for body in (0..warriors.len()).chain(10..10 + view.npc_count()) {
         let eligible = if body < 10 {
             warriors[body].record().active_flag() != 0 && warriors[body].record().stamina()? > 0
         } else {
-            let m = &combat.enemies.records[body - 10].bytes;
+            let m = &view.npc(body - 10)?.bytes;
             EnemyRecord::from_bytes(m).stamina()? > 0
                 && EnemyRecord::from_bytes(m).mechanical_state() != 0xff
         };
         if !eligible
-            || ((faction(combat, warriors, body)? == side)
+            || ((view.faction(warriors, body)? == side)
                 != (AttackPacket(packet).saving_throw_mode() == 4))
         {
             continue;
         }
-        let end = position(combat, body)
-            .ok_or_else(|| RuleError::Invalid("spell body position".into()))?;
+        let end = view.position(body)?;
         let dx = f32::from(end.0.wrapping_sub(start.0));
         let dy = f32::from(end.1.wrapping_sub(start.1));
         let distance = (dx * dx + dy * dy).sqrt();
@@ -310,9 +425,10 @@ pub(super) fn select_targets_impl(
         } else {
             distance <= f32::from(range)
         };
+        // Sight only when packet bytes 3 and 2 sum above 0, as getrange (125662) tests.
         if in_range
-            && (AttackPacket(packet).attack_count() + AttackPacket(packet).base_range() <= 0
-                || lifecycle::can_see(combat, mission, start, end, 0)?)
+            && (AttackPacket(packet).range_per_power() + AttackPacket(packet).base_range() <= 0
+                || view.visible(mission, start, end)?)
         {
             result.distances[body] = distance.trunc() as i16;
             available += 1;
@@ -322,7 +438,7 @@ pub(super) fn select_targets_impl(
         *random = next_random;
         return Ok(result);
     }
-    if AttackPacket(packet).targeting_mode() == 0 {
+    if mode == 0 {
         count = next_random.bound(available);
     }
     count = count.min(7);
@@ -335,18 +451,14 @@ pub(super) fn select_targets_impl(
         }
     }
     result.count = count;
-    let desired = if AttackPacket(packet).targeting_mode() > 0
-        && AttackPacket(packet).defense_category() != 9
-    {
+    let desired = if mode > 0 && AttackPacket(packet).defense_category() != 9 {
         1
     } else {
         count
     };
-    let random_point =
-        AttackPacket(packet).targeting_mode() == 3 && AttackPacket(packet).area_shape() == 10;
-    if !random_point && AttackPacket(packet).targeting_mode() > 1 && result.nearest < range {
-        if let Some(body) = best_choice(
-            combat,
+    let random_point = mode == 3 && AttackPacket(packet).area_shape() == 10;
+    if !random_point && mode > 1 && result.nearest < range {
+        if let Some(body) = view.best_choice(
             warriors,
             areas,
             usize::from(AttackPacket(packet).area_shape()),
@@ -354,21 +466,25 @@ pub(super) fn select_targets_impl(
             &result.distances,
             range,
         )? {
-            let target = position(combat, body).unwrap();
+            let target = view.position(body)?;
             result.targets.push(SpellTarget {
-                first: target.0.wrapping_add(combat.map.shift.0).wrapping_add(5),
-                second: target.1.wrapping_add(combat.map.shift.1).wrapping_add(5),
+                first: target.0.wrapping_add(view.map_shift().0).wrapping_add(5),
+                second: target.1.wrapping_add(view.map_shift().1).wrapping_add(5),
                 kind: 3,
             });
         }
-    } else if (random_point && result.nearest < range)
-        || (AttackPacket(packet).targeting_mode() < 2 && result.nearest <= range)
-    {
+    } else if (random_point && result.nearest < range) || (mode < 2 && result.nearest <= range) {
         for _ in 0..desired {
             let mut selected = None;
             for _ in 0..100 {
-                let body =
-                    (next_random.bound(combat.enemies.records.len() as i16 + 10) - 1) as usize;
+                let body = next_random.bound(view.npc_target_bound()).wrapping_sub(1);
+                let body = usize::try_from(body)
+                    .ok()
+                    .filter(|body| *body < result.distances.len())
+                    .ok_or(RuleError::Unsupported {
+                        action: "combat.spell.target",
+                        dependency: "NPC target draw outside represented distance row",
+                    })?;
                 if result.distances[body] <= range {
                     selected = Some(body);
                     break;
@@ -376,11 +492,10 @@ pub(super) fn select_targets_impl(
             }
             let Some(body) = selected else { break };
             result.targets.push(if random_point {
-                let target = position(combat, body)
-                    .ok_or_else(|| RuleError::Invalid("spell body position".into()))?;
+                let target = view.position(body)?;
                 SpellTarget {
-                    first: target.0.wrapping_add(combat.map.shift.0).wrapping_add(5),
-                    second: target.1.wrapping_add(combat.map.shift.1).wrapping_add(5),
+                    first: target.0.wrapping_add(view.map_shift().0).wrapping_add(5),
+                    second: target.1.wrapping_add(view.map_shift().1).wrapping_add(5),
                     kind: 3,
                 }
             } else {
@@ -393,9 +508,7 @@ pub(super) fn select_targets_impl(
         }
     }
     if !result.targets.is_empty()
-        || (firearm_count == Some(0)
-            && AttackPacket(packet).targeting_mode() < 2
-            && result.nearest <= range)
+        || (firearm_count == Some(0) && mode < 2 && result.nearest <= range)
     {
         result.cast = true;
         let actions = result.caster.record().action_points().wrapping_sub(2);

@@ -1,5 +1,5 @@
 //! Player actions in the original combat execution order.
-use super::{end_turn, finish_player_action, neighbors, refusal, resolve_attack};
+use super::{end_turn, finish_player_action, neighbors, refusal};
 use crate::combat::Combat;
 use crate::{Event, Phase, RandomState, RuleError, Session};
 use centurions_content::{Content, Warrior};
@@ -94,6 +94,18 @@ pub(super) fn player_attack_inner(
     {
         return Err(refusal(crate::feedback::CombatRefusal::OutOfRange));
     }
+    if friendly
+        && target > 10
+        && c.enemies.records[(target - 10) as usize]
+            .record()
+            .faction()?
+            == 0
+    {
+        c.enemies.records[(target - 10) as usize]
+            .record_mut()
+            .set_faction(1);
+        c.victory_work.add_total(1);
+    }
     let warrior = &mut state.warriors[body as usize];
     if warrior.record().action_points()? < 2 {
         return Ok(vec![]);
@@ -102,7 +114,7 @@ pub(super) fn player_attack_inner(
     let actions = warrior.record().action_points()?.wrapping_sub(2);
     warrior.record_mut().set_movement_points(movement);
     warrior.record_mut().set_action_points(actions);
-    let mut events = resolve_attack(
+    let mut events = super::attacks::resolve_attack_with_death(
         c,
         &mut state.warriors,
         &mut state.random,
@@ -126,6 +138,7 @@ pub(super) fn player_attack_inner(
         ),
         &state.party_buffs,
         &mut state.native_work.ammunition_work,
+        Some(state.native_work.death_processing),
     )?;
     events.extend(finish_player_action(state, content, body)?);
     Ok(events)

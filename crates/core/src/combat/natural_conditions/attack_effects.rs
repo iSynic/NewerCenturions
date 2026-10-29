@@ -1,5 +1,6 @@
 //! attack2 (0x1028a4) applies natural effects after physical damage. These rules
 //! preserve its different warrior/enemy admission and duration behavior.
+//! Unlisted selectors keep the strength draw and take the native switch default.
 use crate::{RandomState, RuleError, combat::attack::AttackFeedback};
 use centurions_content::{
     records::{
@@ -73,7 +74,8 @@ pub(crate) fn monster_attack_effect(
 ) -> Result<Option<NaturalEffect>, RuleError> {
     let mut target = ConditionTarget::new(target, DamageTargetKind::Enemy)?;
     span(source, 0, 288)?;
-    if index >= 6 {
+    // Indexes up to 34 read inside attack2's 0x120-byte record copy.
+    if index >= 35 {
         return Err(RuleError::Invalid("natural attack index".into()));
     }
     let source = EnemyRecord::from_bytes(source);
@@ -107,8 +109,6 @@ pub(crate) fn monster_attack_effect(
     } else if (11..=17).contains(&condition) {
         result.extra_damage = extra_damage(&target, condition, attack.effect_maximum, random)?;
         result.applied = result.extra_damage != 0;
-    } else {
-        return Err(unsupported_condition());
     }
     result.set_feedback(condition);
     Ok(Some(result))
@@ -124,7 +124,8 @@ pub(crate) fn warrior_attack_effect(
 ) -> Result<NaturalEffect, RuleError> {
     let mut target = ConditionTarget::new(target, DamageTargetKind::Warrior)?;
     span(source, 0, 288)?;
-    if index >= 6 {
+    // Indexes up to 34 read inside attack2's 0x120-byte record copy.
+    if index >= 35 {
         return Err(RuleError::Invalid("natural attack index".into()));
     }
     let source = EnemyRecord::from_bytes(source);
@@ -166,8 +167,6 @@ pub(crate) fn warrior_attack_effect(
         // atomic (12, 13, 15, 16) are compared by natural-elements.json.
         result.extra_damage = extra_damage(&target, condition, attack.effect_maximum, random)?;
         result.applied = result.extra_damage != 0;
-    } else {
-        return Err(unsupported_condition());
     }
     if condition != 10 || prior_faction == 0 {
         result.set_feedback(condition);
@@ -262,13 +261,6 @@ pub(crate) fn apply_weapon_condition(
         target.set_slot_duration(slot, current.wrapping_add(condition.amount));
     }
     Ok(AttackFeedback::defender(-40, 0))
-}
-
-fn unsupported_condition() -> RuleError {
-    RuleError::Unsupported {
-        action: "combat.attack.condition",
-        dependency: "natural condition outside supplied actor families",
-    }
 }
 
 /// Save before permanent-condition and cyborg gates, including refused effects.

@@ -22,6 +22,9 @@ pub struct Session {
     pub difficulty: i16,
     #[serde(skip)]
     pub(crate) command_preferences: CommandPreferences,
+    /// Per-command control flow, cleared before committing a public action.
+    #[serde(skip)]
+    pub(crate) command_return: bool,
     pub warriors: Vec<Warrior>,
     pub phase: Phase,
     pub mission: Option<String>,
@@ -37,6 +40,8 @@ pub struct Session {
     pub shop_access: Option<shop::Access>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confiscated: Option<confiscation::ConfiscatedEquipment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_return: Option<crate::loot_recovery::RecoveryReturn>,
     #[serde(default, skip_serializing_if = "zero_word")]
     pub suppress_allies: i16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -55,6 +60,10 @@ pub struct Session {
     pub combat: Option<combat::Combat>,
     #[serde(default)]
     pub battle_treasure: i16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordinary_battle_rewards: Option<combat::runtime::OrdinaryBattleRewards>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_battle_treasure: Option<combat::runtime::SelectedBattleTreasure>,
     #[serde(default)]
     pub battle_after_message: i16,
     #[serde(default)]
@@ -64,9 +73,15 @@ pub struct Session {
     #[serde(default)]
     pub combat_story: Option<combat::runtime::DeathStory>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_walk_choice: Option<combat::runtime::RetainedWalkChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub npc_action: Option<Box<combat::runtime::NpcActionFrame>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub survivors: Option<combat::allies::SurvivorSelection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub round_dispatch: Option<combat::round_stories::RoundDispatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_dispatch: Option<combat::runtime::TurnDispatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scripted_cleanup: Option<story_cleanup::Stage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -75,6 +90,14 @@ pub struct Session {
     pub movement_continuation: Option<MovementContinuation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_continuation: Option<TimeContinuation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zero_time: Option<crate::ZeroTimeReturn>,
+    /// Getup reached booty(2,0) while a dialogue or survivor window was open (schema 57).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deferred_getup: bool,
+    /// Omitted while zero; cleared when the loot window closes.
+    #[serde(default, skip_serializing_if = "crate::BootyTally::is_empty")]
+    pub booty_tally: crate::BootyTally,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub psi_selection: Option<combat::psi_selection::Selection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,7 +113,7 @@ pub struct Session {
     #[serde(default)]
     pub psi_menu_choices: [Option<PsiMenuChoice>; 6],
     #[serde(default)]
-    pub bandage_ready: Option<i16>,
+    pub bandage_ready: i16,
     #[serde(default)]
     pub handled_deaths: Vec<usize>,
     #[serde(default)]
@@ -146,9 +169,17 @@ pub struct CommandPreferences {
     pub suppress_round_message_sound: bool,
     #[serde(default)]
     pub animation_delay: i16,
+    /// Original preference22 selects the fixed combat layout. It is an explicit
+    /// command input because newland's position alias can read its rectangles.
+    #[serde(default, skip_serializing_if = "large_combat_field")]
+    pub small_combat_field: bool,
     /// Records `trace` entries for this command only; never serialized.
     #[serde(skip)]
     pub trace: bool,
+}
+
+fn large_combat_field(small: &bool) -> bool {
+    !*small
 }
 
 fn no_saved_position(position: &[u8; 3]) -> bool {

@@ -29,12 +29,7 @@ pub fn add_ally(
         });
     }
     let definition = span(definition, 0, ALLY_BYTES)?;
-    if EnemyRecord::from_bytes(definition).selected_item()? < 0 {
-        return Err(RuleError::Unsupported {
-            action: "story.add_ally",
-            dependency: "random NPC weapon initialization",
-        });
-    }
+    crate::combat::monster_weapons::validate(definition)?;
     let record = &mut records[count * ALLY_BYTES..(count + 1) * ALLY_BYTES];
     record.copy_from_slice(definition);
     let mut stamina = EnemyRecord::from_bytes(record).base_stamina()?;
@@ -61,6 +56,11 @@ pub fn add_ally(
         .wrapping_add(difficulty);
     EnemyRecordMut::from_bytes(record).set_speed(speed);
     EnemyRecordMut::from_bytes(record).adjust_elemental_saves(difficulty.wrapping_mul(7));
+    crate::combat::monster_weapons::initialize(
+        record,
+        random,
+        crate::combat::monster_weapons::MatchOrder::First,
+    )?;
     normalize_menu(&mut records, count + 1);
     Ok(AllyAddition {
         records,

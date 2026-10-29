@@ -14,7 +14,7 @@ pub fn validate_spell(
     spell: i16,
     power: i16,
 ) -> Result<Vec<u8>, RuleError> {
-    if TypedEncounterRecord(crate::exploration::typed_record(state, content)?)
+    if TypedEncounterRecord(&crate::exploration::typed_record(state, content)?)
         .spell_alternative(0)?
         == 0
     {
@@ -57,10 +57,14 @@ pub fn validate_spell(
         spell,
     )?;
     let view = AttackPacket(&packet);
-    if view.targeting_mode() == 7 && !matches!(view.effect()?, 0..=9 | 110) {
+    let indexed = 0x442562_i64 + 2 * i64::from(view.effect()?);
+    if view.targeting_mode() == 7
+        && !matches!(view.effect()?, 0..=9 | 50 | 110)
+        && state.information_word(indexed).is_none()
+    {
         return Err(RuleError::Unsupported {
             action: "story.encounter_spell",
-            dependency: "indexed global spell effect outside recovered party durations",
+            dependency: "indexed spell effect WORD 0x442562 + 2 * effect without an owner",
         });
     }
     if actor.psi_points()? < crate::combat::player_psi::cost(&packet, power)? {
@@ -79,6 +83,7 @@ pub fn cast_spell(
     power: i16,
 ) -> Result<Vec<Event>, RuleError> {
     let packet = validate_spell(state, content, warrior, spell, power)?;
+    crate::combat::player_psi::select_native_caster(state);
     let actor = &mut state.warriors[warrior];
     let remaining = actor
         .psi_points()?
@@ -91,28 +96,28 @@ pub fn cast_spell(
     }
     let identity = [spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1];
     state.selected_warrior = warrior;
-    state.native_work.attack_identity = Some(identity);
+    state.native_work.attack_identity = identity;
     state.native_work.attack_count = power;
-    state.native_work.attack_packet = Some(packet.clone());
+    state.native_work.attack_packet = packet.clone();
     if let Some(combat) = state.combat.as_mut() {
-        combat.attack_packet = Some(packet.clone());
-        combat.attack_identity = Some(identity);
+        combat.attack_packet = packet.clone();
+        combat.attack_identity = identity;
     }
+    // castspell 0x10d328 stores the cast power in WORD 0x437a7a + 2 * member.
+    state.native_work.psi_powers[warrior] = None;
     state.psi_menu_choices[warrior] = Some(crate::PsiMenuChoice {
         row: identity[1] as u8,
         column: identity[2] as u8,
         power,
     });
-    state.native_work.party_mask.fill(0);
+    // encounter2 1228ee calls cleartarget before the impact sound.
+    state.clear_targets();
     let view = AttackPacket(&packet);
     let mut events = vec![Event::Sound {
         resource_id: view.impact_sound()?,
     }];
     if view.targeting_mode() == 7 {
-        if state.native_work.psi_memory.is_none() {
-            state.native_work.psi_memory = Some(crate::initial_psi_memory(&state.warriors)?);
-        }
-        PsiSelectionMemoryMut(state.native_work.psi_memory.as_mut().unwrap())
+        PsiSelectionMemoryMut(&mut state.native_work.psi_memory)
             .remember_cast(warrior, identity, power);
         let (minimum, maximum) = view.duration_bounds();
         let mut duration = state.random.range(minimum, maximum);
@@ -122,13 +127,29 @@ pub fn cast_spell(
                 duration = duration.wrapping_add(state.random.range(minimum, maximum));
             }
         }
-        if view.effect()? == 110 {
-            crate::combat::party_buffs::extend_scenario_tail(state, duration)?;
-        } else {
-            crate::combat::party_buffs::extend(&mut state.party_buffs, view.effect()?, duration)?;
+        match view.effect()? {
+            110 => crate::combat::party_buffs::extend_scenario_tail(state, duration)?,
+            50 => {
+                events.push(Event::Sound { resource_id: 601 });
+                crate::combat::party_buffs::extend_from_count(&mut state.party_buffs, power)?;
+            }
+            effect @ 0..=9 => {
+                crate::combat::party_buffs::extend(&mut state.party_buffs, effect, duration)?
+            }
+            effect => {
+                if !crate::combat::party_buffs::extend_indexed(state, effect, duration)? {
+                    return Err(RuleError::Unsupported {
+                        action: "story.encounter_spell",
+                        dependency: "indexed spell effect WORD 0x442562 + 2 * effect without an owner",
+                    });
+                }
+            }
         }
     }
-    let record = TypedEncounterRecord(crate::exploration::typed_record(state, content)?);
+    // encounter21228c6 clears Ready after castspell, before the selected branch.
+    state.set_ready(0);
+    let bytes = crate::exploration::typed_record(state, content)?;
+    let record = TypedEncounterRecord(&bytes);
     let mut selector = 4;
     for index in 0..TypedEncounterRecord::SPELL_ALTERNATIVES {
         let alternative = record.spell_alternative(index)?;
@@ -148,7 +169,8 @@ pub fn cast_spell(
 }
 
 pub fn begin_actions(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
-    let record = TypedEncounterRecord(crate::exploration::typed_record(state, content)?);
+    let bytes = crate::exploration::typed_record(state, content)?;
+    let record = TypedEncounterRecord(&bytes);
     if record.action_selector() == 0 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
@@ -173,7 +195,8 @@ pub fn action_control(
             Ok(vec![Event::Sound { resource_id }])
         }
         17 => {
-            let record = TypedEncounterRecord(crate::exploration::typed_record(state, content)?);
+            let bytes = crate::exploration::typed_record(state, content)?;
+            let record = TypedEncounterRecord(&bytes);
             let required = record.required_actions();
             let count = required.iter().filter(|value| **value != 0).count();
             if selected.iter().filter(|value| **value).count() != count {
@@ -200,7 +223,8 @@ pub fn action_control(
 
 pub fn validate_actions(state: &Session, content: &Content) -> Result<(), RuleError> {
     if state.encounter_actions.is_some() {
-        let record = TypedEncounterRecord(crate::exploration::typed_record(state, content)?);
+        let bytes = crate::exploration::typed_record(state, content)?;
+        let record = TypedEncounterRecord(&bytes);
         if record.action_selector() == 0
             || !state
                 .exploration

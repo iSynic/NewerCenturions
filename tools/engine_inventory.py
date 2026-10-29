@@ -15,6 +15,7 @@ from pathlib import Path
 
 import scenario_route
 import source_audit
+import engine_diagnostics
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = ("crates/content/src", "crates/core/src", "crates/desktop/src", "archive/crates/reference/src")
@@ -42,30 +43,17 @@ def diagnostics():
     """Unsupported (action, dependency) pairs with the files that construct them."""
     raw = {relative(p): p.read_text(encoding="utf-8")
            for name in SOURCES for p in sorted((ROOT / name).rglob("*.rs"))}
-    defaults = {}
-    for path, text in raw.items():
-        match = DEFAULT_ACTION.search(text)
-        if match:
-            defaults[path] = match[1]
-    rows = defaultdict(set)
-    for path, text in raw.items():
-        if path.endswith("/catalog.rs"):
-            continue
-        sites = [(a, d) for a, d in LITERAL.findall(text)]
-        sites += TWO_ARG.findall(text)
-        action = defaults.get(path) or next(
-            (value for owner, value in defaults.items()
-             if Path(owner).parent == Path(path).parent or Path(owner).parent == Path(path).parent.parent),
-            None)
-        if action:
-            sites += [(action, d) for d in ONE_ARG.findall(text)]
-        for site in sites:
-            rows[site].add(path)
+    raw = {p:t for p,t in raw.items() if not p.endswith('/catalog.rs')}
+    rows, unresolved = engine_diagnostics.scan(raw)
+    missing = [site for site in unresolved if not site['file'].startswith('archive/')]
+    if missing:
+        raise ValueError(f'Unresolved maintained diagnostic builders: {missing}')
     return [{"id": f"diagnostic:{action}|{dependency}", "kind": "diagnostic", "action": action,
-             "dependency": dependency, "files": sorted(paths),
+             "dependency": dependency, "files": sorted({s['file'] for s in sites}),
+             "sites": sorted(sites, key=lambda s:(s['file'],s['line'])),
              "layer": "reference" if all(source_audit.layer(Path(p), "production") == "reference"
-                                         for p in paths) else "maintained"}
-            for (action, dependency), paths in sorted(rows.items())]
+                                         for p in {s['file'] for s in sites}) else "maintained"}
+            for (action, dependency), sites in sorted(rows.items())]
 
 
 def routines():
@@ -90,10 +78,11 @@ def story_operations():
 
 
 def admitted(path):
-    match = ADMITTED.search((ROOT / path).read_text(encoding="utf-8"))
-    if not match:
-        raise SystemExit(f"{path}: natural-condition guard not found")
-    ranges = [[int(v) for v in part.split("..=")] for part in match[1].split("|")]
+    # Prepared attack2 kernels also admit the BYTE switch default after its draw.
+    source = (ROOT / path).read_text(encoding="utf-8")
+    match = ADMITTED.search(source)
+    domain = match[1] if match else ("0..=255" if re.search(r'\b(?:resolve_prepared|admit_weapon_condition)\b', source) else "")
+    ranges = [[int(v) for v in part.split("..=")] for part in domain.split("|")]
     return {v for r in ranges for v in range(r[0], r[-1] + 1)}
 
 

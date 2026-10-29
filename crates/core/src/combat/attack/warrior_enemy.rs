@@ -5,6 +5,7 @@ use crate::{
     RandomState, RuleError,
     combat::damage::{DamageFlags, DamagePacket, resolve_damage},
     combat::natural_conditions::{admit_weapon_condition, apply_weapon_condition},
+    combat::warrior_attack::PreparedMeleeWeapon,
 };
 use centurions_content::{
     Warrior,
@@ -34,12 +35,49 @@ pub(super) fn resolve(
         result.0.sounds.push(45);
         return Ok(result);
     }
-    let mut packet = base;
+    let selected = attacker.bytes.clone();
     let attacks = attacker.record().attacks_used()?.wrapping_add(1);
     attacker.record_mut().set_attacks_used(attacks);
+    let (result, packet, reflected, _) = resolve_prepared(
+        attacker,
+        defender,
+        random,
+        base,
+        0,
+        difficulty,
+        weapon.map(|definition| PreparedMeleeWeapon {
+            definition,
+            armed: true,
+        }),
+        rolls_condition,
+        &selected,
+        0,
+    )?;
+    Ok((result, packet, reflected))
+}
+
+/// The caller owns attack-limit admission, count and retained work preparation.
+/// Immunity refusals carry their original showresults code independently of a miss.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_prepared(
+    attacker: &mut Warrior,
+    defender: &mut MonsterRecord,
+    random: &mut RandomState,
+    base: Vec<u8>,
+    attack_count: i16,
+    difficulty: i16,
+    weapon: Option<PreparedMeleeWeapon<'_>>,
+    rolls_condition: bool,
+    selected: &[u8],
+    bare_hand_bonus: i16,
+) -> Result<(AttackResult, Vec<u8>, bool, Option<i16>), RuleError> {
+    let mut packet = base;
+    // attack's NPC locals precede weapon-condition writes into the target.
+    let target_turn_skip = defender.record().turn_skip_duration();
+    let target_stamina = defender.record().stamina()?;
     let weapon_condition = match weapon.filter(|_| rolls_condition) {
         Some(weapon) => admit_weapon_condition(
-            weapon,
+            weapon.definition,
             &mut defender.bytes,
             DamageTargetKind::Enemy,
             false,
@@ -56,18 +94,21 @@ pub(super) fn resolve(
         && defender.record().turn_skip_duration() == 0
     {
         attacker.record_mut().count_miss();
-        return Ok(no_damage(packet, false));
+        return Ok(prepared_no_damage(packet, false, None));
     }
-    if rejects_weapon(defender.record().weapon_immunity()?, weapon)? {
-        return Ok(no_damage(packet, false));
+    if let Some(code) = weapon_refusal(defender.record().weapon_immunity()?, weapon)? {
+        return Ok(prepared_no_damage(packet, false, Some(code)));
     }
     let reflected =
         defender.record().condition(Condition::PhysicalReflection) != 0 && random.bound(100) < 34;
-    crate::combat::warrior_attack::prepare_packet(
+    crate::combat::warrior_attack::prepare_packet_with_context(
         &mut packet,
         &attacker.bytes,
-        weapon,
-        &attacker.bytes,
+        weapon
+            .filter(|weapon| weapon.armed)
+            .map(|weapon| weapon.definition),
+        selected,
+        bare_hand_bonus,
     )?;
     let resolved = resolve_damage(
         if reflected {
@@ -78,7 +119,7 @@ pub(super) fn resolve(
         !reflected,
         &DamagePacket {
             bytes: packet.clone(),
-            attack_count: 0,
+            attack_count,
         },
         DamageFlags {
             armor: true,
@@ -92,7 +133,7 @@ pub(super) fn resolve(
     let mut damage = resolved.total;
     if damage <= 0 {
         attacker.record_mut().count_miss();
-        return Ok(no_damage(packet, reflected));
+        return Ok(prepared_no_damage(packet, reflected, None));
     }
     if random.bound(100) <= attacker.record().major_wound_chance()? {
         damage = damage.wrapping_mul(2);
@@ -122,8 +163,8 @@ pub(super) fn resolve(
         }
         killed = health < 1;
     } else {
-        if defender.record().turn_skip_duration() != 0 {
-            damage = defender.record().stamina()?;
+        if target_turn_skip != 0 {
+            damage = target_stamina;
         }
         defender.record_mut().mark_damaged();
         let health = defender.record().stamina()?.wrapping_sub(damage);
@@ -136,12 +177,13 @@ pub(super) fn resolve(
             record.count_kill();
         }
     }
-    let sound = match weapon {
-        Some(bytes) => ItemDefinition(bytes).impact_sound()?,
+    let sound = match weapon.filter(|weapon| weapon.armed) {
+        Some(weapon) => ItemDefinition(weapon.definition).impact_sound()?,
         None => random.bound(2).wrapping_add(401),
     };
     Ok((
         AttackResult {
+            icon: resolved.sound,
             feedback,
             damage,
             killed,
@@ -149,12 +191,23 @@ pub(super) fn resolve(
         },
         packet,
         reflected,
+        None,
     ))
+}
+
+fn prepared_no_damage(
+    packet: Vec<u8>,
+    reflected: bool,
+    refusal: Option<i16>,
+) -> (AttackResult, Vec<u8>, bool, Option<i16>) {
+    let (result, packet, reflected) = no_damage(packet, reflected);
+    (result, packet, reflected, refusal)
 }
 
 fn no_damage(packet: Vec<u8>, reflected: bool) -> (AttackResult, Vec<u8>, bool) {
     (
         AttackResult {
+            icon: 0,
             feedback: None,
             damage: 0,
             killed: false,
@@ -165,21 +218,28 @@ fn no_damage(packet: Vec<u8>, reflected: bool) -> (AttackResult, Vec<u8>, bool) 
     )
 }
 
-fn rejects_weapon(immunity: i16, weapon: Option<&[u8]>) -> Result<bool, RuleError> {
-    let weapon = weapon.map(ItemDefinition);
+fn weapon_refusal(
+    immunity: i16,
+    weapon: Option<PreparedMeleeWeapon<'_>>,
+) -> Result<Option<i16>, RuleError> {
     Ok(match immunity {
         -1 | -2 => weapon
-            .map(|weapon| weapon.immunity_class().map(|class| class != immunity))
+            .filter(|weapon| weapon.armed)
+            .map(|weapon| {
+                ItemDefinition(weapon.definition)
+                    .immunity_class()
+                    .map(|class| class != immunity)
+            })
             .transpose()?
-            .unwrap_or(false),
-        0 => false,
-        _ => {
-            weapon
-                .map(|weapon| weapon.description_id())
-                .transpose()?
-                .unwrap_or(0)
-                .wrapping_sub(1024)
-                != immunity
-        }
+            .unwrap_or(false)
+            .then_some(if immunity == -1 { -50 } else { -51 }),
+        0 => None,
+        _ => (weapon
+            .map(|weapon| ItemDefinition(weapon.definition).description_id())
+            .transpose()?
+            .unwrap_or(0)
+            .wrapping_sub(1024)
+            != immunity)
+            .then_some(-45),
     })
 }

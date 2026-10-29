@@ -41,7 +41,32 @@ fn complete_collisions_match_original_all_bodies_fields_usage_and_randomness() {
         ..support::mission()
     };
     let rotated = support::fixture("rotated-fields.json");
-    for case in fixture.array("cases").iter().chain(rotated.array("cases")) {
+    let mut cases: Vec<_> = fixture
+        .array("cases")
+        .iter()
+        .chain(rotated.array("cases"))
+        .cloned()
+        .collect();
+    // The new native editor prefix proves the registered backup remains zero.
+    // Restrict an otherwise unchanged body10 collision to exercise that owner.
+    let mut registered = fixture["cases"][1].clone();
+    registered["registered_backup_control"] = true.into();
+    cases.push(registered);
+    for case in &cases {
+        let mut mission = mission.clone();
+        if case["registered_backup_control"] == true {
+            let backup = support::fixture("editor-backup-boundary.json");
+            assert!(
+                backup["cases"][1]
+                    .bytes("after")
+                    .iter()
+                    .all(|byte| *byte == 0)
+            );
+            let tables = std::sync::Arc::make_mut(&mut mission.shared);
+            let attacks = &mut tables.combat.as_mut().unwrap().attacks;
+            assert_eq!(attacks[2842 + 49], 0);
+            attacks[2842 + 50..2842 + 52].copy_from_slice(&0x2000_i16.to_be_bytes());
+        }
         let mut warriors = support::warriors(&case["warriors_before"]);
         let mut combat = support::battle();
         combat.battle = 28;
@@ -66,7 +91,7 @@ fn complete_collisions_match_original_all_bodies_fields_usage_and_randomness() {
             &mission,
             &mut count,
             &mut random,
-            case.n::<i16>("body"),
+            (case.n::<i16>("body"), 0, &mut 0),
         )
         .unwrap();
         support::native_expect! {
@@ -75,7 +100,7 @@ fn complete_collisions_match_original_all_bodies_fields_usage_and_randomness() {
             bytes combat.spell_fields => &case["fields_after"], "collision fields";
             bytes combat.field_used => &case["used_after"], "collision usage";
             scalar count => &case["count_after"], "collision count";
-            scalar combat.attack_identity.unwrap()[1] => &case["level_after"], "collision level";
+            scalar combat.attack_identity[1] => &case["level_after"], "collision level";
             rng random => (&case["seed_after"], &case["rng_draws"]), "collision seed";
             scalar support::event_sounds(&events) => &case["sounds"], "collision ordered sounds";
         }

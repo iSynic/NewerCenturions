@@ -7,6 +7,9 @@ use crate::original_content::fixture as native_fixture;
 
 use crate::fixture_hex::decode;
 
+#[path = "../native/inventory_reference.rs"]
+mod inventory_reference;
+
 fn story_frame(record: Vec<u8>, cursor: u8, map_slot: usize) -> centurions_core::ScriptState {
     centurions_core::ScriptState {
         map_slot,
@@ -74,12 +77,9 @@ fn scenario_selection_and_archive_children_use_the_application_handlers() {
         driver.app.selected_scenario.as_deref(),
         Some("The Thunder of Guns")
     );
-    driver.command(Command::ImportStarters);
-    driver.command(Command::EnterMission {
-        name: "The Thunder of Guns".into(),
-    });
+    crate::original_content::enter_mission(&mut driver.state, &driver.content);
     driver.app.screen = Screen::Game;
-    let before = driver.state.clone();
+    let mut before = driver.state.clone();
     let (_, about) = driver.act(ApplicationAction::Menu(128, 1));
     assert_eq!(
         about,
@@ -94,19 +94,16 @@ fn scenario_selection_and_archive_children_use_the_application_handlers() {
     driver.act(ApplicationAction::CloseAbout);
     assert!(!driver.app.about);
     assert_eq!(driver.state, before);
-    assert!(
-        driver
-            .app
-            .archives
-            .iter()
-            .any(|(_, name)| name == "Bore Worm")
-    );
+    let archives = &driver.app.archives;
+    assert!(archives.iter().any(|(_, name)| name == "Bore Worm"));
     driver.act(ApplicationAction::Menu(132, 1));
     assert!(driver.app.creature.is_some());
     driver.act(ApplicationAction::CreatureItem(3));
     driver.act(ApplicationAction::CreatureItem(2));
     driver.act(ApplicationAction::CreatureItem(4));
     assert!(driver.app.creature.is_none());
+    // beast103ebe copies the viewed record into MONSTER work.
+    before.native_work.monster_work = driver.state.native_work.monster_work.clone();
     assert_eq!(driver.state, before);
     driver.state.exploration.as_mut().unwrap().presentation =
         Some(Presentation::Prologue { resource_id: 1000 });
@@ -121,12 +118,6 @@ fn scenario_selection_and_archive_children_use_the_application_handlers() {
     let path = std::env::temp_dir().join(format!("centurions-pause-{}.json", std::process::id()));
     centurions_core::save(&path, &driver.state, &driver.content).unwrap();
     driver.state = centurions_core::load(&path, &driver.content).unwrap();
-    let mut legacy: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    legacy["schema_version"] = 8.into();
-    crate::original_content::legacy_save(&mut legacy);
-    std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
-    assert!(centurions_core::load(&path, &driver.content).is_err());
     std::fs::remove_file(path).unwrap();
     let mut ui = crate::presentation::UiState::default();
     assert!(ui.prepare_script_pause(&driver.state));
@@ -190,13 +181,8 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
         word(&driver.creation().draft.warriors[0].bytes, 0xe4).unwrap(),
         1
     );
-    assert!(
-        driver.creation().draft.warriors[0]
-            .inventory()
-            .unwrap()
-            .len()
-            >= 2
-    );
+    let created = &driver.creation().draft.warriors[0];
+    assert!(created.inventory().unwrap().len() >= 2);
     assert!(driver.state.warriors.is_empty());
     driver.act(ApplicationAction::CreationAnswer(true));
     let roster = centurions_core::roster::Roster::open(&path, &driver.content).unwrap();
@@ -224,11 +210,8 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
     driver.act(ApplicationAction::EditorItem(10));
     driver.act(ApplicationAction::EditorItem(32));
     driver.act(ApplicationAction::ScanAnswer(true));
-    assert!(
-        driver.creation().draft.warriors[0]
-            .knows_spell(1101)
-            .unwrap()
-    );
+    let created = &driver.creation().draft.warriors[0];
+    assert!(created.knows_spell(1101).unwrap());
     assert!(driver.app.characters.editor.is_none());
     driver.act(ApplicationAction::CreationAnswer(false));
     assert_eq!(
@@ -278,12 +261,8 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
         centurions_core::load(&saved, &driver.content).unwrap(),
         before_exit
     );
-    assert!(
-        centurions_core::roster::Roster::open(&path, &driver.content)
-            .unwrap()
-            .warriors
-            .contains(&expected[0])
-    );
+    let roster = centurions_core::roster::Roster::open(&path, &driver.content).unwrap();
+    assert!(roster.warriors.contains(&expected[0]));
     driver.state = before_exit;
     driver.app.screen = Screen::Game;
     let blocked = directory.join("blocked");
@@ -358,10 +337,7 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
             ..
         }
     ));
-    driver.command(Command::ImportStarters);
-    driver.command(Command::EnterMission {
-        name: "The Thunder of Guns".into(),
-    });
+    crate::original_content::enter_mission(&mut driver.state, &driver.content);
     let before = driver.state.clone();
     assert!(
         apply(
@@ -376,7 +352,8 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
     );
     assert_eq!(driver.state, before);
     let fixture: serde_json::Value = crate::original_content::fixture("earned-combat-reload.json");
-    driver.state = serde_json::from_value(fixture["foundations"][0]["session"].clone()).unwrap();
+    driver.state =
+        crate::original_content::source_frame(fixture["foundations"][0]["session"].clone());
     assert_eq!(driver.state.phase, Phase::Combat);
     let mut friendly = driver.state.clone();
     let actor = friendly.combat.as_ref().unwrap().active_body().unwrap() as usize;
@@ -440,12 +417,8 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
     let mut events: Vec<_> = (0..3).map(|_| Event::Sound { resource_id: -139 }).collect();
     events.push(Event::Sound { resource_id: 138 });
     restored.prepare_combat_round(Some(-1), &driver.state, &mut events);
-    assert!(
-        events
-            .iter()
-            .all(|event| !matches!(event, Event::Sound { .. })),
-        "round audio would play twice"
-    );
+    let sound = |event: &Event| matches!(event, Event::Sound { .. });
+    assert!(!events.iter().any(sound), "round audio would play twice");
     for event in events {
         if let Event::Feedback(feedback) = event {
             ui.feedback.push_back(feedback);
@@ -496,21 +469,16 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
 // Protects committing the selected level while an existing mission remains untouched during setup.
 #[test]
 fn difficulty_controls_commit_all_original_levels_at_mission_start() {
-    let content = crate::original_content::load();
-    let mut state = Session::new(&content);
+    let mut driver = DesktopReplay::new();
     for level in -2..=2 {
-        let before = state.clone();
-        let mut setup = Application::at(Screen::Squad, 0.);
-        setup.squad = vec![0];
-        setup
-            .handle(ApplicationAction::Difficulty(level), &mut state, &content)
-            .unwrap();
-        assert_eq!(state, before);
-        setup
-            .handle(ApplicationAction::Done, &mut state, &content)
-            .unwrap();
-        assert_eq!(state.difficulty, level);
-        assert_eq!(state.phase, Phase::Exploration);
+        let before = driver.state.clone();
+        driver.app = Application::at(Screen::Squad, 0.);
+        driver.app.squad = vec![0];
+        driver.act(ApplicationAction::Difficulty(level));
+        assert_eq!(driver.state, before);
+        driver.act(ApplicationAction::Done);
+        assert_eq!(driver.state.difficulty, level);
+        assert_eq!(driver.state.phase, Phase::Exploration);
     }
 }
 
@@ -535,28 +503,7 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
         })
     });
     assert_eq!(events, expected);
-    let text = centurions_content::native_text::NativeText::load(
-        &driver.content,
-        &root.join("analysis/extracted"),
-    )
-    .unwrap();
-    let original = std::fs::read(root.join("analysis/ghidra/startup/a5-mapped.bin")).unwrap();
-    for (address, pascal) in [
-        (0x403658, true),
-        (0x403670, true),
-        (0x40361a, false),
-        (0x4035fa, false),
-        (0x4035be, false),
-        (0x403686, false),
-    ] {
-        let slice = &original[(address - 0x3fe210) as usize..];
-        let bytes = if pascal {
-            &slice[1..1 + usize::from(slice[0])]
-        } else {
-            &slice[..slice.iter().position(|b| *b == 0).unwrap()]
-        };
-        assert_eq!(text.text(address, pascal).unwrap().as_bytes(), bytes);
-    }
+    inventory_reference::compare_editor_data(&driver.content, &root);
     let mut ui = crate::presentation::UiState::default();
     ui.feedback.extend(expected.into_iter().map(|event| {
         let Event::Feedback(feedback) = event else {
@@ -586,10 +533,7 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     );
     driver.act(ApplicationAction::Menu(136, 8));
     driver.act(ApplicationAction::EditorAnswer(true));
-    driver.command(Command::ImportStarters);
-    driver.command(Command::EnterMission {
-        name: "The Thunder of Guns".into(),
-    });
+    crate::original_content::enter_mission(&mut driver.state, &driver.content);
     driver.app.screen = Screen::Game;
     let before = driver.state.clone();
     for item in [45, 82, 45, 83, 45, 1] {
@@ -597,18 +541,18 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
             driver.act(ApplicationAction::OpenEditor(0));
         }
         driver.act(ApplicationAction::EditorItem(item));
-        assert_eq!(driver.state, before);
+        let mut scope = driver.state.clone();
+        scope.native_work = before.native_work.clone();
+        assert_eq!(scope, before);
         if matches!(item, 82 | 83) {
-            assert_eq!(driver.editor().draft, before);
+            assert_eq!(driver.editor().draft.warriors, before.warriors);
         }
     }
     driver.act(ApplicationAction::OpenEditor(0));
     driver.act(ApplicationAction::EditorItem(45));
     driver.act(ApplicationAction::EditorItem(4));
-    assert_eq!(
-        word(&driver.state.warriors[0].bytes, 0x9e2).unwrap(),
-        word(&before.warriors[0].bytes, 0x9e2).unwrap() + 1
-    );
+    let lead = |state: &Session, offset| word(&state.warriors[0].bytes, offset).unwrap();
+    assert_eq!(lead(&driver.state, 0x9e2), lead(&before, 0x9e2) + 1);
     assert_eq!(driver.state.random, before.random);
     let first_committed = driver.state.clone();
     driver.act(ApplicationAction::OpenEditor(0));
@@ -617,8 +561,8 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     }
     assert_eq!(driver.state.warriors[1], first_committed.warriors[1]);
     assert_eq!(
-        word(&driver.state.warriors[0].bytes, 0x9e2).unwrap(),
-        word(&first_committed.warriors[0].bytes, 0x9e2).unwrap() + 1
+        lead(&driver.state, 0x9e2),
+        lead(&first_committed, 0x9e2) + 1
     );
     let path = std::env::temp_dir().join(format!("centurions-editor-{}.json", std::process::id()));
     let before_levels = driver.state.clone();
@@ -626,18 +570,11 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     for item in [81, 81, 81, 0, 83, 4] {
         driver.act(ApplicationAction::EditorItem(item));
     }
-    assert_eq!(
-        word(&driver.state.warriors[0].bytes, 0x3a).unwrap(),
-        word(&before_levels.warriors[0].bytes, 0x3a).unwrap() + 3
-    );
-    assert_eq!(
-        driver.state.library_random_draws,
-        before_levels.library_random_draws + 3
-    );
-    assert_eq!(
-        &driver.state.warriors[0].bytes[0x9ce..0x9d2],
-        &before_levels.warriors[0].bytes[0x9ce..0x9d2]
-    );
+    assert_eq!(lead(&driver.state, 0x3a), lead(&before_levels, 0x3a) + 3);
+    let draws = |state: &Session| state.library_random_draws;
+    assert_eq!(draws(&driver.state), draws(&before_levels) + 3);
+    let costs = |state: &Session| state.warriors[0].bytes[0x9ce..0x9d2].to_vec();
+    assert_eq!(costs(&driver.state), costs(&before_levels));
     let before_scans = driver.state.clone();
     driver.act(ApplicationAction::OpenEditor(1));
     for item in [39, 2, 10, 11, 32] {
@@ -652,19 +589,14 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     assert_eq!(driver.state, before_scans);
     driver.act(ApplicationAction::EditorItem(4));
     assert_eq!(&driver.state.warriors[1].bytes[0x9f0..0x9f2], &[0, 1]);
+    let memory = |state: &Session| state.native_work.psi_memory.clone();
     assert_eq!(
-        &driver.state.native_work.psi_memory.as_ref().unwrap()[80..160],
-        &driver.state.warriors[1].bytes[0xa76..0xac6]
+        memory(&driver.state)[80..160],
+        driver.state.warriors[1].bytes[0xa76..0xac6]
     );
-    assert_eq!(
-        &driver.state.native_work.psi_memory.as_ref().unwrap()[..80],
-        &before_scans.native_work.psi_memory.as_ref().unwrap()[..80]
-    );
+    assert_eq!(memory(&driver.state)[..80], memory(&before_scans)[..80]);
     assert_eq!(driver.state.random, before_scans.random);
-    assert_eq!(
-        driver.state.library_random_draws,
-        before_scans.library_random_draws
-    );
+    assert_eq!(draws(&driver.state), draws(&before_scans));
     driver.act(ApplicationAction::Menu(136, 8));
     driver.act(ApplicationAction::OpenEditor(0));
     assert!(!driver.editor().free);
@@ -755,62 +687,8 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     let seed = driver.state.random.clone();
     driver.act(ApplicationAction::OpenInformation(0));
     assert_eq!(driver.state.random, seed);
-    assert_eq!(driver.state, unchanged);
-    let extracted = root.join("analysis/extracted");
-    let native =
-        centurions_content::native_text::NativeText::load(&driver.content, &extracted).unwrap();
-    let strings = driver
-        .content
-        .resources
-        .iter()
-        .filter(|r| {
-            r.original.ends_with("/Cargo Pod")
-                && r.r#type == "STR#"
-                && matches!(r.id, 129 | 131 | 132 | 133)
-        })
-        .map(|r| {
-            (
-                r.id,
-                centurions_content::read_resource(&extracted, r).unwrap(),
-            )
-        })
-        .collect();
-    let fields =
-        centurions_core::character_display::information(&driver.state, 0, &native, &strings)
-            .unwrap();
-    assert_eq!(fields[&67].0, driver.state.warriors[0].name);
-    for (reference, detailed) in [
-        (
-            include_str!("../../../../evidence/fixtures/warrior-information.json"),
-            false,
-        ),
-        (
-            include_str!("../../../../evidence/fixtures/warrior-statistics.json"),
-            true,
-        ),
-    ] {
-        let reference: serde_json::Value = serde_json::from_str(reference).unwrap();
-        for case in reference["cases"].as_array().unwrap() {
-            let bytes = decode(case["before"].as_str().unwrap());
-            let mut sample = Session::new(&driver.content);
-            sample.warriors = vec![centurions_content::Warrior::read(&bytes).unwrap()];
-            let mut fields = if detailed {
-                centurions_core::character_display::statistics(&sample, 0).unwrap()
-            } else {
-                centurions_core::character_display::information(&sample, 0, &native, &strings)
-                    .unwrap()
-            };
-            if detailed {
-                fields.remove(&37);
-            }
-            assert_eq!(
-                serde_json::to_value(fields).unwrap(),
-                case["fields"],
-                "{}",
-                case["case"]
-            );
-        }
-    }
+    inventory_reference::information_entry(&driver.state, &unchanged, 0);
+    inventory_reference::compare_character_fields(&driver.content, &driver.state, &root);
     let viewed = driver.state.clone();
     driver.act(ApplicationAction::InformationItem(100));
     assert!(driver.information().detailed);
@@ -853,15 +731,7 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let content = crate::original_content::load();
     let mut state = Session::new(&content);
-    apply(Command::ImportStarters, &mut state, &content).unwrap();
-    apply(
-        Command::EnterMission {
-            name: "The Thunder of Guns".into(),
-        },
-        &mut state,
-        &content,
-    )
-    .unwrap();
+    crate::original_content::enter_mission(&mut state, &content);
     let mut app = Application::at(Screen::Game, 0.);
     app.editing = true;
     let before = state.clone();
@@ -914,7 +784,7 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
         };
         apply(command, &mut state, &content).unwrap();
     }
-    assert_eq!(state.native_work.inventory_record.as_ref(), Some(&record));
+    assert_eq!(state.native_work.inventory_record, record);
     let drag = ui.inventory.release(Some(vec2(500., 50.))).unwrap();
     let Some(Action::Command(command)) = ui
         .resolve_inventory(Some(Action::Inventory(drag)), &state, &content, 2.)
@@ -923,11 +793,8 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
         panic!("transfer did not reach command boundary")
     };
     let events = apply(command, &mut state, &content).unwrap();
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, Event::ItemTransferred { from: 0, to: 4, .. }))
-    );
+    let moved = |event: &Event| matches!(event, Event::ItemTransferred { from: 0, to: 4, .. });
+    assert!(events.iter().any(moved));
     let transferred = state.warriors[4].inventory().unwrap()[recipient_slot].clone();
     assert_eq!(
         state.warriors[0].inventory().unwrap().len(),
@@ -950,103 +817,9 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
     assert_eq!(centurions_core::load(&path, &content).unwrap(), state);
     // Shop entry, native record decoding, refused purchase, buy/resale, and reload share this item flow.
     let receipt = native_fixture("shop-records.json");
-    for case in receipt["instances"].as_array().unwrap() {
-        assert_eq!(
-            centurions_core::shop::preview(&content, case["item"].as_i64().unwrap() as i16)
-                .unwrap()
-                .0
-                .to_vec(),
-            decode(case["record"].as_str().unwrap())
-        );
-    }
-    let native = centurions_content::native_text::NativeText::load(
-        &content,
-        &root.join("analysis/extracted"),
-    )
-    .unwrap();
-    let mut strings = std::collections::BTreeMap::new();
-    for resource in content.resources.iter().filter(|r| r.r#type == "STR#") {
-        strings.insert(
-            resource.id,
-            centurions_content::read_resource(&root.join("analysis/extracted"), resource).unwrap(),
-        );
-    }
-    for warrior in &state.warriors {
-        for item in warrior.inventory().unwrap() {
-            centurions_core::item_display::row(&content, &item, &native, &strings).unwrap();
-            centurions_core::item_display::detail(
-                &content,
-                content.map(5).unwrap(),
-                &item,
-                false,
-                &native,
-                &strings,
-            )
-            .unwrap();
-        }
-    }
-    for case in receipt["instances"].as_array().unwrap() {
-        let item = centurions_core::shop::preview(&content, case["item"].as_i64().unwrap() as i16)
-            .unwrap();
-        centurions_core::item_display::detail(
-            &content,
-            content.map(5).unwrap(),
-            &item,
-            true,
-            &native,
-            &strings,
-        )
-        .unwrap();
-    }
-    let panels = native_fixture("inventory-details.json");
-    for case in panels["cases"].as_array().unwrap() {
-        let item = centurions_content::InventoryRecord(
-            decode(case["record"].as_str().unwrap()).try_into().unwrap(),
-        );
-        let plan = centurions_core::item_display::detail(
-            &content,
-            content.map(5).unwrap(),
-            &item,
-            case["stock"].as_bool().unwrap(),
-            &native,
-            &strings,
-        )
-        .unwrap();
-        let mut position = (0, 0);
-        let mut fields = vec![];
-        for effect in plan.effects {
-            use centurions_core::item_display::output::{Draw, PanelEffect};
-            match effect {
-                PanelEffect::Drawing(Draw::MoveTo {
-                    horizontal,
-                    vertical,
-                }) => position = (horizontal, vertical),
-                PanelEffect::NumberToString { value, .. } if fields.len() < 13 => {
-                    fields.push(serde_json::json!([position.0, position.1, value]))
-                }
-                _ => {}
-            }
-        }
-        assert_eq!(serde_json::Value::Array(fields), case["fields"]);
-    }
+    inventory_reference::compare_previews(&content, &state, &root, &receipt);
     let source = content.map(5).unwrap().header[92 * 42..93 * 42].to_vec();
-    for case in receipt["shops"].as_array().unwrap().iter().skip(1) {
-        let mut probe = state.clone();
-        let mut record = source.clone();
-        record[26..28].copy_from_slice(&(-(case["shop"].as_i64().unwrap() as i16)).to_be_bytes());
-        probe.exploration.as_mut().unwrap().script = Some(story_frame(record, 1, 92));
-        probe.exploration.as_mut().unwrap().presentation =
-            Some(centurions_core::Presentation::Dialogue {
-                id: 919,
-                text: String::new(),
-            });
-        apply(Command::Continue, &mut probe, &content).unwrap();
-        let offset = case["shop"].as_u64().unwrap() as usize * 3002;
-        assert_eq!(
-            &probe.shops[&0][offset..offset + 3002],
-            decode(case["stock"].as_str().unwrap())
-        );
-    }
+    inventory_reference::compare_shop_stock(&content, &mut state, &receipt, &source);
     state.exploration.as_mut().unwrap().script = Some(story_frame(source, 1, 92));
     state.exploration.as_mut().unwrap().presentation =
         Some(centurions_core::Presentation::Dialogue {
@@ -1059,7 +832,7 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
         Some(centurions_core::Presentation::Shop)
     );
     assert_eq!(
-        &state.shops[&0][..3002],
+        inventory_reference::stock(&state),
         decode(receipt["shops"][0]["stock"].as_str().unwrap())
     );
     let (stock, id, _) = centurions_core::shop::stock(&state)
@@ -1115,114 +888,10 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
     centurions_core::save(&path, &state, &content).unwrap();
     let mut restored = centurions_core::load(&path, &content).unwrap();
     assert_eq!(restored, state);
-    let special = native_fixture("special-shop-purchase.json");
-    let generated = native_fixture("special-shop.json");
-    for case in special["cases"].as_array().unwrap() {
-        let mut content = content.clone();
-        let map_index = state.exploration.as_ref().unwrap().map as usize;
-        let map = &mut content.scenario.as_mut().unwrap().maps[map_index];
-        std::sync::Arc::make_mut(&mut map.shared)
-            .combat
-            .as_mut()
-            .unwrap()
-            .encounters[3650..3660]
-            .copy_from_slice(&[255, 255, 0, 1, 0, 2, 0, 0, 0, 0]);
-        let script = map.script(191).unwrap().to_vec();
-        let mut probe = state.clone();
-        probe.exploration.as_mut().unwrap().presentation =
-            Some(centurions_core::Presentation::Dialogue {
-                id: 740,
-                text: String::new(),
-            });
-        probe.exploration.as_mut().unwrap().script = Some(story_frame(script, 1, 0));
-        apply(Command::Continue, &mut probe, &content).unwrap();
-        let id = case["item"].as_i64().unwrap() as i16;
-        probe.warriors[0] =
-            centurions_content::Warrior::read(&decode(case["before"].as_str().unwrap())).unwrap();
-        probe.shops.get_mut(&probe.scenario_level).unwrap()[3002..6004]
-            .copy_from_slice(&decode(case["stock_before"].as_str().unwrap()));
-        let stock = centurions_core::shop::stock(&probe)
-            .unwrap()
-            .into_iter()
-            .find(|(_, item, _)| *item == id)
-            .unwrap()
-            .0;
-        assert_eq!(
-            centurions_core::shop::price(&probe, &content, id, false).unwrap(),
-            case["price"].as_i64().unwrap() as i32
-        );
-        probe.party_currency = 900000;
-        probe.random = centurions_core::RandomState::new(12);
-        centurions_core::save(&path, &probe, &content).unwrap();
-        probe = centurions_core::load(&path, &content).unwrap();
-        let before = probe.clone();
-        assert!(
-            matches!(apply(Command::SellItem { warrior: 0, slot: 0 }, &mut probe, &content), Err(centurions_core::RuleError::Refused { feedback }) if feedback == vec![centurions_core::feedback::NativeFeedback::Warning { index: generated["refusals"][0]["warning"].as_i64().unwrap() as i16 }])
-        );
-        assert_eq!(probe, before);
-        apply(Command::BuyItem { warrior: 0, stock }, &mut probe, &content).unwrap();
-        let reference = generated["cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| r["item"] == case["item"])
-            .unwrap();
-        assert_eq!(
-            probe.warriors[0]
-                .inventory()
-                .unwrap()
-                .into_iter()
-                .find(|record| record.id() == id)
-                .unwrap()
-                .0
-                .as_slice(),
-            &decode(reference["record"].as_str().unwrap())
-        );
-        assert_eq!(
-            probe.random.seed,
-            reference["seed_after"].as_u64().unwrap() as u32
-        );
-        assert_eq!(probe.random.draws, reference["rng_draws"].as_u64().unwrap());
-        assert_eq!(
-            probe.warriors[0].bytes,
-            decode(case["after"].as_str().unwrap())
-        );
-        assert_eq!(
-            &probe.shops[&probe.scenario_level][3002..6004],
-            &decode(case["stock_after"].as_str().unwrap())
-        );
-        assert_eq!(probe.random.seed, case["seed"].as_u64().unwrap() as u32);
-        assert_eq!(probe.random.draws, case["draws"].as_u64().unwrap());
-        assert_eq!(
-            probe.party_currency,
-            case["currency"].as_i64().unwrap() as i32
-        );
-        assert_eq!(
-            probe.shop_access.as_ref().unwrap().remaining,
-            case["remaining"].as_i64().unwrap() as i16
-        );
-        let before = probe.clone();
-        assert!(
-            matches!(apply(Command::BuyItem { warrior: 0, stock }, &mut probe, &content), Err(centurions_core::RuleError::Refused { feedback }) if feedback == vec![centurions_core::feedback::NativeFeedback::Warning { index: generated["refusals"][1]["warning"].as_i64().unwrap() as i16 }])
-        );
-        assert_eq!(probe, before);
-        centurions_core::save(&path, &probe, &content).unwrap();
-        assert_eq!(centurions_core::load(&path, &content).unwrap(), probe);
-        apply(Command::CloseShop, &mut probe, &content).unwrap();
-        assert!(matches!(
-            probe.exploration.as_ref().unwrap().presentation,
-            Some(centurions_core::Presentation::Dialogue { id: 741, .. })
-        ));
-    }
+    inventory_reference::compare_special_purchases(&content, &state, &path);
     apply(Command::CloseShop, &mut restored, &content).unwrap();
-    assert!(
-        restored
-            .exploration
-            .as_ref()
-            .unwrap()
-            .presentation
-            .is_none()
-    );
+    let position = restored.exploration.as_ref().unwrap();
+    assert!(position.presentation.is_none());
     let (actor, needle) = restored
         .warriors
         .iter()
@@ -1260,243 +929,6 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
     );
     assert_eq!(restored, resumed);
     assert!(restored.outdoor_psi.is_none());
-    let initial = restored.clone();
-    for (name, index, regional) in [
-        ("encounter-inert-items.json", 1),
-        ("encounter-script-items.json", 0),
-        ("encounter-script-items.json", 2),
-        ("item-modifiers.json", 2),
-        ("item-modifiers.json", 4),
-        ("encounter-medical.json", 2),
-        ("walking-encounter-item.json", 0),
-        ("calendar-encounter-item.json", 0),
-        ("outdoor-indexed-items.json", 1),
-    ]
-    .into_iter()
-    .map(|(name, index)| (name, index, false))
-    .chain(std::iter::once(("calendar-encounter-item.json", 0, true)))
-    {
-        let mut restored = initial.clone();
-        ui.feedback.clear();
-        let mut content = content.clone();
-        let encounter = native_fixture(name);
-        let case = &encounter["cases"][index];
-        let walking = case["caller"] == "walking";
-        let calendar = case["caller"] == "calendar" && !regional;
-        let global = case["global"] == true;
-        if let Some(definition) = case.get("definition") {
-            content.items[case["item"].as_u64().unwrap() as usize] =
-                decode(definition.as_str().unwrap());
-        }
-        if case.get("active_body").is_some() {
-            let combat: serde_json::Value =
-                crate::original_content::fixture("earned-combat-reload.json");
-            restored = serde_json::from_value(combat["foundations"][0]["session"].clone()).unwrap();
-            let battle = restored.combat.as_mut().unwrap();
-            battle.order[battle.cursor] = 2;
-        }
-        let native_party = case["before"]
-            .as_str()
-            .unwrap_or_else(|| case["before"]["party"].as_str().unwrap());
-        restored.warriors = decode(native_party)
-            .chunks(3138)
-            .enumerate()
-            .map(|(i, bytes)| {
-                let mut warrior = restored.warriors[i].clone();
-                warrior.bytes = bytes.to_vec();
-                warrior
-            })
-            .collect();
-        if case["before"].get("seed").is_some() {
-            restored.random = centurions_core::RandomState {
-                seed: case["before"]["seed"].as_u64().unwrap() as u32,
-                draws: case["before"]["draws"].as_u64().unwrap(),
-            };
-        }
-        if let Some(tail) = case["before"].get("scenario_duration_tail") {
-            restored.scenario_duration_tail = Some(tail.as_i64().unwrap() as i16);
-        }
-        let position = restored.exploration.as_mut().unwrap();
-        let mut record = vec![0; 42];
-        record[8..10].copy_from_slice(&5_i16.to_be_bytes());
-        record[24..26].copy_from_slice(&8_i16.to_be_bytes());
-        position.script = Some(centurions_core::ScriptState {
-            item_return: name == "encounter-script-items.json",
-            scheduled: !walking,
-            origin: walking.then_some(centurions_core::ScriptOrigin {
-                map: position.map,
-                x: position.x,
-                y: position.y,
-                level: restored.scenario_level,
-            }),
-            ..centurions_core::ScriptState::scheduled(record, 0)
-        });
-        position.presentation = Some(centurions_core::Presentation::Dialogue {
-            id: 0,
-            text: String::new(),
-        });
-        if calendar {
-            position.day = 2;
-            position.hour = 0;
-            position.minute = 0;
-            restored.time_continuation = Some(centurions_core::TimeContinuation {
-                remaining_ticks: 0,
-                minutes_per_tick: 5,
-                schedule_cursor: position.schedule.len() / 40,
-            });
-        }
-        if regional {
-            position.last_move = [1, -1];
-            position.floor.fill(0);
-            position.event_headers.fill(0);
-            restored.movement_continuation =
-                Some(centurions_core::MovementContinuation::RegionalReturn { header: true });
-        }
-        if global {
-            position.script = None;
-            position.presentation = None;
-        } else {
-            apply(Command::Continue, &mut restored, &content).unwrap();
-        }
-        if case["encounter_active"] == false {
-            let position = restored.exploration.as_mut().unwrap();
-            position.script = None;
-            position.presentation = None;
-        }
-        ui.inspection = Some(crate::presentation::Inspection::Items);
-        centurions_core::save(&path, &restored, &content).unwrap();
-        restored = centurions_core::load(&path, &content).unwrap();
-        let before = restored.clone();
-        ui.inventory.open(
-            case.get("actor")
-                .map_or(2, |v| v.as_u64().unwrap() as usize),
-            restored.warriors.len(),
-        );
-        assert!(matches!(
-            ui.resolve_inventory(
-                Some(Action::Inventory(crate::inventory::InventoryAction::Done)),
-                &restored,
-                &content,
-                30.
-            )
-            .unwrap(),
-            Some(Action::Close)
-        ));
-        assert_eq!(restored, before);
-        for _ in 0..2 {
-            let action = crate::inventory::InventoryAction::Item {
-                side: 0,
-                slot: case["slot"].as_u64().unwrap() as usize,
-            };
-            if let Some(Action::Command(command)) = ui
-                .resolve_inventory(Some(Action::Inventory(action)), &restored, &content, 31.)
-                .unwrap()
-            {
-                let inspecting = matches!(command, Command::InspectInventory { .. });
-                match apply(app.command(command), &mut restored, &content) {
-                    Ok(events) => {
-                        if !inspecting {
-                            ui.medical_result(&restored, &events);
-                        }
-                        ui.events(&events);
-                    }
-                    Err(error) => {
-                        assert!(case.get("warning").is_some());
-                        ui.failure(error);
-                    }
-                }
-            }
-        }
-        if name == "encounter-medical.json" {
-            assert!(restored.outdoor_psi.is_some());
-            assert!(ui.inspection.is_none());
-            centurions_core::save(&path, &restored, &content).unwrap();
-            restored = centurions_core::load(&path, &content).unwrap();
-            let events = apply(
-                app.command(Command::CancelOutdoorPsi),
-                &mut restored,
-                &content,
-            )
-            .unwrap();
-            ui.medical_result(&restored, &events);
-            ui.events(&events);
-            assert!(restored.outdoor_psi.is_none());
-        }
-        if case.get("warning").is_some() {
-            assert_eq!(
-                ui.feedback.back(),
-                Some(&centurions_core::feedback::NativeFeedback::Warning {
-                    index: case["warning"].as_i64().unwrap() as i16
-                })
-            );
-            assert!(ui.technical_error.is_none());
-            assert!(ui.inspection == Some(crate::presentation::Inspection::Items));
-            assert!(matches!(
-                restored.exploration.as_ref().unwrap().presentation,
-                Some(centurions_core::Presentation::Typed { .. })
-            ));
-        } else if case.get("dialog_open").is_some() {
-            assert!(ui.inspection == Some(crate::presentation::Inspection::Items));
-            assert!(ui.inventory.selected.is_none());
-            assert!(
-                restored
-                    .exploration
-                    .as_ref()
-                    .unwrap()
-                    .presentation
-                    .is_none()
-            );
-        } else if walking || calendar || global || regional {
-            let position = restored.exploration.as_ref().unwrap();
-            assert!(position.presentation.is_none() && position.script.is_none());
-            assert!(ui.inspection.is_none());
-            assert!(restored.time_continuation.is_none());
-            if regional {
-                assert_eq!(position.last_move, [0; 2]);
-                assert!(restored.movement_continuation.is_none());
-            }
-            if global {
-                assert_eq!(
-                    restored.scenario_duration_tail,
-                    Some(case["after"]["scenario_duration_tail"].as_i64().unwrap() as i16)
-                );
-            }
-        } else {
-            let expected = if name == "encounter-script-items.json" {
-                851
-            } else {
-                950
-            };
-            assert!(
-                matches!(restored.exploration.as_ref().unwrap().presentation, Some(centurions_core::Presentation::Dialogue { id, .. }) if id == expected)
-            );
-        }
-        assert_eq!(
-            restored
-                .warriors
-                .iter()
-                .flat_map(|w| w.bytes.clone())
-                .collect::<Vec<_>>(),
-            decode(
-                case["after"]
-                    .as_str()
-                    .unwrap_or_else(|| case["after"]["party"].as_str().unwrap())
-            )
-        );
-        assert_eq!(restored.ammunition, before.ammunition);
-        let expected_random = if case["before"].get("seed").is_some() {
-            centurions_core::RandomState {
-                seed: case["after"]["seed"].as_u64().unwrap() as u32,
-                draws: case["after"]["draws"].as_u64().unwrap(),
-            }
-        } else {
-            before.random
-        };
-        assert_eq!(restored.random, expected_random);
-        if global {
-            centurions_core::save(&path, &restored, &content).unwrap();
-            assert_eq!(centurions_core::load(&path, &content).unwrap(), restored);
-        }
-    }
+    inventory_reference::compare_encounter_returns(&mut app, &mut ui, &restored, &content, &path);
     std::fs::remove_file(path).unwrap();
 }

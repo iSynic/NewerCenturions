@@ -20,13 +20,13 @@ fn initial(fixture: &Value, case: &Value) -> Session {
     let weapon = state.native_work.ammunition_work.weapon.as_ref().unwrap();
     let ammo = state.native_work.ammunition_work.ammo.as_ref().unwrap();
     state.native_work.weapon_work = WeaponWork {
-        natural_attack_index: None,
-        sound: Some(word(weapon, 14).unwrap()),
-        weapon_armor_filter: Some(word(weapon, 136).unwrap()),
-        ammunition_armor_filter: Some(word(ammo, 136).unwrap()),
+        natural_attack_index: 0,
+        sound: word(weapon, 14).unwrap(),
+        weapon_armor_filter: word(weapon, 136).unwrap(),
+        ammunition_armor_filter: word(ammo, 136).unwrap(),
     };
     state.native_work.loaded_item_field32 =
-        Some(word(state.native_work.ammunition_work.item.as_ref().unwrap(), 32).unwrap());
+        word(state.native_work.ammunition_work.item.as_ref().unwrap(), 32).unwrap();
     let combat = state.combat.as_mut().unwrap();
     // No active NPC is established by these zeroed native helper inputs.
     combat.enemies.records.clear();
@@ -44,21 +44,17 @@ fn expected(state: &Session, fixture: &Value, case: &Value, content: &Content) -
     let class = word(&definition, 26).unwrap().wrapping_abs();
     definition[26..28].copy_from_slice(&class.to_be_bytes());
     assert_eq!(definition, bytes(fixture, &after["item_work"]));
-    expected.native_work.loaded_item_field32 = Some(word(&definition, 32).unwrap());
+    expected.native_work.loaded_item_field32 = word(&definition, 32).unwrap();
     expected.native_work.ammunition_work.item = Some(definition);
     let member = case.n::<usize>("member");
     expected
         .native_work
         .health_context
-        .as_mut()
-        .unwrap()
         .affected[member] = 1;
     assert_eq!(
         expected
             .native_work
             .health_context
-            .as_ref()
-            .unwrap()
             .affected,
         words(fixture, &after["markers"])[..6]
     );
@@ -125,15 +121,13 @@ fn four_public_removals_at_zero_ap_match_complete_native_state_and_saved_replay(
         checkpoint(&uninterrupted, &content, &format!("{index}-after"));
         if index == 0 {
             assert_eq!(
-                state.native_work.health_context.as_ref().unwrap().affected[0],
+                state.native_work.health_context.affected[0],
                 0
             );
             assert_eq!(
                 expected
                     .native_work
                     .health_context
-                    .as_ref()
-                    .unwrap()
                     .affected[0],
                 1
             );
