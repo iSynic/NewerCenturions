@@ -3,8 +3,8 @@ mod scans;
 use centurions_content::{
     Warrior,
     records::{
-        DevelopmentField as Field, LearnedScans, ProfessionProfile, PsiSelectionMemoryMut,
-        RaceProfile, SpellInfoRecord,
+        DevelopmentField as Field, LearnedScans, MosProfile, PsiSelectionMemoryMut, RaceProfile,
+        SpellInfoRecord,
     },
 };
 use scans::keep_spells;
@@ -38,10 +38,10 @@ pub struct Promotion {
     pub warnings: Vec<i16>,
 }
 
-/// The experience for `level`: the sum, over that many levels, of a share that starts at 714 and
+/// The victory points for `level`: the sum, over that many levels, of a share that starts at 714 and
 /// is multiplied at each level by a factor that begins at 1.45, falls by 0.01 a level and stays at
 /// least 1.15.
-pub fn experience_threshold(level: i16) -> Result<i32, RuleError> {
+pub fn victory_points_threshold(level: i16) -> Result<i32, RuleError> {
     let mut running = 714.0_f32;
     let mut total = 0_i32;
     for index in 0..level {
@@ -54,7 +54,7 @@ pub fn experience_threshold(level: i16) -> Result<i32, RuleError> {
     Ok(total)
 }
 
-/// Levels up in the editor, leaving experience and existing scans unchanged.
+/// Levels up in the editor, leaving victory points and existing scans unchanged.
 ///
 /// Original: levelup
 pub fn editor_level_up(
@@ -72,8 +72,8 @@ pub fn editor_level_up(
     Ok(bonus)
 }
 
-/// Sets a warrior's actions per round for the new level: the race and profession points plus one
-/// for each profession unlock level reached, within twice the race limit. Profession conditions
+/// Sets a warrior's actions per round for the new level: the race and MOS points plus one
+/// for each MOS unlock level reached, within twice the race limit. MOS conditions
 /// for the level take effect. Returns whether an unlock level equals the warrior's level.
 fn advance_statistics(
     warrior: &mut Warrior,
@@ -84,7 +84,7 @@ fn advance_statistics(
     let record = centurions_content::records::WarriorRecord::from_bytes(bytes);
     let level = record.level()?;
     let race_index = record.race()?;
-    let profile_index = record.profession()?;
+    let profile_index = record.mos()?;
     if race_index < 1 || profile_index < 1 {
         return Err(RuleError::Unsupported {
             action: "story.promotion",
@@ -92,7 +92,7 @@ fn advance_statistics(
         });
     }
     let race = RaceProfile::from_table(races, race_index)?;
-    let profile = ProfessionProfile::from_table(profiles, profile_index)?;
+    let profile = MosProfile::from_table(profiles, profile_index)?;
     let mut points = race
         .action_points()?
         .wrapping_add(profile.action_points()?)
@@ -231,8 +231,8 @@ struct MemberPromotion {
     warnings: Vec<i16>,
 }
 
-/// Advances one warrior with stamina above 0 and negative remaining experience: the level rises by
-/// one and the remaining experience grows by the experience for the level.
+/// Advances one warrior with stamina above 0 and negative remaining victory points: the level rises by
+/// one and the remaining victory points grow by the victory points for the level.
 fn promote_member(
     warrior: &mut Warrior,
     races: &[u8],
@@ -246,15 +246,15 @@ fn promote_member(
         sounds: vec![],
         warnings: vec![],
     };
-    if warrior.stamina()? <= 0 || warrior.record().remaining_experience()? >= 0 {
+    if warrior.stamina()? <= 0 || warrior.record().remaining_victory_points()? >= 0 {
         return Ok(result);
     }
     let level = warrior.record().level()?;
     let remaining = warrior
         .record()
-        .remaining_experience()?
-        .wrapping_add(experience_threshold(level)?);
-    warrior.record_mut().set_remaining_experience(remaining);
+        .remaining_victory_points()?
+        .wrapping_add(victory_points_threshold(level)?);
+    warrior.record_mut().set_remaining_victory_points(remaining);
     result.sounds.push(3002);
     if level >= 7 && !registered {
         result.warnings.push(40);

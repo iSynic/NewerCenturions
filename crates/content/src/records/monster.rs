@@ -76,8 +76,8 @@ impl<'a> EnemyRecord<'a> {
     pub fn credit_drop_bound(&self) -> Result<i16, ContentError> {
         word(self.0, 0x3a)
     }
-    /// Experience the monster is worth.
-    pub fn experience(&self) -> Result<i16, ContentError> {
+    /// Victory points the monster is worth.
+    pub fn victory_points(&self) -> Result<i16, ContentError> {
         word(self.0, 0x54)
     }
     /// Nonzero when the monster flies.
@@ -211,8 +211,8 @@ impl<'a> EnemyRecord<'a> {
     pub fn weapon_immunity(&self) -> Result<i16, ContentError> {
         word(self.0, 12)
     }
-    /// The monster's armour class.
-    pub fn ac(&self) -> Result<i16, ContentError> {
+    /// The monster's armor rating.
+    pub fn armor_rating(&self) -> Result<i16, ContentError> {
         word(self.0, 8)
     }
     /// The icon that shows the monster on the battle map.
@@ -396,8 +396,8 @@ impl EnemyRecordMut<'_> {
             *value = value.wrapping_add(amount as u8);
         }
     }
-    /// Sets the armour class.
-    pub fn set_armor(&mut self, value: i16) {
+    /// Sets the armor rating.
+    pub fn set_armor_rating(&mut self, value: i16) {
         put_word(self.0, 8, value);
     }
     /// Sets the agility.

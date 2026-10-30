@@ -179,7 +179,7 @@ pub(super) fn storage(state: &mut Session, content: &Content) -> Result<Vec<Even
 }
 
 /// Puts the dealt reward into the game: the booty list and its quality, the surviving monsters and
-/// warriors, the credits, the share and the experience.
+/// warriors, the credits, the share and the victory points.
 pub(crate) fn install(
     state: &mut Session,
     content: &Content,
@@ -213,7 +213,7 @@ pub(crate) fn install(
     state.booty_tally = crate::BootyTally {
         credits: rewards.credits,
         share: rewards.share,
-        experience: rewards.total,
+        victory_points: rewards.total,
     };
     for item in &mut state.booty_list {
         item.0.fill(0);

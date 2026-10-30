@@ -8,7 +8,7 @@ pub use ammunition_menu::{AmmunitionMenuItem, ammunition_menu_items};
 mod detail;
 pub use detail::detail;
 mod information;
-pub use information::{InformationField, UseRow, information, profession_list, user_list};
+pub use information::{InformationField, UseRow, information, mos_list, user_list};
 mod estimate;
 pub use estimate::attack_estimate;
 pub mod output;

@@ -193,7 +193,7 @@ impl Operation<'_> {
             let item = self.item(slot);
             let mut definition = self.load(item.id())?;
             let warrior = &self.result.warrior;
-            let allowed = if warrior.record().race()? == 0 || warrior.record().profession()? == 0 {
+            let allowed = if warrior.record().race()? == 0 || warrior.record().mos()? == 0 {
                 false
             } else {
                 can_use(

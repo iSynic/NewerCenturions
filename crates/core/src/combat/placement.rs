@@ -102,13 +102,13 @@ pub(super) fn place_enemies_with_allies(
             let position = placed.position;
             let bytes = &mut monster.bytes;
             EnemyRecordMut::from_bytes(bytes).set_movement_direction(1, 1);
-            let armor = EnemyRecord::from_bytes(bytes).ac()?;
+            let armor = EnemyRecord::from_bytes(bytes).armor_rating()?;
             if armor != 0 {
                 EnemyRecordMut::from_bytes(bytes)
-                    .set_armor(armor.wrapping_add(random.bound(3) - 2));
+                    .set_armor_rating(armor.wrapping_add(random.bound(3) - 2));
             }
-            let armor = EnemyRecord::from_bytes(bytes).ac()?.max(0);
-            EnemyRecordMut::from_bytes(bytes).set_armor(armor);
+            let armor = EnemyRecord::from_bytes(bytes).armor_rating()?.max(0);
+            EnemyRecordMut::from_bytes(bytes).set_armor_rating(armor);
             let speed = EnemyRecord::from_bytes(bytes)
                 .agility()?
                 .wrapping_add(random.bound(3) - 2)
@@ -190,7 +190,7 @@ pub fn place_squad(
         record.set_spells_so_far(0);
         record.set_faction(0);
         record.set_been_attacked(0);
-        record.set_attacks(0);
+        record.set_action_points(0);
         record.set_bleeding(0);
         record.set_toggle(false);
         record.initialize_placement_marker();

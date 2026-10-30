@@ -398,7 +398,7 @@ pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
                 && state.warriors.get(member).is_some_and(|warrior| {
                     warrior.record().in_battle() != 0
                         && warrior.stamina().unwrap_or(0) > 0
-                        && warrior.record().attacks().unwrap_or(0) >= 2
+                        && warrior.record().action_points().unwrap_or(0) >= 2
                 })
         }
         Action::Command(Command::FieldControl { .. }) => {

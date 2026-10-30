@@ -1,4 +1,4 @@
-//! The race, profession and item bit tables that decide who may use an item.
+//! The race, MOS and item bit tables that decide who may use an item.
 //! Bit zero is the high bit, and the end marker, ability 58, is looked up like
 //! any other.
 use crate::{ContentError, span, word};
@@ -7,8 +7,8 @@ use crate::{ContentError, span, word};
 pub struct EquipmentEligibility<'a>(pub &'a [u8]);
 /// The equipment tables of a race record.
 pub struct RaceEquipment<'a>(pub &'a [u8]);
-/// The equipment tables of a profession record.
-pub struct ProfessionEquipment<'a>(pub &'a [u8]);
+/// The equipment tables of an MOS record.
+pub struct MosEquipment<'a>(pub &'a [u8]);
 
 /// Whether bit `index` of the table at `offset` is set, counting from the high bit.
 fn bit(bytes: &[u8], offset: usize, index: usize) -> Result<bool, ContentError> {
@@ -20,12 +20,12 @@ impl EquipmentEligibility<'_> {
     pub fn required_race(&self) -> Result<i16, ContentError> {
         word(self.0, 108)
     }
-    /// The profession that alone may use the item; zero allows every profession.
-    pub fn required_profession(&self) -> Result<i16, ContentError> {
+    /// The MOS that alone may use the item; zero allows every MOS.
+    pub fn required_mos(&self) -> Result<i16, ContentError> {
         word(self.0, 110)
     }
     /// Whether the item's ability table sets `index`. The item's ability is the first one set;
-    /// the race and the profession must both permit it.
+    /// the race and the MOS must both permit it.
     pub fn ability(&self, index: usize) -> Result<bool, ContentError> {
         bit(self.0, 128, index)
     }
@@ -69,12 +69,12 @@ impl RaceEquipment<'_> {
     }
 }
 
-impl ProfessionEquipment<'_> {
-    /// Whether the profession permits items of ability `index`.
+impl MosEquipment<'_> {
+    /// Whether the MOS permits items of ability `index`.
     pub fn permits_ability(&self, index: usize) -> Result<bool, ContentError> {
         bit(self.0, 442, index)
     }
-    /// The Psi school the profession belongs to.
+    /// The Psi school the MOS belongs to.
     pub fn psi_school(&self) -> Result<i16, ContentError> {
         word(self.0, 254)
     }

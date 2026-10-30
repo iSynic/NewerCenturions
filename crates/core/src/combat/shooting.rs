@@ -271,7 +271,7 @@ pub(crate) fn admit(
         return Err(refused(crate::feedback::CombatRefusal::Blocked));
     }
     let warrior = &state.warriors[actor as usize];
-    if warrior.record().attacks()? < 2 {
+    if warrior.record().action_points()? < 2 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
     if !paid && warrior.record().inventory_quantity(p.slot)? < p.rounds {

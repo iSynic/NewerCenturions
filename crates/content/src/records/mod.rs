@@ -56,7 +56,7 @@ pub use development::{ATTRIBUTES, Attribute, DevelopmentField};
 pub use equipment::{
     EquipmentModifiers, EquipmentStat, InstanceModifiers, InventoryModifier, ItemUpgrade,
 };
-pub use equipment_eligibility::{EquipmentEligibility, ProfessionEquipment, RaceEquipment};
+pub use equipment_eligibility::{EquipmentEligibility, MosEquipment, RaceEquipment};
 pub use exploration_extras::{
     AllyClassBranchExtra, BoatCampingExtra, ChanceBranchExtra, ClinicExtra, DisableChoiceExtra,
     DropCreditsExtra, ExtraTable, GiveConditionExtra, LandLightExtra, LimitedTreasureExtra,
@@ -73,9 +73,7 @@ pub use item_panel::{ItemPanelMut, ItemPanelRecord};
 pub use learned_scans::{LearnedScans, LearnedScansMut};
 pub use monster::{EnemyRecord, EnemyRecordMut, FootprintCell, NaturalAttack};
 pub use party_restrictions::PartyRestrictions;
-pub use profiles::{
-    PROFESSION_PROFILE_BYTES, ProfessionProfile, ProfileTable, RACE_PROFILE_BYTES, RaceProfile,
-};
+pub use profiles::{MOS_PROFILE_BYTES, MosProfile, ProfileTable, RACE_PROFILE_BYTES, RaceProfile};
 pub use psi_memory::PsiSelectionMemoryMut;
 pub use shop::{SHOP_BYTES, SHOP_SLOTS, ShopRecord, ShopRecordMut};
 pub use spell_field::{SPELL_FIELD_BYTES, SpellField, SpellFieldMut};

@@ -7,7 +7,7 @@ use centurions_content::{
     span,
 };
 
-/// What a battle paid: the warriors and monsters after it, the items, the shares of experience, the
+/// What a battle paid: the warriors and monsters after it, the items, the shares of victory points, the
 /// credits and currency, and the party deaths.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rewards {
@@ -51,8 +51,8 @@ pub fn prepare(
     )
 }
 
-/// Prepares a battle's booty under the given mode: the monsters' experience, credits and item
-/// drops, any treasure record's items, the experience share per eligible warrior, and the count of
+/// Prepares a battle's booty under the given mode: the monsters' victory points, credits and item
+/// drops, any treasure record's items, the victory points share per eligible warrior, and the count of
 /// fallen warriors.
 ///
 /// Original: booty
@@ -84,7 +84,7 @@ pub fn prepare_mode(
     let mut next_random = random.clone();
     let super::reward_mode::RewardPrefix {
         items: mut loot,
-        experience: mut total,
+        victory_points: mut total,
         credits: mut cash,
         last_item: mut last_item_id,
     } = mode.prefix(content, difficulty, &mut next_random)?;
@@ -139,7 +139,7 @@ pub fn prepare_mode(
             base = base.wrapping_add(level.wrapping_mul(30));
         }
         total = total.wrapping_add(i32::from(base));
-        total = total.wrapping_add(i32::from(monster.record().experience()?));
+        total = total.wrapping_add(i32::from(monster.record().victory_points()?));
         total = total.wrapping_add(i32::from(
             multiplier.wrapping_mul(monster.record().stamina_max()?),
         ));
@@ -213,19 +213,19 @@ pub fn prepare_mode(
         {
             continue;
         }
-        let experience = crate::rules::sane_long(
+        let victory_points = crate::rules::sane_long(
             f64::from(CharacterInformation(&warrior.bytes).upgrade_points()?) + rounded_share,
         );
-        let experience = if experience < 0 {
-            i32::from(((experience >> 16) as i16).wrapping_abs())
+        let victory_points = if victory_points < 0 {
+            i32::from(((victory_points >> 16) as i16).wrapping_abs())
         } else {
-            experience
+            victory_points
         };
         let remaining = crate::rules::sane_long(
-            f64::from(warrior.record().remaining_experience()?) - rounded_share,
+            f64::from(warrior.record().remaining_victory_points()?) - rounded_share,
         );
-        warrior.record_mut().set_upgrade_points(experience);
-        warrior.record_mut().set_remaining_experience(remaining);
+        warrior.record_mut().set_upgrade_points(victory_points);
+        warrior.record_mut().set_remaining_victory_points(remaining);
     }
     *random = next_random;
     Ok(Rewards {
@@ -246,7 +246,7 @@ pub fn close_without_promotion(warriors: &[Warrior]) -> Result<Vec<Warrior>, Rul
     let mut result = warriors.to_vec();
     for warrior in &mut result {
         span(&warrior.bytes, 0, 3138)?;
-        if warrior.stamina()? > 0 && warrior.record().remaining_experience()? < 0 {
+        if warrior.stamina()? > 0 && warrior.record().remaining_victory_points()? < 0 {
             return Err(RuleError::Unsupported {
                 action: "combat.rewards.close",
                 dependency: "warrior level promotion",

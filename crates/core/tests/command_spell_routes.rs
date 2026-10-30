@@ -103,7 +103,7 @@ fn player_and_monster_status_weapons_use_shared_effects_and_saved_commands() {
                 Command::RunEnemyTurn,
             )
         } else {
-            state.warriors[4].record_mut().set_attacks(6);
+            state.warriors[4].record_mut().set_action_points(6);
             let command = Command::SelectCombatWeapon { slot: 3 };
             support::saved_command(command, &mut state, &content);
             (1, Command::FireSelectedTargets)
@@ -133,7 +133,7 @@ fn player_and_monster_status_weapons_use_shared_effects_and_saved_commands() {
         if !mon {
             // 118544..1185d2: below two action points the fire button only warns 0x11.
             let (saved, warn) = (state.clone(), Warning { index: 0x11 });
-            state.warriors[4].record_mut().set_attacks(1);
+            state.warriors[4].record_mut().set_action_points(1);
             let before = state.clone();
             let refused = apply(Command::BeginFireTargets, &mut state, &content);
             assert!(matches!(refused, Err(RuleError::Refused { feedback }) if feedback == [warn]));
@@ -169,7 +169,7 @@ fn player_and_monster_status_weapons_use_shared_effects_and_saved_commands() {
                     .condition(centurions_content::records::Condition::Poisoned)
                     > 0
             );
-            assert_eq!(state.warriors[4].record().attacks().unwrap(), 3);
+            assert_eq!(state.warriors[4].record().action_points().unwrap(), 3);
             assert_eq!(loaded(&state), before - 1);
         }
     }

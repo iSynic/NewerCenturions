@@ -44,9 +44,9 @@ pub(super) fn apply(
         .stamina()?
         < 1
     {
-        state.warriors[actor].record_mut().set_attacks(0);
+        state.warriors[actor].record_mut().set_action_points(0);
     }
-    if state.warriors[actor].record().attacks()? > 0 {
+    if state.warriors[actor].record().action_points()? > 0 {
         death_return::refresh_body(state, content, actor as i16)?;
     }
     Ok(Outcome::returned(outcome.events))

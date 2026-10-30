@@ -52,7 +52,7 @@ pub(crate) fn calculate(
     } else {
         maximum / 2
     };
-    average = reduce_estimate(average, monster.ac()?);
+    average = reduce_estimate(average, monster.armor_rating()?);
     if actor.toggle() {
         average = reduce_estimate(average, monster.shield_chance()?);
     }
@@ -176,7 +176,7 @@ fn damage_total(
                 .wrapping_add(actor.bare_hand_bonus()?),
         );
     }
-    let mut total = (actor.normal_attacks()? / 2).wrapping_mul(damage);
+    let mut total = (actor.actions_per_round()? / 2).wrapping_mul(damage);
     if firing && weapon_count > 1 {
         total = total.wrapping_mul(weapon_count);
     }

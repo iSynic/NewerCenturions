@@ -39,7 +39,10 @@ pub(super) fn admission(state: &Session, warrior: usize, needs_ap: bool) -> Resu
             feedback: vec![crate::feedback::GameFeedback::Warning { index: 10 }],
         });
     }
-    if state.phase == Phase::Combat && needs_ap && state.warriors[warrior].record().attacks()? < 1 {
+    if state.phase == Phase::Combat
+        && needs_ap
+        && state.warriors[warrior].record().action_points()? < 1
+    {
         return Err(RuleError::Refused { feedback: vec![] });
     }
     Ok(())

@@ -187,7 +187,7 @@ pub(crate) fn automatic_combat_action(
         Some(Action::Command(Command::AutomaticBandage))
     } else if centurions_core::combat::runtime::controlled_warrior(state).is_some() {
         Some(Action::Command(Command::RunControlledTurn))
-    } else if warrior.record().attacks().unwrap_or(0) < 2 {
+    } else if warrior.record().action_points().unwrap_or(0) < 2 {
         Some(Action::Command(Command::EndTurn))
     } else {
         None

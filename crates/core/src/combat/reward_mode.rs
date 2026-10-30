@@ -2,11 +2,11 @@
 use crate::{RandomState, RuleError, items};
 use centurions_content::{Content, InventoryRecord, records::TreasureRecord};
 
-/// What a treasure record pays before the monsters do: items, experience and credits.
+/// What a treasure record pays before the monsters do: items, victory points and credits.
 #[derive(Default)]
 pub(super) struct RewardPrefix {
     pub items: Vec<InventoryRecord>,
-    pub experience: i32,
+    pub victory_points: i32,
     pub credits: i32,
     pub last_item: Option<i16>,
 }
@@ -35,7 +35,7 @@ impl<'a> RewardMode<'a> {
     }
 
     /// Rolls what a treasure record pays: each item with its enhancement raised by the difficulty,
-    /// and its experience and credits, a negative amount being a random draw up to that bound.
+    /// and its victory points and credits, a negative amount being a random draw up to that bound.
     pub(super) fn prefix(
         self,
         content: &Content,
@@ -74,11 +74,11 @@ impl<'a> RewardMode<'a> {
                 amount
             }
         };
-        let experience = award(record.experience()?);
+        let victory_points = award(record.victory_points()?);
         let credits = award(record.credits()?);
         Ok(RewardPrefix {
             items: loot,
-            experience,
+            victory_points,
             credits,
             last_item: last,
         })

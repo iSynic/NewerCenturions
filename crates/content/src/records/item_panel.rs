@@ -15,7 +15,7 @@ impl ItemPanelRecord<'_> {
     pub fn required_level(&self) -> Result<i16, ContentError> {
         word(self.0, 138)
     }
-    /// Armour rating the item adds.
+    /// Armor rating the item adds.
     pub fn armor(&self) -> Result<i16, ContentError> {
         word(self.0, 94)
     }

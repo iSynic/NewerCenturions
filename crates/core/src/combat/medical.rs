@@ -86,7 +86,7 @@ pub fn begin(
         .warriors
         .get(request.warrior)
         .ok_or_else(|| RuleError::Invalid("medical warrior missing".into()))?;
-    if warrior.record().attacks()? < 1 {
+    if warrior.record().action_points()? < 1 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
     let item = warrior
@@ -369,7 +369,7 @@ fn resolve_inner(
             (warrior, true, vec![Event::Sound { resource_id: -141 }])
         }
         MedicalTarget::LivingPoint { x, y } => {
-            if warriors[pending.actor].record().attacks()? < 1 {
+            if warriors[pending.actor].record().action_points()? < 1 {
                 return Err(RuleError::Invalid(
                     "medical continuation has no action point".into(),
                 ));

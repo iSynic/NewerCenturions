@@ -311,8 +311,8 @@ pub fn fit_ammunition(
     }
     let amount = result.ammunition[reserve_index].min(i32::from(capacity)) as i16;
     if in_combat && amount > 0 {
-        let actions = result.warrior.record().attacks()?.wrapping_sub(1);
-        result.warrior.record_mut().set_attacks(actions);
+        let actions = result.warrior.record().action_points()?.wrapping_sub(1);
+        result.warrior.record_mut().set_action_points(actions);
     }
     let mut record = result.warrior.record_mut();
     record.set_inventory_quantity(slot, amount);

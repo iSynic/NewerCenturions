@@ -209,7 +209,7 @@ pub fn admit_to_squad(
     if banned(limits.race_banned(record.race()?))? {
         return refuse(0x88);
     }
-    if banned(limits.profession_banned(record.profession()?))? {
+    if banned(limits.mos_banned(record.mos()?))? {
         return refuse(0x89);
     }
     Ok(())

@@ -73,7 +73,7 @@ pub fn available(state: &Session) -> bool {
         || combat.firearm_selection.is_some()
         || runtime::controlled_warrior(state).is_some()
         || warrior.spec(0).unwrap_or(0) <= 0
-        || warrior.attacks().unwrap_or(0) <= 1
+        || warrior.action_points().unwrap_or(0) <= 1
     {
         return false;
     }
@@ -191,7 +191,7 @@ pub fn select(
 /// Resolves one disable or capture attempt on a machine. It counts one use against the attack limit
 /// (only warning 45 when none are left) and takes two from the warrior's attacks. The roll uses the
 /// first special skill to disable a working machine or the second to capture a disabled one.
-/// Success moves a reward from the warrior's remaining experience into upgrade points and may raise
+/// Success moves a reward from the warrior's remaining victory points into upgrade points and may raise
 /// the skill. Sounds and messages come back in order.
 ///
 /// Original: attack
@@ -226,8 +226,8 @@ pub fn resolve(
         if capture { 3 } else { 5 },
         if capture { 90 } else { 95 },
     );
-    let ap = warrior.record().attacks()?.wrapping_sub(2);
-    warrior.record_mut().set_attacks(ap);
+    let ap = warrior.record().action_points()?.wrapping_sub(2);
+    warrior.record_mut().set_action_points(ap);
     if random.bound(100) > chance
         || capture && monster.record().faction()? == warrior.record().faction()?
     {
@@ -241,7 +241,7 @@ pub fn resolve(
         .wrapping_add(level.wrapping_mul(if capture { 15 } else { 10 }));
     warrior
         .record_mut()
-        .add_remaining_experience(-i32::from(reward));
+        .add_remaining_victory_points(-i32::from(reward));
     let points = warrior
         .record()
         .upgrade_points()

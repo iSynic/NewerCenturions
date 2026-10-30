@@ -92,14 +92,14 @@ pub(crate) fn initialize_warrior_record(
     }
     let unavailable_delta = i8::from(warrior.record().faction()? != 0) - i8::from(faction != 0);
     items::compact(warrior)?;
-    let carry = warrior.record().attacks()?.clamp(0, 1);
+    let carry = warrior.record().action_points()?.clamp(0, 1);
     let mut points = carry
-        .wrapping_add(warrior.record().normal_attacks()?)
-        .wrapping_add(warrior.record().attack_bonus()?);
+        .wrapping_add(warrior.record().actions_per_round()?)
+        .wrapping_add(warrior.record().action_point_bonus()?);
     if warrior.record().condition(Condition::Speedy)? != 0 {
         points = points.wrapping_add(4);
     }
-    warrior.record_mut().set_attacks(points);
+    warrior.record_mut().set_action_points(points);
     let race = warrior.record().race()? - 1;
     let race_move = *race_moves
         .get(race as usize)

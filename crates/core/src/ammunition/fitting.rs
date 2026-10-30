@@ -90,8 +90,8 @@ pub fn fit(
         needed = stock as i16;
     }
     if request.in_combat && needed > 0 {
-        let ap = result.warrior.record().attacks()?.wrapping_sub(1);
-        result.warrior.record_mut().set_attacks(ap);
+        let ap = result.warrior.record().action_points()?.wrapping_sub(1);
+        result.warrior.record_mut().set_action_points(ap);
     }
     result
         .warrior

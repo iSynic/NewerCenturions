@@ -94,7 +94,7 @@ pub(super) fn attack(
 
 /// Gives each neighbor that is guarding one free attack against the acting body; on a departure
 /// every neighbor in the list qualifies. A neighbor skipping its turns, a removed monster, or a
-/// monster facing a warrior of profession 4 or 5 does not react. A kill ends the loop and
+/// monster facing a warrior of MOS 4 or 5 does not react. A kill ends the loop and
 /// interrupts the acting body.
 ///
 /// Original: checkforenemy
@@ -282,7 +282,7 @@ impl GuardFrame {
 
     /// Runs the guard loop on the party's globals after the battle has ended. A neighbor reacts
     /// when it is guarding (or the body is departing) and is not skipping its turns; a monster must
-    /// also be present and does not react to a warrior of profession 4 or 5. The reacting neighbor
+    /// also be present and does not react to a warrior of MOS 4 or 5. The reacting neighbor
     /// stops guarding and attacks the acting body.
     pub(super) fn finish_out_of_combat(
         &mut self,
@@ -326,9 +326,7 @@ impl GuardFrame {
                             && !record.removed()
                             && (actor > 6
                                 || !matches!(
-                                    state.warriors[state.char_select_new]
-                                        .record()
-                                        .profession()?,
+                                    state.warriors[state.char_select_new].record().mos()?,
                                     4 | 5
                                 ))
                     } else if other == 9 {
@@ -448,7 +446,7 @@ impl GuardFrame {
                                 let warrior = warriors.get(selected).ok_or_else(|| {
                                     RuleError::from("selected warrior outside the squad")
                                 })?;
-                                !matches!(warrior.record().profession()?, 4 | 5)
+                                !matches!(warrior.record().mos()?, 4 | 5)
                             })
                     };
                     if !eligible {

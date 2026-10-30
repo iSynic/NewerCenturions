@@ -138,13 +138,13 @@ pub(super) fn apply(
         .get(actor)
         .ok_or_else(|| RuleError::from("selected warrior outside the squad"))?
         .record()
-        .attacks()?
+        .action_points()?
         > 0
     {
         death_return::refresh_body(state, content, actor as i16)?;
     }
     if state.warriors[actor].stamina()? < 1 {
-        state.warriors[actor].record_mut().set_attacks(0);
+        state.warriors[actor].record_mut().set_action_points(0);
     }
     Ok(TurnFlow::Returned)
 }

@@ -95,7 +95,7 @@ impl Creation {
         view.read_only = true;
         view.stage = if race { Stage::Race } else { Stage::Mos };
         view.request.race = warrior.record().race()?;
-        view.request.mos = warrior.record().profession()?;
+        view.request.mos = warrior.record().mos()?;
         view.request.portrait = warrior.record().portrait()?;
         view.request.icon = warrior.record().icon()?;
         Ok(view)
@@ -498,7 +498,7 @@ impl Creation {
                 )
             } else {
                 (
-                    ProfileTable::professions(&map.profiles),
+                    ProfileTable::mos_profiles(&map.profiles),
                     self.request.mos,
                     &PROFILE_FIELD_RUNS[..],
                     &PROFILE_FIELDS[..],

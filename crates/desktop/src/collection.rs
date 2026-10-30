@@ -315,12 +315,12 @@ pub fn draw(
             .and_then(|map| map.dialogue(state.battle_after_message).ok())
     } else {
         // STR# 3 string 0x47, 0x23 with items or credits, 0x24 when that also
-        // has experience, otherwise 0x22 with experience.
+        // has victory points, otherwise 0x22 with victory points.
         let mut id = 0x47;
         if !items.is_empty() || tally.credits != 0 {
             id = 0x23;
         }
-        if tally.experience != 0 {
+        if tally.victory_points != 0 {
             id = if id == 0x23 { 0x24 } else { 0x22 };
         }
         assets.warnings.get(id - 1).cloned()

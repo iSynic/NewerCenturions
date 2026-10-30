@@ -455,7 +455,7 @@ impl Application {
             );
             assets.text(&warrior.name, origin.x + 420., top + 22., 12, YELLOW);
             assets.text(
-                &record.normal_attacks().unwrap_or(0).to_string(),
+                &record.actions_per_round().unwrap_or(0).to_string(),
                 origin.x + 610.,
                 top + 22.,
                 12,
@@ -491,7 +491,7 @@ impl Application {
             for (value, x) in [
                 (record.shield_chance(), 524.),
                 (record.shield_points(), 563.),
-                (record.ac(), 609.),
+                (record.armor_rating(), 609.),
             ] {
                 assets.text(
                     &value.unwrap_or(0).to_string(),

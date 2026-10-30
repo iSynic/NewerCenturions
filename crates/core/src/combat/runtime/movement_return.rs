@@ -594,7 +594,7 @@ fn depart(
         Some((&content.items, &mut state.globals.loaded_items)),
     )?);
     if state.warriors[actor].stamina()? < 1 {
-        state.warriors[actor].record_mut().set_attacks(0);
+        state.warriors[actor].record_mut().set_action_points(0);
         state.warriors[actor].record_mut().set_movement(0);
         return Ok(true);
     }

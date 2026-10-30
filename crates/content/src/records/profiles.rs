@@ -6,7 +6,7 @@ use crate::{ContentError, span, word};
 /// Bytes in one Data race record.
 pub const RACE_PROFILE_BYTES: usize = 408;
 /// Bytes in one Data MOS record.
-pub const PROFESSION_PROFILE_BYTES: usize = 576;
+pub const MOS_PROFILE_BYTES: usize = 576;
 
 /// A Data race or MOS table. Ids are one-based; each caller checks the id
 /// itself and passes the zero-based row.
@@ -24,11 +24,11 @@ impl<'a> ProfileTable<'a> {
             stride: RACE_PROFILE_BYTES,
         }
     }
-    /// The table of profession records.
-    pub fn professions(bytes: &'a [u8]) -> Self {
+    /// The table of MOS records.
+    pub fn mos_profiles(bytes: &'a [u8]) -> Self {
         Self {
             bytes,
-            stride: PROFESSION_PROFILE_BYTES,
+            stride: MOS_PROFILE_BYTES,
         }
     }
     /// The zero-based record; a row past the table is an error.
@@ -39,14 +39,13 @@ impl<'a> ProfileTable<'a> {
 
 /// A race's record: what a warrior of the race starts with and may become.
 pub struct RaceProfile<'a>(pub &'a [u8]);
-/// A profession's record, called M.O.S. in the files: what a warrior of the
-/// profession starts with and gains.
-pub struct ProfessionProfile<'a>(pub &'a [u8]);
+/// An MOS record: what a warrior of the MOS starts with and gains.
+pub struct MosProfile<'a>(pub &'a [u8]);
 
 impl RaceProfile<'_> {
     /// Whether the race may take the one-based `profession`.
-    pub fn accepts_profession(&self, profession: i16) -> Result<bool, ContentError> {
-        Ok(span(self.0, 208 + profession as usize - 1, 1)?[0] != 0)
+    pub fn accepts_mos(&self, mos: i16) -> Result<bool, ContentError> {
+        Ok(span(self.0, 208 + mos as usize - 1, 1)?[0] != 0)
     }
     /// The race's bonus against creature category `category`.
     pub fn creature_bonus(&self, category: usize) -> Result<i16, ContentError> {
@@ -112,83 +111,83 @@ fn creation_attribute_row(attribute: Attribute) -> usize {
     (attribute as usize).min(5)
 }
 
-impl ProfessionProfile<'_> {
-    /// The profession's rating in special skill `skill`.
+impl MosProfile<'_> {
+    /// The MOS's rating in special skill `skill`.
     pub fn special_skill(&self, skill: usize) -> Result<i16, ContentError> {
         word(self.0, skill * 2)
     }
-    /// The profession's saving throw in category `category`.
+    /// The MOS's saving throw in category `category`.
     pub fn resistance(&self, category: usize) -> Result<i16, ContentError> {
         word(self.0, 56 + category * 2)
     }
-    /// What the profession adds to `attribute` at creation.
+    /// What the MOS adds to `attribute` at creation.
     pub fn attribute_bonus(&self, attribute: Attribute) -> Result<i16, ContentError> {
         word(self.0, 72 + creation_attribute_row(attribute) * 2)
     }
-    /// The lowest and highest `attribute` a new warrior of the profession can have.
+    /// The lowest and highest `attribute` a new warrior of the MOS can have.
     pub fn attribute_bounds(&self, attribute: Attribute) -> Result<(i16, i16), ContentError> {
         let start = 110 + creation_attribute_row(attribute) * 4;
         Ok((word(self.0, start)?, word(self.0, start + 2)?))
     }
-    /// Whether the profession can follow Psi school `school`.
+    /// Whether the MOS can follow Psi school `school`.
     pub fn psi_school_enabled(&self, school: usize) -> Result<bool, ContentError> {
         Ok(word(self.0, 88 + school * 6)? != 0)
     }
-    /// The highest tier of scans the profession can learn.
+    /// The highest tier of scans the MOS can learn.
     pub fn highest_scan_tier(&self) -> Result<i16, ContentError> {
         Ok(word(self.0, 90)?
             .wrapping_add(word(self.0, 96)?)
             .wrapping_add(word(self.0, 102)?))
     }
-    /// The level at which the profession gains condition `condition` for good; 1 is at creation.
+    /// The level at which the MOS gains condition `condition` for good; 1 is at creation.
     pub fn condition_level(&self, condition: usize) -> Result<i16, ContentError> {
         word(self.0, 138 + condition * 2)
     }
-    /// The bound of the stamina a new warrior of the profession is dealt.
+    /// The bound of the stamina a new warrior of the MOS is dealt.
     pub fn initial_stamina_bound(&self) -> Result<i16, ContentError> {
         word(self.0, 222)
     }
-    /// The profession's melee accuracy.
+    /// The MOS's melee accuracy.
     pub fn melee_accuracy(&self) -> Result<i16, ContentError> {
         word(self.0, 234)
     }
-    /// The profession's missile accuracy.
+    /// The MOS's missile accuracy.
     pub fn missile_accuracy(&self) -> Result<i16, ContentError> {
         word(self.0, 238)
     }
-    /// The profession's largest bare-hand damage.
+    /// The MOS's largest bare-hand damage.
     pub fn bare_hand_maximum(&self) -> Result<i16, ContentError> {
         word(self.0, 242)
     }
-    /// The profession's missile dodge.
+    /// The MOS's missile dodge.
     pub fn missile_dodge(&self) -> Result<i16, ContentError> {
         word(self.0, 246)
     }
-    /// The profession's melee dodge.
+    /// The MOS's melee dodge.
     pub fn melee_dodge(&self) -> Result<i16, ContentError> {
         word(self.0, 250)
     }
-    /// The race age category the profession's warriors are drawn from, counted from one.
+    /// The race age category the MOS's warriors are drawn from, counted from one.
     pub fn age_category(&self) -> Result<i16, ContentError> {
         word(self.0, 256)
     }
-    /// Movement the profession adds.
+    /// Movement the MOS adds.
     pub fn movement_bonus(&self) -> Result<i16, ContentError> {
         word(self.0, 258)
     }
-    /// The profession's resistance to scans.
+    /// The MOS's resistance to scans.
     pub fn psi_resistance(&self) -> Result<i16, ContentError> {
         word(self.0, 260)
     }
-    /// Actions per round the profession gives.
+    /// Actions per round the MOS gives.
     pub fn action_points(&self) -> Result<i16, ContentError> {
         word(self.0, 266)
     }
-    /// Attacks per combat the profession allows.
+    /// Attacks per combat the MOS allows.
     pub fn attack_limit(&self) -> Result<i16, ContentError> {
         word(self.0, 268)
     }
-    /// Credits a new warrior of the profession starts with.
+    /// Credits a new warrior of the MOS starts with.
     pub fn starting_credits(&self) -> Result<i16, ContentError> {
         word(self.0, 390)
     }
@@ -196,16 +195,16 @@ impl ProfessionProfile<'_> {
     pub fn starting_item(&self, slot: usize) -> Result<i16, ContentError> {
         word(self.0, 392 + slot * 2)
     }
-    /// The levels at which the profession gains an extra action each round; zero is unused.
+    /// The levels at which the MOS gains an extra action each round; zero is unused.
     pub fn action_unlock_levels(&self) -> &[u8] {
         &self.0[432..442]
     }
-    /// Scans the profession may cast in a round.
+    /// Scans the MOS may cast in a round.
     pub fn scan_capacity(&self) -> Result<i16, ContentError> {
         word(self.0, 452)
     }
     /// The percent added to the price of upgrade `selector` for each purchase; 10 for
-    /// an upgrade the profession has no entry for.
+    /// an upgrade the MOS has no entry for.
     pub fn upgrade_percent(&self, selector: u16) -> Result<i16, ContentError> {
         let offset = match selector {
             7 => 0xe4,

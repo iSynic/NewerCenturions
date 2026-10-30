@@ -22,7 +22,7 @@ pub fn fit_ammunition(
         })
         || (state.phase == Phase::Combat
             && (state.combat.as_ref().and_then(Combat::active_body) != Some(warrior as i16)
-                || state.warriors[warrior].record().attacks()? < 1))
+                || state.warriors[warrior].record().action_points()? < 1))
     {
         return Err(RuleError::Invalid(
             "ammunition selection requires an unobstructed active mission turn".into(),

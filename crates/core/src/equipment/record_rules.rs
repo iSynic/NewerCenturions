@@ -8,8 +8,8 @@ use centurions_content::span;
 use centurions_content::{
     Content, InventoryRecord, Warrior,
     records::{
-        EquipmentEligibility, InventorySlots, InventorySlotsMut, ItemDefinition,
-        ProfessionEquipment, ProfileTable, RaceEquipment,
+        EquipmentEligibility, InventorySlots, InventorySlotsMut, ItemDefinition, MosEquipment,
+        ProfileTable, RaceEquipment,
     },
 };
 
@@ -73,7 +73,7 @@ pub(crate) fn calculate_weight(warrior: &mut Warrior, content: &Content) -> Resu
     Ok(())
 }
 
-/// Whether the warrior's race, profession, race traits and psi school allow the item to be used.
+/// Whether the warrior's race, MOS, race traits and psi school allow the item to be used.
 pub fn can_use(
     warrior: &Warrior,
     definition: &[u8],
@@ -81,16 +81,15 @@ pub fn can_use(
 ) -> Result<bool, RuleError> {
     span(definition, 0, ITEM_BYTES)?;
     let race_id = warrior.record().race()?;
-    let mos_id = warrior.record().profession()?;
+    let mos_id = warrior.record().mos()?;
     if race_id <= 0 || mos_id <= 0 {
         return Err(unsupported("unset Race or MOS profile"));
     }
     let race = RaceEquipment(ProfileTable::races(&mission.races).row(race_id as usize - 1)?);
-    let mos =
-        ProfessionEquipment(ProfileTable::professions(&mission.profiles).row(mos_id as usize - 1)?);
+    let mos = MosEquipment(ProfileTable::mos_profiles(&mission.profiles).row(mos_id as usize - 1)?);
     let eligibility = EquipmentEligibility(definition);
     if (eligibility.required_race()? != 0 && eligibility.required_race()? != race_id)
-        || (eligibility.required_profession()? != 0 && eligibility.required_profession()? != mos_id)
+        || (eligibility.required_mos()? != 0 && eligibility.required_mos()? != mos_id)
     {
         return Ok(false);
     }
@@ -425,8 +424,8 @@ pub(super) fn wear_silently(
         return Ok(result);
     }
     if in_combat {
-        let ap = result.warrior.record().attacks()?.wrapping_sub(1);
-        result.warrior.record_mut().set_attacks(ap);
+        let ap = result.warrior.record().action_points()?.wrapping_sub(1);
+        result.warrior.record_mut().set_action_points(ap);
     }
     result.changed = true;
     result.sounds.push(ItemDefinition(definition).sound()?);

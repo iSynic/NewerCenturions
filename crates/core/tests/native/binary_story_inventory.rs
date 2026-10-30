@@ -219,7 +219,7 @@ fn item_prerequisites_match_original_first_party_holder_and_slot() {
 fn story_experience_awards_match_original_complete_normalized_warriors() {
     for case in support::fixture("story-inventory.json").array("award_cases") {
         let result =
-            award_story_experience(&warriors(case.text("before")), case.n::<i32>("amount"))
+            award_story_victory_points(&warriors(case.text("before")), case.n::<i32>("amount"))
                 .unwrap();
         support::native_expect! {
             bytes records(&result.warriors) => &case["after"], "experience award";

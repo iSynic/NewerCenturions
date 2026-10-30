@@ -1,6 +1,6 @@
 //! Warrior record fields shown on the character screens, and the fixed fields
 //! a new warrior receives.
-use super::warrior_layout::{NAME, REMAINING_EXPERIENCE, UPGRADE_POINTS};
+use super::warrior_layout::{NAME, REMAINING_VICTORY_POINTS, UPGRADE_POINTS};
 use crate::bytes::{long, put_long};
 use crate::{ContentError, span, word};
 
@@ -16,11 +16,11 @@ impl CharacterInformation<'_> {
     pub fn age_days(&self) -> Result<i32, ContentError> {
         long(self.0, 0x9ca)
     }
-    /// Experience still to earn for the next level.
-    pub fn experience(&self) -> Result<i32, ContentError> {
-        long(self.0, REMAINING_EXPERIENCE)
+    /// Victory points still to earn for the next level.
+    pub fn victory_points(&self) -> Result<i32, ContentError> {
+        long(self.0, REMAINING_VICTORY_POINTS)
     }
-    /// Experience the warrior has earned and can spend on upgrades.
+    /// Victory points the warrior has earned and can spend on upgrades.
     pub fn upgrade_points(&self) -> Result<i32, ContentError> {
         long(self.0, UPGRADE_POINTS)
     }
@@ -90,14 +90,14 @@ impl CharacterIdentityMut<'_> {
         Ok(())
     }
 
-    /// Gives a new warrior its race, profession, gender, portrait, map icon and name,
+    /// Gives a new warrior its race, MOS, gender, portrait, map icon and name,
     /// at level 1.
     ///
     /// Original: NewCharacter
     pub fn initialize(
         &mut self,
         race: i16,
-        profession: i16,
+        mos: i16,
         gender: i16,
         portrait: i16,
         icon: i16,
@@ -105,7 +105,7 @@ impl CharacterIdentityMut<'_> {
     ) {
         for (offset, value) in [
             (0x32, race),
-            (0x34, profession),
+            (0x34, mos),
             (0x38, gender),
             (0x3a, 1),
             (0x54, portrait),

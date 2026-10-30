@@ -458,9 +458,9 @@ pub(crate) fn pick_by_trait(
         let picked = match mode {
             0 => record.race()? == code,
             1 => record.gender()? == gender,
-            2 => record.profession()? == code,
+            2 => record.mos()? == code,
             3 => race_class(record.race()?, code)?,
-            4 => caste_class(record.profession()?)? == code,
+            4 => caste_class(record.mos()?)? == code,
             _ => false,
         };
         mask[member] = i16::from(picked);
@@ -487,8 +487,8 @@ pub(crate) fn pick_by_caste(
         let admitted = check == 0
             || (check == 1 && record.stamina()? > 0)
             || (check == 2 && mask[member] != 0);
-        let profession = record.profession()?;
-        if admitted && (profession == caste || families.contains(&profession)) {
+        let mos = record.mos()?;
+        if admitted && (mos == caste || families.contains(&mos)) {
             mask[member] = 1;
         }
     }
@@ -496,7 +496,7 @@ pub(crate) fn pick_by_caste(
 }
 
 /// Take Victory Points moves e1 from upgrade points into the remaining
-/// experience. Its picked mode (e2 = 1) tests the pick at the action's own index
+/// victory points. Its picked mode (e2 = 1) tests the pick at the action's own index
 /// for every member; mode 2 spreads the signed quotient over the party.
 pub(crate) fn take_victory_points(
     warriors: &mut [Warrior],
@@ -522,10 +522,10 @@ pub(crate) fn take_victory_points(
     for warrior in warriors {
         let record = warrior.record();
         let remaining = record
-            .remaining_experience()?
+            .remaining_victory_points()?
             .wrapping_add(i32::from(share));
         let points = record.upgrade_points().wrapping_sub(i32::from(share));
-        warrior.record_mut().set_remaining_experience(remaining);
+        warrior.record_mut().set_remaining_victory_points(remaining);
         warrior.record_mut().set_upgrade_points(points);
     }
     Ok(())

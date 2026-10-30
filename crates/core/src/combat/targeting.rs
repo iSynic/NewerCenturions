@@ -111,7 +111,7 @@ pub(crate) fn begin_firearm(
     // below the rounds per shot of the item last loaded, before the weapon reloads.
     let record = state.warriors[actor].record();
     if record.toggle() {
-        if record.attacks()? < 2 {
+        if record.action_points()? < 2 {
             return Err(warning(0x11));
         }
         let stale = state

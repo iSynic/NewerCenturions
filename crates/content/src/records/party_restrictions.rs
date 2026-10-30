@@ -21,8 +21,8 @@ impl PartyRestrictions<'_> {
         self.flag(0x104, race)
     }
     /// Whether a one-based M.O.S. is banned; `None` when it lies outside the record.
-    pub fn profession_banned(&self, profession: i16) -> Option<bool> {
-        self.flag(0x122, profession)
+    pub fn mos_banned(&self, mos: i16) -> Option<bool> {
+        self.flag(0x122, mos)
     }
     /// Whether the byte for the one-based `value`, counted from `base`, is set; `None`
     /// past the record.

@@ -6,7 +6,7 @@ use centurions_content::{
     records::{CharacterInformation, Condition, ItemDefinition},
 };
 
-/// Awards a won battle to the warriors and returns the share of experience each gets.
+/// Awards a won battle to the warriors and returns the share of victory points each gets.
 ///
 /// Original: booty
 pub fn victory_records(
@@ -17,9 +17,9 @@ pub fn victory_records(
     Ok(victory_loot(warriors, enemies, random, None)?.0)
 }
 
-/// Awards a won battle. Each monster is worth experience by its level, flying, stamina and own
-/// experience; the total is divided among the standing warriors still in the battle, added to
-/// their upgrade points and taken from their remaining experience. Each item a monster carries
+/// Awards a won battle. Each monster is worth victory points by its level, flying, stamina and own
+/// victory points; the total is divided among the standing warriors still in the battle, added to
+/// their upgrade points and taken from their remaining victory points. Each item a monster carries
 /// drops by chance, always for item classes 23 to 25. The monsters' conditions are cleared and
 /// they are set to faction 1. Returns the share and the loot.
 ///
@@ -34,7 +34,7 @@ pub fn victory_loot(
     for w in warriors.iter_mut() {
         crate::story::inventory::normalize_warrior_after_battle(w)?;
     }
-    let mut experience = 0_i32;
+    let mut victory_points = 0_i32;
     for m in enemies.iter_mut() {
         let level = m.record().hit_dice()?;
         if !matches!(level, 0..=3 | 7)
@@ -57,10 +57,10 @@ pub fn victory_loot(
         } else {
             [(15, 3), (30, 6), (45, 9), (65, 12)][level as usize]
         };
-        experience = experience.wrapping_add(
+        victory_points = victory_points.wrapping_add(
             base + flying
                 + multiplier * i32::from(m.record().stamina_max()?)
-                + i32::from(m.record().experience()?),
+                + i32::from(m.record().victory_points()?),
         );
         for slot in 0..6 {
             let id = m.record().item(slot)?;
@@ -104,7 +104,7 @@ pub fn victory_loot(
         })
         .count() as i32;
     let share = if eligible != 0 {
-        (experience as f32 as i32 / eligible).abs()
+        (victory_points as f32 as i32 / eligible).abs()
     } else {
         0
     };
@@ -114,8 +114,8 @@ pub fn victory_loot(
                 .upgrade_points()?
                 .wrapping_add(share);
             w.record_mut().set_upgrade_points(points);
-            let remaining = w.record().remaining_experience()?.wrapping_sub(share);
-            w.record_mut().set_remaining_experience(remaining);
+            let remaining = w.record().remaining_victory_points()?.wrapping_sub(share);
+            w.record_mut().set_remaining_victory_points(remaining);
         }
     }
     let mut loot = vec![];

@@ -190,8 +190,8 @@ pub(crate) fn spend_attack_action(
     warrior: &mut centurions_content::Warrior,
 ) -> Result<(), RuleError> {
     let movement = warrior.record().movement()?.wrapping_sub(3).max(0);
-    let actions = warrior.record().attacks()?.wrapping_sub(2);
+    let actions = warrior.record().action_points()?.wrapping_sub(2);
     warrior.record_mut().set_movement(movement);
-    warrior.record_mut().set_attacks(actions);
+    warrior.record_mut().set_action_points(actions);
     Ok(())
 }

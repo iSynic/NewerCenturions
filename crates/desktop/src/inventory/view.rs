@@ -91,7 +91,7 @@ impl Inventory {
             {
                 crate::assets::icon_in(image, vec2(383., y + 8.));
             }
-            if let Ok(mos) = warrior.record().profession()
+            if let Ok(mos) = warrior.record().mos()
                 && let Some(name) = mos_names.get(mos.wrapping_sub(1) as usize)
             {
                 let name: String = name.chars().take(7).collect();

@@ -228,7 +228,7 @@ fn process_action(
         return select_turn(state, content, false);
     }
     if actor >= 10
-        || state.warriors[actor as usize].record().attacks()? < 2
+        || state.warriors[actor as usize].record().action_points()? < 2
         || combat.active_body().is_none() && !combat.body_alive(&state.warriors, actor)
     {
         return end_turn(state, content);

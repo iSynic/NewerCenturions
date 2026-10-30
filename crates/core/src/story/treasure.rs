@@ -4,21 +4,21 @@ use centurions_content::{
     records::{RandomTreasureExtra, TreasureRecord},
 };
 
-/// What a treasure record gave: the warriors afterward, the items, the experience share of each
-/// eligible warrior and the credits and experience awarded.
+/// What a treasure record gave: the warriors afterward, the items, the victory points share of each
+/// eligible warrior and the credits and victory points awarded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Treasure {
     pub warriors: Vec<Warrior>,
     pub items: Vec<InventoryRecord>,
     pub share: i32,
     pub credits: i32,
-    /// The awarded experience.
-    pub experience: i32,
+    /// The awarded victory points.
+    pub victory_points: i32,
     pub inventory_record: Option<InventoryRecord>,
 }
 
-/// Works out a treasure record: its items are generated, a negative experience or credit amount is
-/// rolled, and the experience is divided among the warriors in the battle who can take it.
+/// Works out a treasure record: its items are generated, a negative victory point or credit amount is
+/// rolled, and the victory points are divided among the warriors in the battle who can take it.
 pub fn prepare(
     warriors: &[Warrior],
     record: &[u8],
@@ -48,7 +48,7 @@ pub fn prepare(
             )?);
         }
     }
-    // booty randomizes items, then experience, then credits.
+    // booty randomizes items, then victory points, then credits.
     let mut award = |amount: i32| {
         if amount < 0 {
             i32::from(next_random.bound(((amount >> 16) as i16).wrapping_abs()))
@@ -56,7 +56,7 @@ pub fn prepare(
             amount
         }
     };
-    let amount = award(record.experience()?);
+    let amount = award(record.victory_points()?);
     let credits = award(record.credits()?);
     let eligible = result
         .iter()
@@ -77,19 +77,19 @@ pub fn prepare(
         }
         // The in-battle test above already bounds this read. The sum is exact;
         // only storing it as a 32-bit value saturates.
-        let experience = crate::rules::sane_long(
+        let victory_points = crate::rules::sane_long(
             f64::from(warrior.record().upgrade_points()) + f64::from(share),
         );
-        let experience = if experience < 0 {
-            i32::from(((experience >> 16) as i16).wrapping_abs())
+        let victory_points = if victory_points < 0 {
+            i32::from(((victory_points >> 16) as i16).wrapping_abs())
         } else {
-            experience
+            victory_points
         };
         let remaining = crate::rules::sane_long(
-            f64::from(warrior.record().remaining_experience()?) - f64::from(share),
+            f64::from(warrior.record().remaining_victory_points()?) - f64::from(share),
         );
-        warrior.record_mut().set_upgrade_points(experience);
-        warrior.record_mut().set_remaining_experience(remaining);
+        warrior.record_mut().set_upgrade_points(victory_points);
+        warrior.record_mut().set_remaining_victory_points(remaining);
     }
     let inventory_record = items::sort_loot(&mut loot);
     *random = next_random;
@@ -98,7 +98,7 @@ pub fn prepare(
         items: loot,
         share,
         credits,
-        experience: amount,
+        victory_points: amount,
         inventory_record,
     })
 }

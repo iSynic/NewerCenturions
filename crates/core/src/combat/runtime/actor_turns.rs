@@ -61,7 +61,7 @@ pub fn controlled_turn(state: &mut Session, content: &Content) -> Result<Vec<Eve
         return crate::combat::retreat::leave_edge(state, content, member);
     }
     if state.warriors[member].record().movement()? < 1
-        || state.warriors[member].record().attacks()? < 2
+        || state.warriors[member].record().action_points()? < 2
     {
         state.warriors[member].record_mut().set_guarding(1);
         return end_turn(state, content);

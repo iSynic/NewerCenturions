@@ -152,7 +152,7 @@ fn original_reward_chain_crosses_level_thresholds_at_close() {
                 prepared.items
             } else {
                 let amount = i32::from_be_bytes(table[80..84].try_into().unwrap());
-                warriors = story_inventory::award_story_experience(&warriors, amount)
+                warriors = story_inventory::award_story_victory_points(&warriors, amount)
                     .unwrap()
                     .warriors;
                 vec![]

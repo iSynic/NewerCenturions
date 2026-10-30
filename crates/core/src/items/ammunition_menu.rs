@@ -159,7 +159,7 @@ pub(crate) fn choose(
             != Some(owner as i16)
         {
             Some(10)
-        } else if state.warriors[owner].record().attacks()? < 1 {
+        } else if state.warriors[owner].record().action_points()? < 1 {
             Some(17)
         } else {
             None

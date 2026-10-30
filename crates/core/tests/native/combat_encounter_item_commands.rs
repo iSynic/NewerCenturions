@@ -98,8 +98,8 @@ fn combat_typed_items_keep_charges_native_work_and_saved_branch_returns() {
         for (actual, original) in state.warriors.iter().zip(&before.warriors) {
             assert_eq!(actual.stamina().unwrap(), original.stamina().unwrap());
             assert_eq!(
-                actual.record().attacks().unwrap(),
-                original.record().attacks().unwrap()
+                actual.record().action_points().unwrap(),
+                original.record().action_points().unwrap()
             );
             assert_eq!(
                 actual.record().psi_points().unwrap(),
@@ -283,9 +283,9 @@ fn combat_typed_items_keep_charges_native_work_and_saved_branch_returns() {
             before.warriors[member].psi_points().unwrap()
         );
         assert_eq!(
-            actual.attacks().unwrap(),
+            actual.action_points().unwrap(),
             original
-                .attacks()
+                .action_points()
                 .unwrap()
                 .wrapping_sub(if member == 1 { 2 } else { 0 })
         );
@@ -363,8 +363,8 @@ fn combat_typed_items_keep_charges_native_work_and_saved_branch_returns() {
         assert_eq!(current_combat(&state).blank_round, 9);
         for member in [1, 4] {
             assert_eq!(
-                state.warriors[member].record().attacks().unwrap(),
-                before.warriors[member].record().attacks().unwrap()
+                state.warriors[member].record().action_points().unwrap(),
+                before.warriors[member].record().action_points().unwrap()
             );
             assert_eq!(
                 state.warriors[member].record().movement().unwrap(),
@@ -390,10 +390,10 @@ fn combat_typed_items_keep_charges_native_work_and_saved_branch_returns() {
             assert_eq!(state.globals.attack_count, 1);
             assert_eq!(current_combat(&state).blank_round, 0);
             assert_eq!(
-                state.warriors[1].record().attacks().unwrap(),
+                state.warriors[1].record().action_points().unwrap(),
                 before.warriors[1]
                     .record()
-                    .attacks()
+                    .action_points()
                     .unwrap()
                     .wrapping_sub(2)
             );
@@ -411,8 +411,8 @@ fn combat_typed_items_keep_charges_native_work_and_saved_branch_returns() {
             assert_eq!(current_combat(&state).blank_round, 9);
             assert_eq!(state.warriors[1].record().movement().unwrap(), 6);
             assert_eq!(
-                state.warriors[1].record().attacks().unwrap(),
-                before.warriors[1].record().attacks().unwrap()
+                state.warriors[1].record().action_points().unwrap(),
+                before.warriors[1].record().action_points().unwrap()
             );
             assert_eq!(
                 state.warriors[4].inventory().unwrap()[3]

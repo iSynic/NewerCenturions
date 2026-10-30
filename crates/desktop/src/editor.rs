@@ -354,7 +354,7 @@ impl WarriorEditor {
             15.,
             YELLOW,
         );
-        if let Ok(mos) = warrior.record().profession()
+        if let Ok(mos) = warrior.record().mos()
             && let Some(profile) = content.map(0).and_then(|map| {
                 let start = usize::try_from(mos.checked_sub(1)?)
                     .ok()?

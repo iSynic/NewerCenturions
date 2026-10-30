@@ -202,7 +202,7 @@ pub(super) fn draw_combat_information(
             (record.stamina(), 115., 470.),
             (record.psi_points(), 115., 493.),
             (record.shield_points(), 223., 470.),
-            (record.ac(), 274., 470.),
+            (record.armor_rating(), 274., 470.),
         ] {
             assets.text(&value.unwrap_or(0).to_string(), x, y, 12, WHITE);
         }
@@ -224,10 +224,10 @@ pub(super) fn draw_combat_information(
         (w.record().stamina(), 115., 470.),
         (w.record().psi_points(), 115., 493.),
         (w.record().movement(), 115., 516.),
-        (w.record().attacks(), 211., 516.),
+        (w.record().action_points(), 211., 516.),
         (w.record().shield_chance(), 181., 470.),
         (w.record().shield_points(), 223., 470.),
-        (w.record().ac(), 274., 470.),
+        (w.record().armor_rating(), 274., 470.),
     ] {
         assets.text(&field(value), x, y, 12, WHITE);
     }

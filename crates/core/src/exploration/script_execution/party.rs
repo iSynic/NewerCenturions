@@ -14,7 +14,7 @@ use centurions_content::records::{
 use centurions_content::{Content, span};
 
 /// Runs the script operations that change the party: its members and conditions, gear, money,
-/// allies, shops and treasure, fatigue, experience and healing, and the mission's score and flags.
+/// allies, shops and treasure, fatigue, victory points and healing, and the mission's score and flags.
 pub(super) fn execute(
     operation: Operation,
     parameter: i16,
@@ -388,13 +388,13 @@ pub(super) fn execute(
         }
         Operation::Experience => {
             let awarded =
-                story_inventory::award_story_experience(&state.warriors, i32::from(parameter))?;
+                story_inventory::award_story_victory_points(&state.warriors, i32::from(parameter))?;
             state.warriors = awarded.warriors;
-            // The amount is the experience the treasure window hands out.
+            // The amount is the victory points the treasure window hands out.
             state.booty_tally = crate::BootyTally {
                 credits: 0,
                 share: awarded.share,
-                experience: i32::from(parameter),
+                victory_points: i32::from(parameter),
             };
             let position = state.exploration.as_mut().unwrap();
             position.presentation = Some(Presentation::Loot);

@@ -289,19 +289,19 @@ pub(crate) fn normalize_warrior_after_battle(warrior: &mut Warrior) -> Result<()
     Ok(())
 }
 
-/// Experience given by a story: the warriors afterward and each one's share.
+/// Victory points given by a story: the warriors afterward and each one's share.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExperienceAward {
+pub struct VictoryPointsAward {
     pub warriors: Vec<Warrior>,
     pub share: i32,
 }
 
-/// Gives experience to the warriors with stamina above 0 and no negative computer control, dividing
+/// Gives victory points to the warriors with stamina above 0 and no negative computer control, dividing
 /// it evenly among them; battle state is cleared first.
-pub fn award_story_experience(
+pub fn award_story_victory_points(
     warriors: &[Warrior],
     amount: i32,
-) -> Result<ExperienceAward, RuleError> {
+) -> Result<VictoryPointsAward, RuleError> {
     let mut result = normalize_story_loot(warriors)?;
     for warrior in &mut result {
         warrior.record_mut().set_in_battle(1);
@@ -324,28 +324,28 @@ pub fn award_story_experience(
             continue;
         }
         // The sum is exact; only storing it as a 32-bit value saturates.
-        let experience = crate::rules::sane_long(
+        let victory_points = crate::rules::sane_long(
             f64::from(CharacterInformation(&warrior.bytes).upgrade_points()?) + f64::from(share),
         );
-        let experience = if experience < 0 {
-            i32::from(((experience >> 16) as i16).wrapping_abs())
+        let victory_points = if victory_points < 0 {
+            i32::from(((victory_points >> 16) as i16).wrapping_abs())
         } else {
-            experience
+            victory_points
         };
         let remaining = crate::rules::sane_long(
-            f64::from(warrior.record().remaining_experience()?) - f64::from(share),
+            f64::from(warrior.record().remaining_victory_points()?) - f64::from(share),
         );
-        warrior.record_mut().set_upgrade_points(experience);
-        warrior.record_mut().set_remaining_experience(remaining);
+        warrior.record_mut().set_upgrade_points(victory_points);
+        warrior.record_mut().set_remaining_victory_points(remaining);
     }
-    Ok(ExperienceAward {
+    Ok(VictoryPointsAward {
         warriors: result,
         share,
     })
 }
 
 /// Generates the items of a treasure record a story hands out, enhanced for the difficulty. A
-/// record that also awards credits or experience is not supported here.
+/// record that also awards credits or victory points is not supported here.
 pub fn grant_story_treasure(
     treasure: &[u8],
     content: &Content,

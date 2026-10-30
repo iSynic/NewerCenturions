@@ -3,7 +3,7 @@ use super::{Action, Control, UiState, equipped_ammunition_reserve, field};
 use crate::{assets::Assets, layout};
 use centurions_core::{Command, Phase, Presentation, Session};
 use macroquad::prelude::*;
-/// Draws the squad's rows beside the map (portrait, name, attacks, stamina and
+/// Draws the squad's rows beside the map (portrait, name, action points, stamina and
 /// psi points) and their controls. Returns the selected warrior.
 pub(super) fn roster(
     state: &Session,
@@ -21,7 +21,7 @@ pub(super) fn roster(
             crate::assets::texture_in(texture, Rect::new(rect.x + 2., rect.y + 2., 46., 46.));
         }
         let name = if ui.preferences.enabled(crate::preferences::pref::APPEND_MOS) {
-            let mos = w.record().profession().unwrap_or(0);
+            let mos = w.record().mos().unwrap_or(0);
             let names = assets
                 .character_strings
                 .get(&131)
@@ -37,9 +37,9 @@ pub(super) fn roster(
         assets.text(&name, rect.x + 87., rect.y + 21., 12, YELLOW);
         assets.text(
             &field(if state.phase == Phase::Combat {
-                w.record().attacks()
+                w.record().action_points()
             } else {
-                w.record().normal_attacks()
+                w.record().actions_per_round()
             }),
             rect.x + 281.,
             rect.y + 21.,
@@ -67,7 +67,7 @@ pub(super) fn roster(
         for (value, x) in [
             (w.record().shield_chance(), 208.),
             (w.record().shield_points(), 247.),
-            (w.record().ac(), 294.),
+            (w.record().armor_rating(), 294.),
         ] {
             assets.text(&field(value), rect.x + x, rect.y + 44., 12, YELLOW);
         }
@@ -176,7 +176,7 @@ pub(super) fn information(state: &Session, assets: &Assets, selected: usize) {
                 field(w.record().psi_points()),
                 field(w.record().psi_points_max()),
                 field(w.record().shield_chance()),
-                field(w.record().ac())
+                field(w.record().armor_rating())
             ),
             r.x + 10.,
             r.y + 37.,
@@ -199,7 +199,7 @@ pub(super) fn information(state: &Session, assets: &Assets, selected: usize) {
             assets.text(
                 &format!(
                     "AP {}  MP {}  Round {}",
-                    field(w.record().attacks()),
+                    field(w.record().action_points()),
                     field(w.record().movement()),
                     c.combat_round + 1
                 ),

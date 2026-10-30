@@ -1,7 +1,7 @@
 //! Conditions and saving throws of an attack's target, warrior or monster.
 //! Monster durations are signed bytes; warrior durations are signed words.
 //! The caller owns rule order and duration caps.
-use super::warrior_layout::{CONDITIONS, REMAINING_EXPERIENCE, UPGRADE_POINTS};
+use super::warrior_layout::{CONDITIONS, REMAINING_VICTORY_POINTS, UPGRADE_POINTS};
 use super::{Condition, DamageTargetKind, put_word};
 use crate::bytes::add_long_wrapping;
 use crate::{ContentError, span, word};
@@ -69,7 +69,7 @@ impl<'a> ConditionTarget<'a> {
     }
     /// The monster's resistance to scans (its Psi resistance); a warrior's lies elsewhere in its
     /// record.
-    pub fn magic_immunity(&self) -> Result<i16, ContentError> {
+    pub fn psi_resistance(&self) -> Result<i16, ContentError> {
         word(self.bytes, 0xa)
     }
     /// Which side the target fights on; zero is the party's side, nonzero the opposing side.
@@ -153,11 +153,11 @@ impl<'a> ConditionTarget<'a> {
         let offset = if self.is_enemy() { 0x10e } else { 0x58 };
         put_word(self.bytes, offset, points);
     }
-    /// Warrior experience drain: remaining experience gains what upgrade points lose.
-    pub fn shift_experience(&mut self, amount: i32) -> Result<(), ContentError> {
-        span(self.bytes, REMAINING_EXPERIENCE, 8)?;
+    /// Drains a warrior's victory points: remaining victory points gain what upgrade points lose.
+    pub fn shift_victory_points(&mut self, amount: i32) -> Result<(), ContentError> {
+        span(self.bytes, REMAINING_VICTORY_POINTS, 8)?;
         for (offset, delta) in [
-            (REMAINING_EXPERIENCE, amount),
+            (REMAINING_VICTORY_POINTS, amount),
             (UPGRADE_POINTS, amount.wrapping_neg()),
         ] {
             add_long_wrapping(self.bytes, offset, delta);

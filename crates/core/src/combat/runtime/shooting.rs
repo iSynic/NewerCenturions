@@ -169,9 +169,9 @@ pub(super) fn player_shoot_action_at(
         crate::combat::shooting::drop_empty_weapon(state, content, body as usize, &mut events)?;
     }
     let warrior = &mut state.warriors[body as usize];
-    let actions = warrior.record().attacks()?.wrapping_sub(2);
+    let actions = warrior.record().action_points()?.wrapping_sub(2);
     let movement = warrior.record().movement()?.wrapping_sub(3).max(0);
-    warrior.record_mut().set_attacks(actions);
+    warrior.record_mut().set_action_points(actions);
     warrior.record_mut().set_movement(movement);
     if SpellInfoRecord(&prepared.packet).divides_shots_between_targets() {
         prepared.shots = 1;

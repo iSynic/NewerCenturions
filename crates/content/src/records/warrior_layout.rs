@@ -23,8 +23,8 @@ pub const CONDITIONS_END: usize = 0xae;
 pub const COMPUTER_CONTROL: usize = 0x90;
 /// One hundred inventory records (`items`) of `INVENTORY_BYTES` each.
 pub const ITEMS: usize = 0x132;
-/// Signed long remaining experience.
-pub const REMAINING_EXPERIENCE: usize = 0x9ce;
+/// Signed long remaining victory points.
+pub const REMAINING_VICTORY_POINTS: usize = 0x9ce;
 /// Signed long upgrade points.
 pub const UPGRADE_POINTS: usize = 0x9d2;
 /// The firing toggle byte: nonzero selects the missile weapon.

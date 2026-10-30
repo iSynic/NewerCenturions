@@ -107,10 +107,7 @@ pub fn information(
         credits,
         if credits > 9_999_999 { 10 } else { 12 },
     );
-    fields.insert(
-        45,
-        (decode(indexed(strings, 131, record.profession()?)?), 12),
-    );
+    fields.insert(45, (decode(indexed(strings, 131, record.mos()?)?), 12));
     fields.insert(46, (decode(indexed(strings, 129, record.race()?)?), 12));
     let gender_text = match profile.gender()? {
         1 => 0x400b12,
@@ -119,7 +116,7 @@ pub fn information(
     };
     fields.insert(47, (game_text.text(gender_text, true)?, 12));
     for (item, value) in [
-        (48, record.normal_attacks()?),
+        (48, record.actions_per_round()?),
         (49, record.attack_limit()?),
         (25, record.max_spells_attacks()?),
         (113, record.shield_points()?),
@@ -128,12 +125,12 @@ pub fn information(
     ] {
         number(&mut fields, item, value, 12);
     }
-    number(&mut fields, 81, profile.experience()?, 12);
+    number(&mut fields, 81, profile.victory_points()?, 12);
     number(&mut fields, 83, profile.upgrade_points()?, 12);
     for (item, value) in [
         (34, record.shield_chance()?),
         (35, profile.shield_cost()?),
-        (36, record.ac()?),
+        (36, record.armor_rating()?),
         (32, record.level()?),
         (50, record.load()?),
         (51, record.load_max()?),

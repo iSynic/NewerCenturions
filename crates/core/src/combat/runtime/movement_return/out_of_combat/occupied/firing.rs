@@ -33,7 +33,7 @@ pub(super) fn apply(
     }
     let mut targets = vec![];
     let mut discard_empty = false;
-    if state.warriors[actor].record().attacks()? > 1 {
+    if state.warriors[actor].record().action_points()? > 1 {
         let limit =
             ItemDefinition(state.globals.loaded_items.weapon.as_deref().unwrap()).attack_count()?;
         for _ in 0..limit {

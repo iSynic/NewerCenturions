@@ -4,7 +4,7 @@ use super::{ENCOUNTER_SOUND, ExtraIndex, Operation, ScriptStep, load_extra};
 use crate::{Event, RuleError, Session};
 use centurions_content::mission::OpeningMission;
 use centurions_content::records::{
-    Condition, ProfessionEquipment, ProfileTable, RaceEquipment, WarriorRecord,
+    Condition, MosEquipment, ProfileTable, RaceEquipment, WarriorRecord,
 };
 use centurions_content::{Content, word};
 
@@ -163,7 +163,7 @@ pub(super) fn execute(
             })
         }
         // A negative code tests only picked members, for its magnitude.
-        // Caste and race classes come from each member's profession and race record.
+        // Caste and race classes come from each member's MOS and race record.
         Operation::MiscellaneousBranch => {
             let code = e(2)?;
             let wanted = if code < 0 { code.wrapping_abs() } else { code };
@@ -174,10 +174,10 @@ pub(super) fn execute(
                     for (member, warrior) in state.warriors.iter().enumerate() {
                         let record = warrior.record();
                         let matched = match test {
-                            0 => record.profession()? == wanted,
+                            0 => record.mos()? == wanted,
                             1 => record.race()? == wanted,
                             2 => record.gender()? == wanted,
-                            5 => caste_class(map, record.profession()?)? == wanted,
+                            5 => caste_class(map, record.mos()?)? == wanted,
                             _ => race_class(map, record.race()?, wanted)?,
                         };
                         found |= matched && (code >= 0 || mask[member] != 0);
@@ -212,7 +212,7 @@ pub(super) fn execute(
     }
 }
 
-/// The profile row of a race or profession number.
+/// The profile row of a race or MOS number.
 fn profile(table: ProfileTable<'_>, id: i16) -> Result<&[u8], RuleError> {
     usize::try_from(id)
         .ok()
@@ -221,15 +221,12 @@ fn profile(table: ProfileTable<'_>, id: i16) -> Result<&[u8], RuleError> {
         .ok_or_else(|| unsupported("story.opcode", "member outside the profiles"))
 }
 
-/// The class of a profession. A zero caste keeps the previously loaded profile,
+/// The class of an MOS. A zero caste keeps the previously loaded profile,
 /// which is not held.
 ///
 /// Original: loadprofile
 pub(super) fn caste_class(map: &OpeningMission, caste: i16) -> Result<i16, RuleError> {
-    Ok(
-        ProfessionEquipment(profile(ProfileTable::professions(&map.profiles), caste)?)
-            .psi_school()?,
-    )
+    Ok(MosEquipment(profile(ProfileTable::mos_profiles(&map.profiles), caste)?).psi_school()?)
 }
 
 /// Whether a race belongs to race class `code - 1`.

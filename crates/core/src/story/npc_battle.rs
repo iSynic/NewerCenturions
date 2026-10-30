@@ -99,10 +99,10 @@ pub fn finish(
                 let level = warrior.record().level()?;
                 // The award keeps the signed 16-bit product.
                 let award = i32::from(level.wrapping_mul(200));
-                let current = warrior.record().remaining_experience()?;
+                let current = warrior.record().remaining_victory_points()?;
                 warrior
                     .record_mut()
-                    .set_remaining_experience(current.wrapping_add(award));
+                    .set_remaining_victory_points(current.wrapping_add(award));
             }
             Ok(Some(remembered_move))
         }

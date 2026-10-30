@@ -32,7 +32,7 @@ pub(super) fn execute(
                 .position(|w| w.record().bleeding() != 0)
                 .ok_or(RuleError::Refused { feedback: vec![] })?;
             state.warriors[target].record_mut().set_bleeding(0);
-            state.warriors[member].record_mut().set_attacks(0);
+            state.warriors[member].record_mut().set_action_points(0);
             Ok(vec![Event::Feedback(feedback::GameFeedback::Flash {
                 address: 0x403cd6,
                 x: 30,

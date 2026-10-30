@@ -114,7 +114,7 @@ pub(crate) fn check_item_actor(state: &Session, warrior: usize) -> Result<(), Ru
     if let Some(combat) = &state.combat {
         let warning = if combat.active_body() != Some(warrior as i16) {
             Some(10)
-        } else if actor.record().attacks()? < 1 {
+        } else if actor.record().action_points()? < 1 {
             Some(17)
         } else {
             None

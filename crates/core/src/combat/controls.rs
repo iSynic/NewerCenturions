@@ -113,13 +113,13 @@ pub fn delay(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleE
     if warriors.record().movement()? != warriors.record().movement_max()? {
         return Err(warning(59));
     }
-    let remaining = warriors.record().attacks()?.wrapping_sub(
+    let remaining = warriors.record().action_points()?.wrapping_sub(
         warriors
             .record()
-            .attack_bonus()?
-            .wrapping_add(warriors.record().normal_attacks()?),
+            .action_point_bonus()?
+            .wrapping_add(warriors.record().actions_per_round()?),
     );
-    warriors.record_mut().set_attacks(remaining);
+    warriors.record_mut().set_action_points(remaining);
     let combat = state.combat.as_mut().unwrap();
     let cursor = combat.battle_order_index;
     // The delayed body goes to the end of the battle order.
@@ -142,11 +142,11 @@ pub fn undo(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleEr
     let member = actor(state)?;
     let combat = state.combat.as_ref().unwrap();
     let warriors = &state.warriors[member];
-    if warriors.record().attacks()?
+    if warriors.record().action_points()?
         != warriors
             .record()
-            .attack_bonus()?
-            .wrapping_add(warriors.record().normal_attacks()?)
+            .action_point_bonus()?
+            .wrapping_add(warriors.record().actions_per_round()?)
         || combat.turn_origin.is_none()
     {
         return Err(warning(82));
@@ -180,7 +180,7 @@ pub fn undo(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleEr
     combat.field.tiles[to] = member as i16;
     combat.squad.pos[member] = origin;
     let warriors = &mut state.warriors[member];
-    warriors.record_mut().set_attacks(0);
+    warriors.record_mut().set_action_points(0);
     let mission = crate::Session::land_in(
         content,
         state.mission.as_deref(),
@@ -329,8 +329,8 @@ pub fn select_weapon(
     );
     state.warriors[member] = worn.warrior;
     let warriors = &mut state.warriors[member];
-    let ap = warriors.record().attacks()?.wrapping_sub(1);
-    warriors.record_mut().set_attacks(ap);
+    let ap = warriors.record().action_points()?.wrapping_sub(1);
+    warriors.record_mut().set_action_points(ap);
     crate::items::compact(&mut state.warriors[member])?;
     events.extend(runtime::finish_player_action(
         state,

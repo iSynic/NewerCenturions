@@ -23,7 +23,7 @@ fn attacker_penalties(attacker: &WarriorRecord<'_>, mut chance: i16) -> Result<i
 
 /// A warrior's chance to hit a monster: the base 33 and melee accuracy, less the attacker's
 /// hindrances, plus the warrior's bonus against each creature category the monster belongs to, less
-/// the monster's ac and its shielding, and adjusted by the monster's defensive conditions.
+/// the monster's armor rating and its shielding, and adjusted by the monster's defensive conditions.
 pub(in crate::combat) fn against_enemy(attacker: &[u8], defender: &[u8]) -> Result<i16, RuleError> {
     let attacker = WarriorRecord::from_bytes(attacker);
     let defender = EnemyRecord::from_bytes(defender);
@@ -34,7 +34,7 @@ pub(in crate::combat) fn against_enemy(attacker: &[u8], defender: &[u8]) -> Resu
             chance = chance.wrapping_add(attacker.special(category)?);
         }
     }
-    chance = chance.wrapping_sub(defender.ac()?);
+    chance = chance.wrapping_sub(defender.armor_rating()?);
     chance = chance.wrapping_sub(
         defender
             .condition(Condition::ShieldedFromHits)
@@ -61,7 +61,7 @@ pub(in crate::combat) fn against_enemy(attacker: &[u8], defender: &[u8]) -> Resu
 }
 
 /// A warrior's chance to hit another warrior: as against a monster, but the defender's melee dodge
-/// replaces ac and there are no creature categories.
+/// replaces armor rating and there are no creature categories.
 pub(in crate::combat) fn against_warrior(
     attacker: &[u8],
     defender: &[u8],
@@ -157,7 +157,7 @@ pub(in crate::combat) fn enemy_against_warrior(
 }
 
 /// A monster's chance to hit another monster: 33 plus 5 per hit die and per point of damage plus,
-/// less the attacker's hindrances, adjusted by the defender's conditions and ac. An attacker of
+/// less the attacker's hindrances, adjusted by the defender's conditions and armor rating. An attacker of
 /// creature category 4 or 5 loses 10 against a seventh-level-protected defender.
 pub(in crate::combat) fn enemy_against_enemy(
     attacker: &EnemyRecord<'_>,
@@ -196,7 +196,7 @@ pub(in crate::combat) fn enemy_against_enemy(
             chance = chance.wrapping_add(bonus);
         }
     }
-    chance = chance.wrapping_sub(defender.ac()?);
+    chance = chance.wrapping_sub(defender.armor_rating()?);
     if (attacker.has_creature_category(4) || attacker.has_creature_category(5))
         && defender.condition(Condition::SeventhLevelProtection) != 0
     {

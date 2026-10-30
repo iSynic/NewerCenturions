@@ -800,7 +800,7 @@ fn npc_body_state(content: &Content, body: usize, spell: i16) -> (Session, (i16,
     let (category, tier, column) = (spell / 1000, spell % 1000 / 100 - 1, spell % 100 - 1);
     state.warriors[5].bytes[0x36..0x38].copy_from_slice(&category.to_be_bytes());
     state.warriors[5].bytes[0x9f0 + (tier * 7 + column) as usize] = 1;
-    state.warriors[5].record_mut().set_attacks(6);
+    state.warriors[5].record_mut().set_action_points(6);
     state.globals.loaded_items.item = Some(content.items[0].clone());
     let combat = state.combat.as_mut().unwrap();
     let living = combat.roster.records[0].clone();

@@ -7,13 +7,14 @@ use centurions_content::records::{
 use centurions_content::{Content, InventoryRecord};
 use serde::{Deserialize, Serialize};
 
-/// The credits, per-warrior share and experience the treasure window shows.
+/// The credits, per-warrior share and victory points the treasure window shows.
 /// booty keeps them only while its window is open.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BootyTally {
     pub credits: i32,
     pub share: i32,
-    pub experience: i32,
+    #[serde(rename = "experience")]
+    pub victory_points: i32,
 }
 
 impl BootyTally {
@@ -23,8 +24,8 @@ impl BootyTally {
     }
 }
 
-/// Opens the treasure window with experience 1 and no monsters, so the selected
-/// members are left with exactly 1 experience.
+/// Opens the treasure window with 1 victory point and no monsters, so the selected
+/// members are left with exactly 1 victory point.
 ///
 /// Original: newland
 pub(super) fn reset_experience(
@@ -33,7 +34,7 @@ pub(super) fn reset_experience(
 ) -> Result<Vec<Event>, RuleError> {
     for (warrior, selected) in state.warriors.iter_mut().zip(state.globals.party_track) {
         if selected != 0 {
-            warrior.record_mut().set_remaining_experience(1);
+            warrior.record_mut().set_remaining_victory_points(1);
         }
     }
     for warrior in &mut state.warriors {
@@ -83,7 +84,7 @@ pub(super) fn reset_experience(
             EnemyRecordMut::from_bytes(record).set_weapon(weapon);
         }
     }
-    let treasure = TreasureRecord::experience_award(1);
+    let treasure = TreasureRecord::victory_points_award(1);
     effects.push(Event::Sound {
         resource_id: crate::feedback::BOOTY_SOUND,
     });
@@ -265,7 +266,7 @@ fn present_reward_record(
     state.booty_tally = BootyTally {
         credits: prepared.credits,
         share: prepared.share,
-        experience: prepared.experience,
+        victory_points: prepared.victory_points,
     };
     if let Some(record) = prepared.inventory_record {
         state.globals.inventory_record = record;

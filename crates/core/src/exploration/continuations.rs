@@ -45,12 +45,12 @@ pub fn continue_story(state: &mut Session, content: &Content) -> Result<Vec<Even
     continue_with_spells(state, content, false)
 }
 
-/// Whether a warrior has gained enough experience to advance and has psi, so the player must
+/// Whether a warrior has gained enough victory points to advance and has psi, so the player must
 /// confirm the spells before moving on.
 pub fn needs_spell_confirmation(state: &Session) -> bool {
     state.warriors.iter().any(|warrior| {
         warrior.stamina().unwrap_or(0) > 0
-            && warrior.record().remaining_experience().unwrap() < 0
+            && warrior.record().remaining_victory_points().unwrap() < 0
             && warrior.record().psi_points_max().unwrap_or(0) != 0
             && warrior.record().psi_school().unwrap_or(0) != 0
     })

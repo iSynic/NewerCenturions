@@ -15,9 +15,9 @@ fn adjust(bytes: &mut [u8], difficulty: i16, resistance: i16, armor: i16) -> Res
     }
     EnemyRecordMut::from_bytes(bytes).adjust_elemental_saves(difficulty.wrapping_mul(resistance));
     let armor = EnemyRecord::from_bytes(bytes)
-        .ac()?
+        .armor_rating()?
         .wrapping_sub(difficulty.wrapping_mul(armor));
-    EnemyRecordMut::from_bytes(bytes).set_armor(armor);
+    EnemyRecordMut::from_bytes(bytes).set_armor_rating(armor);
     let speed = EnemyRecord::from_bytes(bytes)
         .agility()?
         .wrapping_add(difficulty);
@@ -64,11 +64,11 @@ pub fn summon(
         EnemyRecordMut::from_bytes(bytes).set_faction(faction);
     }
     EnemyRecordMut::from_bytes(bytes).set_movement_direction(0, 0);
-    let mut armor = EnemyRecord::from_bytes(bytes).ac()?;
+    let mut armor = EnemyRecord::from_bytes(bytes).armor_rating()?;
     if armor != 0 {
         armor = armor.wrapping_add(random.bound(3).wrapping_sub(2));
     }
-    EnemyRecordMut::from_bytes(bytes).set_armor(armor.max(0));
+    EnemyRecordMut::from_bytes(bytes).set_armor_rating(armor.max(0));
     let speed = EnemyRecord::from_bytes(bytes)
         .agility()?
         .wrapping_add(random.bound(3).wrapping_sub(2))

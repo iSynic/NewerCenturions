@@ -183,8 +183,8 @@ fn upgrade(
             state.exploration.as_ref(),
         )
         .ok_or_else(|| RuleError::Invalid("upgrade MOS tables missing".into()))?;
-        let mos = record.record().profession()?;
-        let profile = ProfileTable::professions(&map.profiles).row(
+        let mos = record.record().mos()?;
+        let profile = ProfileTable::mos_profiles(&map.profiles).row(
             usize::try_from(mos.wrapping_sub(1))
                 .map_err(|_| RuleError::Invalid("upgrade MOS index".into()))?,
         )?;

@@ -56,9 +56,9 @@ pub fn add_ally(
         .wrapping_add(difficulty.wrapping_mul(3));
     EnemyRecordMut::from_bytes(record).set_psi_resistance(immunity);
     let armor = EnemyRecord::from_bytes(record)
-        .ac()?
+        .armor_rating()?
         .wrapping_add(difficulty.wrapping_mul(-2));
-    EnemyRecordMut::from_bytes(record).set_armor(armor);
+    EnemyRecordMut::from_bytes(record).set_armor_rating(armor);
     let speed = EnemyRecord::from_bytes(record)
         .agility()?
         .wrapping_add(difficulty);

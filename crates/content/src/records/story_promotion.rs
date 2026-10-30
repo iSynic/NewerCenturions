@@ -1,8 +1,7 @@
 //! Profile lookups and scan fields used on promotion and when choosing scans.
 use super::warrior_layout::KNOWN_SCANS;
 use super::{
-    LearnedScans, ProfessionProfile, ProfileTable, PsiSelectionMemoryMut, RaceProfile,
-    SpellInfoRecord,
+    LearnedScans, MosProfile, ProfileTable, PsiSelectionMemoryMut, RaceProfile, SpellInfoRecord,
 };
 use crate::{ContentError, span};
 
@@ -13,11 +12,11 @@ impl<'a> RaceProfile<'a> {
     }
 }
 
-impl<'a> ProfessionProfile<'a> {
+impl<'a> MosProfile<'a> {
     /// One-based 576-byte M.O.S. profile; callers reject indexes below one.
-    pub fn from_table(profiles: &'a [u8], profession: i16) -> Result<Self, ContentError> {
+    pub fn from_table(profiles: &'a [u8], mos: i16) -> Result<Self, ContentError> {
         Ok(Self(
-            ProfileTable::professions(profiles).row(profession as usize - 1)?,
+            ProfileTable::mos_profiles(profiles).row(mos as usize - 1)?,
         ))
     }
 }

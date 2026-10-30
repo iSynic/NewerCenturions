@@ -277,7 +277,7 @@ impl DropCreditsExtra<'_> {
 pub struct VictoryPointsExtra<'a>(pub &'a [u8]);
 
 impl VictoryPointsExtra<'_> {
-    /// Victory points to take, moved from upgrade points into remaining experience.
+    /// Victory points to take, moved from upgrade points into remaining victory points.
     pub fn amount(&self) -> Result<i16, ContentError> {
         word(self.0, 0)
     }

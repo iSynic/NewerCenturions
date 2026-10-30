@@ -1,6 +1,6 @@
 use super::warrior_layout::{
     BLEEDING, COMPUTER_CONTROL, CONDITIONS, CONDITIONS_END, DEFINE_SPELLS, ITEM_COUNT, ITEMS,
-    KNOWN_SCANS, LEARNED_SCAN_BYTES, NAME, PSI_MEMORY_END, PSI_SCHOOL, REMAINING_EXPERIENCE,
+    KNOWN_SCANS, LEARNED_SCAN_BYTES, NAME, PSI_MEMORY_END, PSI_SCHOOL, REMAINING_VICTORY_POINTS,
     STAMINA, STAMINA_MAX, TOGGLE, UPGRADE_POINTS,
 };
 use super::{UpgradeRecord, put_word};
@@ -100,12 +100,12 @@ impl<'a> WarriorRecord<'a> {
     pub fn equipped_battery(&self) -> Result<i16, ContentError> {
         word(self.0, 0xee)
     }
-    /// The warrior's armour rating.
-    pub fn ac(&self) -> Result<i16, ContentError> {
+    /// The warrior's armor rating.
+    pub fn armor_rating(&self) -> Result<i16, ContentError> {
         word(self.0, 0x2c)
     }
-    /// Attacks the warrior makes in a round before bonuses.
-    pub fn normal_attacks(&self) -> Result<i16, ContentError> {
+    /// Actions per round the warrior has before bonuses.
+    pub fn actions_per_round(&self) -> Result<i16, ContentError> {
         word(self.0, 0x12)
     }
     /// The icon that shows the warrior on the battle map.
@@ -216,8 +216,8 @@ impl<'a> WarriorRecord<'a> {
     pub fn guarding(&self) -> Result<i16, ContentError> {
         word(self.0, 0x16)
     }
-    /// Attacks left this round.
-    pub fn attacks(&self) -> Result<i16, ContentError> {
+    /// Action points left this round.
+    pub fn action_points(&self) -> Result<i16, ContentError> {
         word(self.0, 0x40)
     }
     /// Movement left this round.
@@ -232,8 +232,8 @@ impl<'a> WarriorRecord<'a> {
     pub fn movement_bonus(&self) -> Result<i16, ContentError> {
         word(self.0, 0x30)
     }
-    /// Attacks added to the normal number each round.
-    pub fn attack_bonus(&self) -> Result<i16, ContentError> {
+    /// Action points added to the actions per round each round.
+    pub fn action_point_bonus(&self) -> Result<i16, ContentError> {
         word(self.0, 0x1e)
     }
     /// Brawn, the strength attribute.
@@ -314,8 +314,8 @@ impl<'a> WarriorRecord<'a> {
     pub fn save(&self, save: super::SavingThrow) -> Result<i16, ContentError> {
         word(self.0, 0x112 + save as usize * 2)
     }
-    /// The warrior's profession (`caste`).
-    pub fn profession(&self) -> Result<i16, ContentError> {
+    /// The warrior's MOS (`caste`).
+    pub fn mos(&self) -> Result<i16, ContentError> {
         word(self.0, 0x34)
     }
     /// The warrior's gender.
@@ -377,13 +377,13 @@ impl<'a> WarriorRecord<'a> {
     pub fn spells_so_far(&self) -> Result<i16, ContentError> {
         word(self.0, 0xac8)
     }
-    /// Experience the warrior has earned and can spend on upgrades.
+    /// Victory points the warrior has earned and can spend on upgrades.
     pub fn upgrade_points(&self) -> i32 {
         long_at(self.0, UPGRADE_POINTS)
     }
-    /// Experience the warrior must still earn to reach the next level.
-    pub fn remaining_experience(&self) -> Result<i32, ContentError> {
-        long(self.0, REMAINING_EXPERIENCE)
+    /// Victory points the warrior must still earn to reach the next level.
+    pub fn remaining_victory_points(&self) -> Result<i32, ContentError> {
+        long(self.0, REMAINING_VICTORY_POINTS)
     }
     /// Whether the warrior knows the scan at this tier and column.
     pub fn known_scan(&self, tier: usize, column: usize) -> u8 {
@@ -449,9 +449,9 @@ impl WarriorRecordMut<'_> {
     pub fn set_spec(&mut self, index: usize, value: i16) {
         put_word(self.0, 0xf4 + index * 2, value);
     }
-    /// Changes the experience still to earn for the next level by `value`.
-    pub fn add_remaining_experience(&mut self, value: i32) {
-        self.increment_statistic(REMAINING_EXPERIENCE, value);
+    /// Changes the victory points still to earn for the next level by `value`.
+    pub fn add_remaining_victory_points(&mut self, value: i32) {
+        self.increment_statistic(REMAINING_VICTORY_POINTS, value);
     }
     /// Clears the attacked-this-round flag.
     pub fn clear_been_attacked(&mut self) {
@@ -610,8 +610,8 @@ impl WarriorRecordMut<'_> {
     pub fn set_turn_skip_duration(&mut self, value: i16) {
         put_word(self.0, 0x60, value);
     }
-    /// Sets the attacks left this round.
-    pub fn set_attacks(&mut self, value: i16) {
+    /// Sets the action points left this round.
+    pub fn set_action_points(&mut self, value: i16) {
         put_word(self.0, 0x40, value);
     }
     /// Sets the weight the warrior carries.
@@ -642,7 +642,7 @@ impl WarriorRecordMut<'_> {
     pub fn set_target(&mut self, body: i16) {
         put_word(self.0, 0x18, body);
     }
-    /// Ending the turn clears guarding, then the remaining movement; attacks
+    /// Ending the turn clears guarding, then the remaining movement; action points
     /// are not cleared here.
     pub fn finish_turn_movement(&mut self) {
         self.0[0x16..0x18].fill(0);
@@ -660,13 +660,13 @@ impl WarriorRecordMut<'_> {
     pub fn set_appearance(&mut self, portrait: bool, resource: i16) {
         put_word(self.0, if portrait { 0x54 } else { 0x56 }, resource);
     }
-    /// Sets the experience available for upgrades.
+    /// Sets the victory points available for upgrades.
     pub fn set_upgrade_points(&mut self, points: i32) {
         put_long(self.0, UPGRADE_POINTS, points);
     }
-    /// Sets the experience still to earn for the next level.
-    pub fn set_remaining_experience(&mut self, points: i32) {
-        put_long(self.0, REMAINING_EXPERIENCE, points);
+    /// Sets the victory points still to earn for the next level.
+    pub fn set_remaining_victory_points(&mut self, points: i32) {
+        put_long(self.0, REMAINING_VICTORY_POINTS, points);
     }
     /// Sets how many times the upgrade `selector` names has been bought.
     pub fn set_upgrade_count(&mut self, selector: u16, count: i16) {

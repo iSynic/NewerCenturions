@@ -72,7 +72,7 @@ pub struct Inventory {
     /// opened it over the loot grid.
     information_item: Option<(i16, bool)>,
     information_fields: RefCell<Option<information::ItemInformation>>,
-    /// An open showcondition list: professions, widened and the ITEM work it read.
+    /// An open showcondition list: MOSs, widened and the ITEM work it read.
     use_list: Option<(bool, bool, Vec<u8>)>,
     /// An open ammunition popup.
     ammunition: Option<ammunition::Popup>,

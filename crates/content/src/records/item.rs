@@ -210,7 +210,7 @@ impl ItemDefinition<'_> {
     pub fn shield_chance(&self) -> Result<i16, ContentError> {
         word(self.0, 88)
     }
-    /// Armour rating the item adds.
+    /// Armor rating the item adds.
     pub fn armor(&self) -> Result<i16, ContentError> {
         word(self.0, 94)
     }

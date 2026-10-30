@@ -32,7 +32,7 @@ pub(super) fn reload_at_occupied_cell(
     if member.record().in_battle() != 1 {
         return Err(refuse("actor is not active"));
     }
-    if member.record().attacks()? < 2 {
+    if member.record().action_points()? < 2 {
         return Err(refuse("actor has fewer than two action points"));
     }
     let (faction, living) = if let Some(target) = usize::try_from(target)

@@ -55,7 +55,7 @@ pub struct StoryTables {
     pub item_cache: Vec<u8>,
     /// `Data Race`: the race records.
     pub races: Vec<u8>,
-    /// `Data MOS`: the profession and level-up tables.
+    /// `Data MOS`: the MOS and level-up tables.
     pub profiles: Vec<u8>,
     /// `Data ED3`: the story scripts, 42 bytes each, that doors and events run.
     pub door_scripts: Vec<u8>,

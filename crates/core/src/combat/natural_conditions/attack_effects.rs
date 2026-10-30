@@ -95,7 +95,7 @@ pub(crate) fn monster_attack_effect(
     let strength = random
         .range(source.hit_dice()? / 2, source.hit_dice()?)
         .max(1);
-    if target.magic_immunity()? > 100 {
+    if target.psi_resistance()? > 100 {
         return Ok(None);
     }
     if matches!(condition, 1..=6 | 9) {
@@ -161,7 +161,7 @@ pub(crate) fn warrior_attack_effect(
         // Twenty per point of the attacker's maximum stamina, as a signed word.
         if !saves(&target, SavingThrow::Entanglement, random)? {
             let amount = source.stamina_max()?.wrapping_mul(20);
-            target.shift_experience(i32::from(amount))?;
+            target.shift_victory_points(i32::from(amount))?;
             result.applied = true;
         }
     } else if condition == 19 {

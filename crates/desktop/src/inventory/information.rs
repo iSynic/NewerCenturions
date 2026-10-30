@@ -140,7 +140,7 @@ impl Inventory {
             return;
         };
         let rows = if *professions {
-            centurions_core::item_display::profession_list(
+            centurions_core::item_display::mos_list(
                 map,
                 owner,
                 item,

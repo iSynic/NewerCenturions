@@ -5,8 +5,8 @@ use centurions_content::{
     game_text::GameText,
     records::{
         ATTRIBUTES, Attribute, CharacterIdentityMut, CharacterStatisticsMut,
-        DevelopmentField as Field, InventorySlotsMut, ItemDefinition, ProfessionProfile,
-        ProfileTable, RaceProfile, Statistic, WarriorRecordMut,
+        DevelopmentField as Field, InventorySlotsMut, ItemDefinition, MosProfile, ProfileTable,
+        RaceProfile, Statistic, WarriorRecordMut,
     },
     word,
 };
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 pub struct Request {
     /// The race chosen.
     pub race: i16,
-    /// The profession chosen.
+    /// The MOS chosen.
     pub mos: i16,
     /// The gender chosen.
     pub gender: i16,
@@ -31,7 +31,7 @@ pub struct Request {
     pub icon: i16,
 }
 
-/// Builds a new warrior's record from the dialog's choices: race and profession profiles, rolled
+/// Builds a new warrior's record from the dialog's choices: race and MOS profiles, rolled
 /// attributes, starting skills, resistances and conditions. Starting items are given separately
 /// by `initial_items`.
 pub fn generate(
@@ -54,9 +54,8 @@ pub fn generate(
         ));
     }
     let race = RaceProfile(ProfileTable::races(&map.races).row(request.race as usize - 1)?);
-    let mos =
-        ProfessionProfile(ProfileTable::professions(&map.profiles).row(request.mos as usize - 1)?);
-    if !race.accepts_profession(request.mos)? {
+    let mos = MosProfile(ProfileTable::mos_profiles(&map.profiles).row(request.mos as usize - 1)?);
+    if !race.accepts_mos(request.mos)? {
         return Err(RuleError::Invalid("race and MOS are incompatible".into()));
     }
     let (name, _, invalid) = encoding_rs::MACINTOSH.encode(&request.name);
@@ -135,11 +134,11 @@ pub fn generate(
         .action_points()?
         .wrapping_add(2)
         .wrapping_add(mos.action_points()?);
-    WarriorRecordMut::from_bytes(&mut b).set_attacks(power);
+    WarriorRecordMut::from_bytes(&mut b).set_action_points(power);
     Field::ActionsPerRound.write(&mut b, power);
-    let experience = story_promotion::experience_threshold(request.level)?;
-    WarriorRecordMut::from_bytes(&mut b).set_remaining_experience(experience);
-    WarriorRecordMut::from_bytes(&mut b).set_upgrade_points(experience);
+    let victory_points = story_promotion::victory_points_threshold(request.level)?;
+    WarriorRecordMut::from_bytes(&mut b).set_remaining_victory_points(victory_points);
+    WarriorRecordMut::from_bytes(&mut b).set_upgrade_points(victory_points);
     Field::BareHandMaximum.write(&mut b, mos.bare_hand_maximum()?);
     Field::ScanCapacity.write(&mut b, mos.scan_capacity()?);
     Field::AttackLimit.write(&mut b, mos.attack_limit()?);
@@ -251,7 +250,7 @@ pub fn generate(
     warrior.original_sha256 = centurions_content::digest(&warrior.bytes);
     Ok(warrior)
 }
-/// Gives a new character its profession's starting items, installs and checks
+/// Gives a new character its MOS's starting items, installs and checks
 /// each one, and wears what it can.
 ///
 /// Original: addinitialitems
@@ -267,9 +266,8 @@ pub fn initial_items(
     if !warrior.inventory()?.is_empty() {
         return Err("creation equipment already installed".into());
     }
-    let mos = ProfessionProfile(
-        ProfileTable::professions(&mission.profiles)
-            .row(warrior.record().profession()? as usize - 1)?,
+    let mos = MosProfile(
+        ProfileTable::mos_profiles(&mission.profiles).row(warrior.record().mos()? as usize - 1)?,
     );
     let mut candidate = warrior.clone();
     let mut count = 0_u16;
@@ -317,12 +315,12 @@ pub fn initial_items(
     Ok(vec![])
 }
 
-/// Sets the starting special skills: race plus profession for each skill the profession has,
+/// Sets the starting special skills: race plus MOS for each skill the MOS has,
 /// then adjustments from the brawn and quickness-and-coordination tables.
 fn specialties(
     b: &mut [u8],
     race: &RaceProfile<'_>,
-    mos: &ProfessionProfile<'_>,
+    mos: &MosProfile<'_>,
     game_text: &GameText,
 ) -> Result<(), RuleError> {
     let mut tables = game_text.bytes(0x400634, 576)?.to_vec();

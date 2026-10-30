@@ -50,7 +50,7 @@ pub fn draw(assets: &Assets, warrior: &Warrior, at: Vec2, marks: Marks) {
     // box's left + 5 and bottom - 3, cut to seven characters and then one more
     // while wider than 38 pixels.
     if marks.class_label
-        && let Some(name) = usize::try_from(record.profession().unwrap_or(0))
+        && let Some(name) = usize::try_from(record.mos().unwrap_or(0))
             .ok()
             .and_then(|class| {
                 assets

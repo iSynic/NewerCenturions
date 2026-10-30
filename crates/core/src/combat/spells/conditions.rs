@@ -149,7 +149,7 @@ pub(crate) fn stun(target: &mut [u8], monster: bool, duration: i16) -> Result<()
         let skip = WarriorRecord::from_bytes(target).turn_skip_duration()?;
         let mut record = WarriorRecordMut::from_bytes(target);
         record.set_turn_skip_duration(skip.wrapping_add(duration));
-        record.set_attacks(0);
+        record.set_action_points(0);
         record.set_movement(0);
     }
     Ok(())

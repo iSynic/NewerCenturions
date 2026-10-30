@@ -428,7 +428,7 @@ ranges and movement cost live in `rules`; shop price rounding lives in
 `shop/pricing`; ordered credit payment lives in `story_inventory/payment`.
 Historical adapters preserve their reference API and receipt representation.
 
-Creation and promotion use borrowed race/profession profiles and development
+Creation and promotion use borrowed race/MOS profiles and development
 fields. Party filtering and scripted inventory changes share record views with
 ordinary commands while retaining their caller-specific rules. Spell fields
 remain the same saved 20-byte records; `records/spell_field` owns their signed

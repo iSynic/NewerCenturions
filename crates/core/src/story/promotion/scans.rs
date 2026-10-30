@@ -3,7 +3,7 @@
 use crate::RuleError;
 use centurions_content::{
     Warrior,
-    records::{LearnedScans, LearnedScansMut, ProfessionProfile, SpellInfoRecord, WarriorRecord},
+    records::{LearnedScans, LearnedScansMut, MosProfile, SpellInfoRecord, WarriorRecord},
 };
 use serde::{Deserialize, Serialize};
 
@@ -32,11 +32,11 @@ impl ScanSelection {
                 dependency: "warrior cannot perform scans",
             });
         }
-        let profile = warrior.record().profession()?;
+        let profile = warrior.record().mos()?;
         if profile < 1 {
             return Err(RuleError::Invalid("scan MOS profile is unavailable".into()));
         }
-        let highest_tier = ProfessionProfile::from_table(profiles, profile)?.highest_scan_tier()?;
+        let highest_tier = MosProfile::from_table(profiles, profile)?.highest_scan_tier()?;
         let mut warrior = warrior.clone();
         let remaining = normalize_scans(&mut warrior)?;
         Ok(Self {
@@ -48,7 +48,7 @@ impl ScanSelection {
     }
 
     /// Picks the tier of scan the player is choosing from; it cannot be above what the warrior's
-    /// profession allows.
+    /// MOS allows.
     pub fn select_tier(&mut self, tier: usize) -> Result<(), RuleError> {
         if tier >= 7 || tier as i16 + 1 > self.highest_tier {
             return Err(RuleError::Unsupported {

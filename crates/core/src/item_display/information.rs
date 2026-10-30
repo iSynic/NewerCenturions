@@ -7,7 +7,7 @@ use centurions_content::{
     mission::OpeningMission,
     records::{
         EquipmentEligibility, EquipmentModifiers, InventoryModifier as Modifier, ItemDefinition,
-        ItemPanelMut, ItemPanelRecord, ProfessionEquipment, ProfileTable, RaceEquipment,
+        ItemPanelMut, ItemPanelRecord, MosEquipment, ProfileTable, RaceEquipment,
     },
 };
 
@@ -222,11 +222,11 @@ pub fn information(
         .wrapping_mul(supplied)
         .wrapping_add(item.weight()?);
     fields.set(23, weight.to_string());
-    let (race, profession) = conflicts(&definition, owner, mission)?;
+    let (race, mos) = conflicts(&definition, owner, mission)?;
     if race {
         fields.pascal(18, 0x400f96)?;
     }
-    if profession {
+    if mos {
         fields.pascal(19, 0x400f86)?;
     }
     Ok(fields.items)
@@ -293,11 +293,10 @@ fn conflicts(
 ) -> Result<(bool, bool), RuleError> {
     let (race, mos) = profiles(owner, mission)?;
     let race_id = owner.record().race()?;
-    let mos_id = owner.record().profession()?;
+    let mos_id = owner.record().mos()?;
     let eligibility = EquipmentEligibility(definition);
     let mut racial = eligibility.required_race()? != 0 && eligibility.required_race()? != race_id;
-    let mut caste =
-        eligibility.required_profession()? != 0 && eligibility.required_profession()? != mos_id;
+    let mut caste = eligibility.required_mos()? != 0 && eligibility.required_mos()? != mos_id;
     if racial {
         return Ok((racial, caste));
     }
@@ -353,12 +352,12 @@ fn row(text: String) -> UseRow {
     }
 }
 
-/// The profession popup: the abilities the selected warrior's race and MOS both
+/// The MOS popup: the abilities the selected warrior's race and MOS both
 /// permit (`STR#` 6), with icon 385 on each ability the item has. `passes`
 /// repeats the member loop when the shift key widens it to the squad.
 ///
 /// Original: showcondition
-pub fn profession_list(
+pub fn mos_list(
     mission: &OpeningMission,
     owner: &Warrior,
     definition: &[u8],
@@ -433,18 +432,18 @@ pub fn user_list(
     Ok(rows)
 }
 
-/// The race and profession profiles of the owner, for judging which items can be used.
+/// The race and MOS profiles of the owner, for judging which items can be used.
 fn profiles<'a>(
     owner: &Warrior,
     mission: &'a OpeningMission,
-) -> Result<(RaceEquipment<'a>, ProfessionEquipment<'a>), RuleError> {
+) -> Result<(RaceEquipment<'a>, MosEquipment<'a>), RuleError> {
     let race_id = owner.record().race()?;
-    let mos_id = owner.record().profession()?;
+    let mos_id = owner.record().mos()?;
     if race_id <= 0 || mos_id <= 0 {
         return Err("item information owner has no Race or MOS profile".into());
     }
     Ok((
         RaceEquipment(ProfileTable::races(&mission.races).row(race_id as usize - 1)?),
-        ProfessionEquipment(ProfileTable::professions(&mission.profiles).row(mos_id as usize - 1)?),
+        MosEquipment(ProfileTable::mos_profiles(&mission.profiles).row(mos_id as usize - 1)?),
     ))
 }

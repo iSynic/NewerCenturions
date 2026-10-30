@@ -77,9 +77,9 @@ pub(crate) fn retarget(
     Ok(vec![])
 }
 
-/// The dialog's user and profession popups play 609, then 607 on close. The
+/// The dialog's user and MOS popups play 609, then 607 on close. The
 /// user list checks each member with canuse, which reloads the item from its
-/// description each time; the profession list loads only the profiles.
+/// description each time; the MOS list loads only the profiles.
 ///
 /// Original: showcondition
 pub(crate) fn list_users(

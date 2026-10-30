@@ -46,7 +46,7 @@ pub fn player_guard(state: &mut Session, content: &Content) -> Result<Vec<Event>
             "guard requires a living participant".into(),
         ));
     }
-    if warrior.record().attacks()? < 2 {
+    if warrior.record().action_points()? < 2 {
         return Err(RuleError::Invalid(
             "guard requires a current player input turn".into(),
         ));
@@ -115,7 +115,7 @@ pub(super) fn player_attack_inner(
         combat.kill_counts.add_num_enemy(1);
     }
     let warrior = &mut state.warriors[body as usize];
-    if warrior.record().attacks()? < 2 {
+    if warrior.record().action_points()? < 2 {
         return Ok(vec![]);
     }
     crate::combat::records::spend_attack_action(warrior)?;

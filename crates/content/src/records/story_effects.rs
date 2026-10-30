@@ -184,8 +184,8 @@ impl<'a> TreasureRecord<'a> {
     /// Number of item slots in a treasure record.
     pub const SLOTS: usize = 20;
 
-    /// A treasure record that gives only `amount` experience.
-    pub fn experience_award(amount: i32) -> [u8; 88] {
+    /// A treasure record that gives only `amount` victory points.
+    pub fn victory_points_award(amount: i32) -> [u8; 88] {
         let mut record = [0; Self::BYTES];
         put_long(&mut record, 80, amount);
         record
@@ -195,7 +195,7 @@ impl<'a> TreasureRecord<'a> {
     pub fn new(record: &'a [u8]) -> Result<Self, ContentError> {
         Ok(Self(span(record, 0, Self::BYTES)?))
     }
-    /// Whether the record gives experience or credits.
+    /// Whether the record gives victory points or credits.
     pub fn has_awards(&self) -> bool {
         self.0[80..88].iter().any(|value| *value != 0)
     }
@@ -208,7 +208,7 @@ impl<'a> TreasureRecord<'a> {
         word(self.0, 40 + slot * 2)
     }
     /// A negative award keeps a random bound in its high word.
-    pub fn experience(&self) -> Result<i32, ContentError> {
+    pub fn victory_points(&self) -> Result<i32, ContentError> {
         long(self.0, 80)
     }
     /// Credits the treasure gives.

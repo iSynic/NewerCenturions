@@ -2,14 +2,13 @@ use crate::{RandomState, RuleError};
 use centurions_content::{
     WARRIOR_BYTES, Warrior,
     records::{
-        Attribute, CharacterInformation, DevelopmentField as Field, ProfessionProfile,
-        WarriorRecordMut,
+        Attribute, CharacterInformation, DevelopmentField as Field, MosProfile, WarriorRecordMut,
     },
     span,
 };
 
 /// The price of a warrior's next upgrade. Each repeat purchase multiplies the
-/// price by the profession's percentage, rounding to single precision each time.
+/// price by the MOS's percentage, rounding to single precision each time.
 ///
 /// Original: upgradewarrior
 pub fn upgrade_cost(
@@ -38,8 +37,8 @@ pub fn upgrade_payment(
 }
 
 /// The price of the next purchase of one upgrade: its base price multiplied by 100 plus the
-/// profession's percentage, over 100, once for every purchase already made, and held to 50,000,000
-/// at most. Returns the price and the profession's percentage.
+/// MOS's percentage, over 100, once for every purchase already made, and held to 50,000,000
+/// at most. Returns the price and the MOS's percentage.
 ///
 /// Original: upgradewarrior
 fn upgrade_price(
@@ -47,7 +46,7 @@ fn upgrade_price(
     selector: u16,
     profile: &[u8],
 ) -> Result<(f32, i32), RuleError> {
-    /// Base prices of the 33 upgrades, before the profession's percentage.
+    /// Base prices of the 33 upgrades, before the MOS's percentage.
     const BASE: [i16; 33] = [
         100, 100, 100, 100, 100, 100, 100, 50, 200, 200, 150, 150, 150, 150, 150, 150, 175, 125,
         200, 175, 100, 100, 300, 250, 350, 400, 100, 100, 100, 200, 250, 300, 1000,
@@ -55,7 +54,7 @@ fn upgrade_price(
     let base = *BASE.get(usize::from(selector)).ok_or_else(|| {
         RuleError::Invalid("upgrade selector is outside the original table".into())
     })?;
-    let percent = ProfessionProfile(profile).upgrade_percent(selector)?;
+    let percent = MosProfile(profile).upgrade_percent(selector)?;
     let count = warrior.record().upgrade(selector).purchases()?;
     // Percentages below -100 give a negative factor, so the cost alternates sign.
     let factor = (f64::from((100. + f64::from(percent)) as f32) / 100.) as f32;
