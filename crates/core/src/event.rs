@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct PresentationIcon(pub i16);
 
 impl PartialEq for PresentationIcon {
+    /// Presentation icons are not part of an event's identity, so any two compare equal.
     fn eq(&self, _: &Self) -> bool {
         true
     }
@@ -15,12 +16,11 @@ impl PartialEq for PresentationIcon {
 
 impl Eq for PresentationIcon {}
 
-/// The flight cast 0x10d4fe draws for one target triple after its launch sound
-/// (0x10db1a) and before that target resolves, the cast's spell area that
-/// resolvespell 0x1517c4 reads before its body loop, for a body a ray crosses the
-/// walk step whose resolvespell (0x10e22a) presented it, and the showspellinfo
-/// drawing that precedes an NPC's cast. Like `PresentationIcon` it is presentation
-/// data only: not serialized and never distinguishing two events.
+/// What the desktop draws around a cast: the flight to one target after the
+/// launch sound and before the target resolves, the spell area, the walk step at
+/// which a ray crosses a body, and the spell information shown before a monster's
+/// cast. Like `PresentationIcon` it is presentation data only: not serialized and
+/// never distinguishing two events.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PresentationFlight(
     pub Option<Flight>,
@@ -30,6 +30,7 @@ pub struct PresentationFlight(
 );
 
 impl PartialEq for PresentationFlight {
+    /// Presentation flights are not part of an event's identity, so any two compare equal.
     fn eq(&self, _: &Self) -> bool {
         true
     }
@@ -37,32 +38,30 @@ impl PartialEq for PresentationFlight {
 
 impl Eq for PresentationFlight {}
 
+/// The flight a cast shows from its caster to one target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Flight {
-    /// Packet byte 17 (BYTE44375f), cast's switch at 0x10dca2.
+    /// The flight animation, from `spell_info` byte 17.
     pub kind: i8,
-    /// The caster's and target's pixels in tactical positions times 32
-    /// (0x10d654..0x10d71e and 0x10d870..0x10dada).
+    /// The caster's and target's pixels: tactical positions times 32.
     pub from: (i16, i16),
     pub to: (i16, i16),
-    /// cast 0x10d5aa..0x10d5d0 shortens the walk to 30 + WORD439568 steps under
-    /// preference 9 for more than one target outside a ray or physical packet.
+    /// Preference 9 shortens the walk for more than one target, except for a ray
+    /// or a physical attack.
     pub short: bool,
-    /// A type-24 flight's sixteen Rand(10) - 5 draws (0x10de8a, 0x10de9e): pass n adds
-    /// `jitter[2n]` to the target's h pixel and `jitter[2n + 1]` to its v pixel.
+    /// A type-24 flight's sixteen `Rand(10) - 5` draws: pass n adds `jitter[2n]`
+    /// to the target's h pixel and `jitter[2n + 1]` to its v pixel.
     pub jitter: [i8; 16],
-    /// ploticon3 0x10d596: cicn 12000 + 8 * byte 17 that cast plots in window 128
-    /// at rect 0x4436f2 before its triple loop; none for a category-9 packet
-    /// (BYTE443761, 0x10d56e).
+    /// The cicn 12000 + 8 * byte 17 that cast plots in the spell box before its
+    /// target loop; none for a firearm (category 9).
     pub cicn: Option<i16>,
-    /// The walk step at which a ray stopped on a blocking cell (0x10e110..0x10e198).
+    /// The walk step at which a ray stopped on a blocking cell.
     pub stop: Option<i16>,
 }
 
-/// One body a ray walk crosses: cast resolves it at walk step `step` (0x10e22a),
-/// before that step's sprite and delay (0x10e58c). `lead` events of the crossing
-/// precede the result carrying it and `tail` follow it; all of them happen at
-/// that step.
+/// One body a ray walk crosses: cast resolves it at walk step `step`, before that
+/// step's sprite and delay. `lead` events of the crossing precede the result
+/// carrying it and `tail` follow it; all of them happen at that step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RayCrossing {
     pub step: i16,
@@ -70,33 +69,32 @@ pub struct RayCrossing {
     pub tail: u16,
 }
 
-/// showspellinfo 0x159192 in window 128, which combat calls on an NPC's turn
-/// before resolvespell (0x11495e, 0x114a4c, 0x114b50) or cast (0x11509e). It
-/// plots `icon` in rect 0x4436fa (0x15929c..0x1592fa) and, for a packet whose
-/// bytes 2 and 3 sum above zero, cicn 14022 in that rectangle's top-left 32
-/// square raised 5 (0x159302..0x15936e). A category-9 packet first erases rect
-/// 0x4436f2 and plots WEAPON work WORD 0x453772 there (0x1591a0..0x1591e6). It
-/// then draws GetIndString(`name`) in yellowColor at (WORD40856c + 369,
-/// WORD40856e + 402 - 32) and, after TextMode srcOr, the number in redColor at
-/// (WORD40856c + 548, WORD40856e + 386 - 32) (0x159370..0x159462), TextSize 12.
+/// The spell information shown on a monster's turn before it casts or fires. It
+/// shows `icon`, marks an area spell (range sum above zero) with cicn 14022, and
+/// for a firearm (category 9) shows the weapon icon instead of the flight box.
+/// The name is drawn in yellow and the number in red, TextSize 12.
+///
+/// Original: showspellinfo
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpellInfo {
     pub icon: i16,
     pub area: bool,
-    /// A category-9 packet, which erases rect 0x4436f2 and plots `weapon_icon`.
+    /// A firearm (category 9), which clears the flight box and shows `weapon_icon`.
     pub firearm: bool,
     pub weapon_icon: Option<i16>,
     /// STR# ID and index; none when the work record it reads is not represented.
     pub name: Option<(i16, i16)>,
-    /// WORD4435cc, or for category 9 WORD4435be; none when not represented.
+    /// `power_level`, or a firearm's own count; none when not represented.
     pub number: Option<i16>,
     /// How many events precede the event carrying it.
     pub lead: u16,
 }
 
 impl SpellInfo {
-    /// showspellinfo's drawing for `packet`, the spell identity WORDs 0x4435c6..
-    /// 0x4435ca and WORD4435cc. A category-9 packet reads WEAPON and ITEM work.
+    /// The spell information for `spell_info`, the cast identity and power. A
+    /// firearm names its weapon and item instead.
+    ///
+    /// Original: showspellinfo
     pub fn new(
         packet: &[u8],
         identity: [i16; 3],
@@ -110,7 +108,6 @@ impl SpellInfo {
                 .get(offset..offset + 2)
                 .map(|word| i16::from_be_bytes([word[0], word[1]]))
         };
-        // 0x159202..0x159282: the jump on BYTE44374f, then WORD443776 == 0x3a.
         let detail = i16::from(byte(0x1f));
         let mut icon = match byte(1) {
             3 => detail + 9999,
@@ -129,7 +126,6 @@ impl SpellInfo {
         }
         let firearm = byte(19) == 9;
         let name = if firearm {
-            // getselection 0x125a08 stores the base in WORD4471e8 before the index reads it.
             weapon.and_then(|weapon| word(weapon, 0x66)).and_then(|id| {
                 let base = crate::rules::selection_base(id);
                 item.and_then(|item| word(item, 0x66)).map(|item| {
@@ -178,19 +174,18 @@ impl SpellInfo {
     }
 }
 
-/// resolvespell's state at 0x1517c4, before the body loop: preference 10 sends a
-/// mode 3, 4 or above-8 packet through spelleffect's area path 0x15b5e0, which
-/// plays the impact sound WORD443774 (0x151808) and animates every body of mask
-/// 0x4434e0 at once; otherwise each presented target flashes in turn.
+/// The spell area before resolvespell's body loop. Under preference 10 a target
+/// type 3, 4 or above 8 plays the impact sound once and animates every target
+/// together; otherwise each presented target flashes in turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpellArea {
-    /// The nonzero WORDs of mask 0x4434e0, bit n for body n (0x15b670).
+    /// The spell's targets, bit n for body n.
     pub bodies: u128,
-    /// Packet byte 1 (BYTE44374f), compared as a signed BYTE at 0x1517d2..0x1517ee.
+    /// `spell_info` byte 1, the target type, compared as a signed byte.
     pub mode: i8,
-    /// Packet WORD 0x26 (WORD443774).
+    /// The impact sound from `spell_info`.
     pub sound: i16,
-    /// Packet byte 18 (BYTE443760) after the body loop, spelleffect's cicn base.
+    /// `spell_info` byte 18 after the body loop, spelleffect's cicn base.
     pub effect: i8,
     /// How many events of the body loop precede the result carrying the area.
     pub lead: u16,
@@ -228,8 +223,8 @@ impl SpellArea {
         }
     }
 
-    /// resolvespell's area for a body loop over one target (0x151022 from the
-    /// NPC firearm caller), carried on that target's result.
+    /// The area for a body loop over one target, as a monster firearm shot resolves
+    /// it, carried on that target's result.
     pub(crate) fn single(target: i16, packet: &[u8]) -> PresentationFlight {
         let mut mask = [0; 110];
         if let Some(flag) = usize::try_from(target).ok().and_then(|t| mask.get_mut(t)) {
@@ -283,6 +278,7 @@ impl Flight {
     }
 }
 
+/// Everything the game reports back from a command, in the order it happened.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
     ItemUpgraded {
@@ -314,7 +310,7 @@ pub enum Event {
         record: Vec<u8>,
         text: String,
     },
-    Feedback(feedback::NativeFeedback),
+    Feedback(feedback::GameFeedback),
     CreditsPooled {
         total: i32,
     },
@@ -334,8 +330,8 @@ pub enum Event {
     Sound {
         resource_id: i16,
     },
-    /// cast's launch sound 0x10db1a for a flight that presents no result. It
-    /// serializes and compares as `Sound`; the flight is presentation data only.
+    /// cast's launch sound for a flight that presents no result. It serializes
+    /// and compares as `Sound`; the flight is presentation data only.
     #[serde(rename = "Sound", skip_deserializing)]
     Launch {
         resource_id: i16,
@@ -360,12 +356,12 @@ pub enum Event {
         y: i32,
     },
     StoryPresented,
-    /// newland27 draws the PICT centred in a 320-pixel square of the map window,
-    /// where it stays until the map is drawn again.
+    /// The draw-picture script operation centres the PICT in a 320-pixel square
+    /// of the map window, where it stays until the map is drawn again.
     PictureDrawn {
         resource_id: i16,
     },
-    /// newland28 redraws the screen over a drawn picture.
+    /// The redraw-screen script operation redraws the screen over a picture.
     ScreenRedrawn,
     Message {
         id: i16,
@@ -395,8 +391,7 @@ pub enum Event {
         target: i16,
         damage: i16,
         defeated: bool,
-        /// The showdamage icon for this hit: WORD 0x41f710 after resolvedamage,
-        /// which showresults 0x159124 draws over the target; 0 without damage.
+        /// The damage icon showresults draws over the target; 0 without damage.
         #[serde(skip)]
         icon: PresentationIcon,
         #[serde(skip)]
@@ -408,8 +403,8 @@ pub enum Event {
         target: i16,
         damage: i16,
         defeated: bool,
-        /// WORD 0x41f710 for resolvespell's code-0 showresults 0x151dba; 0 when the
-        /// caller does not resolve damage through a selected-body result.
+        /// The damage icon resolvespell's result shows; 0 when the caller does not
+        /// resolve damage through a selected-body result.
         #[serde(skip)]
         icon: PresentationIcon,
         #[serde(skip)]
@@ -419,7 +414,8 @@ pub enum Event {
         body: i16,
         definition: i16,
     },
-    /// Effect58 placed a copy of MONSTER work, which has no definition number.
+    /// A summoning effect placed a copy of the current monster, which has no
+    /// definition number.
     CombatantSummoned {
         body: i16,
     },
@@ -472,6 +468,8 @@ impl Event {
 /// Events compare as they serialize: presentation fields are skipped and a
 /// `Launch` is its `Sound`.
 impl PartialEq for Event {
+    /// Two events are equal when they play the same sound, or, for events that are not sounds, when
+    /// they serialize alike.
     fn eq(&self, other: &Self) -> bool {
         match (self.sound(), other.sound()) {
             (Some(a), Some(b)) => a == b,

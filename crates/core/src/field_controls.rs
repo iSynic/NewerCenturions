@@ -1,9 +1,10 @@
-//! Outdoor branches of buttonchoice109530 and checkforsecret11177e.
-use crate::{Content, Event, Phase, RuleError, Session, feedback::NativeFeedback};
+//! The outdoor control buttons and the search for secrets.
+use crate::{Content, Event, Phase, RuleError, Session, feedback::GameFeedback, story_allies};
 use centurions_content::records::{EnemyRecord, EnemyRecordMut, WarriorRecord};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
+/// The outdoor control buttons.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Action {
     Camp,
@@ -14,6 +15,8 @@ pub enum Action {
     Clinic,
 }
 
+/// The outdoor controls' state: whether the party is camping, whether search mode is on, the
+/// clinic's price percentage when one is available, and the steps still to run.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct State {
     pub camping: bool,
@@ -22,6 +25,8 @@ pub struct State {
     pending: VecDeque<Step>,
 }
 
+/// One step of a control button's action: time passing, a region check, a search for secrets,
+/// healing, or a move.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 enum Step {
     Time(u8),
@@ -31,6 +36,8 @@ enum Step {
     Move(i8, i8),
 }
 
+/// Whether the field controls can be used: the party is exploring with nothing on screen and
+/// nothing waiting to resume.
 pub fn free(state: &Session) -> bool {
     state.phase == Phase::Exploration
         && state
@@ -44,6 +51,8 @@ pub fn free(state: &Session) -> bool {
         && state.movement_continuation.is_none()
 }
 
+/// Checks that the queued steps are ones the controls can queue: at most five, with time of 1 to
+/// 10 ticks, a region divisor of 1 or 4, and a move of one square at most that goes somewhere.
 pub(crate) fn validate(state: &Session) -> Result<(), RuleError> {
     if let Some(control) = &state.field_controls
         && (control.pending.len() > 5
@@ -61,6 +70,10 @@ pub(crate) fn validate(state: &Session) -> Result<(), RuleError> {
     Ok(())
 }
 
+/// Starts a control button's action, refused when the controls are not free or steps are still
+/// queued. The button's tutorial page is shown first, even when the action is then refused:
+/// Search and Heal are refused with a warning above fatigue 134. Camp, Rest, Search and Heal queue
+/// their steps and run them; Clinic enters the clinic at the recorded price percentage.
 pub(crate) fn start(
     state: &mut Session,
     content: &Content,
@@ -85,14 +98,14 @@ pub(crate) fn start(
     };
     let feedback: Vec<_> = tutorial
         .into_iter()
-        .map(|index| NativeFeedback::Tutorial {
+        .map(|index| GameFeedback::Tutorial {
             first: index,
             last: index,
         })
         .collect();
     if matches!(action, Action::Search | Action::Heal) && fatigue > 134 {
         let mut feedback = feedback;
-        feedback.push(NativeFeedback::Warning { index: 54 });
+        feedback.push(GameFeedback::Warning { index: 54 });
         return Err(RuleError::Refused { feedback });
     }
     if action == Action::Clinic {
@@ -112,8 +125,8 @@ pub(crate) fn start(
                 resource_id: if control.searching { 208 } else { 205 },
             });
         }
-        // buttonchoice 0x10a17c: camping can always be broken but not started while disabled.
-        Action::Camp if !control.camping && state.native_work.camp_disabled => {
+        // Camping can always be broken, but not started while disabled.
+        Action::Camp if !control.camping && state.globals.camp_disabled => {
             events.push(Event::Feedback(crate::feedback::camp_flash(0x403f24)));
         }
         Action::Camp => {
@@ -161,6 +174,8 @@ pub(crate) fn start(
     Ok(events)
 }
 
+/// Runs the queued steps in order until the controls are no longer free (a step put something on
+/// screen) or none remain.
 pub(crate) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let mut events = vec![];
     while free(state) {
@@ -189,7 +204,7 @@ pub(crate) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event
                 )?;
                 position.floor = search.floor;
                 events.extend(search.discoveries.into_iter().map(|found| {
-                    Event::Feedback(NativeFeedback::ResourceFlash {
+                    Event::Feedback(GameFeedback::ResourceFlash {
                         resource_id: 138,
                         index: usize::from(found.ordinal),
                         x: 30,
@@ -204,11 +219,10 @@ pub(crate) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event
                 }
             }
             Step::Heal => heal(state, content, &mut events)?,
-            // buttonchoice's move loop (0x109b46) only leaves its wait to move while
-            // fatigue is below 135 or camping is disabled; it never warns here.
+            // The party moves only while fatigue is below 135 or camping is
+            // disabled; otherwise the move waits without a warning.
             Step::Move(dx, dy) => {
-                if state.exploration.as_ref().unwrap().fatigue < 135
-                    || state.native_work.camp_disabled
+                if state.exploration.as_ref().unwrap().fatigue < 135 || state.globals.camp_disabled
                 {
                     events.extend(crate::exploration::move_squad(state, content, dx, dy)?)
                 }
@@ -218,6 +232,8 @@ pub(crate) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event
     Ok(events)
 }
 
+/// Breaks camp when the party moves: time passes, the region is checked, and the move follows.
+/// Returns nothing when the party is not camping.
 pub(crate) fn leave_camp(
     state: &mut Session,
     content: &Content,
@@ -240,6 +256,8 @@ pub(crate) fn leave_camp(
     }
 }
 
+/// Queues a search for secrets after the party's step when search mode is on. Returns whether one
+/// was queued.
 pub(crate) fn automatic_search(state: &mut Session) -> bool {
     if let Some(control) = state.field_controls.as_mut()
         && control.searching
@@ -253,9 +271,12 @@ pub(crate) fn automatic_search(state: &mut Session) -> bool {
     }
 }
 
+/// Each warrior who can heal and cast spends 10 psi points, while holding more than 9, on every
+/// squad member or held-over ally hurt but above -10 stamina, healing a random 1 to 8. Squad
+/// members of race 3 are not healed.
 fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Result<(), RuleError> {
     for caster in 0..state.warriors.len() {
-        if !state.warriors[caster].record().healing_available()
+        if !state.warriors[caster].record().can_heal()
             || !crate::combat::player_psi::can_cast(
                 &state.warriors,
                 caster as i16,
@@ -264,7 +285,7 @@ fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Resu
         {
             continue;
         }
-        for target in 0..state.warriors.len() + state.ally_count {
+        for target in 0..state.warriors.len() + state.held_over {
             if state.warriors[caster].record().psi_points()? <= 9 {
                 break;
             }
@@ -272,13 +293,14 @@ fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Resu
                 let bytes = &state.warriors[target].bytes;
                 WarriorRecord::from_bytes(bytes).stamina()? > -10
                     && WarriorRecord::from_bytes(bytes).stamina()?
-                        < WarriorRecord::from_bytes(bytes).maximum_stamina()?
+                        < WarriorRecord::from_bytes(bytes).stamina_max()?
                     && WarriorRecord::from_bytes(bytes).race()? != 3
             } else {
-                let bytes = &state.allies[(target - state.warriors.len()) * 288..];
+                let bytes =
+                    &state.holdover[(target - state.warriors.len()) * story_allies::ALLY_BYTES..];
                 EnemyRecord::from_bytes(bytes).stamina()? > -10
                     && EnemyRecord::from_bytes(bytes).stamina()?
-                        < EnemyRecord::from_bytes(bytes).maximum_stamina()?
+                        < EnemyRecord::from_bytes(bytes).stamina_max()?
             };
             if !needs_heal {
                 continue;
@@ -287,11 +309,11 @@ fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Resu
             state.warriors[caster].record_mut().set_psi_points(psi);
             let amount = state.random.bound(8);
             if target < state.warriors.len() {
-                let context = crate::story_health::retained_context(
-                    state.selected_warrior,
-                    &state.native_work.health_context,
+                let context = crate::story::health::reselected_context(
+                    state.char_select_new,
+                    &state.globals.health_context,
                 );
-                let healed = crate::story_health::heal_outdoors(
+                let healed = crate::story::health::heal_outdoors(
                     &state.warriors,
                     target,
                     amount,
@@ -300,13 +322,13 @@ fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Resu
                     &mut state.random,
                 )?;
                 state.warriors = healed.warriors;
-                state.native_work.health_context = healed.context;
+                state.globals.health_context = healed.context;
                 for effect in healed.events {
                     match effect {
-                        crate::story_health::HealthEvent::Sound(resource_id) => {
+                        crate::story::health::HealthEvent::Sound(resource_id) => {
                             events.push(Event::Sound { resource_id })
                         }
-                        crate::story_health::HealthEvent::PartyLost => {
+                        crate::story::health::HealthEvent::PartyLost => {
                             events.extend(crate::mission::defeat(state, content)?);
                             return Ok(());
                         }
@@ -314,11 +336,12 @@ fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Resu
                     }
                 }
             } else {
-                let bytes = &mut state.allies[(target - state.warriors.len()) * 288..];
+                let bytes = &mut state.holdover
+                    [(target - state.warriors.len()) * story_allies::ALLY_BYTES..];
                 let stamina = EnemyRecord::from_bytes(bytes)
                     .stamina()?
                     .wrapping_add(amount)
-                    .min(EnemyRecord::from_bytes(bytes).maximum_stamina()?);
+                    .min(EnemyRecord::from_bytes(bytes).stamina_max()?);
                 EnemyRecordMut::from_bytes(bytes).set_stamina(stamina);
             }
         }

@@ -1,12 +1,18 @@
 use crate::{Content, Event, Phase, Presentation, RuleError, Session, story_health};
 
+/// The clinic's prices at the standard rate, before the percentage.
 const BASE_PRICES: [i16; 9] = [250, 350, 850, 200, 0, 200, 350, 1500, 0];
 
-/// temple15d328..15d412 converts each WORD through single precision and FTINTX.
+/// Clinic prices at a percentage, computed in single precision and truncated.
+///
+/// Original: temple
 pub fn prices(percent: i16) -> [i16; 9] {
     BASE_PRICES.map(|base| ((f32::from(base) * f32::from(percent) / 100.) as i32) as i16)
 }
 
+/// Checks a saved clinic visit. A clinic entry must follow non-empty messages and a running
+/// script. A pending member must be in the squad during exploration, with a script running or a
+/// clinic rate recorded.
 pub(crate) fn validate(state: &Session) -> Result<(), RuleError> {
     let mut page = state
         .exploration
@@ -46,6 +52,8 @@ pub(crate) fn validate(state: &Session) -> Result<(), RuleError> {
     Ok(())
 }
 
+/// The squad member the clinic is for, looking past any messages shown first. A clinic entry
+/// not yet shown uses the selected character.
 pub(crate) fn pending(state: &Session) -> Option<usize> {
     let mut presentation = state
         .exploration
@@ -56,12 +64,14 @@ pub(crate) fn pending(state: &Session) -> Option<usize> {
     }
     match presentation {
         Presentation::Clinic { member, .. } => Some(*member),
-        Presentation::ClinicEntry { .. } => Some(state.selected_warrior),
+        Presentation::ClinicEntry { .. } => Some(state.char_select_new),
         _ => None,
     }
 }
 
-/// newland144bd8 and temple15d2f0: pool on entry, even if no treatment is bought.
+/// Entering a clinic pools the party's credits, even if nothing is bought.
+///
+/// Original: newland, temple
 pub(crate) fn visit(state: &mut Session, percent: i16) -> Result<Vec<Event>, RuleError> {
     state.field_controls.get_or_insert_default().clinic = Some(percent);
     crate::party::pool_credits(&mut state.warriors, &mut state.party_currency)?;
@@ -70,7 +80,7 @@ pub(crate) fn visit(state: &mut Session, percent: i16) -> Result<Vec<Event>, Rul
         .as_mut()
         .ok_or("clinic requires a mission")?
         .presentation = Some(Presentation::Clinic {
-        member: state.selected_warrior,
+        member: state.char_select_new,
         percent,
     });
     Ok(vec![
@@ -79,6 +89,13 @@ pub(crate) fn visit(state: &mut Session, percent: i16) -> Result<Vec<Event>, Rul
     ])
 }
 
+/// Handles a click on a clinic control. Items 1 and 11 leave and continue the script; 6 and 7 step
+/// to the previous or next member; 15 to 18 and 20 to 22 are services. A service is refused with
+/// a warning when the party's money is below its price; otherwise the price is paid and the
+/// treatment applied (items 15 to 17 heal the member, 18, 20 and 21 clear a record field, and 22
+/// only charges).
+///
+/// Original: temple
 pub(crate) fn control(
     state: &mut Session,
     content: &Content,
@@ -107,7 +124,7 @@ pub(crate) fn control(
             } else {
                 (member + 1) % state.warriors.len()
             };
-            state.selected_warrior = member;
+            state.char_select_new = member;
             state.exploration.as_mut().unwrap().presentation =
                 Some(Presentation::Clinic { member, percent });
             return Ok(vec![Event::Sound { resource_id: 141 }]);
@@ -118,7 +135,7 @@ pub(crate) fn control(
     let price = i32::from(prices(percent)[usize::from(item - 15)]);
     if state.party_currency < price {
         return Err(RuleError::Refused {
-            feedback: vec![crate::feedback::NativeFeedback::Warning { index: 50 }],
+            feedback: vec![crate::feedback::GameFeedback::Warning { index: 50 }],
         });
     }
     state.party_currency = state.party_currency.wrapping_sub(price);
@@ -130,7 +147,7 @@ pub(crate) fn control(
                 16 => state.random.range(3, 24),
                 _ => 5000,
             };
-            let context = story_health::retained_context(member, &state.native_work.health_context);
+            let context = story_health::reselected_context(member, &state.globals.health_context);
             let outcome = story_health::heal_outdoors(
                 &state.warriors,
                 member,
@@ -140,7 +157,7 @@ pub(crate) fn control(
                 &mut state.random,
             )?;
             state.warriors = outcome.warriors;
-            state.native_work.health_context = outcome.context;
+            state.globals.health_context = outcome.context;
             for event in outcome.events {
                 match event {
                     story_health::HealthEvent::Sound(resource_id) => {
@@ -162,7 +179,7 @@ pub(crate) fn control(
             };
             state.warriors[member].bytes[offset..offset + 2].fill(0);
         }
-        // The original visible item22 charges its price but has no switch body.
+        // Item 22 is shown and charged but does nothing; the game has no case for it.
         22 => {}
         _ => unreachable!(),
     }

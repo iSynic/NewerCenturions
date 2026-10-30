@@ -2,6 +2,8 @@ use centurions_core::Command;
 use macroquad::prelude::*;
 use std::collections::VecDeque;
 
+/// The lists and pickers that open over the game: items, a crate, firearm and
+/// scan targets, weapons, conditions, modifiers, specials, scans and bandaging.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Inspection {
     Items,
@@ -15,19 +17,15 @@ pub enum Inspection {
     PsiTargets,
     Bandage,
 }
+/// What the screen keeps between frames: the open inspection, the selected
+/// warrior, pending messages, movement and targeting, and the combat playback.
 #[derive(Default)]
 pub struct UiState {
     pub inventory: crate::inventory::Inventory,
-    pub collection_slot: Option<usize>,
-    pub collection_drag: bool,
-    pub collection_drop: Option<usize>,
-    pub collection_drop_scroll: usize,
+    pub collection: crate::collection::Selection,
     pub combat_view: crate::combat_controls::View,
     pub preferences: crate::preferences::Preferences,
-    pub feedback: VecDeque<centurions_core::feedback::NativeFeedback>,
-    pub persistent_feedback: Option<centurions_core::feedback::NativeFeedback>,
-    pub feedback_started: Option<f64>,
-    pub feedback_until: f64,
+    pub feedback: crate::feedback::Feedback,
     pub help_request: Option<(usize, usize)>,
     pub technical_error: Option<String>,
     pub diagnostic_path: Option<std::path::PathBuf>,
@@ -46,18 +44,13 @@ pub struct UiState {
     /// The PICT newland27 left over the map window.
     pub picture: Option<i16>,
     pub delay_until: f64,
-    pub psi_power: i16,
-    pub psi_choice: Option<(i16, i16)>,
-    pub psi_pending: Option<(i16, i16)>,
-    pub psi_rotation: u8,
-    pub psi_preview: Option<(i16, i16)>,
-    pub firearm_map_target: bool,
-    pub estimate_target: Option<i16>,
-    pub estimate: std::cell::RefCell<Option<crate::targeting::EstimateCache>>,
-    pub medical_cancel: bool,
+    pub psi: crate::scan_picker::PsiSelection,
+    pub targeting: crate::targeting::Targeting,
     /// The logical pointer while the left button is held, for downbutton's look.
     pub held_pointer: Option<Vec2>,
 }
+/// An outdoor spell effect playing at a map cell: its cicn base, place, size and
+/// frame timing.
 pub struct OutdoorAnimation {
     pub effect: i16,
     pub x: i16,
@@ -66,6 +59,8 @@ pub struct OutdoorAnimation {
     pub started: f64,
     pub frame_seconds: f64,
 }
+/// What a click or key can ask for: a rule command, a choice in a screen of the
+/// game, opening or closing a list, saving or loading.
 #[derive(Clone)]
 pub enum Action {
     Inventory(crate::inventory::InventoryAction),
@@ -93,10 +88,61 @@ pub enum Action {
     Drop(usize, usize),
 }
 
+/// A clickable rectangle on the screen, with the action it carries out and
+/// whether it is available.
 pub struct Control {
     pub rect: Rect,
     pub action: Action,
     pub enabled: bool,
+}
+
+/// Which end of the pushed control list a pointer lookup starts from.
+#[derive(Clone, Copy)]
+pub enum HitOrder {
+    /// The earliest pushed control wins.
+    First,
+    /// The latest pushed (topmost) control wins.
+    Topmost,
+}
+
+/// The action of the control under `point` that `accepts` admits, searched in `order`.
+pub fn clicked(
+    controls: &[Control],
+    point: Vec2,
+    order: HitOrder,
+    accepts: impl Fn(&Control) -> bool,
+) -> Option<Action> {
+    let hit = |control: &&Control| accepts(control) && control.rect.contains(point);
+    match order {
+        HitOrder::First => controls.iter().find(hit),
+        HitOrder::Topmost => controls.iter().rev().find(hit),
+    }
+    .map(|control| control.action.clone())
+}
+
+/// The topmost control under `point`, enabled or not.
+pub fn topmost(controls: &[Control], point: Vec2) -> Option<&Control> {
+    controls
+        .iter()
+        .rev()
+        .find(|control| control.rect.contains(point))
+}
+
+/// Draws picture `id` in `rect` and pushes the control that answers clicks there.
+pub fn push_panel_control(
+    assets: &crate::assets::Assets,
+    controls: &mut Vec<Control>,
+    id: i16,
+    rect: Rect,
+    enabled: bool,
+    action: Action,
+) {
+    assets.panel(id, rect);
+    controls.push(Control {
+        rect,
+        action,
+        enabled,
+    });
 }
 mod controls;
 pub(crate) use controls::authored_text;

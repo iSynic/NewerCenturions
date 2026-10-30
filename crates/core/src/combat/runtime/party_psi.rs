@@ -1,7 +1,13 @@
-//! Party psi in the original combat execution order.
+//! Psi cast by the party outside the tactical map.
+use crate::combat::player_psi::PartyCastRequest;
 use crate::{Event, Phase, RuleError, Session};
 use centurions_content::Content;
 
+/// A warrior casts a psi power of the party on the land map outside a battle. The power is
+/// prepared, the warrior's menu choice is remembered and, when targets must still be chosen, the
+/// cast waits for them; otherwise it is resolved on the party.
+///
+/// Original: castspell
 pub fn party_psi(
     state: &mut Session,
     content: &Content,
@@ -25,33 +31,32 @@ pub fn party_psi(
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
     let result = crate::combat::player_psi::prepare_party(
         &state.warriors,
-        &state.native_work.psi_memory,
-        &state.party_buffs,
+        &state.globals.define_spells,
+        &state.party_condition,
         mission,
         state.psi_disabled,
-        crate::combat::player_psi::PartyCastRequest {
+        PartyCastRequest {
             warrior,
             spell,
             power,
         },
     )?;
-    // castspell10b9bc; mode-seven resolvespell1512b8/151316 clears it.
-    state.native_work.ready = 1;
+    // castspell sets in_spell; a global (mode 7) spell clears it.
+    state.globals.in_spell = 1;
     if let Some(duration) = result.scenario_duration {
         crate::combat::party_buffs::extend_scenario_tail(state, duration)?;
     }
     state.warriors = result.warriors;
     let memory = result.memory;
-    state.party_buffs = result.buffs;
+    state.party_condition = result.buffs;
     let packet = result.packet;
-    state.native_work.attack_packet = packet.clone();
-    // buttonchoice 10ac9a calls cleartarget after castspell returns.
+    state.globals.spell_info = packet.clone();
     state.clear_targets();
 
-    state.native_work.attack_identity = result.identity;
-    state.native_work.attack_count = result.count;
-    // castspell 0x10d328 stores the cast power in WORD 0x437a7a + 2 * member.
-    state.native_work.psi_powers[warrior] = None;
+    state.globals.cast_identity = result.identity;
+    state.globals.attack_count = result.count;
+    // The warrior's remembered spell power is forgotten.
+    state.globals.old_power_level[warrior] = None;
     state.psi_menu_choices[warrior] = Some(crate::PsiMenuChoice {
         row: result.identity[1] as u8,
         column: result.identity[2] as u8,
@@ -72,9 +77,9 @@ pub fn party_psi(
         });
         return Ok(vec![]);
     }
-    state.native_work.party_mask[..state.warriors.len()].fill(1);
-    state.native_work.psi_memory = memory;
+    state.globals.party_track[..state.warriors.len()].fill(1);
+    state.globals.define_spells = memory;
     let outcome =
-        crate::story_spell::resolve_party_outdoors(state, content, &packet, spell, power)?;
+        crate::story::spell::resolve_party_outdoors(state, content, &packet, spell, power)?;
     Ok(outcome.events)
 }

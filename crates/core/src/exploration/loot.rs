@@ -1,15 +1,14 @@
-//! Loot for maintained exploration.
+//! Treasure and loot found while exploring.
 use super::{continue_with_spells, needs_spell_confirmation};
 use crate::{Event, Presentation, RuleError, Session, insert, items, story_collection};
 use centurions_content::records::{
-    AttackPacket, EnemyRecord, EnemyRecordMut, TreasureRecord, TreasureTable,
+    EnemyRecord, EnemyRecordMut, SpellInfoRecord, TreasureRecord, TreasureTable,
 };
 use centurions_content::{Content, InventoryRecord};
 use serde::{Deserialize, Serialize};
 
-/// What booty105748 draws from its own locals: register a3's credits (added to
-/// LONG 0x442788 at 0x1060dc), the per-warrior share -$96 and experience total
-/// LONG 0x443392. booty keeps them only while its window is open.
+/// The credits, per-warrior share and experience the treasure window shows.
+/// booty keeps them only while its window is open.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BootyTally {
     pub credits: i32,
@@ -18,39 +17,42 @@ pub struct BootyTally {
 }
 
 impl BootyTally {
+    /// Whether the tally is still in its starting state.
     pub(crate) fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 }
 
-/// newland102, 0x141358..0x1413e2, enters ordinary booty with experience 1
-/// and no NPCs. Selected members' remaining experience is literally 1.
+/// Opens the treasure window with experience 1 and no monsters, so the selected
+/// members are left with exactly 1 experience.
+///
+/// Original: newland
 pub(super) fn reset_experience(
     state: &mut Session,
     content: &Content,
 ) -> Result<Vec<Event>, RuleError> {
-    for (warrior, selected) in state.warriors.iter_mut().zip(state.native_work.party_mask) {
+    for (warrior, selected) in state.warriors.iter_mut().zip(state.globals.party_track) {
         if selected != 0 {
             warrior.record_mut().set_remaining_experience(1);
         }
     }
     for warrior in &mut state.warriors {
-        warrior.record_mut().set_active_flag(1);
+        warrior.record_mut().set_in_battle(1);
     }
-    state.retain_npcs();
+    state.store_monsters();
     let health_effect = state
         .combat
         .as_ref()
-        .map(|arena| &arena.attack_packet)
-        .map(|packet| AttackPacket(packet).health_effect());
+        .map(|arena| &arena.spell_info)
+        .map(|packet| SpellInfoRecord(packet).health_effect());
     state.store_spell_fatigue();
     if let Some(arena) = state.combat.take() {
-        state.native_work.ready = arena.ready;
-        state.native_work.attack_packet = arena.attack_packet;
-        state.native_work.attack_identity = arena.attack_identity;
-        state.native_work.weapon_work = arena.weapon_work;
-        state.native_work.selected_enemy = arena.selected_enemy;
-        state.native_work.script_enemy = arena.script_enemy;
+        state.globals.in_spell = arena.in_spell;
+        state.globals.spell_info = arena.spell_info;
+        state.globals.cast_identity = arena.cast_identity;
+        state.globals.weapon_traits = arena.weapon_traits;
+        state.globals.monster_up = arena.monster_up;
+        state.globals.macro_monster = arena.macro_monster;
     }
     state.handled_deaths.clear();
     if let Some(story) = state.combat_story.as_mut() {
@@ -60,24 +62,25 @@ pub(super) fn reset_experience(
     state.phase = crate::Phase::Exploration;
     let mut effects = crate::combat::runtime::refit_after_combat(state, content)?;
     state.clear_tactical_fields();
-    let unavailable = state
+    let kill_party = state
         .warriors
         .iter()
         .filter(|warrior| {
-            warrior.stamina().unwrap_or(0) < 1 || warrior.record().automatic_mode().unwrap_or(0) < 0
+            warrior.stamina().unwrap_or(0) < 1
+                || warrior.record().computer_control().unwrap_or(0) < 0
         })
         .count() as i8;
-    // With count43874a cleared, bodycount has no surviving NPCs to select.
+    // With no monsters, bodycount has no survivors to select.
     for record in state
-        .allies
-        .as_chunks_mut::<{ crate::story_allies::ALLY_BYTES }>()
+        .holdover
+        .as_chunks_mut::<{ crate::story::allies::ALLY_BYTES }>()
         .0
         .iter_mut()
-        .take(state.ally_count)
+        .take(state.held_over)
     {
         let weapon = EnemyRecord::from_bytes(record).primary_weapon()?;
         if weapon < 200 {
-            EnemyRecordMut::from_bytes(record).set_selected_item(weapon);
+            EnemyRecordMut::from_bytes(record).set_weapon(weapon);
         }
     }
     let treasure = TreasureRecord::experience_award(1);
@@ -85,18 +88,20 @@ pub(super) fn reset_experience(
         resource_id: crate::feedback::BOOTY_SOUND,
     });
     effects.extend(present_reward_record(state, content, &treasure)?);
-    let mut health = crate::story_health::retained_context(
-        state.selected_warrior,
-        &state.native_work.health_context,
+    let mut health = crate::story::health::reselected_context(
+        state.char_select_new,
+        &state.globals.health_context,
     );
-    health.unavailable = unavailable;
+    health.kill_party = kill_party;
     if let Some(effect) = health_effect {
         health.effect = effect;
     }
-    state.native_work.health_context = health;
+    state.globals.health_context = health;
     Ok(effects)
 }
 
+/// Takes a piece of loot from the treasure window: ammunition goes into the party's reserves, other
+/// items to the chosen warrior, or to the crate when no warrior is given.
 pub fn take_loot(
     state: &mut Session,
     content: &Content,
@@ -111,12 +116,12 @@ pub fn take_loot(
         return Err(RuleError::Invalid("no loot choice active".into()));
     }
     let item = state
-        .booty_items
+        .booty_list
         .get(slot)
         .filter(|item| item.id() != 0)
         .ok_or_else(|| RuleError::Invalid("loot slot is empty".into()))?
         .clone();
-    state.load_item_work(content, item.id())?;
+    state.load_item(content, item.id())?;
     let mut effects = Vec::new();
     if (200..400).contains(&item.id()) && item.category_code() == 26 {
         effects = items::add_ammunition(state, content, &item)?;
@@ -169,7 +174,7 @@ pub fn take_loot(
                 .map(|warning| Event::CollectionRejected { warning }),
         );
         *recipient = collected.warrior;
-        state.booty_items[slot] = collected.item;
+        state.booty_list[slot] = collected.item;
         if !collected.collected {
             return Ok(effects);
         }
@@ -177,8 +182,8 @@ pub fn take_loot(
             && let Some(last) = recipient.inventory()?.last()
         {
             let id = last.id();
-            state.native_work.inventory_record = item.clone();
-            state.load_item_work(content, id)?;
+            state.globals.inventory_record = item.clone();
+            state.load_item(content, id)?;
         }
     } else {
         effects = insert(item, &mut state.crate_items, true)?;
@@ -186,13 +191,13 @@ pub fn take_loot(
             return Ok(effects);
         }
     }
-    state.booty_items[slot].clear_id();
+    state.booty_list[slot].clear_id();
     if let Some(limit) = &mut state.loot_limit
         && *limit != 0
     {
         *limit = limit.wrapping_sub(1);
         if *limit == 0 {
-            state.booty_items.fill(InventoryRecord([0; 22]));
+            state.booty_list.fill(InventoryRecord([0; 22]));
             if !needs_spell_confirmation(state) {
                 effects.extend(continue_with_spells(state, content, false)?);
             }
@@ -201,6 +206,7 @@ pub fn take_loot(
     Ok(effects)
 }
 
+/// Opens the treasure window on the scenario's treasure record with the given number.
 pub(crate) fn present_treasure(
     state: &mut Session,
     content: &Content,
@@ -220,33 +226,36 @@ pub(crate) fn present_treasure(
     present_treasure_record(state, content, &record)
 }
 
-/// booty(1, 0) on a treasure record already in the booty buffer at 0x44331c.
+/// Opens the treasure window on a treasure record already loaded.
+///
+/// Original: booty
 pub(super) fn present_treasure_record(
     state: &mut Session,
     content: &Content,
     record: &[u8],
 ) -> Result<Vec<Event>, RuleError> {
     let events = present_reward_record(state, content, record)?;
-    let mut retained = TreasureRecord::new(record)?.0.to_vec();
-    centurions_content::records::TreasureRecordMut(&mut retained).consume_items()?;
-    state.native_work.treasure_record = retained;
+    let mut treasure = TreasureRecord::new(record)?.0.to_vec();
+    centurions_content::records::TreasureRecordMut(&mut treasure).consume_items()?;
+    state.globals.treasure = treasure;
     Ok(events)
 }
 
+/// Prepares a treasure record's money and items and shows them.
 fn present_reward_record(
     state: &mut Session,
     content: &Content,
     record: &[u8],
 ) -> Result<Vec<Event>, RuleError> {
-    let prepared = crate::story_treasure::prepare(
+    let prepared = crate::story::treasure::prepare(
         &state.warriors,
         record,
         content,
         &mut state.random,
         state.difficulty,
     )?;
-    // The prepared records do not retain randomitem's parallel quality bytes.
-    state.native_work.loot_quality = if prepared.items.is_empty() {
+    // Prepared records carry no loot quality of their own.
+    state.globals.loot_quality = if prepared.items.is_empty() {
         Some(vec![0; 1000])
     } else {
         None
@@ -259,15 +268,13 @@ fn present_reward_record(
         experience: prepared.experience,
     };
     if let Some(record) = prepared.inventory_record {
-        state.native_work.inventory_record = record;
+        state.globals.inventory_record = record;
     }
-    state.booty_items.fill(InventoryRecord([0; 22]));
+    state.booty_list.fill(InventoryRecord([0; 22]));
     for (slot, item) in prepared.items.into_iter().enumerate() {
-        state.native_work.loaded_item_field32 = state
-            .native_work
-            .ammunition_work
-            .load_item(content, item.id())?;
-        state.booty_items[slot] = item;
+        state.globals.loaded_item_field32 =
+            state.globals.loaded_items.load_item(content, item.id())?;
+        state.booty_list[slot] = item;
     }
     state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
     Ok(vec![Event::StoryPresented])

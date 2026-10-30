@@ -1,10 +1,12 @@
 //! Map presentation.
 use super::UiState;
 use crate::{assets::Assets, layout};
-use centurions_content::{Content, word};
+use centurions_content::Content;
 use centurions_core::Session;
 use macroquad::prelude::*;
 
+/// Draws tile `tile` (1 to 300, 20 to a row) of terrain sheet `terrain` at
+/// `(x, y)`; any other tile number draws nothing.
 pub(super) fn terrain(assets: &Assets, terrain: u8, tile: i16, x: f32, y: f32) {
     let Some(texture) = assets.terrain.get(&terrain) else {
         return;
@@ -28,6 +30,8 @@ pub(super) fn terrain(assets: &Assets, terrain: u8, tile: i16, x: f32, y: f32) {
         );
     }
 }
+/// Draws the 15 by 13 cells of the map around the party, or around the combat
+/// view while a battle is on.
 pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiState) {
     let Some(position) = &state.exploration else {
         return;
@@ -45,14 +49,16 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
             let sx = layout::MAP.x + x as f32 * 32.;
             let sy = layout::MAP.y + y as f32 * 32.;
             if let Some(c) = combat {
-                let index = (vx + x + i32::from(c.map.shift.0) + 5) as usize * 90
-                    + (vy + y + i32::from(c.map.shift.1) + 5) as usize;
-                let tile = c.map.tiles[index];
+                let index = (vx + x + i32::from(c.field.map_shift.0) + 5) as usize * 90
+                    + (vy + y + i32::from(c.field.map_shift.1) + 5) as usize;
+                let tile = c.field.tiles[index];
                 let id = tile.wrapping_abs();
                 let under = if (0..6).contains(&id) {
-                    c.squad.under_tiles[id as usize]
-                } else if id >= 10 && id < 10 + c.enemies.records.len() as i16 {
-                    word(&c.enemies.records[(id - 10) as usize].bytes, 0x11e)
+                    c.squad.char_under[id as usize]
+                } else if id >= 10 && id < 10 + c.roster.records.len() as i16 {
+                    c.roster.records[(id - 10) as usize]
+                        .record()
+                        .underlying_tile()
                         .unwrap_or(1000 + mission.default_tile)
                 } else {
                     tile
@@ -71,14 +77,18 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
                 let icon = if tile < 0 && id >= 1000 {
                     Some(id)
                 } else if (0..6).contains(&id) {
-                    super::bodies::warrior_icon(state.warriors[id as usize].record())
-                } else if id >= 10 && id < 10 + c.enemies.records.len() as i16 {
+                    // A slot past a short squad holds no warrior to draw.
+                    state
+                        .warriors
+                        .get(id as usize)
+                        .and_then(|warrior| super::bodies::warrior_icon(warrior.record()))
+                } else if id >= 10 && id < 10 + c.roster.records.len() as i16 {
                     // A -3 definition draws a picture in the bodies pass instead.
-                    let monster = c.enemies.records[(id - 10) as usize].record();
-                    match (monster.size(), monster.tactical_icon()) {
+                    let monster = c.roster.records[(id - 10) as usize].record();
+                    match (monster.size(), monster.icon()) {
                         (Ok(-3), _) | (_, Err(_)) => None,
                         (Ok(_), Ok(icon)) => {
-                            Some(super::bodies::enemy_icon(monster.facing_flag(), icon))
+                            Some(super::bodies::enemy_icon(monster.facing_left(), icon))
                         }
                         (Err(_), Ok(_)) => None,
                     }
@@ -119,8 +129,8 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
         && let Some(icon) = effect.icon(get_time())
         && let Some(texture) = assets.icons.get(&icon)
     {
-        // calcbodyrect 0x10d3f6 and 0x15b67a..0x15b73a: the body's rectangle,
-        // which PlotCIcon fills; only its part in the view rect is copied.
+        // calcbodyrect gives the body's rectangle, which PlotCIcon fills; only
+        // its part in the view rect is copied.
         for body in effect.bodies() {
             if let Some((position, size)) = crate::combat_playback::Playback::body_cell(c, body) {
                 super::bodies::plot_clipped(
@@ -131,7 +141,7 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
             }
         }
     }
-    let party_icon = match state.native_work.boat {
+    let party_icon = match state.globals.boat {
         0 => Some(
             if state.field_controls.as_ref().is_some_and(|c| c.camping) {
                 178
@@ -139,7 +149,7 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
                 192 + i16::from(position.facing)
             },
         ),
-        _ => Some(13006 - i16::from(state.native_work.boat_facing)),
+        _ => Some(13006 - i16::from(state.globals.boat_facing)),
     };
     if combat.is_none()
         && let Some(texture) = party_icon.and_then(|id| assets.icons.get(&id))
@@ -153,10 +163,12 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
     }
 }
 
-/// showdamage 0x1553bc: the cicn in the body's 32-pixel cell, raised 16 pixels for
-/// size classes 1 and 3 and moved 16 left above class 1, then the amount in bold
-/// at (left + 8, top + 20) in size 10 above 9, otherwise (left + 11, top + 20) in
+/// The result cicn in the body's 32-pixel cell, raised 16 pixels for size
+/// classes 1 and 3 and moved 16 left above class 1, then the amount in bold at
+/// (left + 8, top + 20) in size 10 above 9, otherwise (left + 11, top + 20) in
 /// size 12. Cicns 160-163 print in blackColor and the others in whiteColor.
+///
+/// Original: showdamage
 fn result_icon(
     assets: &Assets,
     combat: &centurions_core::combat::Combat,
@@ -177,26 +189,16 @@ fn result_icon(
         left -= 16.;
     }
     if let Some(texture) = assets.icons.get(&icon.icon) {
-        draw_texture_ex(
-            texture,
-            left,
-            top,
-            WHITE,
-            DrawTextureParams {
-                dest_size: Some(vec2(32., 32.)),
-                ..Default::default()
-            },
-        );
+        crate::assets::icon_in(texture, vec2(left, top));
     }
-    // 0x1555c8..0x1555d8: the number is always drawn.
+    // The number is always drawn.
     let color = if (160..=163).contains(&icon.icon) {
         BLACK
     } else {
         WHITE
     };
     let (dx, text_size) = if icon.amount > 9 { (8., 10) } else { (11., 12) };
-    // TextFace(bold) at 0x1554bc: QuickDraw's bold repeats each glyph one
-    // pixel to the right.
+    // QuickDraw's bold repeats each glyph one pixel to the right.
     for smear in [0., 1.] {
         assets.text(
             &icon.amount.to_string(),
@@ -218,6 +220,7 @@ pub(super) fn draw_story_picture(assets: &Assets, ui: &UiState) {
     draw_texture(texture, layout::MAP.x + x, layout::MAP.y + y, WHITE);
 }
 
+/// Draws the frame of the outdoor spell effect playing now, over its map cell.
 pub(super) fn draw_outdoor_effect(state: &Session, assets: &Assets, ui: &UiState) {
     let Some(effect) = ui.effects.front() else {
         return;
@@ -235,14 +238,13 @@ pub(super) fn draw_outdoor_effect(state: &Session, assets: &Assets, ui: &UiState
     };
     let (vx, vy) = layout::outdoor_origin(position.x, position.y);
     let size = f32::from(effect.size);
-    draw_texture_ex(
+    crate::assets::texture_in(
         texture,
-        layout::MAP.x + (i32::from(effect.x) - vx) as f32 * 32. - size / 2.,
-        layout::MAP.y + (i32::from(effect.y) - vy) as f32 * 32. - size / 2.,
-        WHITE,
-        DrawTextureParams {
-            dest_size: Some(vec2(size, size)),
-            ..Default::default()
-        },
+        Rect::new(
+            layout::MAP.x + (i32::from(effect.x) - vx) as f32 * 32. - size / 2.,
+            layout::MAP.y + (i32::from(effect.y) - vy) as f32 * 32. - size / 2.,
+            size,
+            size,
+        ),
     );
 }

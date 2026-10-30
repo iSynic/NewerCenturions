@@ -1,12 +1,12 @@
 //! Bounded original attack2/checkforenemy records and saved source caller joins.
-use crate::combat::neighbor_work::NeighborWork;
-use crate::combat::retained::{InitiativeWork, NpcBacking, NpcSlot};
-use crate::combat::runtime::detached_attack::run;
+use crate::combat::battlefield::Battlefield;
+use crate::combat::globals::{BattleOrder, MonsterSlot, Monsters};
+use crate::combat::neighbor_scan::Neighbors;
+use crate::combat::runtime::out_of_combat_attack::run;
 use crate::combat::runtime::reaction_calls::AttackCall;
 use crate::combat::runtime::reaction_frame::ReactionFrame;
 use crate::combat::runtime::{CombatReturn, DeathStory};
-use crate::combat::tactical_work::TacticalWork;
-use crate::combat::weapon_work::WeaponWork;
+use crate::combat::weapon_traits::WeaponTraits;
 use crate::test_support::{bytes, content, fixture};
 use crate::{Command, Content, Event, Presentation, RandomState, ScriptState, Session};
 use centurions_content::combat::MonsterRecord;
@@ -55,13 +55,13 @@ fn detached_attacks_match_native_records_work_rng_and_ordered_sounds() {
                     attacker: source["attacker"].as_i64().unwrap() as i16,
                     recipient: source["target"].as_i64().unwrap() as i16,
                     index: source["index"].as_u64().unwrap() as usize,
-                    retained_actor: 10,
+                    turn_actor: 10,
                 },
             )
             .unwrap_or_else(|error| panic!("{}: {error}", case["name"]));
             (outcome.returned, outcome.events)
         } else {
-            let actor = state.native_work.initiative_work.order[0];
+            let actor = state.globals.battle_order.order[0];
             let outcome = ReactionFrame::new(actor, 0, (1, 0))
                 .unwrap()
                 .finish_after_teardown(&mut state, &content)
@@ -78,19 +78,19 @@ fn detached_attacks_match_native_records_work_rng_and_ordered_sounds() {
         if case["name"] == "weapon-condition-retained-item-shield" {
             // GetIndString (CODE 2 +0x17c) leaves the text empty for an index of 0 or below.
             let mut empty = initial(source, &content);
-            let item = empty.native_work.ammunition_work.item.as_mut().unwrap();
+            let item = empty.globals.loaded_items.item.as_mut().unwrap();
             item[46..48].copy_from_slice(&0_i16.to_be_bytes());
             let call = AttackCall {
                 attacker: source["attacker"].as_i64().unwrap() as i16,
                 recipient: source["target"].as_i64().unwrap() as i16,
                 index: source["index"].as_u64().unwrap() as usize,
-                retained_actor: 10,
+                turn_actor: 10,
             };
             let outcome = run(&mut empty, &content, call).unwrap();
             let condition = |event: &Event| {
                 matches!(
                     event,
-                    Event::Feedback(crate::feedback::NativeFeedback::CombatResourceResult {
+                    Event::Feedback(crate::feedback::GameFeedback::CombatResourceResult {
                         resource_id: 134,
                         ..
                     })
@@ -101,7 +101,7 @@ fn detached_attacks_match_native_records_work_rng_and_ordered_sounds() {
                 if condition(original) {
                     assert_eq!(
                         *actual,
-                        Event::Feedback(crate::feedback::NativeFeedback::CombatResourceResult {
+                        Event::Feedback(crate::feedback::GameFeedback::CombatResourceResult {
                             resource_id: 134,
                             index: 0,
                         })
@@ -116,7 +116,7 @@ fn detached_attacks_match_native_records_work_rng_and_ordered_sounds() {
         if source["parent"] == "checkforenemy" {
             let mut lost = initial(source, &content);
             lost.warriors[3].record_mut().set_stamina(1);
-            lost.native_work.health_context.unavailable = 5;
+            lost.globals.health_context.kill_party = 5;
             saved_return(&mut lost, &content);
             let events = crate::apply(Command::Continue, &mut lost, &content).unwrap();
             assert_eq!(lost.phase, crate::Phase::SquadSelection);
@@ -147,14 +147,14 @@ fn saved_reaction_strike_resumes_attack2_against_an_npc_target() {
     let content = content();
     let mut state = initial(&case["declarations"]["source_input"], &content);
     // NPC 10 struck once; its next natural attack goes to its target body, NPC 11.
-    let backing = &mut state.native_work.npc_backing;
+    let backing = &mut state.globals.monsters;
     let mut victim = backing.slot(0).unwrap().clone();
     victim.position = victim.position.map(|(x, y)| (x + 1, y));
     *backing.slot_mut(1).unwrap() = victim;
     let striker = &mut backing.slot_mut(0).unwrap().record;
-    striker.record_mut().set_target_body(11);
-    state.native_work.selected_enemy = 0;
-    state.native_work.weapon_work.natural_attack_index = 0;
+    striker.record_mut().set_target(11);
+    state.globals.monster_up = 0;
+    state.globals.weapon_traits.natural_attack_index = 0;
     saved_strike_return(&mut state, &content, false);
     let draws = state.random.draws;
     let events = crate::apply(Command::Continue, &mut state, &content).unwrap();
@@ -187,8 +187,8 @@ pub(super) fn initial(input: &Value, content: &Content) -> Session {
         .map(|raw| Warrior::read(raw).unwrap())
         .collect();
     state.difficulty = 0; // The native declarations explicitly initialize442576 to0.
-    state.selected_warrior = scalar(&before["selected_warrior"]) as usize;
-    state.native_work.selected_enemy = scalar(&before["selected_enemy"]) as usize;
+    state.char_select_new = scalar(&before["selected_warrior"]) as usize;
+    state.globals.monster_up = scalar(&before["selected_enemy"]) as usize;
     state.exploration.as_mut().unwrap().last_move = bytes(&before["direction"])
         .into_iter()
         .map(|value| value as i8)
@@ -196,8 +196,8 @@ pub(super) fn initial(input: &Value, content: &Content) -> Session {
         .try_into()
         .unwrap();
     let npc_positions = words(&before["npc_positions"]);
-    state.native_work.npc_backing = NpcBacking {
-        active_count: 1,
+    state.globals.monsters = Monsters {
+        num_mon: 1,
         origin: (5, 5),
         slots: bytes(&before["npcs"])
             .as_chunks::<288>()
@@ -205,7 +205,7 @@ pub(super) fn initial(input: &Value, content: &Content) -> Session {
             .iter()
             .enumerate()
             .map(|(index, raw)| {
-                Some(NpcSlot {
+                Some(MonsterSlot {
                     record: MonsterRecord {
                         bytes: raw.to_vec(),
                     },
@@ -219,61 +219,61 @@ pub(super) fn initial(input: &Value, content: &Content) -> Session {
     };
     let positions = words(&before["party_positions"]);
     let under = words(&before["under"]);
-    state.native_work.tactical_work = TacticalWork {
-        map: crate::combat::TacticalMap {
+    state.globals.battlefield = Battlefield {
+        field: crate::combat::CombatField {
             tiles: words(&before["map"]),
-            shift: (0, 0),
+            map_shift: (0, 0),
             edge_word: 0,
         },
         saved_land: None,
-        positions: std::array::from_fn(|index| (positions[index * 2], positions[index * 2 + 1])),
-        under_tiles: std::array::from_fn(|index| under[index]),
-        spell_fields: bytes(&before["fields"]),
-        field_used: bytes(&before["used"]),
+        pos: std::array::from_fn(|index| (positions[index * 2], positions[index * 2 + 1])),
+        char_under: std::array::from_fn(|index| under[index]),
+        spell_queue: bytes(&before["fields"]),
+        collide_check: bytes(&before["used"]),
         battle: None,
     };
-    state.native_work.initiative_work = InitiativeWork {
+    state.globals.battle_order = BattleOrder {
         order: words(&before["order"]),
-        cursor: scalar(&before["cursor"]) as usize,
+        index: scalar(&before["cursor"]) as usize,
     };
-    state.native_work.victory_work.total = scalar(&before["total"]);
-    state.native_work.victory_work.defeated = scalar(&before["defeated"]);
-    state.native_work.ready = scalar(&before["ready"]);
-    state.native_work.round_work.inactive_rounds = Some(scalar(&before["inactive"]));
+    state.globals.kill_counts.num_enemy = scalar(&before["total"]);
+    state.globals.kill_counts.kill_mon = scalar(&before["defeated"]);
+    state.globals.in_spell = scalar(&before["ready"]);
+    state.globals.round_scripts.blank_round = Some(scalar(&before["inactive"]));
     let presence = words(&before["presence"]);
-    state.native_work.neighbor_work = NeighborWork {
+    state.globals.neighbors = Neighbors {
         departure: scalar(&before["departure"]),
         presence: std::array::from_fn(|index| presence[index * 110..(index + 1) * 110].to_vec()),
         bodies: words(&before["bodies"]),
     };
-    state.native_work.party_mask = words(&before["mask"]).try_into().unwrap();
-    state.native_work.attack_packet = bytes(&before["packet"]);
-    state.native_work.attack_identity = words(&before["identity"]).try_into().unwrap();
-    state.native_work.attack_count = scalar(&before["attack_count"]);
+    state.globals.party_track = words(&before["mask"]).try_into().unwrap();
+    state.globals.spell_info = bytes(&before["packet"]);
+    state.globals.cast_identity = words(&before["identity"]).try_into().unwrap();
+    state.globals.attack_count = scalar(&before["attack_count"]);
     let item = bytes(&before["item_work"]);
     let weapon = bytes(&before["weapon_work"]);
     let ammo = bytes(&before["ammo_work"]);
-    state.native_work.loaded_item_field32 = word(&item, 32).unwrap();
-    state.native_work.weapon_work = WeaponWork {
+    state.globals.loaded_item_field32 = word(&item, 32).unwrap();
+    state.globals.weapon_traits = WeaponTraits {
         natural_attack_index: scalar(&before["natural_index"]),
         sound: word(&weapon, 14).unwrap(),
         weapon_armor_filter: word(&weapon, 136).unwrap(),
         ammunition_armor_filter: word(&ammo, 136).unwrap(),
     };
-    state.native_work.ammunition_work = crate::ammunition::WorkBuffers {
+    state.globals.loaded_items = crate::ammunition::LoadedItems {
         item: Some(item),
         weapon: Some(weapon),
         ammo: Some(ammo),
     };
-    state.native_work.health_context = crate::story_health::HealthContext {
-        unavailable: scalar(&before["health_unavailable"]) as i8,
-        selected_warrior: scalar(&before["health_selected"]) as usize,
-        effect: state.native_work.attack_packet[18] as i8,
+    state.globals.health_context = crate::story_health::HealthContext {
+        kill_party: scalar(&before["health_unavailable"]) as i8,
+        char_select_new: scalar(&before["health_selected"]) as usize,
+        effect: state.globals.spell_info[18] as i8,
         last_body: scalar(&before["health_last_body"]),
         marks_affected: scalar(&before["health_marks"]) != 0,
         affected: words(&before["health_affected"]).try_into().unwrap(),
     };
-    state.party_buffs = bytes(&before["buffs"]);
+    state.party_condition = bytes(&before["buffs"]);
     state.random = RandomState::new(input["seed"].as_u64().unwrap() as u32);
     state.random.draws = input["draws"].as_u64().unwrap();
     state
@@ -285,11 +285,11 @@ pub(super) fn compare(state: &Session, events: &[Event], case: &Value) {
             .as_array()
             .is_some_and(|owners| owners.iter().any(|owner| owner == name))
     };
-    let work = &state.native_work.tactical_work;
-    let health = &state.native_work.health_context;
-    let neighbors = &state.native_work.neighbor_work;
-    let buffers = &state.native_work.ammunition_work;
-    let backing = &state.native_work.npc_backing;
+    let work = &state.globals.battlefield;
+    let health = &state.globals.health_context;
+    let neighbors = &state.globals.neighbors;
+    let buffers = &state.globals.loaded_items;
+    let backing = &state.globals.monsters;
     let records = [
         (
             "warriors",
@@ -307,10 +307,10 @@ pub(super) fn compare(state: &Session, events: &[Event], case: &Value) {
                 .flat_map(|slot| slot.as_ref().unwrap().record.bytes.iter().copied())
                 .collect(),
         ),
-        ("map", encoded(work.map.tiles.iter().copied())),
+        ("map", encoded(work.field.tiles.iter().copied())),
         (
             "party_positions",
-            encoded(work.positions.iter().flat_map(|point| [point.0, point.1])),
+            encoded(work.pos.iter().flat_map(|point| [point.0, point.1])),
         ),
         (
             "npc_positions",
@@ -322,10 +322,10 @@ pub(super) fn compare(state: &Session, events: &[Event], case: &Value) {
                 ]
             })),
         ),
-        ("under", encoded(work.under_tiles)),
-        ("fields", work.spell_fields.clone()),
-        ("used", work.field_used.clone()),
-        ("packet", state.native_work.attack_packet.clone()),
+        ("under", encoded(work.char_under)),
+        ("fields", work.spell_queue.clone()),
+        ("used", work.collide_check.clone()),
+        ("packet", state.globals.spell_info.clone()),
         ("item_work", buffers.item.as_ref().unwrap().clone()),
         ("weapon_work", buffers.weapon.as_ref().unwrap().clone()),
         ("ammo_work", buffers.ammo.as_ref().unwrap().clone()),
@@ -339,12 +339,12 @@ pub(super) fn compare(state: &Session, events: &[Event], case: &Value) {
             ),
         ),
         ("bodies", encoded(neighbors.bodies.iter().copied())),
-        ("mask", encoded(state.native_work.party_mask)),
-        ("identity", encoded(state.native_work.attack_identity)),
+        ("mask", encoded(state.globals.party_track)),
+        ("identity", encoded(state.globals.cast_identity)),
         ("health_affected", encoded(health.affected)),
         (
             "order",
-            encoded(state.native_work.initiative_work.order.iter().copied()),
+            encoded(state.globals.battle_order.order.iter().copied()),
         ),
         (
             "direction",
@@ -357,7 +357,7 @@ pub(super) fn compare(state: &Session, events: &[Event], case: &Value) {
                     vec![]
                 }),
         ),
-        ("buffs", state.party_buffs.clone()),
+        ("buffs", state.party_condition.clone()),
     ];
     for (name, actual) in records {
         if excluded(name) {
@@ -372,37 +372,34 @@ pub(super) fn compare(state: &Session, events: &[Event], case: &Value) {
         );
     }
     for (name, actual) in [
-        ("item_field32", state.native_work.loaded_item_field32),
-        ("weapon_sound", state.native_work.weapon_work.sound),
+        ("item_field32", state.globals.loaded_item_field32),
+        ("weapon_sound", state.globals.weapon_traits.sound),
         (
             "weapon_filter",
-            state.native_work.weapon_work.weapon_armor_filter,
+            state.globals.weapon_traits.weapon_armor_filter,
         ),
         (
             "ammo_filter",
-            state.native_work.weapon_work.ammunition_armor_filter,
+            state.globals.weapon_traits.ammunition_armor_filter,
         ),
         (
             "natural_index",
-            state.native_work.weapon_work.natural_attack_index,
+            state.globals.weapon_traits.natural_attack_index,
         ),
-        (
-            "inactive",
-            state.native_work.round_work.inactive_rounds.unwrap(),
-        ),
-        ("health_unavailable", i16::from(health.unavailable)),
+        ("inactive", state.globals.round_scripts.blank_round.unwrap()),
+        ("health_unavailable", i16::from(health.kill_party)),
         ("health_effect", i16::from(health.effect)),
         ("health_last_body", health.last_body),
         ("health_marks", i16::from(health.marks_affected)),
-        ("health_selected", health.selected_warrior as i16),
-        ("selected_warrior", state.selected_warrior as i16),
-        ("selected_enemy", state.native_work.selected_enemy as i16),
-        ("ready", state.native_work.ready),
-        ("total", state.native_work.victory_work.total),
-        ("defeated", state.native_work.victory_work.defeated),
-        ("attack_count", state.native_work.attack_count),
+        ("health_selected", health.char_select_new as i16),
+        ("selected_warrior", state.char_select_new as i16),
+        ("selected_enemy", state.globals.monster_up as i16),
+        ("ready", state.globals.in_spell),
+        ("total", state.globals.kill_counts.num_enemy),
+        ("defeated", state.globals.kill_counts.kill_mon),
+        ("attack_count", state.globals.attack_count),
         ("departure", neighbors.departure),
-        ("cursor", state.native_work.initiative_work.cursor as i16),
+        ("cursor", state.globals.battle_order.index as i16),
     ] {
         if case["comparison"]["excluded_work_owners"]
             .as_array()
@@ -433,7 +430,7 @@ pub(super) fn compare(state: &Session, events: &[Event], case: &Value) {
         .iter()
         .filter_map(|event| match event {
             Event::Sound { resource_id } => Some(*resource_id),
-            Event::Feedback(crate::feedback::NativeFeedback::CombatResult {
+            Event::Feedback(crate::feedback::GameFeedback::CombatResult {
                 code,
                 audible: true,
                 ..
@@ -452,7 +449,7 @@ pub(super) fn compare(state: &Session, events: &[Event], case: &Value) {
     let resources: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
-            Event::Feedback(crate::feedback::NativeFeedback::CombatResourceResult {
+            Event::Feedback(crate::feedback::GameFeedback::CombatResourceResult {
                 resource_id,
                 index,
             }) => Some((*resource_id, *index)),

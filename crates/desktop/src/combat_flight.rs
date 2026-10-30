@@ -1,43 +1,44 @@
-//! cast 0x10d4fe's flight for one target: after the launch sound (0x10db1a) the
-//! packet's byte 17 (BYTE44375f, switched at 0x10dca2) selects a PICT 401 sprite
-//! walk, a patXor line or framed ovals. Geometry and timing only; the presentation
-//! layer draws the frames.
+//! A cast's flight to one target: after the launch sound, the spell's flight
+//! kind picks a PICT 401 sprite walk, a patXor line or framed ovals. Geometry and
+//! timing only; the presentation layer draws the frames.
 use centurions_core::Flight;
 
-/// One cast 0x10d4fe flight, timed in delay(1) ticks.
+/// One flight drawn by cast, timed in delay(1) ticks.
 #[derive(Clone, Copy, Debug)]
 pub struct FlightFrames {
     pub flight: Flight,
-    /// The walk's step count d6 (0x10d5a0..0x10d5d0), at least 1 (0x10db82).
+    /// The walk's step count, at least 1.
     pub steps: i16,
     pub started: f64,
     pub tick_seconds: f64,
     pub recentred: bool,
     /// The ticks this part of the walk shows: a ray's walk is cut where
-    /// resolvespell presents a crossed body (0x10e22a).
+    /// resolvespell presents a crossed body.
     pub window: (i16, i16),
 }
 
 /// What a flight shows during one tick.
 pub enum FlightFrame {
-    /// The default arm 0x10e074..0x10e5d6 copies a 32-pixel PICT 401 sprite
-    /// transparently at its walk point, `source` in sprite pixels.
+    /// The default kind copies a 32-pixel PICT 401 sprite transparently at its
+    /// walk point, `source` in sprite pixels.
     Sprite {
         point: (i16, i16),
         source: (i16, i16),
     },
-    /// 0x10ddde/0x10de70: a patXor line between the cell centres in a square pen.
+    /// A patXor line between the cell centres in a square pen.
     Line {
         from: (i16, i16),
         to: (i16, i16),
         pen: i16,
     },
-    /// 0x10df26..0x10e06e: patXor ovals in a 4-pixel pen, as (left, top, right,
-    /// bottom) pixel rectangles.
+    /// patXor ovals in a 4-pixel pen, as (left, top, right, bottom) pixel
+    /// rectangles.
     Ovals([Option<(i16, i16, i16, i16)>; 2]),
 }
 
 impl FlightFrames {
+    /// Starts `flight` over `steps` steps at time `started`, a tick lasting
+    /// `tick_seconds`.
     pub fn new(flight: Flight, steps: i16, started: f64, tick_seconds: f64) -> Self {
         let steps = steps.max(1);
         Self {
@@ -68,8 +69,8 @@ impl FlightFrames {
         self.window.1 - self.window.0
     }
 
-    /// The delay(1) calls the arm makes: the sprite walk waits after steps 15, 30,
-    /// ..., 120 (0x10e58c..0x10e5c6); the line and oval arms wait eight times.
+    /// The delay(1) calls a flight makes: the sprite walk waits after steps 15,
+    /// 30, ..., 120; the line and oval kinds wait eight times.
     pub fn ticks(kind: i8, steps: i16) -> i16 {
         match kind {
             13 => 0,
@@ -78,8 +79,8 @@ impl FlightFrames {
         }
     }
 
-    /// The walk point after `step` increments of the single-precision stride
-    /// (0x10dbce..0x10dc0a), truncated like the core's ray.
+    /// The walk point after `step` increments of the single-precision stride,
+    /// truncated like the rules' ray.
     fn point(&self, step: i16) -> (i16, i16) {
         let (from, to) = (self.flight.from, self.flight.to);
         let along = |a: i16, b: i16| {
@@ -89,6 +90,9 @@ impl FlightFrames {
         (along(from.0, to.0), along(from.1, to.1))
     }
 
+    /// What the flight shows at `now`, or None outside its window.
+    ///
+    /// Original: cast
     pub fn frame(&self, now: f64) -> Option<FlightFrame> {
         let tick = ((now - self.started) / self.tick_seconds).floor();
         if !(0. ..f64::from(self.length())).contains(&tick) {
@@ -101,8 +105,8 @@ impl FlightFrames {
             23 | 24 => {
                 let mut to = to;
                 if self.flight.kind == 24 {
-                    // 0x10de8a..0x10dea6 add Rand(10) - 5 to the target point each
-                    // pass; the core drew those offsets from the session.
+                    // Each pass adds Rand(10) - 5 to the target point; the rules
+                    // drew those offsets from the session's generator.
                     let jitter = self.flight.jitter;
                     for pass in 0..=tick as usize {
                         to.0 += i16::from(jitter[pass * 2]);
@@ -143,7 +147,10 @@ impl FlightFrames {
         })
     }
 
-    /// 0x10e3ec..0x10e562: row 64 rising, 96 falling, 128 rightward, 160 leftward.
+    /// The sprite row for the walk's direction: 64 rising, 96 falling, 128
+    /// rightward, 160 leftward.
+    ///
+    /// Original: cast
     fn sprite_row(&self) -> i16 {
         let dx = self.flight.to.0.wrapping_sub(self.flight.from.0);
         let dy = self.flight.to.1.wrapping_sub(self.flight.from.1);

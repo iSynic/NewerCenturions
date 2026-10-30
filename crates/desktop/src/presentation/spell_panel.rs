@@ -1,10 +1,10 @@
-//! Window 128's cast rectangles during combat playback: ploticon3's cicn in rect
-//! 0x4436f2, rect 0x4436fa (showspellinfo, showresults and killbody) and
+//! The combat panel's spell rectangles while a command plays: ploticon3's cast
+//! cicn, the result rectangle (showspellinfo, showresults and killbody) and
 //! showspellinfo's name and number.
 //!
-//! ToolBoxInit places rect 0x4436f2 at WORD40856c + 527, WORD40856e + 335 - 32
-//! (0x1324e6..0x132526) and rect 0x4436fa at WORD40856c + 570, WORD40856e + 328 -
-//! 32 (0x132400..0x132440) in window 128; the controls sit 20 pixels lower here.
+//! The cast rectangle sits at (527, 335 - 32) and the result rectangle at
+//! (570, 328 - 32) from the panel origin; the controls sit 20 pixels lower here
+//! than in the game's window.
 use crate::{
     assets::Assets,
     combat_playback::{Playback, ResultSlot},
@@ -12,9 +12,13 @@ use crate::{
 use centurions_core::SpellInfo;
 use macroquad::prelude::*;
 
+/// Where the cast spell's cicn is plotted in the combat panel.
 const CAST: Rect = Rect::new(687., 463., 32., 32.);
+/// Where a spell's result is plotted in the combat panel.
 const RESULT: Rect = Rect::new(730., 456., 64., 64.);
 
+/// Draws the cast spell's icon and the spell or target result icon in the combat
+/// panel.
 pub(super) fn draw(assets: &Assets, playback: &Playback) {
     if let Some(icon) = playback.cast_icon
         && let Some(texture) = assets.icons.get(&icon)
@@ -24,8 +28,8 @@ pub(super) fn draw(assets: &Assets, playback: &Playback) {
     match playback.result_slot {
         Some(ResultSlot::Spell { icon, area }) => spell_icon(assets, icon, area),
         Some(ResultSlot::Target { icon, size }) => {
-            // showresults erases the rectangle (0x1585be), then plots into it
-            // inset 16 on each axis WORD4435ce does not extend (0x158582..0x1585bc).
+            // showresults erases the rectangle, then plots into it inset 16 on
+            // each axis the size class does not extend.
             draw_rectangle(RESULT.x, RESULT.y, RESULT.w, RESULT.h, WHITE);
             let mut rect = RESULT;
             if size == 0 || size == 2 {
@@ -49,6 +53,8 @@ pub(super) fn draw(assets: &Assets, playback: &Playback) {
 }
 
 /// showspellinfo's whole drawing, as combatchoice shows it while choosing targets.
+///
+/// Original: showspellinfo
 pub(crate) fn draw_info(assets: &Assets, info: &SpellInfo) {
     if info.firearm
         && let Some(texture) = info.weapon_icon.and_then(|icon| assets.icons.get(&icon))
@@ -59,19 +65,22 @@ pub(crate) fn draw_info(assets: &Assets, info: &SpellInfo) {
     text(assets, info);
 }
 
+/// Draws the spell's result icon; an area spell adds cicn 14022 in its top left
+/// corner.
 fn spell_icon(assets: &Assets, icon: i16, area: bool) {
     if let Some(texture) = assets.icons.get(&icon) {
         plot(texture, RESULT);
     }
-    // 0x159318..0x15936e: cicn 14022 in the rectangle's top-left 32 square,
+    // An area spell adds cicn 14022 in the rectangle's top-left 32 square,
     // OffsetRect(0, -5).
     if area && let Some(texture) = assets.icons.get(&14022) {
         plot(texture, Rect::new(RESULT.x, RESULT.y - 5., 32., 32.));
     }
 }
 
-/// showspellinfo's name in yellowColor and number in redColor, TextSize 12
-/// (0x159370..0x159462).
+/// The spell's name in yellowColor and number in redColor, TextSize 12.
+///
+/// Original: showspellinfo
 fn text(assets: &Assets, info: &SpellInfo) {
     let yellow = Color::from_rgba(0xfc, 0xf3, 0x05, 255);
     let red = Color::from_rgba(0xdd, 0x08, 0x06, 255);
@@ -101,14 +110,5 @@ fn indexed_name(assets: &Assets, (list, index): (i16, i16)) -> String {
 
 /// PlotCIcon scales the cicn to the rectangle.
 fn plot(texture: &Texture2D, rect: Rect) {
-    draw_texture_ex(
-        texture,
-        rect.x,
-        rect.y,
-        WHITE,
-        DrawTextureParams {
-            dest_size: Some(vec2(rect.w, rect.h)),
-            ..Default::default()
-        },
-    );
+    crate::assets::texture_in(texture, rect);
 }

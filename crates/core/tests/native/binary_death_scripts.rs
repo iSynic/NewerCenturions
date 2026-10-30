@@ -7,13 +7,13 @@ use centurions_core::combat::death_scripts::cleanup_enemy;
 
 fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>) {
     let mut combat = support::battle();
-    combat.map.tiles = case.words("map_before");
-    combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
-    combat.enemies.records = vec![MonsterRecord {
+    combat.field.tiles = case.words("map_before");
+    combat.squad.pos = (0..6).map(|i| (40 + i, 40)).collect();
+    combat.roster.records = vec![MonsterRecord {
         bytes: case.bytes("record_before"),
     }];
-    combat.enemies.positions = vec![(20, 20)];
-    combat.order[1] = 10;
+    combat.roster.mon_pos = vec![(20, 20)];
+    combat.battle_order[1] = 10;
     (combat, support::warriors(&case["warriors_before"]))
 }
 
@@ -24,11 +24,11 @@ fn native_large_death_cleanup_matches_record_map_order_and_queue() {
         let (mut combat, mut warriors) = input(case);
         let result = cleanup_enemy(&mut combat, &mut warriors, 10).unwrap();
         assert_eq!(
-            combat.enemies.records[0].bytes,
+            combat.roster.records[0].bytes,
             case.bytes("record_cleanup")
         );
-        assert_eq!(combat.map.tiles, words(&case.bytes("map_cleanup")));
-        assert_eq!(combat.order, words(&case.bytes("order_after")));
+        assert_eq!(combat.field.tiles, words(&case.bytes("map_cleanup")));
+        assert_eq!(combat.battle_order, words(&case.bytes("order_after")));
         assert_eq!(i64::from(result.increment_kills), case["kills_cleanup"]);
         if case.n::<i64>("queued") != 0 {
             let entry = result.entry.unwrap();
@@ -41,13 +41,13 @@ fn story(
     fixture: &serde_json::Value,
     case: &serde_json::Value,
     header: &mut [u8],
-    queue: &mut DeathQueue,
+    queue: &mut TodoQueue,
     input: (i16, i16),
     flags: &mut [u8],
     warriors: &mut [Warrior],
 ) {
-    let (native_body, script) = input;
-    let death_frame = DeathStoryFrame::capture(header, native_body).unwrap();
+    let (body, script) = input;
+    let death_frame = DeathStoryFrame::capture(header, body).unwrap();
     let authored = fixture.bytes(if script == 51 {
         "script51"
     } else {
@@ -81,7 +81,7 @@ fn native_queue_child_reset_and_parent_restore_match_composite_cases() {
         let entry = result.entry.unwrap();
         let mut header = case.bytes("parent_body");
         let mut flags = vec![0; 128];
-        let mut queue = DeathQueue {
+        let mut queue = TodoQueue {
             pointer: 0x12345678,
             ..Default::default()
         };
@@ -113,7 +113,7 @@ fn native_queue_child_reset_and_parent_restore_match_composite_cases() {
             }
             queue.begin();
             while let Some((index, entry)) = queue.current() {
-                let saved: DeathQueue =
+                let saved: TodoQueue =
                     serde_json::from_str(&serde_json::to_string(&queue).unwrap()).unwrap();
                 assert_eq!(saved, queue);
                 story(

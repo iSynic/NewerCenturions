@@ -1,7 +1,8 @@
-//! cast10e0c8..10e642: a ray crosses cells in fixed pixel steps and yields each new body.
+//! A ray crosses cells in fixed pixel steps and yields each new body it meets.
 use crate::{RandomState, RuleError, combat::Combat, event::Flight};
-use centurions_content::{mission::OpeningMission, records::AttackPacket};
+use centurions_content::{mission::OpeningMission, records::SpellInfoRecord};
 
+/// What a ray meets next: a body, or something that stops it.
 pub(crate) enum RayStep {
     Body(usize),
     Blocked,
@@ -19,6 +20,8 @@ pub(crate) struct RayWalk {
 }
 
 impl RayWalk {
+    /// Starts a ray from one pixel to another in the given number of steps, for the actor who cast
+    /// it.
     pub(crate) fn new(start: (i16, i16), end: (i16, i16), steps: i16, actor: usize) -> Self {
         Self {
             point: (f32::from(start.0), f32::from(start.1)),
@@ -34,11 +37,14 @@ impl RayWalk {
         }
     }
 
-    /// The walk step (cast's d3) the last `next` tested.
+    /// The walk step the last `next` tested.
     pub(crate) fn step(&self) -> i16 {
         self.tested
     }
 
+    /// Moves the ray along until it meets a body it has not yet struck (never the caster's own) or
+    /// a blocking tile; only a spell with range is stopped by a blocking tile. Returns None at the
+    /// end of the walk.
     pub(crate) fn next(
         &mut self,
         tiles: &[i16],
@@ -58,8 +64,8 @@ impl RayWalk {
                 i32::from(y) + i32::from(shift.1) + 5,
             )?;
             let body = tiles[cell].wrapping_abs();
-            // 0x10e0d8..0x10e0ec: packet bytes 3 and 2, each sign-extended, summed as a WORD.
-            if AttackPacket(packet).range_per_power() + AttackPacket(packet).base_range() > 0
+            // The two range bytes are signed and summed.
+            if SpellInfoRecord(packet).range_per_power() + SpellInfoRecord(packet).range_base() > 0
                 && body > 1000
                 && mission.tile_word(body - 1000, 12)? != 0
             {
@@ -76,11 +82,13 @@ impl RayWalk {
     }
 }
 
-/// cast10d654/10da62: a body's ray pixel; an NPC footprint of size 1 or 3 moves it up and
-/// a size above 1 moves it left by half a cell.
-pub(crate) fn body_pixel(cell: (i16, i16), npc_size: Option<i16>) -> (i16, i16) {
+/// A body's ray pixel; a monster footprint of size 1 or 3 moves it up and a size above 1
+/// moves it left by half a cell.
+///
+/// Original: cast
+pub(crate) fn body_pixel(cell: (i16, i16), monster_size: Option<i16>) -> (i16, i16) {
     let mut pixel = (cell.0.wrapping_mul(32), cell.1.wrapping_mul(32));
-    if let Some(size) = npc_size {
+    if let Some(size) = monster_size {
         if matches!(size, 1 | 3) {
             pixel.1 = pixel.1.wrapping_sub(16);
         }
@@ -91,10 +99,11 @@ pub(crate) fn body_pixel(cell: (i16, i16), npc_size: Option<i16>) -> (i16, i16) 
     pixel
 }
 
-/// cast's switch on packet byte 17 (BYTE44375f, 0x10dca2) after a target's launch
-/// sound: type 24 (0x10de70..0x10df1e) makes eight passes, each adding Rand(10) - 5
-/// to the target's h pixel (0x10de8a) and then its v pixel (0x10de9e). No other type
-/// draws. Returns the offsets in draw order, zero when nothing was drawn.
+/// After a target's launch sound, flight type 24 makes eight passes, each adding
+/// Rand(10) - 5 to the target's h pixel and then its v pixel. No other type draws.
+/// Returns the offsets in draw order, zero when nothing was drawn.
+///
+/// Original: cast
 pub(crate) fn flight_jitter(packet: &[u8], random: &mut RandomState) -> [i8; 16] {
     let mut jitter = [0; 16];
     if packet.get(17) == Some(&24) {
@@ -105,17 +114,20 @@ pub(crate) fn flight_jitter(packet: &[u8], random: &mut RandomState) -> [i8; 16]
     jitter
 }
 
-/// cast's arms for byte-17 types 13 and 23..=27 end at 0x10e5dc, past the default walk
-/// (0x10e07a..0x10e5d6) that alone resolves a ray's crossed bodies, and a mode-6 packet
-/// then skips spelltargets (0x10e61c). Such a ray resolves no body and makes no block test.
+/// Flight types 13 and 23..=27 skip the ray walk that alone resolves crossed bodies,
+/// and a mode-6 packet then skips spelltargets, so such a ray resolves no body and
+/// makes no block test.
+///
+/// Original: cast
 pub(crate) fn ray_walks(packet: &[u8]) -> bool {
     !matches!(packet.get(17).map(|kind| *kind as i8), Some(13 | 23..=27))
 }
 
-/// cast's flight for one target triple: the caster's pixel (0x10d654..0x10d71e), the
-/// target's (a warrior, an NPC footprint or a map cell, 0x10d870..0x10dada), the
-/// short-walk test at 0x10d5aa..0x10d5d0, which also needs preference 9, and the
-/// offsets `flight_jitter` drew for this target.
+/// The flight for one target: the caster's pixel, the target's (a warrior, a monster
+/// footprint or a map cell), the short-walk test, which also needs preference 9,
+/// and the offsets `flight_jitter` drew for this target.
+///
+/// Original: cast
 pub(crate) fn flight(
     combat: &Combat,
     caster: i16,
@@ -124,38 +136,23 @@ pub(crate) fn flight(
     targets: usize,
     jitter: [i8; 16],
 ) -> Option<Flight> {
-    let pixel = |body: i16| -> Option<(i16, i16)> {
-        if body < 10 {
-            Some(body_pixel(
-                *combat.squad.positions.get(usize::try_from(body).ok()?)?,
-                None,
-            ))
-        } else {
-            let index = usize::try_from(body - 10).ok()?;
-            let size = combat.enemies.records.get(index)?.record().size().ok()?;
-            Some(body_pixel(
-                *combat.enemies.positions.get(index)?,
-                Some(size.wrapping_abs()),
-            ))
-        }
-    };
     let to = match target.kind {
-        1 | 2 => pixel(target.first)?,
+        1 | 2 => combat.get_body_pixel(target.first)?,
         _ => (
             target
                 .first
-                .wrapping_sub(combat.map.shift.0 + 5)
+                .wrapping_sub(combat.field.map_shift.0 + 5)
                 .wrapping_mul(32),
             target
                 .second
-                .wrapping_sub(combat.map.shift.1 + 5)
+                .wrapping_sub(combat.field.map_shift.1 + 5)
                 .wrapping_mul(32),
         ),
     };
-    flight_between(packet, pixel(caster)?, to, targets, jitter)
+    flight_between(packet, combat.get_body_pixel(caster)?, to, targets, jitter)
 }
 
-/// cast's flight between two pixels already placed like `flight`'s.
+/// A flight between two pixels already placed like `flight`'s.
 pub(crate) fn flight_between(
     packet: &[u8],
     from: (i16, i16),
@@ -163,13 +160,13 @@ pub(crate) fn flight_between(
     targets: usize,
     jitter: [i8; 16],
 ) -> Option<Flight> {
-    let attack = AttackPacket(packet);
+    let attack = SpellInfoRecord(packet);
     let kind = packet.get(17).map(|kind| *kind as i8)?;
     Some(Flight {
         kind,
         from,
         to,
-        short: attack.targeting_mode() != 6 && attack.defense_category() != 9 && targets > 1,
+        short: !attack.is_ray() && attack.defense_category() != 9 && targets > 1,
         jitter,
         cicn: (attack.defense_category() != 9).then(|| 12000 + i16::from(kind) * 8),
         stop: None,

@@ -1,4 +1,4 @@
-//! Player feedback references from the original executable and Cargo Pod resources.
+//! The sounds, warnings and flashes the game uses to answer the player.
 
 use serde::{Deserialize, Serialize};
 
@@ -12,8 +12,10 @@ pub const CLIP_SOUND_BASE: i16 = 403;
 /// Cargo Pod `STR#` 3 "Warnings", entry 25: the weapon has no ammunition left.
 pub const OUT_OF_AMMUNITION_WARNING: i16 = 25;
 
+/// What the game shows or sounds back to the player: warnings, tutorial pages, flashes, dialog
+/// text, combat refusals and results.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum NativeFeedback {
+pub enum GameFeedback {
     Silent,
     DialogText {
         dialog: i16,
@@ -49,8 +51,8 @@ pub enum NativeFeedback {
     Combat {
         kind: CombatRefusal,
     },
-    /// killbody12ebac..12ebe4 draws Pascal DATA403286/403294 at (400,30),
-    /// then delay(0) reads the original animation-delay preference.
+    /// Outdoors, killbody shows that a warrior is dead or knocked out at
+    /// (400, 30), then waits for the animation-delay preference.
     OutdoorBodyStatus {
         permanent: bool,
         wait: i16,
@@ -61,7 +63,7 @@ pub enum NativeFeedback {
         amount: i16,
         audible: bool,
     },
-    /// ShowResults -40 reads the retained ITEM condition label from STR#134.
+    /// Result code -40 shows the loaded item's condition label from STR# 134.
     CombatResourceResult {
         resource_id: i16,
         index: usize,
@@ -71,9 +73,10 @@ pub enum NativeFeedback {
     },
 }
 
-/// The camping flashes shared by buttonchoice and newland66: x 50, y 50, sound 6001.
-pub fn camp_flash(address: u32) -> NativeFeedback {
-    NativeFeedback::Flash {
+/// The camping flash shared by the camp button and the camping-ability script
+/// operation: x 50, y 50, sound 6001.
+pub fn camp_flash(address: u32) -> GameFeedback {
+    GameFeedback::Flash {
         address,
         x: 50,
         y: 50,
@@ -82,9 +85,11 @@ pub fn camp_flash(address: u32) -> NativeFeedback {
     }
 }
 
-/// newland144632: original Click Mouse flash before the script resumes.
-pub fn script_pause() -> NativeFeedback {
-    NativeFeedback::Flash {
+/// The "Click Mouse" flash a script shows before it resumes.
+///
+/// Original: newland
+pub fn script_pause() -> GameFeedback {
+    GameFeedback::Flash {
         address: 0x401c9e,
         x: 100,
         y: 200,
@@ -93,7 +98,9 @@ pub fn script_pause() -> NativeFeedback {
     }
 }
 
-/// showresults 0x158454 fixed result branches; addresses reference Pascal DATA strings.
+/// The fixed text of showresults' result codes, as original string addresses.
+///
+/// Original: showresults
 pub fn combat_result(code: i16) -> Option<(u32, i16)> {
     Some(match code {
         -8 => (0x400c98, 0),
@@ -128,6 +135,7 @@ pub fn combat_result(code: i16) -> Option<(u32, i16)> {
     })
 }
 
+/// Why a shot, throw or cast cannot be made on the chosen target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CombatRefusal {
     NeedTarget,
@@ -139,6 +147,7 @@ pub enum CombatRefusal {
 }
 
 impl CombatRefusal {
+    /// The text the game flashes for this refusal.
     pub fn address(self) -> u32 {
         match self {
             Self::NeedTarget => 0x403daa,

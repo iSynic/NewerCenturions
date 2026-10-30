@@ -82,20 +82,36 @@ packaging with prepared originals also requires the extended campaign replays.
 These assisted replays check functionality and save/resume behavior; they do not
 establish complete original-game parity or live desktop acceptance.
 
-The instruction-level reference is a separate, private Cargo workspace under
-`archive/`: the routine catalog and recovered execution bodies
-(`archive/crates/reference`), the expanded translations (`archive/crates/translated*`)
-and `centurions-reference-tools`, which prints the routine catalog report. It builds
-against the maintained crates in the root workspace but is not part of the public
-source, nor are the Ghidra probes in `tools/ghidra/` and the menu-boundary check over
-their fixtures, the Ghidra project setup scripts, the translation generator or the
-original-game reference drivers. In a development checkout:
+## Test layout
 
-```powershell
-cargo test --manifest-path archive/Cargo.toml --features original-fixtures
-cargo clippy --manifest-path archive/Cargo.toml --all-targets --features original-fixtures -- -D warnings
-cargo run --manifest-path archive/Cargo.toml -p centurions-reference-tools
-```
+`crates/core/Cargo.toml` sets `autotests = false` and declares one integration
+test binary, `native_reference` (`tests/native_reference.rs`), with
+`required-features = ["original-fixtures"]`. That binary holds the native
+comparisons and also the maintained command and campaign tests, so a default
+`cargo test --workspace` builds none of core's integration tests. Run them with
+`--features original-fixtures`.
+
+Under `crates/core/tests/`:
+
+- `command_*.rs`, `source_*.rs`, `campaign.rs` and `enemy_callers.rs`:
+  command/replay and campaign tests, declared as modules of `native_reference.rs`.
+- `native/`: comparisons against original-binary fixtures, listed in
+  `native/modules.rs` and included by `native_reference.rs`.
+- `support/`, plus `prelude.rs`, `native_common.rs`, `snapshots.rs` and
+  `hex.rs`: shared helpers for those tests, including command replay, campaign
+  assistance and native save receipts. `support/replay_recorder.rs` is also the
+  `centurions-replay-recorder` example.
+- `unit/`: tests and helpers compiled into the library itself.
+
+Tests that need private items are included from the source module they test
+with `#[path]`, for example `src/time.rs` includes `tests/unit/time_reference.rs`
+and `src/exploration.rs` includes `tests/native/regional_reference.rs`. In core
+these modules are gated on `all(test, feature = "original-fixtures")`.
+`crates/content` also sets `autotests = false` and gates its declared tests on
+the same feature. The desktop includes its `tests/unit` files the same way;
+some of those run without the feature.
+
+## Test-code accounting
 
 Preserve native fixture bytes and case identities. `python tools/source_audit.py`
 counts two layers separately:
@@ -120,6 +136,47 @@ not exceed `MAINTAINED_TEST_CEILING` in the tool:
 Both ratios, and the combined historical one, are still reported. Retain only distinct critical coverage, and prefer
 the existing command/replay groups.
 
+## Private development checkout
+
+The material in this section exists only in the private development checkout.
+It is excluded from the public source snapshot.
+
+### Reference archive
+
+The instruction-level reference is a separate Cargo workspace under `archive/`:
+the routine catalog and recovered execution bodies (`archive/crates/reference`),
+the expanded translations (`archive/crates/translated*`) and
+`centurions-reference-tools`, which prints the routine catalog report. It builds
+against the maintained crates in the root workspace.
+
+```powershell
+cargo test --manifest-path archive/Cargo.toml --features original-fixtures
+cargo clippy --manifest-path archive/Cargo.toml --all-targets --features original-fixtures -- -D warnings
+cargo run --manifest-path archive/Cargo.toml -p centurions-reference-tools
+```
+
+### Ghidra and reference tools
+
+The Ghidra probes in `tools/ghidra/` and the menu-boundary check over their
+fixtures, the Ghidra project setup scripts, the translation generator and the
+original-game reference drivers are private.
+
+`python tools/original_dispatch.py` extracts the original `newland` opcode arms
+and the `attack2` natural-condition arms for warrior and NPC targets from the
+private Ghidra exports. It writes values only to `evidence/original-dispatch.json`.
+The inventory lists each original arm against the current Rust: a named story
+operation, or the admission guards for natural conditions. `resolvespell` and
+`castspell` branch on range guards and are not extracted.
+
+### Local package with the original files
+
+`python tools/package_local.py` builds a standalone local checkpoint that bundles the
+supplied original game files beside the release binaries, after checking every
+packaged fork against the extraction manifest. It is for local development only;
+public packages never contain the originals.
+
+### Engine inventory
+
 `python tools/engine_inventory.py` regenerates `evidence/engine-inventory.json` from
 the current source, the routine catalog and the supplied data. It covers unsupported
 diagnostics, catalog routines (each binding labelled maintained or reference) and
@@ -131,13 +188,6 @@ catalog binding to a missing file, fails the build. `--check` also reports rows
 marked `unreviewed`. A value absent from the supplied scenario is not
 evidence that the original binary cannot reach it. Regenerate after changing a
 diagnostic, a catalog binding or a dispatch arm.
-
-`python tools/original_dispatch.py` extracts the original `newland` opcode arms
-and the `attack2` natural-condition arms for warrior and NPC targets from the
-private Ghidra exports. It writes values only to `evidence/original-dispatch.json`.
-The inventory lists each original arm against the current Rust: a named story
-operation, or the admission guards for natural conditions. `resolvespell` and
-`castspell` branch on range guards and are not extracted.
 
 ## Public source and GitHub builds
 

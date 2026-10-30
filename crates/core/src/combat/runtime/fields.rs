@@ -1,4 +1,13 @@
-//! Fields in the original combat execution order.
+//! Spell fields that act on bodies entering or standing in them.
+use crate::combat::map_alias::MapAliases;
+use crate::combat::spells;
+use crate::combat::spells::DirectSpell;
+use crate::combat::spells::FieldCollision;
+use crate::combat::spells::FieldUsage;
+use crate::combat::spells::RestrictionMemoryView;
+use crate::combat::spells::SpellContext;
+use crate::combat::spells::out_of_combat::Arm;
+use crate::combat::spells::summon::ItemRefresh;
 use centurions_content::records::{CharacterStatisticsMut, Statistic};
 
 use super::{append_spell_outcomes, spell_identity};
@@ -6,19 +15,20 @@ use crate::combat::Combat;
 use crate::{Event, RandomState, RuleError};
 use centurions_content::Warrior;
 
-/// `actor` is the moving body, the selected warrior WORD4435d2 and the movement
-/// marker WORD438786 that resolvespell reads.
+/// Resolves the fields under `actor`, the moving body.
+///
+/// Original: collide
 pub fn collide_fields(
-    c: &mut Combat,
-    w: &mut [Warrior],
+    combat: &mut Combat,
+    warriors: &mut [Warrior],
     mission: &centurions_content::mission::OpeningMission,
     count: &mut i16,
     random: &mut RandomState,
     (body, selected, gate): (i16, usize, &mut i16),
 ) -> Result<Vec<Event>, RuleError> {
-    collide_fields_with_work(
-        c,
-        w,
+    collide_fields_with_refresh(
+        combat,
+        warriors,
         mission,
         count,
         random,
@@ -28,29 +38,30 @@ pub fn collide_fields(
     )
 }
 
-/// `actor` is the moving body, the ITEM work alias, the selected warrior WORD4435d2
-/// and the movement marker WORD438786 that resolvespell reads. `items` is the ITEM
-/// work combatupdate2 refreshes after a full-roster summon refusal.
+/// Resolves the fields under `actor`, the moving body. `items` is the item work
+/// refreshed when a full roster refuses a summon.
+///
+/// Original: collide
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn collide_fields_with_work(
-    c: &mut Combat,
-    w: &mut [Warrior],
+pub(crate) fn collide_fields_with_refresh(
+    combat: &mut Combat,
+    warriors: &mut [Warrior],
     mission: &centurions_content::mission::OpeningMission,
     count: &mut i16,
     random: &mut RandomState,
     actor: (i16, Option<i16>, usize, &mut i16),
-    party_mask: &mut [i16; 6],
-    items: crate::combat::spell_summon::ItemRefresh<'_>,
+    party_track: &mut [i16; 6],
+    items: ItemRefresh<'_>,
 ) -> Result<Vec<Event>, RuleError> {
-    if actor.2 >= w.len() {
+    if actor.2 >= warriors.len() {
         return Err("field collision for an inactive selected warrior".into());
     }
     let mut next_gate = *actor.3;
-    let mut next = c.clone();
-    let mut next_warriors = w.to_vec();
+    let mut next = combat.clone();
+    let mut next_warriors = warriors.to_vec();
     let mut next_count = *count;
     let mut next_random = random.clone();
-    let mut next_mask = *party_mask;
+    let mut next_mask = *party_track;
     let mut next_buffers = items.as_ref().map(|(_, buffers)| (**buffers).clone());
     let events = collide_fields_impl(
         &mut next,
@@ -60,8 +71,8 @@ pub(crate) fn collide_fields_with_work(
         &mut next_random,
         FieldActor {
             body: actor.0,
-            selected_warrior: actor.2,
-            item_work_alias: actor.1,
+            char_select_new: actor.2,
+            item_restriction: actor.1,
             movement_gate: &mut next_gate,
             items: items
                 .as_ref()
@@ -74,36 +85,44 @@ pub(crate) fn collide_fields_with_work(
         *buffers = next;
     }
     *actor.3 = next_gate;
-    *c = next;
-    w.clone_from_slice(&next_warriors);
+    *combat = next;
+    warriors.clone_from_slice(&next_warriors);
     *count = next_count;
     *random = next_random;
-    *party_mask = next_mask;
+    *party_track = next_mask;
     Ok(events)
 }
 
+/// The body whose cell is checked for fields, with the selected warrior, the item restriction and
+/// the movement-spell marker its effects read.
 pub(super) struct FieldActor<'a> {
     pub(super) body: i16,
-    pub(super) selected_warrior: usize,
-    pub(super) item_work_alias: Option<i16>,
-    /// WORD438786.
+    pub(super) char_select_new: usize,
+    pub(super) item_restriction: Option<i16>,
+    /// The movement-spell marker.
     pub(super) movement_gate: &'a mut i16,
-    /// combatupdate2's ITEM work for a full-roster summon refusal.
-    pub(super) items: crate::combat::spell_summon::ItemRefresh<'a>,
+    /// The item work refreshed when a full roster refuses a summon.
+    pub(super) items: ItemRefresh<'a>,
 }
 
+/// Resolves every spell field that reaches the body in its cell, one slot at a time. The field's
+/// centre becomes the first target; a summon field summons at its centre, a move field moves the
+/// selected body, any other casts its spell on the targets it covers. Nothing happens while no
+/// field is active.
+///
+/// Original: collide
 pub(super) fn collide_fields_impl(
-    c: &mut Combat,
-    w: &mut [Warrior],
+    combat: &mut Combat,
+    warriors: &mut [Warrior],
     mission: &centurions_content::mission::OpeningMission,
     count: &mut i16,
     random: &mut RandomState,
     mut actor: FieldActor<'_>,
-    party_mask: &mut [i16; 6],
+    party_track: &mut [i16; 6],
 ) -> Result<Vec<Event>, RuleError> {
     let body = actor.body;
-    if !c
-        .spell_fields
+    if !combat
+        .spell_queue
         .as_chunks::<20>()
         .0
         .iter()
@@ -116,16 +135,16 @@ pub(super) fn collide_fields_impl(
         .as_ref()
         .ok_or_else(|| RuleError::Invalid("spell collision tables missing".into()))?;
     let mut events = vec![];
-    let mut usage = crate::combat::spells::FieldUsage {
+    let mut usage = FieldUsage {
         slot: 0,
-        used: c.field_used.clone(),
+        used: combat.collide_check.clone(),
     };
     for slot in 0..60 {
         usage.slot = slot;
-        let Some(collision) = crate::combat::spells::collision_field(
-            c,
-            w,
-            &c.spell_fields,
+        let Some(collision) = spells::collision_field(
+            combat,
+            warriors,
+            &combat.spell_queue,
             &usage,
             body as usize,
             &tables.attacks,
@@ -133,32 +152,29 @@ pub(super) fn collide_fields_impl(
         else {
             continue;
         };
-        // collide 1142a6 calls cleartarget; 1142e0..1142fe store the centre as target 0.
-        c.target_work.clear();
-        c.target_work.write(std::slice::from_ref(&collision.target));
+        // The field's centre becomes the first target.
+        combat.target_picks.clear();
+        combat
+            .target_picks
+            .write(std::slice::from_ref(&collision.target));
         *count = collision.count;
-        c.attack_packet = collision.packet.clone();
+        combat.spell_info = collision.packet.clone();
         let mut identity = spell_identity(collision.id);
         identity[1] = collision.level;
-        c.attack_identity = identity;
-        // collide1140ae calls spelltargets15cb0e, which holds Ready at 1 around
-        // resolvespell, so a collision killbody queues its script; Ready is 0 after.
-        // Target 0 is the field centre and resolvespell's 0x3a arm summons there;
-        // spelltargets' mask is never consulted.
-        if centurions_content::records::AttackPacket(&collision.packet)
+        combat.cast_identity = identity;
+        // in_spell is set while the field resolves, so a death it causes queues its
+        // story; in_spell is clear afterwards. A summon field summons at its centre.
+        if centurions_content::records::SpellInfoRecord(&collision.packet)
             .effect()?
             .wrapping_abs()
             == 58
         {
-            c.ready = 1;
+            combat.in_spell = 1;
             events.extend(super::live_arm(
-                c,
-                w,
+                combat,
+                warriors,
                 (mission, random),
-                (
-                    crate::combat::spells::detached::Arm::Summon,
-                    actor.selected_warrior,
-                ),
+                (Arm::Summon, actor.char_select_new),
                 (collision.id, &collision.packet, *count),
                 &mut *actor.movement_gate,
                 (None, None),
@@ -167,90 +183,87 @@ pub(super) fn collide_fields_impl(
                     .as_mut()
                     .map(|(items, buffers)| (*items, &mut **buffers)),
             )?);
-            c.ready = 0;
-            c.target_work.resolved(0);
+            combat.in_spell = 0;
+            combat.target_picks.resolved(0);
             continue;
         }
-        let context = crate::combat::spells::SpellContext {
+        let context = SpellContext {
             packet: &collision.packet,
             id: collision.id,
             count: *count,
             caster: body,
-            initiative: c.cursor as i16,
+            initiative: combat.battle_order_index as i16,
             collision: true,
         };
-        let mask = crate::combat::spells::target_mask_rotated_with_origin(
-            c,
-            w,
+        let mask = spells::target_mask_rotated_with_origin(
+            combat,
+            warriors,
             &mission.areas,
             (&collision.target, &collision.target),
             &context,
-            &c.spell_fields,
+            &combat.spell_queue,
             random,
-            (
-                collision.rotation,
-                crate::combat::map_alias::MapAliases::of_mission(mission),
-            ),
+            (collision.rotation, MapAliases::of_mission(mission)),
         )?;
-        party_mask.copy_from_slice(&mask.mask[..6]);
-        // collide114332 leaves spelltargets' marks; no cast clears them.
-        c.target_tail = mask.mask[6..].to_vec();
-        let previous_hp = w
+        party_track.copy_from_slice(&mask.mask[..6]);
+        // The field's target marks stay until a later cast clears them.
+        combat.track_tail = mask.mask[6..].to_vec();
+        let previous_hp = warriors
             .iter()
             .map(Warrior::stamina)
             .collect::<Result<Vec<_>, _>>()?;
-        c.mark_monster_spell_work(&collision.packet, &mask.mask);
-        c.ready = 1;
-        let effect = centurions_content::records::AttackPacket(&collision.packet)
+        combat.mark_monster_spell_pick(&collision.packet, &mask.mask);
+        combat.in_spell = 1;
+        let effect = centurions_content::records::SpellInfoRecord(&collision.packet)
             .effect()?
             .wrapping_abs();
         if matches!(effect, 55 | 56) {
             events.extend(move_selected(
-                c,
-                w,
+                combat,
+                warriors,
                 (mission, random),
                 &mut actor,
                 &collision,
             )?);
-            c.ready = 0;
-            c.target_work.resolved(0);
+            combat.in_spell = 0;
+            combat.target_picks.resolved(0);
             continue;
         }
-        let memory = crate::combat::spells::RestrictionMemoryView::ordinary_startup(
-            &mission.item_cache,
-            actor.item_work_alias,
-        )
-        .with_tables(mission)
-        .with_selected_warrior(actor.selected_warrior as i16)
-        .with_live_caster(c, w);
-        let result = crate::combat::spells::resolve_collision_with_memory(
-            w,
-            &c.enemies.records,
+        let memory =
+            RestrictionMemoryView::ordinary_startup(&mission.item_cache, actor.item_restriction)
+                .with_tables(mission)
+                .with_char_up(actor.char_select_new as i16)
+                .with_live_caster(combat, warriors);
+        let result = spells::resolve_collision_with_memory(
+            warriors,
+            &combat.roster.records,
             &mask.mask,
-            &crate::combat::spells::DirectSpell {
+            &DirectSpell {
                 packet: &collision.packet,
                 level: collision.level,
                 count: *count,
-                armor_filter: c.weapon_work.armor_filter(),
-                weapon_sound: c.weapon_work.sound(),
+                armor_filter: combat.weapon_traits.armor_filter(),
+                weapon_sound: combat.weapon_traits.sound(),
             },
             &mut usage,
-            (c.active_body(), memory),
+            (combat.active_body(), memory),
             random,
         )?;
-        c.unavailable = c.unavailable.wrapping_sub(result.recovered as i8);
+        combat.kill_party = combat.kill_party.wrapping_sub(result.recovered as i8);
         if result.healed {
-            centurions_content::records::AttackPacketMut(&mut c.attack_packet).set_health_effect(4);
+            centurions_content::records::SpellInfoRecordMut(&mut combat.spell_info)
+                .set_health_effect(4);
         }
         let result = result.body;
-        w.clone_from_slice(&result.warriors);
-        c.victory_work.add_total(result.total_delta);
-        c.enemies.records = result.enemies;
-        if c.active_body()
+        warriors.clone_from_slice(&result.warriors);
+        combat.kill_counts.add_num_enemy(result.total_delta);
+        combat.roster.records = result.enemies;
+        if combat
+            .active_body()
             .is_some_and(|active| (0..6).contains(&active))
         {
-            let member = actor.selected_warrior;
-            let warrior = w
+            let member = actor.char_select_new;
+            let warrior = warriors
                 .get_mut(member)
                 .ok_or_else(|| RuleError::Invalid("field credit warrior missing".into()))?;
             for (target, outcome) in &result.targets {
@@ -273,43 +286,41 @@ pub(super) fn collide_fields_impl(
                 .map(|resource_id| Event::Sound { resource_id }),
         );
         append_spell_outcomes(
-            c,
-            w,
+            combat,
+            warriors,
             result.targets,
             result.race_excluded,
             (None, collision.id, &collision.packet, &previous_hp),
             true,
             &mut events,
         )?;
-        c.ready = 0;
-        // collide pushes 0 as spelltargets' triple argument (114326).
-        c.target_work.resolved(0);
+        combat.in_spell = 0;
+        combat.target_picks.resolved(0);
     }
-    c.field_used = usage.used;
+    combat.collide_check = usage.used;
     Ok(events)
 }
 
-/// resolvespell151418 for a movement field: after its duration draws and the
-/// WORD438786 test, WORD4435d2 lands on the field centre collide stored in
-/// WORD443722/443724. The body loop and its usage byte do not run.
+/// A movement field moves the acting warrior (charup) to its centre, after the
+/// duration draws and the movement-marker test. No body is resolved and the field's
+/// usage is not marked.
+///
+/// Original: resolvespell
 fn move_selected(
-    c: &mut Combat,
-    w: &mut [Warrior],
+    combat: &mut Combat,
+    warriors: &mut [Warrior],
     (mission, random): (
         &centurions_content::mission::OpeningMission,
         &mut RandomState,
     ),
     actor: &mut FieldActor<'_>,
-    collision: &crate::combat::spells::FieldCollision,
+    collision: &FieldCollision,
 ) -> Result<Vec<Event>, RuleError> {
     super::live_arm(
-        c,
-        w,
+        combat,
+        warriors,
         (mission, random),
-        (
-            crate::combat::spells::detached::Arm::Movement,
-            actor.selected_warrior,
-        ),
+        (Arm::Movement, actor.char_select_new),
         (collision.id, &collision.packet, collision.count),
         &mut *actor.movement_gate,
         (None, None),

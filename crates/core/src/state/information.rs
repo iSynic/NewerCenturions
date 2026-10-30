@@ -1,16 +1,17 @@
-//! WORDs of the saved Information block that indexed native writers reach.
+//! Values of the saved Information block that scripts and effects reach by
+//! address.
 use crate::Session;
 
-/// The ten party durations at 442562.
+/// The ten party durations.
 const PARTY_DURATIONS: std::ops::Range<i64> = 0x442562..0x442576;
-/// WORD442576, the Session difficulty.
+/// The difficulty.
 const DIFFICULTY: i64 = 0x442576;
-/// The 128 story flag BYTEs at 44258c.
+/// The 128 story flags.
 const FLAGS: std::ops::Range<i64> = 0x44258c..0x44260c;
 
-/// Reads a represented Information WORD from its owners.
+/// Reads an Information value from the session field that holds it.
 pub(crate) fn read_word(
-    party_buffs: &[u8],
+    party_condition: &[u8],
     difficulty: i16,
     flags: &[u8],
     address: i64,
@@ -21,16 +22,16 @@ pub(crate) fn read_word(
     };
     match address {
         _ if address % 2 != 0 => None,
-        _ if PARTY_DURATIONS.contains(&address) => bytes(party_buffs, PARTY_DURATIONS.start),
+        _ if PARTY_DURATIONS.contains(&address) => bytes(party_condition, PARTY_DURATIONS.start),
         DIFFICULTY => Some(difficulty),
         _ if FLAGS.contains(&address) => bytes(flags, FLAGS.start),
         _ => None,
     }
 }
 
-/// Writes a represented Information WORD; false leaves every owner unchanged.
+/// Writes an Information value; false leaves the session unchanged.
 pub(crate) fn write_word(
-    party_buffs: &mut [u8],
+    party_condition: &mut [u8],
     difficulty: &mut i16,
     flags: &mut [u8],
     address: i64,
@@ -43,8 +44,8 @@ pub(crate) fn write_word(
     };
     match address {
         _ if address % 2 != 0 => false,
-        _ if PARTY_DURATIONS.contains(&address) => put(party_buffs, PARTY_DURATIONS.start),
-        // Validation bounds the represented difficulty; other values stay unowned.
+        _ if PARTY_DURATIONS.contains(&address) => put(party_condition, PARTY_DURATIONS.start),
+        // Only difficulties -2..2 are kept; other values have no owner.
         DIFFICULTY if (-2..=2).contains(&value) => {
             *difficulty = value;
             true
@@ -55,15 +56,15 @@ pub(crate) fn write_word(
 }
 
 impl Session {
-    /// The represented owner of an even Information address, if any.
+    /// The value at an even Information address, if the session holds it.
     pub(crate) fn information_word(&self, address: i64) -> Option<i16> {
-        read_word(&self.party_buffs, self.difficulty, &self.flags, address)
+        read_word(&self.party_condition, self.difficulty, &self.flags, address)
     }
 
-    /// Writes a represented Information WORD; false leaves the session unchanged.
+    /// Writes an Information value; false leaves the session unchanged.
     pub(crate) fn set_information_word(&mut self, address: i64, value: i16) -> bool {
         let written = write_word(
-            &mut self.party_buffs,
+            &mut self.party_condition,
             &mut self.difficulty,
             &mut self.flags,
             address,

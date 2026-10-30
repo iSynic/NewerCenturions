@@ -2,21 +2,24 @@
 mod defenses;
 
 use crate::{RandomState, RuleError};
+use centurions_content::WARRIOR_BYTES;
+use centurions_content::combat::MONSTER_BYTES;
 use centurions_content::records::{
     DamageDefenses, DamageDefinition, DamageTargetKind, DamageTargetRecord,
 };
 
-/// resolvedamage150e7a stores the first nonzero channel's cue in WORD 0x41f710.
-/// Cargo Pod has `cicn`/`PICT` resources 157-164 and no `snd ` with these ids;
-/// the reference body calls them icons. Physical and per-attack channels share 157.
+/// The damage icon for each channel; the first channel that deals damage picks
+/// it. Physical and per-attack damage share icon 157.
 const DAMAGE_CHANNEL_CUES: [i16; 9] = [157, 157, 159, 160, 161, 162, 163, 164, 159];
 
+/// The damage record of an attack and the number of attacks it makes.
 #[derive(Clone, Debug)]
 pub struct DamagePacket {
     pub bytes: Vec<u8>,
     pub attack_count: i16,
 }
 
+/// Which defenses apply to a damage roll: shield, armor, saving throws and the armor filter.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DamageFlags {
     pub shield: bool,
@@ -25,6 +28,8 @@ pub struct DamageFlags {
     pub armor_filter: bool,
 }
 
+/// The damage dealt, split into its nine channels, with the cue for the first channel that hurt and
+/// whether a shield absorbed any of it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct DamageResult {
     pub total: i16,
@@ -33,6 +38,7 @@ pub struct DamageResult {
     pub shield_sound: bool,
 }
 
+/// Resolves damage with a previous amount of zero.
 pub fn resolve_damage(
     target: &mut [u8],
     monster: bool,
@@ -43,9 +49,10 @@ pub fn resolve_damage(
     resolve_damage_with_amount(target, monster, packet, flags, 0, random)
 }
 
-/// resolvedamage150e7a reads the caller's previous amount for negative NPC saves.
-/// Keep this explicit input: replacing it with the current component changes
-/// the original vulnerability behavior.
+/// Resolves damage. A monster's negative save works from the caller's previous
+/// amount, not the current one (see docs/source-notes/combat.md).
+///
+/// Original: resolvedamage
 pub fn resolve_damage_with_amount(
     target: &mut [u8],
     monster: bool,
@@ -54,7 +61,14 @@ pub fn resolve_damage_with_amount(
     previous_amount: i16,
     random: &mut RandomState,
 ) -> Result<DamageResult, RuleError> {
-    if packet.bytes.len() != 58 || target.len() != if monster { 288 } else { 3138 } {
+    if packet.bytes.len() != 58
+        || target.len()
+            != if monster {
+                MONSTER_BYTES
+            } else {
+                WARRIOR_BYTES
+            }
+    {
         return Err(RuleError::Invalid("damage record size".into()));
     }
     let definition = DamageDefinition::read(&packet.bytes)?;
@@ -107,7 +121,7 @@ pub fn resolve_damage_with_amount(
     let first = components.iter().position(|damage| *damage != 0);
     let sound = first.map_or(0, |channel| DAMAGE_CHANNEL_CUES[channel]);
     if first.is_some() {
-        target.mark_damaged();
+        target.mark_been_attacked();
     }
     let total = sum(&components);
     crate::trace::damage(&rolled, &components, total);
@@ -119,6 +133,11 @@ pub fn resolve_damage_with_amount(
     })
 }
 
+/// Rolls each damage channel: one flat physical roll, a per-attack roll summed over the attacks,
+/// and one roll per element. A monster's damage is multiplied by its size when the attack scales
+/// with it.
+///
+/// Original: resolvedamage
 fn roll_damage(
     definition: &DamageDefinition,
     attack_count: i16,
@@ -149,6 +168,7 @@ fn roll_damage(
     components
 }
 
+/// Totals the channels.
 fn sum(components: &[i16; 9]) -> i16 {
     components
         .iter()

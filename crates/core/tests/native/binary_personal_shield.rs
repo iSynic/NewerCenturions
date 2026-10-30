@@ -142,8 +142,8 @@ fn profile_gates_and_manual_and_automatic_equipment_match_native_records() {
                 Step::Refit => {
                     let mut actual = random(before);
                     if case["kind"] == "automatic" {
-                        use centurions_core::ammunition::WorkBuffers;
-                        let work = |snapshot: &Value| WorkBuffers {
+                        use centurions_core::ammunition::LoadedItems;
+                        let work = |snapshot: &Value| LoadedItems {
                             item: Some(snapshot.bytes("item_work")),
                             ammo: Some(snapshot.bytes("ammo")),
                             weapon: Some(snapshot.bytes("weapon")),
@@ -154,8 +154,8 @@ fn profile_gates_and_manual_and_automatic_equipment_match_native_records() {
                                 .unwrap();
                         state.warriors = warriors.clone();
                         state.ammunition = stock(before);
-                        state.native_work.ammunition_work = work(before);
-                        state.native_work.inventory_record = InventoryRecord(
+                        state.globals.loaded_items = work(before);
+                        state.globals.inventory_record = InventoryRecord(
                             before.bytes("selected_record").try_into().unwrap(),
                         );
                         state.random = actual;
@@ -180,7 +180,7 @@ fn profile_gates_and_manual_and_automatic_equipment_match_native_records() {
                             .collect();
                         assert_eq!(events, expected);
                         assert_eq!(state.ammunition, stock(after));
-                        assert_eq!(state.native_work.ammunition_work, work(after));
+                        assert_eq!(state.globals.loaded_items, work(after));
                         assert_eq!(state.random, random(after));
                         warriors = state.warriors.clone();
                         assert_party(&warriors, after);
@@ -314,26 +314,26 @@ fn edited_equipment_refit_scans_reserves_and_commits_a_level_refusal() {
         state.ammunition[107] = 1000;
         let warrior = &mut state.warriors[3];
         let mut item = ItemDefinition(&content.items[id]).fresh_stock().unwrap();
-        item.set_equipment_flag(1);
-        item.set_quantity(0);
+        item.set_equipped(1);
+        item.set_charge(0);
         item.set_capacity(if id == 637 { 250 } else { 1 });
         let level = warrior.record().level().unwrap() + 1;
         item.set_editor_modifier(0, level as u8);
         let slot = usize::from(id == 637);
         if id == 637 {
             let mut gun = ItemDefinition(&content.items[1]).fresh_stock().unwrap();
-            gun.set_equipment_flag(1);
-            gun.set_quantity(0);
+            gun.set_equipped(1);
+            gun.set_charge(0);
             gun.set_capacity(10);
             gun.set_ammunition(201);
             warrior.record_mut().set_inventory_slot(0, &gun);
             state.ammunition[1] = 2;
-            item.set_quantity(1);
+            item.set_charge(1);
             item.set_ammunition(307);
         }
         warrior.record_mut().set_inventory_slot(slot, &item);
         InventorySlotsMut(&mut warrior.bytes).set_count((slot + 1) as i16);
-        state.native_work.inventory_record = item.clone();
+        state.globals.inventory_record = item.clone();
         let mut resumed = support::checkpoint(&state, &content, "edited-refit");
         let random = state.random.clone();
         let events = support::replay_command(
@@ -344,13 +344,13 @@ fn edited_equipment_refit_scans_reserves_and_commits_a_level_refusal() {
         );
         let actual = state.warriors[3].record().inventory_slot(slot);
         if id == 637 {
-            assert_eq!(actual.quantity().unwrap(), 250);
-            assert_eq!(actual.equipment_flag(), 0);
+            assert_eq!(actual.charge().unwrap(), 250);
+            assert_eq!(actual.equipped(), 0);
             assert_eq!(state.ammunition[107], 751);
             assert_eq!(state.ammunition[1], 2); // Native partial refit does not debit stock.
             assert_eq!(events[2], Event::CollectionRejected { warning: 49 });
             assert!(
-                matches!(&events[3], Event::Feedback(centurions_core::feedback::NativeFeedback::EquipmentLevel { level: required }) if *required == level)
+                matches!(&events[3], Event::Feedback(centurions_core::feedback::GameFeedback::EquipmentLevel { level: required }) if *required == level)
             );
             assert_eq!(state.random.draws, random.draws + 2);
         } else {

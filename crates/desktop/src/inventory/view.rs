@@ -1,13 +1,15 @@
-//! Inventory view using original resources and controls.
+//! The Items screen: the two item lists, their categories and controls.
 use super::{Inventory, InventoryAction};
 use crate::{
     assets::Assets,
     presentation::{Action, Control},
 };
-use centurions_content::Content;
+use centurions_content::{Content, InventoryRecord, Warrior};
 use centurions_core::Session;
 use macroquad::prelude::*;
 impl Inventory {
+    /// Draws the Items screen: both warriors' lists with their portraits and
+    /// scroll bars and the controls.
     pub fn draw(
         &self,
         content: &Content,
@@ -29,119 +31,26 @@ impl Inventory {
             else {
                 continue;
             };
-            let x = if side == 0 { 10. } else { 470. };
             let records = self.items(state, content, side).unwrap_or_default();
             for (row, (slot, item)) in records.iter().skip(self.scroll[side]).take(9).enumerate() {
-                let rect = Rect::new(x, 36. + row as f32 * 40., 325., 39.);
-                if self.selected == Some((side, *slot)) {
-                    draw_rectangle(
-                        rect.x,
-                        rect.y,
-                        rect.w,
-                        rect.h,
-                        Color::from_rgba(220, 230, 225, 255),
-                    );
-                }
-                if let Some(definition) = content.items.get(item.id().unsigned_abs() as usize)
-                    && let Ok(id) = centurions_content::records::ItemDefinition(definition).icon()
-                    && let Some(icon) = assets.icons.get(&id)
-                {
-                    draw_texture_ex(
-                        icon,
-                        rect.x,
-                        rect.y,
-                        WHITE,
-                        DrawTextureParams {
-                            dest_size: Some(vec2(32., 32.)),
-                            ..Default::default()
-                        },
-                    );
-                }
-                let name = assets.names.get(&item.id()).map_or("", String::as_str);
-                assets.text(name, rect.x + 42., rect.y + 17., 12, BLACK);
-                if let Ok(amount) = item.quantity()
-                    && amount > 0
-                {
-                    let mut x = rect.x + 42. + measure_text(name, Some(&assets.font), 12, 1.).width;
-                    if let Ok(ammo) = item.ammunition_id()
-                        && ammo != 0
-                        && let Some(definition) = content.items.get(ammo.unsigned_abs() as usize)
-                        && let Ok(icon) =
-                            centurions_content::records::ItemDefinition(definition).icon()
-                        && let Some(image) = assets.icons.get(&icon)
-                    {
-                        draw_texture_ex(
-                            image,
-                            x + 4.,
-                            rect.y,
-                            WHITE,
-                            DrawTextureParams {
-                                dest_size: Some(vec2(16., 16.)),
-                                ..Default::default()
-                            },
-                        );
-                        x += 22.;
-                    }
-                    if let Ok(prefix) = assets.native_text.text(0x401152, true) {
-                        assets.text(&format!("{prefix}{amount}"), x, rect.y + 17., 12, BLUE);
-                    }
-                }
-                self.row_stats(content, item, assets, rect.x + 42., rect.y + 30.);
-                controls.push(Control {
-                    rect,
-                    enabled: true,
-                    action: Action::Inventory(InventoryAction::Item { side, slot: *slot }),
-                });
+                self.draw_item_row(content, assets, side, row, *slot, item, controls);
             }
             if side == 1 && Self::shop(state) {
                 continue;
             }
-            let portrait = warrior.record().portrait().unwrap_or(0);
-            if let Some(image) = assets.portraits.get(&portrait) {
-                draw_texture_ex(
-                    image,
-                    if side == 0 { 97. } else { 455. },
-                    422.,
-                    WHITE,
-                    DrawTextureParams {
-                        dest_size: Some(vec2(32., 32.)),
-                        ..Default::default()
-                    },
-                );
-            }
-            assets.text(
-                &warrior.name,
-                if side == 0 { 151. } else { 503. },
-                471.,
-                12,
-                YELLOW,
-            );
-            let edge = if side == 0 { 0. } else { 720. };
-            assets.text(
-                &warrior.record().carried_weight().unwrap_or(0).to_string(),
-                edge + 8.,
-                445.,
-                12,
-                YELLOW,
-            );
-            assets.text(
-                &warrior.record().weight_capacity().unwrap_or(0).to_string(),
-                edge + 42.,
-                445.,
-                12,
-                YELLOW,
-            );
-            assets.text(&records.len().to_string(), edge + 49., 475., 12, YELLOW);
+            draw_owner_footer(assets, warrior, side, records.len());
         }
-        for side in 0..2 {
+        for (side, layout) in SIDE_LAYOUT.iter().enumerate() {
             for (y, delta) in [(20., -1), (384., 1)] {
-                let rect = Rect::new(if side == 0 { 349. } else { 435. }, y, 16., 20.);
-                assets.panel(if delta < 0 { 179 } else { 183 }, rect);
-                controls.push(Control {
+                let rect = Rect::new(layout.scroll, y, 16., 20.);
+                crate::presentation::push_panel_control(
+                    assets,
+                    controls,
+                    if delta < 0 { 179 } else { 183 },
                     rect,
-                    enabled: true,
-                    action: Action::Inventory(InventoryAction::Scroll { side, delta }),
-                });
+                    true,
+                    Action::Inventory(InventoryAction::Scroll { side, delta }),
+                );
             }
         }
         for member in 0..if Self::shop(state) { 0 } else { 6 } {
@@ -164,16 +73,7 @@ impl Inventory {
                     .portraits
                     .get(&warrior.record().portrait().unwrap_or(0))
                 {
-                    draw_texture_ex(
-                        image,
-                        rect.x,
-                        rect.y,
-                        WHITE,
-                        DrawTextureParams {
-                            dest_size: Some(vec2(rect.w, rect.h)),
-                            ..Default::default()
-                        },
-                    );
+                    crate::assets::texture_in(image, rect);
                 }
                 controls.push(Control {
                     rect,
@@ -189,16 +89,7 @@ impl Inventory {
                 .portraits
                 .get(&warrior.record().portrait().unwrap_or(0))
             {
-                draw_texture_ex(
-                    image,
-                    383.,
-                    y + 8.,
-                    WHITE,
-                    DrawTextureParams {
-                        dest_size: Some(vec2(32., 32.)),
-                        ..Default::default()
-                    },
-                );
+                crate::assets::icon_in(image, vec2(383., y + 8.));
             }
             if let Ok(mos) = warrior.record().profession()
                 && let Some(name) = mos_names.get(mos.wrapping_sub(1) as usize)
@@ -223,7 +114,7 @@ impl Inventory {
             {
                 assets.text(
                     &price.to_string(),
-                    if side == 0 { 241. } else { 188. },
+                    SIDE_LAYOUT[side].price,
                     447.,
                     12,
                     YELLOW,
@@ -247,15 +138,17 @@ impl Inventory {
                 });
             }
         } else {
-            assets.panel(202, Rect::new(183., 411., 102., 40.));
-            controls.push(Control {
-                rect: Rect::new(183., 411., 102., 40.),
-                enabled: state
+            crate::presentation::push_panel_control(
+                assets,
+                controls,
+                202,
+                Rect::new(183., 411., 102., 40.),
+                state
                     .shop_access
                     .as_ref()
                     .is_some_and(|a| a.level == state.scenario_level),
-                action: Action::Inventory(InventoryAction::Shop),
-            });
+                Action::Inventory(InventoryAction::Shop),
+            );
             self.draw_ammunition_button(assets, controls);
         }
         assets.panel(175, Rect::new(375., 320., 50., 37.));
@@ -295,4 +188,120 @@ impl Inventory {
         self.draw_information(content, state, assets, controls);
         self.draw_ammunition(assets, controls);
     }
+
+    /// One item row: its icon, name, quantity with loaded ammunition, and stats.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_item_row(
+        &self,
+        content: &Content,
+        assets: &Assets,
+        side: usize,
+        row: usize,
+        slot: usize,
+        item: &InventoryRecord,
+        controls: &mut Vec<Control>,
+    ) {
+        let rect = Rect::new(SIDE_LAYOUT[side].list, 36. + row as f32 * 40., 325., 39.);
+        if self.selected == Some((side, slot)) {
+            draw_rectangle(
+                rect.x,
+                rect.y,
+                rect.w,
+                rect.h,
+                Color::from_rgba(220, 230, 225, 255),
+            );
+        }
+        if let Some(definition) = content.items.get(item.id().unsigned_abs() as usize)
+            && let Ok(id) = centurions_content::records::ItemDefinition(definition).icon()
+            && let Some(icon) = assets.icons.get(&id)
+        {
+            crate::assets::icon_in(icon, vec2(rect.x, rect.y));
+        }
+        let name = assets.names.get(&item.id()).map_or("", String::as_str);
+        assets.text(name, rect.x + 42., rect.y + 17., 12, BLACK);
+        if let Ok(amount) = item.charge()
+            && amount > 0
+        {
+            let mut x = rect.x + 42. + measure_text(name, Some(&assets.font), 12, 1.).width;
+            if let Ok(ammo) = item.ammunition_id()
+                && ammo != 0
+                && let Some(definition) = content.items.get(ammo.unsigned_abs() as usize)
+                && let Ok(icon) = centurions_content::records::ItemDefinition(definition).icon()
+                && let Some(image) = assets.icons.get(&icon)
+            {
+                crate::assets::texture_in(image, Rect::new(x + 4., rect.y, 16., 16.));
+                x += 22.;
+            }
+            if let Ok(prefix) = assets
+                .game_text
+                .text(crate::game_strings::QUANTITY_PREFIX, true)
+            {
+                assets.text(&format!("{prefix}{amount}"), x, rect.y + 17., 12, BLUE);
+            }
+        }
+        self.row_stats(content, item, assets, rect.x + 42., rect.y + 30.);
+        controls.push(Control {
+            rect,
+            enabled: true,
+            action: Action::Inventory(InventoryAction::Item { side, slot }),
+        });
+    }
 }
+
+/// The owner's portrait, name, carried weight, capacity and item count under a list.
+fn draw_owner_footer(assets: &Assets, warrior: &Warrior, side: usize, item_count: usize) {
+    let layout = &SIDE_LAYOUT[side];
+    let portrait = warrior.record().portrait().unwrap_or(0);
+    if let Some(image) = assets.portraits.get(&portrait) {
+        crate::assets::icon_in(image, vec2(layout.portrait, 422.));
+    }
+    assets.text(&warrior.name, layout.name, 471., 12, YELLOW);
+    let edge = layout.edge;
+    assets.text(
+        &warrior.record().load().unwrap_or(0).to_string(),
+        edge + 8.,
+        445.,
+        12,
+        YELLOW,
+    );
+    assets.text(
+        &warrior.record().load_max().unwrap_or(0).to_string(),
+        edge + 42.,
+        445.,
+        12,
+        YELLOW,
+    );
+    assets.text(&item_count.to_string(), edge + 49., 475., 12, YELLOW);
+}
+
+/// Horizontal positions that differ between the left (0) and right (1) lists.
+struct SideLayout {
+    list: f32,
+    portrait: f32,
+    name: f32,
+    /// Left edge of the weight and count panel.
+    edge: f32,
+    scroll: f32,
+    price: f32,
+}
+
+/// Where each side of the Items screen puts its list, portrait, name, weight
+/// and count panel, scroll bar and price column.
+const SIDE_LAYOUT: [SideLayout; 2] = [
+    SideLayout {
+        list: 10.,
+        portrait: 97.,
+        name: 151.,
+        edge: 0.,
+        scroll: 349.,
+        price: 241.,
+    },
+    SideLayout {
+        list: 470.,
+        portrait: 455.,
+        name: 503.,
+        edge: 720.,
+        scroll: 435.,
+        price: 188.,
+    },
+];

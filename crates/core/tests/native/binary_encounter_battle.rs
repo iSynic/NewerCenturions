@@ -7,7 +7,7 @@ fn selected_reward_start(content: &Content, entry_treasure: i16) -> Session {
     let case = &fixture.array("cases")[0];
     let mut state = support::mission_session(content);
     state.warriors = support::warriors(&case.bytes("before"));
-    state.native_work.party_mask = [1, 0, 1, 0, 0, 0];
+    state.globals.party_track = [1, 0, 1, 0, 0, 0];
     let position = state.exploration.as_mut().unwrap();
     position.script = Some(ScriptState::scheduled(case.bytes("record"), 0));
     position.presentation = Some(Presentation::Dialogue {
@@ -17,7 +17,7 @@ fn selected_reward_start(content: &Content, entry_treasure: i16) -> Session {
     support::saved_command(Command::Continue, &mut state, content);
     assert!(state.selected_battle_treasure.is_some());
     assert_eq!(
-        centurions_content::word(&state.native_work.extra_record, 8).unwrap(),
+        centurions_content::word(&state.globals.extra_record, 8).unwrap(),
         entry_treasure
     );
     state
@@ -31,9 +31,9 @@ fn selected_reward_return(content: &Content, entry_treasure: i16) -> Session {
     // histories are source compositions, not captured nested battles.
     state.warriors = support::warriors(&case.bytes("battle_return"));
     let mut arena = support::battle();
-    arena.retained_npcs = state.native_work.npc_backing.clone();
-    arena.squad.positions.truncate(state.warriors.len());
-    arena.squad.under_tiles.truncate(state.warriors.len());
+    arena.monsters = state.globals.monsters.clone();
+    arena.squad.pos.truncate(state.warriors.len());
+    arena.squad.char_under.truncate(state.warriors.len());
     state.combat = Some(arena);
     state.exploration.as_mut().unwrap().presentation = Some(Presentation::Survivors);
     state.random = RandomState::new(case.n("seed_before"));
@@ -55,10 +55,10 @@ fn selected_reward_rereads_shared_extra_after_saved_first_window() {
             .copy_from_slice(&entry.to_be_bytes());
         tables.treasure[704..792].copy_from_slice(&case.bytes("treasure"));
         let mut state = selected_reward_return(&content, entry);
-        state.native_work.extra_record[8..10]
+        state.globals.extra_record[8..10]
             .copy_from_slice(&retained.to_be_bytes());
         if early {
-            state.native_work.early_booty = 1;
+            state.globals.coward = 1;
         }
         let currency = state.party_currency;
         let events = support::saved_command(Command::Continue, &mut state, &content);
@@ -89,9 +89,9 @@ fn selected_reward_rereads_shared_extra_after_saved_first_window() {
     tables.treasure[704..792].copy_from_slice(&case.bytes("treasure"));
     let mut state = selected_reward_start(&content, 8);
     for warrior in &mut state.warriors {
-        warrior.record_mut().set_active_flag(0);
+        warrior.record_mut().set_in_battle(0);
     }
-    state.combat.as_mut().unwrap().unavailable = 0;
+    state.combat.as_mut().unwrap().kill_party = 0;
     let currency = state.party_currency;
     let random = state.random.clone();
     let events = support::saved_command(Command::EndTurn, &mut state, &content);
@@ -99,9 +99,9 @@ fn selected_reward_rereads_shared_extra_after_saved_first_window() {
     assert!(state.combat_story.is_none() && state.round_dispatch.is_none());
     assert!(state.exploration.as_ref().unwrap().script.is_none());
     assert_eq!(state.phase, Phase::Exploration);
-    assert_eq!(state.native_work.early_booty, 1);
+    assert_eq!(state.globals.coward, 1);
     assert_eq!(
-        state.native_work.treasure_record,
+        state.globals.treasure,
         case.bytes("treasure")
     );
     assert_eq!(state.party_currency, currency);
@@ -110,24 +110,24 @@ fn selected_reward_rereads_shared_extra_after_saved_first_window() {
         state
             .warriors
             .iter()
-            .all(|warrior| warrior.record().active_flag() == 1)
+            .all(|warrior| warrior.record().in_battle() == 1)
     );
     assert!(events.contains(&Event::BattleEnded { victory: true }));
     assert_eq!(support::event_sounds(&events), [5]);
     assert!(!events.iter().any(|event| matches!(
         event,
-        Event::Feedback(centurions_core::feedback::NativeFeedback::Flash {
+        Event::Feedback(centurions_core::feedback::GameFeedback::Flash {
             address: 0x401b7e,
             ..
         })
     )));
     let mut terminal = selected_reward_start(&content, 8);
-    terminal.combat.as_mut().unwrap().unavailable = terminal.warriors.len() as i8;
-    let early = terminal.native_work.early_booty;
+    terminal.combat.as_mut().unwrap().kill_party = terminal.warriors.len() as i8;
+    let early = terminal.globals.coward;
     let events = support::saved_command(Command::EndTurn, &mut terminal, &content);
     assert!(events.contains(&Event::MissionEnded { defeated: true }));
     assert!(terminal.exploration.is_none() && terminal.selected_battle_treasure.is_none());
-    assert_eq!(terminal.native_work.early_booty, early);
+    assert_eq!(terminal.globals.coward, early);
 }
 
 #[test]
@@ -175,9 +175,9 @@ fn selected_parent_returns_after_saved_death_and_round_child_battles() {
                 death_depth: Some(0),
                 ..Default::default()
             });
-            state.combat.as_mut().unwrap().cursor = 110;
-            state.combat.as_mut().unwrap().round_scripts.slots[0] = 1;
-            state.combat.as_mut().unwrap().round_scripts.pending = Some(RoundProgram {
+            state.combat.as_mut().unwrap().battle_order_index = 110;
+            state.combat.as_mut().unwrap().round_macros.slots[0] = 1;
+            state.combat.as_mut().unwrap().round_macros.pending = Some(RoundProgram {
                 slot: 0,
                 script: Some(1),
                 cursor: 1,
@@ -220,9 +220,9 @@ fn selected_parent_returns_after_saved_death_and_round_child_battles() {
         assert!(state.combat.is_some());
         state.warriors = support::warriors(&case.bytes("battle_return"));
         let mut arena = support::battle();
-        arena.retained_npcs = state.native_work.npc_backing.clone();
-        arena.squad.positions.truncate(state.warriors.len());
-        arena.squad.under_tiles.truncate(state.warriors.len());
+        arena.monsters = state.globals.monsters.clone();
+        arena.squad.pos.truncate(state.warriors.len());
+        arena.squad.char_under.truncate(state.warriors.len());
         state.combat = Some(arena);
         state.exploration.as_mut().unwrap().presentation = Some(Presentation::Survivors);
         state.random = RandomState::new(case.n("seed_before"));
@@ -245,7 +245,7 @@ fn selected_parent_returns_after_saved_death_and_round_child_battles() {
         assert!(state.combat.is_none());
         assert!(state.exploration.as_ref().unwrap().script.is_none());
         assert_eq!(
-            centurions_content::word(&state.native_work.extra_record, 8).unwrap(),
+            centurions_content::word(&state.globals.extra_record, 8).unwrap(),
             0
         );
         assert!(sounds.windows(2).any(|pair| pair == [7, 20]));
@@ -263,7 +263,7 @@ fn selected_parent_returns_after_saved_death_and_round_child_battles() {
     tables.scheduled_scripts[42..84].copy_from_slice(&case.bytes("record"));
     let mut selected = support::mission_session(&content);
     selected.warriors = support::warriors(&case.bytes("before"));
-    selected.native_work.party_mask = [1, 0, 1, 0, 0, 0];
+    selected.globals.party_track = [1, 0, 1, 0, 0, 0];
     let position = selected.exploration.as_mut().unwrap();
     let index = centurions_content::mission::OpeningMission::index(position.x, position.y).unwrap();
     position.floor[index] = 0;
@@ -289,9 +289,9 @@ fn selected_parent_returns_after_saved_death_and_round_child_battles() {
     position.schedule.clone_from(&calendar.schedule);
     (position.day, position.hour, position.minute) = (calendar.day, calendar.hour, calendar.minute);
     position.floor[index] = 0;
-    state.native_work.tactical_work.saved_land = selected
-        .native_work
-        .tactical_work
+    state.globals.battlefield.saved_land = selected
+        .globals
+        .battlefield
         .saved_land
         .clone();
     let story = state.combat_story.as_mut().unwrap();
@@ -305,10 +305,10 @@ fn selected_parent_returns_after_saved_death_and_round_child_battles() {
     story.suspended_script = selected.exploration.as_mut().unwrap().script.take();
     let mut extra = case.bytes("extra");
     extra[8..10].fill(0);
-    state.native_work.extra_record = extra;
+    state.globals.extra_record = extra;
     assert!(
-        state.native_work.victory_work.total
-            > state.native_work.victory_work.defeated
+        state.globals.kill_counts.num_enemy
+            > state.globals.kill_counts.kill_mon
     );
     let events = support::saved_command(Command::Continue, &mut state, &content);
     assert_eq!(
@@ -324,7 +324,7 @@ fn selected_parent_returns_after_saved_death_and_round_child_battles() {
         y: 19
     }));
     assert_eq!(
-        state.native_work.tactical_work.positions[3],
+        state.globals.battlefield.pos[3],
         (20, 19)
     );
     assert!(state.combat.is_none() && state.combat_story.is_none());
@@ -365,7 +365,7 @@ fn selected_battle_bonus_has_two_saved_reward_windows_and_matches_native_prepara
         tables.treasure[704..792].copy_from_slice(&case.bytes("treasure"));
         let mut state = support::mission_session(&content);
         state.warriors = support::warriors(&case.bytes("before"));
-        state.native_work.party_mask = [1, 0, 1, 0, 0, 0];
+        state.globals.party_track = [1, 0, 1, 0, 0, 0];
         let position = state.exploration.as_mut().unwrap();
         position.script = Some(ScriptState::scheduled(case.bytes("record"), 0));
         position.presentation = Some(Presentation::Dialogue {
@@ -378,9 +378,9 @@ fn selected_battle_bonus_has_two_saved_reward_windows_and_matches_native_prepara
         // The oracle's combat service supplies this controlled return, not a played battle.
         state.warriors = support::warriors(&case.bytes("battle_return"));
         let mut arena = support::battle();
-        arena.retained_npcs = state.native_work.npc_backing.clone();
-        arena.squad.positions.truncate(state.warriors.len());
-        arena.squad.under_tiles.truncate(state.warriors.len());
+        arena.monsters = state.globals.monsters.clone();
+        arena.squad.pos.truncate(state.warriors.len());
+        arena.squad.char_under.truncate(state.warriors.len());
         state.combat = Some(arena);
         state.exploration.as_mut().unwrap().presentation = Some(Presentation::Survivors);
         state.random = RandomState::new(case.n("seed_before"));
@@ -388,13 +388,13 @@ fn selected_battle_bonus_has_two_saved_reward_windows_and_matches_native_prepara
         if index == 0 {
             let mut escaped = state.clone();
             escaped.exploration.as_mut().unwrap().presentation = None;
-            escaped.combat.as_mut().unwrap().order[1] = 0;
+            escaped.combat.as_mut().unwrap().battle_order[1] = 0;
             escaped.warriors[0].record_mut().set_turn_skip_duration(0);
             escaped.warriors[0]
                 .record_mut()
                 .set_condition(centurions_content::records::Condition::Retreating, 0);
             for warrior in escaped.warriors.iter_mut().skip(1) {
-                warrior.record_mut().set_active_flag(0);
+                warrior.record_mut().set_in_battle(0);
             }
             let events = support::saved_command(Command::EscapeCombat, &mut escaped, &content);
             assert!(

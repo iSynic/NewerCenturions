@@ -9,20 +9,28 @@ use std::{
     sync::Arc,
 };
 
+/// Where a resource's bytes lie: a file and an offset within its resource fork.
 #[derive(Clone, Debug, Deserialize)]
 pub struct SourceFork {
+    /// The file holding the fork.
     pub path: String,
+    /// Where the resource's data starts within the fork.
     pub offset: usize,
     #[serde(skip)]
     pub(crate) cached: Option<Arc<[u8]>>,
 }
 
+/// A player's New Centurions installation, read in place.
 pub struct Installation {
+    /// What the installation holds.
     pub content: Content,
+    /// The folder resources are read from.
     pub resource_root: PathBuf,
 }
 
 impl Installation {
+    /// The folder the program sits in; for a Mac application bundle, the folder
+    /// holding the bundle.
     pub fn default_root() -> PathBuf {
         let executable = std::env::current_exe().unwrap_or_default();
         let directory = executable.parent().unwrap_or(Path::new("."));
@@ -38,6 +46,8 @@ impl Installation {
         directory.to_path_buf()
     }
 
+    /// Opens the installation at `root`, which holds `Data Files` and `Scenarios`. A
+    /// prepared development layout is accepted as well.
     pub fn open(root: &Path) -> Result<Self, ContentError> {
         if root.join("Data Files").is_dir() && root.join("Scenarios").is_dir() {
             return Self::direct(root);
@@ -55,6 +65,8 @@ impl Installation {
         ))
     }
 
+    /// Reads an installation folder in place: its data forks and the resource forks
+    /// kept as `.rsrc` files, AppleDouble sidecars or native forks.
     fn direct(root: &Path) -> Result<Self, ContentError> {
         let mut files = BTreeSet::new();
         for name in ["Data Files", "Scenarios", "Warriors"] {
@@ -69,7 +81,7 @@ impl Installation {
         let mut resources = vec![];
         let mut owners = BTreeSet::new();
         #[cfg(target_os = "macos")]
-        let native_files = files.clone();
+        let fork_files = files.clone();
         for path in files {
             let name = Path::new(&path)
                 .file_name()
@@ -115,18 +127,18 @@ impl Installation {
             }
         }
         #[cfg(target_os = "macos")]
-        for path in native_files {
+        for path in fork_files {
             let name = Path::new(&path).file_name().unwrap().to_string_lossy();
             if name.starts_with("._") || name.ends_with(".rsrc") || owners.contains(&path) {
                 continue;
             }
-            if let Some(native) = native_resource(&safe_path(root, &path)?)? {
-                add_resources(&native, &path, &path, &mut owners, &mut resources)?;
+            if let Some(fork) = resource_fork(&safe_path(root, &path)?)? {
+                add_resources(&fork, &path, &path, &mut owners, &mut resources)?;
                 forks.push(Fork {
                     path: format!("TheNewCenturions/{path}.rsrc"),
                     kind: "resource".into(),
-                    size: native.len(),
-                    sha256: digest(&native),
+                    size: fork.len(),
+                    sha256: digest(&fork),
                 });
             }
         }
@@ -148,8 +160,9 @@ impl Installation {
     }
 }
 
+/// The resource fork of a file on a Mac file system, or none when it has none.
 #[cfg(target_os = "macos")]
-fn native_resource(path: &Path) -> Result<Option<Vec<u8>>, ContentError> {
+fn resource_fork(path: &Path) -> Result<Option<Vec<u8>>, ContentError> {
     let fork = path.join("..namedfork/rsrc");
     match fs::metadata(&fork) {
         Ok(metadata) if metadata.len() == 0 => Ok(None),
@@ -159,6 +172,7 @@ fn native_resource(path: &Path) -> Result<Option<Vec<u8>>, ContentError> {
     }
 }
 
+/// Lists the files below `directory`, relative to `root`; a symbolic link is refused.
 fn collect(
     root: &Path,
     directory: &Path,
@@ -221,6 +235,7 @@ fn collect(
     Ok(())
 }
 
+/// Reads a file of at most 64 MiB.
 pub(crate) fn read_file(path: &Path) -> Result<Vec<u8>, ContentError> {
     if fs::metadata(path)?.len() > 64 * 1024 * 1024 {
         return Err(ContentError::Invalid(format!(
@@ -231,11 +246,13 @@ pub(crate) fn read_file(path: &Path) -> Result<Vec<u8>, ContentError> {
     Ok(fs::read(path)?)
 }
 
+/// Reads a file's data fork, taking it out of an AppleSingle or AppleDouble wrapper.
 pub fn data_file(path: &Path) -> Result<Vec<u8>, ContentError> {
     let raw = read_file(path)?;
     Ok(fork_payload(&raw, 1)?.to_vec())
 }
 
+/// Reads the data fork of an installation file named relative to the root.
 pub(crate) fn read_data(root: &Path, relative: &str) -> Result<Vec<u8>, ContentError> {
     let relative = if root.join("Data Files").is_dir() {
         relative
@@ -248,15 +265,18 @@ pub(crate) fn read_data(root: &Path, relative: &str) -> Result<Vec<u8>, ContentE
     Ok(fork_payload(&raw, 1)?.to_vec())
 }
 
+/// Whether the bytes are an AppleSingle or AppleDouble file.
 fn wrapped(bytes: &[u8]) -> bool {
     matches!(bytes.get(..4), Some([0, 5, 0x16, 0] | [0, 5, 0x16, 7]))
 }
 
+/// The entry descriptors of an AppleSingle or AppleDouble file.
 fn descriptors(bytes: &[u8]) -> Result<&[u8], ContentError> {
     let count = usize::from(u16::from_be_bytes(span(bytes, 24, 2)?.try_into().unwrap()));
     span(bytes, 26, count * 12)
 }
 
+/// Whether the wrapped file has the entry `id`.
 fn has_fork(bytes: &[u8], id: u32) -> Result<bool, ContentError> {
     Ok(descriptors(bytes)?
         .as_chunks::<12>()
@@ -265,6 +285,8 @@ fn has_fork(bytes: &[u8], id: u32) -> Result<bool, ContentError> {
         .any(|r| u32::from_be_bytes(r[..4].try_into().unwrap()) == id))
 }
 
+/// The entry `id` of a wrapped file (1 is the data fork, 2 the resource fork); a file that is
+/// not wrapped is returned whole for either.
 pub(crate) fn fork_payload(bytes: &[u8], id: u32) -> Result<&[u8], ContentError> {
     if !wrapped(bytes) {
         return Ok(bytes);
@@ -287,6 +309,8 @@ pub(crate) fn fork_payload(bytes: &[u8], id: u32) -> Result<&[u8], ContentError>
     result.ok_or_else(|| ContentError::Invalid(format!("AppleSingle/Double missing fork {id}")))
 }
 
+/// Lists the resources of a resource fork, checking each is whole and none
+/// repeats.
 fn add_resources(
     raw: &[u8],
     path: &str,

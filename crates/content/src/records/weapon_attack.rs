@@ -1,8 +1,9 @@
 use super::put_word;
 use crate::{ContentError, word};
 
-/// Item fields consumed by prepattack14c6c2. These are modifiers, not a prepared
-/// attack: ammunition overrides and burst/enhancement arithmetic belong to rules.
+/// Item fields a weapon brings to its attack. These are modifiers, not a
+/// prepared attack: the rules apply ammunition overrides and burst and
+/// enhancement arithmetic.
 pub struct WeaponAttackModifiers {
     pub count: u8,
     pub target_filter: u8,
@@ -20,6 +21,7 @@ pub struct WeaponAttackModifiers {
 }
 
 impl WeaponAttackModifiers {
+    /// Reads the weapon's attack modifiers from its item definition.
     pub fn read(bytes: &[u8]) -> Result<Self, ContentError> {
         let mut elemental_maximum = [0; 7];
         for (value, offset) in elemental_maximum
@@ -46,8 +48,8 @@ impl WeaponAttackModifiers {
     }
 }
 
-/// Only the fields written by weapon preparation. Encoding updates the supplied
-/// template in place, preserving all other attack bytes and their saved meaning.
+/// The attack fields that preparing a weapon writes. Encoding updates the
+/// given packet in place and leaves every other byte as it was.
 pub struct WeaponAttackParameters {
     pub count: u8,
     pub target_filter: u8,
@@ -63,6 +65,7 @@ pub struct WeaponAttackParameters {
 }
 
 impl WeaponAttackParameters {
+    /// Reads the attack fields from a spell info packet.
     pub fn read(packet: &[u8]) -> Result<Self, ContentError> {
         Ok(Self {
             count: packet[0],
@@ -79,6 +82,7 @@ impl WeaponAttackParameters {
         })
     }
 
+    /// Writes the attack fields into a spell info packet.
     pub fn write(&self, packet: &mut [u8]) {
         packet[0] = self.count;
         packet[1] = self.target_mode;

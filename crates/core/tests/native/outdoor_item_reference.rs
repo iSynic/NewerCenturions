@@ -46,12 +46,12 @@ fn input(source: &Value) -> (Session, Content) {
                 .attacks;
         attacks[offset..offset + 58].copy_from_slice(&bytes(&json!(packet)));
     }
-    state.allies = bytes(&before["allies"]);
-    state.ally_count = scalar(&before["ally_count"]) as usize;
-    state.native_work.psi_memory = bytes(&before["psi_memory"]);
-    state.native_work.inventory_record =
+    state.holdover = bytes(&before["allies"]);
+    state.held_over = scalar(&before["ally_count"]) as usize;
+    state.globals.define_spells = bytes(&before["psi_memory"]);
+    state.globals.inventory_record =
         InventoryRecord::read(&bytes(&before["inventory_record"])).unwrap();
-    state.native_work.npc_backing.active_count = scalar(&before["npc_count"]);
+    state.globals.monsters.num_mon = scalar(&before["npc_count"]);
     state.scenario_duration_tail = Some(scalar(&before["scenario_duration_tail"]));
     let position = state.exploration.as_mut().unwrap();
     position.minute = scalar(&before["clock_minute"]);
@@ -59,8 +59,8 @@ fn input(source: &Value) -> (Session, Content) {
     position.day = scalar(&before["clock_day"]);
     position.fatigue = scalar(&before["fatigue"]);
     let mask = words(&before["mask"]);
-    state.native_work.party_mask.copy_from_slice(&mask[..6]);
-    state.native_work.spell_target_tail = mask[6..].to_vec();
+    state.globals.party_track.copy_from_slice(&mask[..6]);
+    state.globals.track_tail = mask[6..].to_vec();
     assert!(state.combat.is_none());
     assert_eq!(scalar(&before["combat_mode"]), 0);
     (state, content)
@@ -98,7 +98,7 @@ fn verify_output(state: &Session, content: &Content, events: &[Event], raw: &Val
     projection["comparison"]["native_events_projection"] = "requested_audio".into();
     verify(state, content, events, &projection);
     assert_eq!(
-        state.native_work.character_bare_hand_bonus,
+        state.globals.character_bare_hand_bonus,
         scalar(&raw["memory"]["character_work_bonus"]["hex"])
     );
     assert_eq!(
@@ -106,7 +106,7 @@ fn verify_output(state: &Session, content: &Content, events: &[Event], raw: &Val
         Some(scalar(&raw["memory"]["scenario_duration_tail"]["hex"]))
     );
     assert_eq!(
-        state.native_work.npc_backing.active_count,
+        state.globals.monsters.num_mon,
         scalar(&raw["memory"]["npc_count"]["hex"])
     );
     let position = state.exploration.as_ref().unwrap();
@@ -124,19 +124,19 @@ fn verify_output(state: &Session, content: &Content, events: &[Event], raw: &Val
         );
     }
     let mask: Vec<_> = state
-        .native_work
-        .party_mask
+        .globals
+        .party_track
         .iter()
-        .chain(&state.native_work.spell_target_tail)
+        .chain(&state.globals.track_tail)
         .flat_map(|value| value.to_be_bytes())
         .collect();
     for (name, actual) in [
         ("mask", mask),
-        ("psi_memory", state.native_work.psi_memory.clone()),
-        ("allies", state.allies.clone()),
+        ("psi_memory", state.globals.define_spells.clone()),
+        ("allies", state.holdover.clone()),
         (
             "inventory_record",
-            state.native_work.inventory_record.0.to_vec(),
+            state.globals.inventory_record.0.to_vec(),
         ),
     ] {
         let expected = bytes(&raw["memory"][name]["hex"]);
@@ -174,8 +174,8 @@ fn outdoor_items_match_native_load_charge_resolution_and_return_work() {
                 // no-effect Rust caller metadata. No native state is filled in.
                 record.resize(516, 0);
                 state
-                    .native_work
-                    .encounter_work
+                    .globals
+                    .encounter_headers
                     .load(&record, 0, true)
                     .unwrap();
                 let original = bytes(&source["before"]["script_actions"]);
@@ -225,7 +225,7 @@ fn outdoor_items_match_native_load_charge_resolution_and_return_work() {
                     raw["registers"]["D0"].as_u64().unwrap()
                 );
                 assert_eq!(
-                    state.native_work.encounter_work.header(true),
+                    state.globals.encounter_headers.header(true),
                     bytes(&raw["memory"]["typed_record"]["hex"])
                 );
             }
@@ -269,8 +269,7 @@ fn inventory_opening_and_owner_switch_match_native_work_across_save() {
         if command_name == "SwitchInventoryOwner" {
             // The same-owner chooser guard returns before the switch body.
             let mut same = source["command"].clone();
-            same[command_name]["warrior"] =
-                state.native_work.health_context.selected_warrior.into();
+            same[command_name]["warrior"] = state.globals.health_context.char_select_new.into();
             same[command_name]["quick_info"] = true.into();
             let same: Command = serde_json::from_value(same).unwrap();
             let before = state.clone();
@@ -330,12 +329,12 @@ fn historical_item_snapshots_match_the_resolver_and_recorded_owner_mask_endpoint
                 .collect();
             // These party-only inputs do not consume NPC coordinates/count or an
             // unrecorded selected-warrior WORD. Keep the complete captured records.
-            state.native_work.npc_backing.slots = bytes(&prepared["all_records"])
+            state.globals.monsters.slots = bytes(&prepared["all_records"])
                 .as_chunks::<288>()
                 .0
                 .iter()
                 .map(|raw| {
-                    Some(crate::combat::retained::NpcSlot {
+                    Some(crate::combat::globals::MonsterSlot {
                         record: centurions_content::combat::MonsterRecord {
                             bytes: raw.to_vec(),
                         },
@@ -343,34 +342,33 @@ fn historical_item_snapshots_match_the_resolver_and_recorded_owner_mask_endpoint
                     })
                 })
                 .collect();
-            state.native_work.initiative_work = crate::combat::retained::InitiativeWork {
+            state.globals.battle_order = crate::combat::globals::BattleOrder {
                 order: words(&prepared["order"]),
-                cursor: prepared["cursor"].as_u64().unwrap() as usize,
+                index: prepared["cursor"].as_u64().unwrap() as usize,
             };
-            state.native_work.ammunition_work = crate::ammunition::WorkBuffers {
+            state.globals.loaded_items = crate::ammunition::LoadedItems {
                 item: Some(bytes(&prepared["item_work"])),
                 weapon: Some(bytes(&prepared["weapon_work"])),
                 ammo: Some(bytes(&prepared["ammo_work"])),
             };
             state
-                .native_work
-                .weapon_work
+                .globals
+                .weapon_traits
                 .load_pair(
                     &bytes(&prepared["weapon_work"]),
                     &bytes(&prepared["ammo_work"]),
                 )
                 .unwrap();
-            state.native_work.loaded_item_field32 =
-                prepared["item_context"].as_i64().unwrap() as i16;
-            state.native_work.psi_memory = bytes(&prepared["memory"]);
-            state.party_buffs = bytes(&prepared["party_buffs"]);
+            state.globals.loaded_item_field32 = prepared["item_context"].as_i64().unwrap() as i16;
+            state.globals.define_spells = bytes(&prepared["memory"]);
+            state.party_condition = bytes(&prepared["party_buffs"]);
             state.scenario_duration_tail = prepared["scenario_duration_tail"]
                 .as_i64()
                 .map(|value| value as i16);
-            state.native_work.health_context = crate::story_health::HealthContext {
-                unavailable: prepared["unavailable"].as_i64().unwrap() as i8,
+            state.globals.health_context = crate::story_health::HealthContext {
+                kill_party: prepared["unavailable"].as_i64().unwrap() as i8,
                 // Exact old probe mapping: selected_member is BYTE44273f.
-                selected_warrior: prepared["selected_member"].as_u64().unwrap() as usize,
+                char_select_new: prepared["selected_member"].as_u64().unwrap() as usize,
                 effect: prepared["health_effect"].as_i64().unwrap() as i8,
                 last_body: prepared["health_last_body"].as_i64().unwrap() as i16,
                 marks_affected: prepared["heal_marks_affected"].as_i64().unwrap() != 0,
@@ -380,9 +378,9 @@ fn historical_item_snapshots_match_the_resolver_and_recorded_owner_mask_endpoint
             let identity: [i16; 3] = words(&prepared["identity"]).try_into().unwrap();
             let id = (identity[0] + 1) * 1000 + (identity[1] + 1) * 100 + identity[2] + 1;
             let count = prepared["count"].as_i64().unwrap() as i16;
-            state.native_work.attack_packet = packet.clone();
-            state.native_work.attack_identity = identity;
-            state.native_work.attack_count = count;
+            state.globals.spell_info = packet.clone();
+            state.globals.cast_identity = identity;
+            state.globals.attack_count = count;
             state.random = crate::RandomState::new(prepared["seed"].as_u64().unwrap() as u32);
             state.random.draws = prepared["draws"].as_u64().unwrap();
             let mut mask = [0; 110];
@@ -409,8 +407,8 @@ fn historical_item_snapshots_match_the_resolver_and_recorded_owner_mask_endpoint
             );
             assert_eq!(
                 state
-                    .native_work
-                    .npc_backing
+                    .globals
+                    .monsters
                     .slots
                     .iter()
                     .flat_map(|slot| slot.as_ref().unwrap().record.bytes.iter().copied())
@@ -418,25 +416,25 @@ fn historical_item_snapshots_match_the_resolver_and_recorded_owner_mask_endpoint
                 bytes(&expected["all_records"])
             );
             assert_eq!(
-                state.native_work.ammunition_work.item.as_ref().unwrap(),
+                state.globals.loaded_items.item.as_ref().unwrap(),
                 &bytes(&expected["item_work"])
             );
             assert_eq!(
-                state.native_work.ammunition_work.weapon.as_ref().unwrap(),
+                state.globals.loaded_items.weapon.as_ref().unwrap(),
                 &bytes(&expected["weapon_work"])
             );
             assert_eq!(
-                state.native_work.ammunition_work.ammo.as_ref().unwrap(),
+                state.globals.loaded_items.ammo.as_ref().unwrap(),
                 &bytes(&expected["ammo_work"])
             );
-            assert_eq!(state.native_work.psi_memory, bytes(&expected["memory"]));
-            assert_eq!(state.native_work.attack_packet, bytes(&expected["packet"]));
+            assert_eq!(state.globals.define_spells, bytes(&expected["memory"]));
+            assert_eq!(state.globals.spell_info, bytes(&expected["packet"]));
             assert_eq!(
-                state.native_work.attack_identity.as_slice(),
+                state.globals.cast_identity.as_slice(),
                 words(&expected["identity"])
             );
             assert_eq!(
-                state.native_work.attack_count,
+                state.globals.attack_count,
                 expected["count"].as_i64().unwrap() as i16
             );
             assert_eq!(state.random.seed, expected["seed"].as_u64().unwrap() as u32);
@@ -466,7 +464,7 @@ fn historical_item_snapshots_match_the_resolver_and_recorded_owner_mask_endpoint
             }
             sounds.extend(outcome.events.iter().filter_map(|event| match event {
                 Event::Sound { resource_id } => Some(*resource_id),
-                Event::Feedback(crate::feedback::NativeFeedback::CombatResult {
+                Event::Feedback(crate::feedback::GameFeedback::CombatResult {
                     code,
                     audible: true,
                     ..
@@ -534,22 +532,22 @@ fn quick_information_on_open_matches_native_item_ammo_and_spell_work() {
     let mut detail = state.clone();
     crate::items::compact(&mut detail.warriors[4]).unwrap();
     crate::items::quick_info(&mut detail, &content, 4, 0).unwrap();
-    let work = &detail.native_work;
+    let work = &detail.globals;
     assert_eq!(
-        work.ammunition_work.item.as_deref().unwrap(),
+        work.loaded_items.item.as_deref().unwrap(),
         bytes(&prefix["item_work"]["hex"])
     );
     assert_eq!(
-        work.ammunition_work.ammo.as_deref().unwrap(),
+        work.loaded_items.ammo.as_deref().unwrap(),
         bytes(&prefix["ammo_work"]["hex"])
     );
-    assert_eq!(work.attack_packet, bytes(&prefix["packet"]["hex"]));
+    assert_eq!(work.spell_info, bytes(&prefix["packet"]["hex"]));
     assert_eq!(
-        work.attack_identity.to_vec(),
+        work.cast_identity.to_vec(),
         words(&prefix["identity"]["hex"])
     );
     assert_eq!(
-        work.weapon_work.ammunition_armor_filter,
+        work.weapon_traits.ammunition_armor_filter,
         scalar(&prefix["ammo_filter"]["hex"])
     );
     let command = Command::OpenInventory {

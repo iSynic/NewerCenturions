@@ -1,11 +1,14 @@
-//! Turn setup for combat.
+//! Starting a turn: conditions, attacks, movement and the battle order.
 use crate::{RandomState, RuleError, items};
+use centurions_content::WARRIOR_BYTES;
 use centurions_content::combat::MonsterRecord;
 use centurions_content::{
     Warrior,
     records::{Condition, EnemyRecord, EnemyRecordMut},
 };
 
+/// Turns a bearing in degrees and a distance into the battle-map offset where the monsters'
+/// formation starts.
 pub fn direction_offset(direction: i16, distance: i16) -> (i16, i16) {
     let radians = (f64::from(direction) / 57.3) as f32 as f64;
     (
@@ -14,6 +17,8 @@ pub fn direction_offset(direction: i16, distance: i16) -> (i16, i16) {
     )
 }
 
+/// Starts the turn of the body that holds it, a warrior or a monster. A monster that cannot act, or
+/// whose turn script runs, is not supported here.
 pub fn initialize_turn(
     body: i16,
     warriors: &mut [Warrior],
@@ -34,7 +39,7 @@ pub fn initialize_turn(
                 dependency: "inactive enemy",
             });
         }
-        let chance = monster.record().turn_script_chance()?;
+        let chance = monster.record().turn_macro_chance()?;
         if random.bound(100) <= chance {
             return Err(RuleError::Unsupported {
                 action: "combat.turn",
@@ -48,26 +53,28 @@ pub fn initialize_turn(
     Ok(())
 }
 
-/// getup12667e..127090: turn markers, confusion, signed faction and AP/movement.
+/// Starts a warrior's turn: markers, confusion, side, attacks and movement.
+///
+/// Original: getup
 pub(crate) fn initialize_warrior_record(
     warrior: &mut Warrior,
     race_moves: &[i8],
     random: &mut RandomState,
 ) -> Result<(bool, i8), RuleError> {
-    centurions_content::span(&warrior.bytes, 0, 3138)?;
+    centurions_content::span(&warrior.bytes, 0, WARRIOR_BYTES)?;
     if (warrior.record().fleeing_duration()? != 0 || warrior.record().faction()? != 0)
-        && warrior.record().automatic_mode()? == 0
+        && warrior.record().computer_control()? == 0
     {
-        warrior.record_mut().set_automatic_mode(1);
+        warrior.record_mut().set_computer_control(1);
     }
     let faction = warrior.record().faction()?;
-    if warrior.record().automatic_mode()? >= 0 && warrior.record().confusion_duration()? != 0 {
+    if warrior.record().computer_control()? >= 0 && warrior.record().confusion_duration()? != 0 {
         let roll = random.bound(100);
         if roll < 30 {
             if random.bound(2) == 1 && faction == 0 {
                 warrior.record_mut().set_faction(faction.wrapping_add(1));
-                if warrior.record().automatic_mode()? == 0 {
-                    warrior.record_mut().set_automatic_mode(1);
+                if warrior.record().computer_control()? == 0 {
+                    warrior.record_mut().set_computer_control(1);
                 }
             } else if random.bound(2) == 2 && faction != 0 {
                 warrior.record_mut().set_faction(0);
@@ -85,40 +92,42 @@ pub(crate) fn initialize_warrior_record(
     }
     let unavailable_delta = i8::from(warrior.record().faction()? != 0) - i8::from(faction != 0);
     items::compact(warrior)?;
-    let carry = warrior.record().action_points()?.clamp(0, 1);
+    let carry = warrior.record().attacks()?.clamp(0, 1);
     let mut points = carry
-        .wrapping_add(warrior.record().actions_per_round()?)
-        .wrapping_add(warrior.record().action_point_bonus()?);
+        .wrapping_add(warrior.record().normal_attacks()?)
+        .wrapping_add(warrior.record().attack_bonus()?);
     if warrior.record().condition(Condition::Speedy)? != 0 {
         points = points.wrapping_add(4);
     }
-    warrior.record_mut().set_action_points(points);
+    warrior.record_mut().set_attacks(points);
     let race = warrior.record().race()? - 1;
     let race_move = *race_moves
         .get(race as usize)
         .ok_or_else(|| RuleError::Invalid("race movement missing".into()))?;
     calculate_movement(warrior, race_move)?;
-    let maximum = warrior.record().movement_per_round()?;
-    warrior.record_mut().set_movement_points(maximum);
+    let maximum = warrior.record().movement_max()?;
+    warrior.record_mut().set_movement(maximum);
     warrior.record_mut().set_attacks_used(0);
-    warrior.record_mut().set_scans_used(0);
+    warrior.record_mut().set_spells_so_far(0);
     Ok((false, unavailable_delta))
 }
 
-/// getup126a18..126dd6: signed counters, confusion draws and haste attack copies.
+/// Starts a monster's turn: condition counters, confusion draws and haste.
+///
+/// Original: getup
 pub(crate) fn initialize_enemy_record(
     bytes: &mut [u8],
     random: &mut RandomState,
 ) -> Result<(bool, i16), RuleError> {
     let chance = EnemyRecord::from_bytes(bytes)
-        .turn_script_chance()?
+        .turn_macro_chance()?
         .wrapping_abs();
-    EnemyRecordMut::from_bytes(bytes).set_turn_script_chance(chance);
+    EnemyRecordMut::from_bytes(bytes).set_turn_macro_chance(chance);
     let record = EnemyRecord::from_bytes(bytes);
     let actions = record
         .action_points()
         .min(1)
-        .wrapping_add(record.actions_per_round());
+        .wrapping_add(record.attack_count());
     EnemyRecordMut::from_bytes(bytes).set_action_points(actions);
     let faction = EnemyRecord::from_bytes(bytes).faction()?;
     if EnemyRecord::from_bytes(bytes).condition(Condition::Confused) != 0 {
@@ -146,8 +155,8 @@ pub(crate) fn initialize_enemy_record(
         }
     }
     let record = EnemyRecord::from_bytes(bytes);
-    let mut movement = (record.movement_per_round()? as i8)
-        .wrapping_sub(record.condition(Condition::Entangled) as i8);
+    let mut movement =
+        (record.movement_max()? as i8).wrapping_sub(record.condition(Condition::Entangled) as i8);
     if record.condition(Condition::MovingSlowly) != 0 {
         movement /= 2;
     }
@@ -160,12 +169,13 @@ pub(crate) fn initialize_enemy_record(
             record.fill_missing_natural_attack(slot as usize);
         }
     }
-    EnemyRecordMut::from_bytes(bytes).set_movement_points(movement);
+    EnemyRecordMut::from_bytes(bytes).set_movement(movement);
     let hostile_change =
         i16::from(EnemyRecord::from_bytes(bytes).faction()? != 0) - i16::from(faction != 0);
     Ok((false, hostile_change))
 }
 
+/// The battle an encounter record picks, with its sound, message and treasure.
 #[derive(Debug, PartialEq, Eq)]
 pub struct EncounterBattle {
     pub battle: i16,
@@ -174,14 +184,16 @@ pub struct EncounterBattle {
     pub treasure: i16,
 }
 
-/// CODE 1 movecalc. Each SANE-to-single conversion is an explicit f32 rounding.
+/// A warrior's movement points, rounded to single precision at each step.
+///
+/// Original: movecalc
 pub fn calculate_movement(warrior: &mut Warrior, race_movement: i8) -> Result<(), RuleError> {
     let record = warrior.record();
     let maximum = 1000_i16
         .wrapping_add(record.brawn()?.wrapping_mul(100))
         .wrapping_add(record.brawn_upgrades()?.wrapping_mul(10));
-    let available = maximum.wrapping_sub(record.carried_weight()?) as u16;
-    // A wrapped zero capacity divides by zero: 65535/0 is infinite and 0/0 is NaN.
+    let available = maximum.wrapping_sub(record.load()?) as u16;
+    // A zero capacity divides by zero: 65535/0 is infinite and 0/0 is NaN.
     let mut movement =
         ((available as f64 / (maximum as u16) as f64) as f32 as f64 * race_movement as f64) as f32;
     movement = (movement as f64 - record.condition(Condition::Entangled)? as f64) as f32;
@@ -193,14 +205,17 @@ pub fn calculate_movement(warrior: &mut Warrior, race_movement: i8) -> Result<()
     }
     movement = (movement as f64 + record.movement_bonus()? as f64) as f32;
     movement = ((movement as f64 + 0.5) as f32).max(5.0);
-    // The record keeps the low WORD of the LONG conversion.
+    // The record keeps the low word.
     let movement = crate::rules::sane_long(f64::from(movement.trunc())) as i16;
     warrior.record_mut().set_weight_capacity(maximum);
-    warrior.record_mut().set_movement_per_round(movement);
+    warrior.record_mut().set_movement_max(movement);
     Ok(())
 }
 
-/// CODE 1 getbattleorder, including its ordered adjacent comparisons.
+/// Deals the battle order. A surprise puts the squad first or last; otherwise
+/// every body draws a random free slot.
+///
+/// Original: getbattleorder
 pub fn initiative(
     warrior_speeds: &[i16],
     enemy_speeds: &[i16],

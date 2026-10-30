@@ -25,23 +25,23 @@ pub(super) fn assert_battle(state: &Session, case: &Value) {
     combat.validate(&state.warriors).unwrap();
     let encode = |v: &[i16]| support::word_bytes(v);
     support::native_expect! {
-        bytes &encode(&combat.map.tiles) => &case.bytes("tiles"), &format!("{context} map");
+        bytes &encode(&combat.field.tiles) => &case.bytes("tiles"), &format!("{context} map");
     };
     let [x, y] = case.n::<[i16; 2]>("shift");
-    assert_eq!(combat.map.shift, (x, y));
+    assert_eq!(combat.field.map_shift, (x, y));
     support::native_expect! {
-        scalar combat.map.edge_word => &case["edge"], "binary_battle_entry";
+        scalar combat.field.edge_word => &case["edge"], "binary_battle_entry";
         records &state.warriors => &case["warriors"], &format!("{context} warriors");
-        records &combat.enemies.records => &case["enemies"], &format!("{context} enemies");
-        scalar combat.enemies.records.len() => &case["count"], "binary_battle_entry";
+        records &combat.roster.records => &case["enemies"], &format!("{context} enemies");
+        scalar combat.roster.records.len() => &case["count"], "binary_battle_entry";
     }
     let positions = |p: &[(i16, i16)]| p.iter().flat_map(|(x, y)| [*x, *y]).collect::<Vec<_>>();
     support::native_expect! {
-        bytes encode(&positions(&combat.squad.positions)) => &case["squad"], &format!("{context} squad");
-        words &(combat.squad.under_tiles) => &case["under"], "binary_battle_entry";
-        bytes encode(&positions(&combat.enemies.positions)) => &case["positions"], &format!("{context} enemy positions");
-        words &(combat.order) => &case["order"], "binary_battle_entry";
-        scalar combat.cursor => &case["cursor"], "binary_battle_entry";
+        bytes encode(&positions(&combat.squad.pos)) => &case["squad"], &format!("{context} squad");
+        words &(combat.squad.char_under) => &case["under"], "binary_battle_entry";
+        bytes encode(&positions(&combat.roster.mon_pos)) => &case["positions"], &format!("{context} enemy positions");
+        words &(combat.battle_order) => &case["order"], "binary_battle_entry";
+        scalar combat.battle_order_index => &case["cursor"], "binary_battle_entry";
     }
     support::assert_rng(&state.random, &case["seed_after"], &case["draws"]);
 }
@@ -82,8 +82,8 @@ fn battle_state(
     state.warriors[0].bytes[0x90..0x92].copy_from_slice(&marker.to_be_bytes());
     if marker != 0 {
         // These selected-count variants are constructed controls, not new native captures.
-        state.native_work.health_context = centurions_core::story_health::context(
-            &state.warriors, state.selected_warrior, None,
+        state.globals.health_context = centurions_core::story_health::context(
+            &state.warriors, state.char_select_new, None,
         );
     }
 

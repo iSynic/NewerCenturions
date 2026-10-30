@@ -1,17 +1,20 @@
-//! Party script operations, preserving original dispatch order.
-use super::super::{present_treasure, present_treasure_record, unsupported};
-use super::{Operation, ScriptStep};
+//! Script operations that change the party, its members and their gear.
+use super::super::{present_treasure, present_treasure_record};
+use super::{ExtraIndex, Operation, ScriptStep, load_extra};
+use crate::combat::spells::RestrictionMemoryView;
 use crate::{
     Event, Presentation, RuleError, Session, story, story_allies, story_inventory, story_party,
 };
 use centurions_content::mission::OpeningMission;
 use centurions_content::records::{
-    ClinicExtra, EventHeaderTable, ExtraTable, FatigueChange, LimitedTreasureExtra,
-    RecoveryRestrictions, StoryRecordMut,
+    ClinicExtra, DropCreditsExtra, EventHeaderTable, FatigueChange, GiveConditionExtra,
+    ItemConsumptionExtra, ItemDefinition, LimitedTreasureExtra, PickByCasteExtra, PickByTraitExtra,
+    RandomTreasureExtra, RecoveryRestrictions, StoryRecordMut, VictoryPointsExtra,
 };
-use centurions_content::records::{TreasureRecord, WarriorRecord};
-use centurions_content::{Content, span, word};
+use centurions_content::{Content, span};
 
+/// Runs the script operations that change the party: its members and conditions, gear, money,
+/// allies, shops and treasure, fatigue, experience and healing, and the mission's score and flags.
 pub(super) fn execute(
     operation: Operation,
     parameter: i16,
@@ -25,22 +28,18 @@ pub(super) fn execute(
     let script = position.script.as_mut().unwrap();
     match operation {
         Operation::AdjustStatistics => {
-            let extra = ExtraTable(
-                &map.combat
-                    .as_ref()
-                    .ok_or("story combat tables missing")?
-                    .encounters,
-            )
-            .record(parameter.unsigned_abs() as usize)?;
-            state.native_work.extra_record = extra.to_vec();
-            state.warriors = story_party::adjust_statistics(
-                &state.warriors,
-                &state.native_work.party_mask,
-                extra,
+            let extra = load_extra(
+                &mut state.globals,
+                map,
+                ExtraIndex::Magnitude(parameter),
+                Some("story combat tables missing"),
             )?;
+            state.warriors =
+                story_party::adjust_statistics(&state.warriors, &state.globals.party_track, extra)?;
         }
         Operation::Confiscate => {
-            // The restore loop counts its items in newland's encounter-caller local.
+            // The restore loop counts its items in the slot that holds the
+            // encounter's caller.
             let restored = state
                 .confiscated
                 .as_ref()
@@ -65,14 +64,12 @@ pub(super) fn execute(
             }
         }
         Operation::Clinic => {
-            let extra = ExtraTable(
-                &map.combat
-                    .as_ref()
-                    .ok_or("clinic extra records missing")?
-                    .encounters,
-            )
-            .record(parameter.unsigned_abs() as usize)?;
-            state.native_work.extra_record = extra.to_vec();
+            let extra = load_extra(
+                &mut state.globals,
+                map,
+                ExtraIndex::Magnitude(parameter),
+                Some("clinic extra records missing"),
+            )?;
             let clinic = ClinicExtra(extra);
             let percent = clinic.percent()?;
             let sound = clinic.sound()?;
@@ -102,7 +99,7 @@ pub(super) fn execute(
                 .ok_or("map or note index unavailable")?;
             *flag = 1;
             if parameter > -1 {
-                effects.push(Event::Feedback(crate::feedback::NativeFeedback::Flash {
+                effects.push(Event::Feedback(crate::feedback::GameFeedback::Flash {
                     address: 0x401c28,
                     x: 30,
                     y: 355,
@@ -112,28 +109,31 @@ pub(super) fn execute(
             }
         }
         Operation::SelectedHealth | Operation::PartyHealth => {
-            let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
-                .record(parameter.unsigned_abs() as usize)?;
-            state.native_work.extra_record = extra.to_vec();
-            let context = crate::story_health::retained_context(
-                state.selected_warrior,
-                &state.native_work.health_context,
+            let extra = load_extra(
+                &mut state.globals,
+                map,
+                ExtraIndex::Magnitude(parameter),
+                None,
+            )?;
+            let context = crate::story::health::reselected_context(
+                state.char_select_new,
+                &state.globals.health_context,
             );
-            let outcome = crate::story_health::party_health(
+            let outcome = crate::story::health::party_health(
                 &state.warriors,
                 extra,
                 operation == Operation::PartyHealth,
-                &state.native_work.party_mask,
+                &state.globals.party_track,
                 &context,
                 &mut state.random,
             )?;
             state.warriors = outcome.warriors;
-            state.native_work.health_context = outcome.context;
+            state.globals.health_context = outcome.context;
             let mut party_lost = false;
             for event in outcome.events {
                 match event {
-                    crate::story_health::HealthEvent::Flash { address, sound } => {
-                        effects.push(Event::Feedback(crate::feedback::NativeFeedback::Flash {
+                    crate::story::health::HealthEvent::Flash { address, sound } => {
+                        effects.push(Event::Feedback(crate::feedback::GameFeedback::Flash {
                             address,
                             x: 100,
                             y: 30,
@@ -141,7 +141,7 @@ pub(super) fn execute(
                             sound,
                         }))
                     }
-                    crate::story_health::HealthEvent::Animation { effect, .. } => {
+                    crate::story::health::HealthEvent::Animation { effect, .. } => {
                         effects.push(Event::OutdoorEffect {
                             effect: i16::from(effect),
                             x: position.x as i16,
@@ -150,17 +150,17 @@ pub(super) fn execute(
                             delay: 0,
                         })
                     }
-                    crate::story_health::HealthEvent::Sound(resource_id) => {
+                    crate::story::health::HealthEvent::Sound(resource_id) => {
                         effects.push(Event::Sound { resource_id })
                     }
-                    crate::story_health::HealthEvent::Dialogue(id) => {
+                    crate::story::health::HealthEvent::Dialogue(id) => {
                         position.presentation = Some(Presentation::Dialogue {
                             id,
                             text: map.dialogue(id)?,
                         });
                         effects.push(Event::StoryPresented);
                     }
-                    crate::story_health::HealthEvent::Defeated { warrior, .. } => {
+                    crate::story::health::HealthEvent::Defeated { warrior, .. } => {
                         if let Some(combat) = state.combat.as_mut() {
                             crate::combat::lifecycle::kill_body(
                                 combat,
@@ -169,7 +169,7 @@ pub(super) fn execute(
                             )?;
                         }
                     }
-                    crate::story_health::HealthEvent::PartyLost => {
+                    crate::story::health::HealthEvent::PartyLost => {
                         party_lost = true;
                     }
                 }
@@ -183,18 +183,21 @@ pub(super) fn execute(
             }
         }
         Operation::FilterParty => {
-            let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
-                .record(parameter.unsigned_abs() as usize)?;
-            state.native_work.extra_record = extra.to_vec();
-            let memory = crate::combat::spells::RestrictionMemoryView::ordinary_startup(
+            let extra = load_extra(
+                &mut state.globals,
+                map,
+                ExtraIndex::Magnitude(parameter),
+                None,
+            )?;
+            let memory = RestrictionMemoryView::ordinary_startup(
                 &map.item_cache,
-                crate::combat::spells::retained_item_alias(&state.native_work.ammunition_work)?,
+                crate::combat::spells::loaded_item_restriction(&state.globals.loaded_items)?,
             )
             .with_alias_owners(crate::combat::warrior_alias::session_owners!(state))
             .with_definitions(&content.items);
-            state.native_work.party_mask = crate::story_party::filter_party(
+            state.globals.party_track = crate::story::party::filter_party(
                 &state.warriors,
-                state.native_work.party_mask,
+                state.globals.party_track,
                 cursor,
                 extra,
                 &mut state.random,
@@ -202,26 +205,27 @@ pub(super) fn execute(
             )?;
         }
         Operation::SetRecoveryRestrictions => {
-            let extra = ExtraTable(
-                &map.combat
-                    .as_ref()
-                    .ok_or("script extra records unavailable")?
-                    .encounters,
-            )
-            .record(parameter.unsigned_abs() as usize)?;
-            state.native_work.extra_record = extra.to_vec();
+            let extra = load_extra(
+                &mut state.globals,
+                map,
+                ExtraIndex::Magnitude(parameter),
+                Some("script extra records unavailable"),
+            )?;
             let restrictions = RecoveryRestrictions::decode(extra);
             state.psi_disabled = restrictions.psi;
             state.enemy_spell_disabled = restrictions.enemy_spells;
             state.energy_recovery_disabled = restrictions.energy;
         }
         Operation::ChangeFatigue => {
-            let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
-                .record(parameter.unsigned_abs() as usize)?;
-            state.native_work.extra_record = extra.to_vec();
+            let extra = load_extra(
+                &mut state.globals,
+                map,
+                ExtraIndex::Magnitude(parameter),
+                None,
+            )?;
             position.fatigue = match FatigueChange::decode(extra)? {
                 FatigueChange::Set(value) => value,
-                // Native order divides first, then multiplies with WORD wrapping.
+                // Divides first, then multiplies with 16-bit wrapping.
                 FatigueChange::Percent(percent) => (percent / 100).wrapping_mul(position.fatigue),
                 FatigueChange::Keep => position.fatigue,
             };
@@ -239,14 +243,14 @@ pub(super) fn execute(
                 story_allies::ALLY_BYTES,
             )?;
             let addition = story_allies::add_ally(
-                &state.allies,
-                state.ally_count,
+                &state.holdover,
+                state.held_over,
                 definition,
                 state.difficulty,
                 &mut state.random,
             )?;
-            state.allies = addition.records;
-            state.ally_count = addition.count;
+            state.holdover = addition.records;
+            state.held_over = addition.count;
             if let Some(warning) = addition.warning {
                 effects.push(Event::CollectionRejected { warning });
             } else {
@@ -256,16 +260,16 @@ pub(super) fn execute(
             }
         }
         Operation::RemoveAllies => {
-            let removed = crate::story_remove_allies::remove_class(
-                &state.allies,
-                state.ally_count,
+            let removed = crate::story::remove_allies::remove_class(
+                &state.holdover,
+                state.held_over,
                 parameter,
             )?;
-            state.allies = removed.records;
-            state.ally_count = removed.count;
+            state.holdover = removed.records;
+            state.held_over = removed.count;
         }
         Operation::CopyMapEvent => {
-            // newland1434d4 copies the current map's mutable header, not Data ED3.
+            // Copies from the current land's changed headers, not the scenario's.
             let slot = usize::try_from(parameter)
                 .map_err(|_| RuleError::Invalid("negative event header slot".into()))?;
             let replacement = EventHeaderTable(&position.event_headers).record(slot)?;
@@ -277,9 +281,12 @@ pub(super) fn execute(
             script.restart_from(&replacement);
         }
         Operation::LimitedShopOrTreasure => {
-            let extra = ExtraTable(&map.combat.as_ref().unwrap().encounters)
-                .record(parameter.unsigned_abs() as usize)?;
-            state.native_work.extra_record = extra.to_vec();
+            let extra = load_extra(
+                &mut state.globals,
+                map,
+                ExtraIndex::Magnitude(parameter),
+                None,
+            )?;
             let limited = LimitedTreasureExtra(extra);
             let id = limited.treasure()?;
             if id <= 0 {
@@ -295,147 +302,54 @@ pub(super) fn execute(
             }
             return Ok(ScriptStep::Pause);
         }
-        // newland43 first clears a positive duration in slot e2 for every member, then
-        // adds e3 for members chosen by e1 (all, picked, stamina above -10) with sound
-        // e4, the portrait effect and showresults code e2 + 1.
+        // Clears a positive duration of condition e2 for every member, then adds e3
+        // for members chosen by e1 (all, picked, stamina above -10) with sound e4,
+        // the portrait effect and showresults code e2 + 1.
         Operation::GiveCondition => {
-            let extra =
-                ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
-            state.native_work.extra_record = extra.to_vec();
-            let slot = usize::try_from(word(extra, 2)?)
-                .ok()
-                .filter(|&slot| slot < 40)
-                .ok_or_else(|| unsupported("story.opcode", "condition outside the record"))?;
-            let (who, amount, sound) = (word(extra, 0)?, word(extra, 4)?, word(extra, 6)?);
-            for member in 0..state.warriors.len() {
-                let warrior = &mut state.warriors[member];
-                let current = WarriorRecord::from_bytes(&warrior.bytes).condition_slot(slot)?;
-                if current > 0 {
-                    warrior.record_mut().set_condition_duration(slot, 0);
-                }
-                let chosen = match who {
-                    0 => true,
-                    1 => state.native_work.party_mask[member] != 0,
-                    2 => warrior.record().stamina()? > -10,
-                    _ => false,
-                };
-                if chosen {
-                    let current = WarriorRecord::from_bytes(&warrior.bytes).condition_slot(slot)?;
-                    warrior
-                        .record_mut()
-                        .set_condition_duration(slot, current.wrapping_add(amount));
-                    if sound != 0 {
-                        effects.push(Event::Sound { resource_id: sound });
-                    }
-                    effects.push(Event::Feedback(
-                        crate::feedback::NativeFeedback::CombatResult {
-                            body: member as i16,
-                            code: slot as i16 + 1,
-                            amount: 0,
-                            audible: false,
-                        },
-                    ));
-                }
-            }
+            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            story_party::give_condition(
+                &mut state.warriors,
+                &state.globals.party_track,
+                GiveConditionExtra(extra),
+                effects,
+            )?;
         }
-        // newland50 clears the pick mask, then picks members (living ones when e5 is
-        // set) by race e3 (0), gender e2 (1), caste e3 (2), race class e3 (3) or caste
-        // class e3 (4).
+        // Clears the picks, then picks members by trait.
         Operation::PickByTrait => {
-            let extra =
-                ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
-            state.native_work.extra_record = extra.to_vec();
-            let (mode, gender, code) = (word(extra, 0)?, word(extra, 2)?, word(extra, 4)?);
-            let mut mask = [0; 6];
-            for (member, warrior) in state.warriors.iter().enumerate() {
-                let record = warrior.record();
-                if word(extra, 8)? != 0 && record.stamina()? <= 0 {
-                    continue;
-                }
-                let picked = match mode {
-                    0 => record.race()? == code,
-                    1 => record.gender()? == gender,
-                    2 => record.profession()? == code,
-                    3 => super::branches::race_class(map, record.race()?, code)?,
-                    4 => super::branches::caste_class(map, record.profession()?)? == code,
-                    _ => false,
-                };
-                mask[member] = i16::from(picked);
-            }
-            state.native_work.party_mask = mask;
+            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            state.globals.party_track = story_party::pick_by_trait(
+                &state.warriors,
+                PickByTraitExtra(extra),
+                |race, code| super::branches::race_class(map, race, code),
+                |caste| super::branches::caste_class(map, caste),
+            )?;
         }
-        // newland53 clears the pick mask first, so its picked-only check (e3 = 2)
-        // admits nobody. Caste e1 picks, as do the caste families of e2.
         Operation::PickByCaste => {
-            let extra =
-                ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
-            state.native_work.extra_record = extra.to_vec();
-            let (caste, family, check) = (word(extra, 0)?, word(extra, 2)?, word(extra, 4)?);
-            let families: &[i16] = match family {
-                1 => &[1, 3, 4],
-                2 => &[3, 6, 7, 8],
-                3 => &[2, 5],
-                _ => &[],
-            };
-            let mut mask = [0; 6];
-            for (member, warrior) in state.warriors.iter().enumerate() {
-                let record = warrior.record();
-                let admitted = check == 0
-                    || (check == 1 && record.stamina()? > 0)
-                    || (check == 2 && mask[member] != 0);
-                let profession = record.profession()?;
-                if admitted && (profession == caste || families.contains(&profession)) {
-                    mask[member] = 1;
-                }
-            }
-            state.native_work.party_mask = mask;
+            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            state.globals.party_track =
+                story_party::pick_by_caste(&state.warriors, PickByCasteExtra(extra))?;
         }
-        // newland60 clears the carried credits of every member, or of picked members
-        // when e2 is set; the wealth type e1 is not read.
+        // Clears the carried credits of every member, or of picked members when e2
+        // is set; the wealth type e1 is not read.
         Operation::DropMemberCredits => {
-            let extra =
-                ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
-            state.native_work.extra_record = extra.to_vec();
-            let picked_only = word(extra, 2)? != 0;
+            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let picked_only = DropCreditsExtra(extra).picked_only()?;
             for (member, warrior) in state.warriors.iter_mut().enumerate() {
-                if !picked_only || state.native_work.party_mask[member] != 0 {
+                if !picked_only || state.globals.party_track[member] != 0 {
                     warrior.record_mut().set_carried_credits(0);
                 }
             }
         }
-        // newland90 moves e1 from upgrade points into the remaining experience. Its
-        // picked mode (e2 = 1) tests the pick word at the action's own index for every
-        // member; mode 2 spreads the signed quotient over the party.
         Operation::TakeVictoryPoints => {
-            let extra =
-                ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
-            state.native_work.extra_record = extra.to_vec();
-            let amount = word(extra, 0)?;
-            let share = match word(extra, 2)? {
-                1 => {
-                    let picked =
-                        *state.native_work.party_mask.get(cursor).ok_or_else(|| {
-                            unsupported("story.opcode", "pick word past the party")
-                        })?;
-                    if picked == 0 {
-                        return Ok(ScriptStep::Continue);
-                    }
-                    amount
-                }
-                2 => amount / state.warriors.len() as i16,
-                _ => amount,
-            };
-            for warrior in &mut state.warriors {
-                let record = warrior.record();
-                let remaining = record
-                    .remaining_experience()?
-                    .wrapping_add(i32::from(share));
-                let points = record.upgrade_points().wrapping_sub(i32::from(share));
-                warrior.record_mut().set_remaining_experience(remaining);
-                warrior.record_mut().set_upgrade_points(points);
-            }
+            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            story_party::take_victory_points(
+                &mut state.warriors,
+                &state.globals.party_track,
+                cursor,
+                VictoryPointsExtra(extra),
+            )?;
         }
-        // newland91 empties every member's inventory, then redraws.
+        // Empties every member's inventory, then redraws.
         Operation::DropAllEquipment => {
             let mut warriors = state.warriors.clone();
             let mut loaded = None;
@@ -450,37 +364,19 @@ pub(super) fn execute(
             state.apply_equipment_globals(&globals)?;
             state.warriors = warriors;
             if let Some(item) = loaded {
-                state.load_item_work(content, item)?;
+                state.load_item(content, item)?;
             }
         }
         Operation::AlterShop => {
-            let extra =
-                ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
-            state.native_work.extra_record = extra.to_vec();
+            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             crate::shop::alter(state, content, extra)?;
         }
-        // newland65 fills the booty buffer that opcode 10 reads from Data TD with |e1|
-        // item words from randrange(e2, e3) (Rand(|e1|) of them for negative e1) and
-        // keeps the count in the encounter-caller local; later words overflow into the
-        // record's enhancement and award fields.
         Operation::RandomTreasure => {
-            let extra =
-                ExtraTable(&map.combat.as_ref().unwrap().encounters).record(parameter as usize)?;
-            state.native_work.extra_record = extra.to_vec();
-            let requested = word(extra, 0)?;
-            if !(-44..=44).contains(&requested) {
-                return Err(unsupported("story.opcode", "random items past the record"));
-            }
-            let count = if requested < 0 {
-                state.random.bound(requested.wrapping_abs())
-            } else {
-                requested
-            };
-            let mut record = [0; TreasureRecord::BYTES];
-            for item in 0..count.max(0) as usize {
-                let id = state.random.range(word(extra, 2)?, word(extra, 4)?);
-                record[item * 2..item * 2 + 2].copy_from_slice(&id.to_be_bytes());
-            }
+            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let (count, record) = crate::story::treasure::random_items(
+                &mut state.random,
+                RandomTreasureExtra(extra),
+            )?;
             let position = state.exploration.as_mut().unwrap();
             position.script.as_mut().unwrap().caller_action = Some(count);
             effects.extend(present_treasure_record(state, content, &record)?);
@@ -494,7 +390,7 @@ pub(super) fn execute(
             let awarded =
                 story_inventory::award_story_experience(&state.warriors, i32::from(parameter))?;
             state.warriors = awarded.warriors;
-            // newland11 stores the amount in LONG 0x443392 before booty(12, 0).
+            // The amount is the experience the treasure window hands out.
             state.booty_tally = crate::BootyTally {
                 credits: 0,
                 share: awarded.share,
@@ -503,6 +399,41 @@ pub(super) fn execute(
             let position = state.exploration.as_mut().unwrap();
             position.presentation = Some(Presentation::Loot);
             effects.push(Event::StoryPresented);
+            return Ok(ScriptStep::Pause);
+        }
+        Operation::ConsumePartyItems => {
+            let tables = map.combat.as_ref().unwrap();
+            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let consumed = story_inventory::consume_party_items_with_record(
+                &state.warriors,
+                content,
+                &tables.race_moves,
+                extra,
+                Some(&state.globals.inventory_record),
+            )?;
+            state.apply_equipment_globals(&consumed.global_writes)?;
+            if let Some(definition) = consumed.definition {
+                state.globals.loaded_item_field32 =
+                    ItemDefinition(&definition).ammunition_caliber()?;
+                state.globals.loaded_items.item = Some(definition);
+            } else if consumed.consumed != 0 {
+                let consumption = ItemConsumptionExtra(extra);
+                let loaded = if consumption.mode()? == 3 {
+                    consumption.replacement()?
+                } else {
+                    consumption.item()?
+                };
+                state.globals.loaded_item_field32 =
+                    state.globals.loaded_items.load_item(content, loaded)?;
+            }
+            if let Some(record) = consumed.record {
+                state.globals.inventory_record = record;
+            }
+            state.warriors = consumed.warriors;
+            effects.extend(consumed.events);
+        }
+        Operation::ResetExperience => {
+            effects.extend(super::super::loot::reset_experience(state, content)?);
             return Ok(ScriptStep::Pause);
         }
         _ => unreachable!("opcode routed to wrong story adapter"),

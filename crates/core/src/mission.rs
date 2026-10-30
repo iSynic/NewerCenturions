@@ -1,35 +1,34 @@
+use crate::combat::battlefield::Battlefield;
 use crate::{Event, MapState, Presentation, RuleError, ScriptState, Session};
 use centurions_content::{Content, Warrior};
 
-/// partyloss14913e clears its screen state, not killbody/heal's retained work.
+/// Ends the mission when the party is lost. The screen state clears; killbody and
+/// heal's last results stay.
+///
+/// Original: partyloss
 pub(crate) fn end(state: &mut Session, content: &Content) -> Result<(), RuleError> {
-    crate::combat::runtime::retain_last_defeated(state)?;
-    state.retain_combat_work();
+    crate::combat::runtime::store_last_defeated(state)?;
+    state.store_combat_globals();
     state.clear_tactical_fields();
     if let Some(combat) = &state.combat {
-        state.native_work.tactical_work = crate::combat::tactical_work::TacticalWork::capture(
-            combat,
-            &state.native_work.tactical_work,
-        );
+        state.globals.battlefield = Battlefield::capture(combat, &state.globals.battlefield);
     }
-    state.retain_npcs();
+    state.store_monsters();
     let mut next = Session::new(content);
-    // partyloss14913e leaves work globals in place while clearing the active party.
-    std::mem::swap(&mut next.native_work, &mut state.native_work);
-    // partyloss has no writer for the menu records440edc or count44257c.
-    std::mem::swap(&mut next.allies, &mut state.allies);
-    next.ally_count = state.ally_count;
-    // cleartarget13822a clears110 WORDs at4434e0, including these six party entries.
+    // The game values stay while the active party clears.
+    std::mem::swap(&mut next.globals, &mut state.globals);
+    // The allies stay.
+    std::mem::swap(&mut next.holdover, &mut state.holdover);
+    next.held_over = state.held_over;
     next.clear_targets();
-    // partyloss1493aa clears WORD44374c, leaving total WORD4435c4 untouched.
-    next.native_work.victory_work.defeated = 0;
-    // partyloss1493b8 clears Ready WORD438760 independently of combat mode.
-    next.native_work.ready = 0;
-    let health = &mut next.native_work.health_context;
-    // 1493b0/1493dc/1493ec; last body, effect and affected words survive.
-    health.unavailable = 0;
+    // Defeated enemies reset; the enemy total stays.
+    next.globals.kill_counts.kill_mon = 0;
+    next.globals.in_spell = 0;
+    let health = &mut next.globals.health_context;
+    // The last body, effect and affected members stay.
+    health.kill_party = 0;
     health.marks_affected = false;
-    health.selected_warrior = 0;
+    health.char_select_new = 0;
     next.confiscated = state.confiscated.take();
     next.random = state.random.clone();
     next.library_random_seed = state.library_random_seed;
@@ -39,6 +38,7 @@ pub(crate) fn end(state: &mut Session, content: &Content) -> Result<(), RuleErro
     Ok(())
 }
 
+/// Ends the mission in defeat: the party is lost with the defeat sound.
 pub(crate) fn defeat(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     end(state, content)?;
     Ok(vec![
@@ -47,10 +47,12 @@ pub(crate) fn defeat(state: &mut Session, content: &Content) -> Result<Vec<Event
     ])
 }
 
+/// Takes the party to a square of a map and level, keeping the maps it leaves so they come back as
+/// they were left.
 pub(crate) fn travel(
     state: &mut Session,
     content: &Content,
-    target: crate::story_destination::Location,
+    target: crate::story::destination::Location,
 ) -> Result<(), RuleError> {
     centurions_content::mission::OpeningMission::index(target.x, target.y)?;
     let authored = content
@@ -107,24 +109,28 @@ pub(crate) fn travel(
     Ok(())
 }
 
+/// The zero-based stage a script's stage change names: its parameter ignoring sign, less one.
 pub fn stage_target(parameter: i16) -> Result<usize, RuleError> {
     let target = parameter.wrapping_abs().wrapping_sub(1);
     usize::try_from(target).map_err(|_| RuleError::Invalid("stage target is unavailable".into()))
 }
 
+/// Restores stamina and psi to their maximums for every warrior but the last, as a stage begins.
 pub fn restore_stage_warriors(warriors: &[Warrior]) -> Result<Vec<Warrior>, RuleError> {
     let mut restored = warriors.to_vec();
     for warrior in restored.iter_mut().take(warriors.len().saturating_sub(1)) {
-        // The original stage caller restores all but the final party member.
-        // Keep its read/write sequence, including partial failure behavior.
-        let stamina = warrior.record().maximum_stamina()?;
+        // Every member but the last is restored, as the game does; keep the
+        // order, including where a failure stops it.
+        let stamina = warrior.record().stamina_max()?;
         warrior.record_mut().set_stamina(stamina);
-        let psi = warrior.record().maximum_psi()?;
+        let psi = warrior.record().psi_points_max()?;
         warrior.record_mut().set_psi_points(psi);
     }
     Ok(restored)
 }
 
+/// Begins a scenario stage: the party goes to the stage's starting square and map, the warriors are
+/// restored, held-over allies are cleared, and the stage's start script and prologue are queued.
 pub(crate) fn begin_stage(
     state: &mut Session,
     content: &Content,
@@ -172,8 +178,8 @@ pub(crate) fn begin_stage(
     position.y = stage.start.1;
     state.mission_stage = target as i16;
     state.warriors = restore_stage_warriors(&state.warriors)?;
-    state.allies = crate::story_allies::clear_stage_allies(&state.allies)?;
-    state.ally_count = 0;
+    state.holdover = crate::story::allies::clear_stage_allies(&state.holdover)?;
+    state.held_over = 0;
     position.script = if stage.start_script != 0 {
         Some(ScriptState::scheduled(
             authored.script(stage.start_script)?.to_vec(),

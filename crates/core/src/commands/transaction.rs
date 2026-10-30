@@ -4,6 +4,11 @@ use crate::{
 };
 use centurions_content::Content;
 
+/// Applies a command all or nothing: it runs on a copy of the session, which replaces the session
+/// only if the command succeeds or is refused after it already had effects. On success, deferred
+/// getup and monster actions resume, the caster writes are committed, and the copy is validated
+/// before it replaces the session. A command wrapped with preferences runs under them, and with
+/// tracing when asked.
 pub fn apply(
     command: Command,
     state: &mut Session,
@@ -59,8 +64,8 @@ pub fn apply(
             if let Some(combat) = candidate.combat.as_mut() {
                 combat.direct_deaths = false;
             }
-            candidate.retain_npc_work();
-            candidate.retain_monster_work();
+            candidate.store_monster_turn_flags();
+            candidate.store_monster_pick();
             candidate.release_monster_template();
             candidate.validate(content)?;
             *state = candidate;
@@ -72,27 +77,32 @@ pub fn apply(
         &mut candidate,
         content,
     )?);
-    events.extend(combat::runtime::resume_npc_action(&mut candidate, content)?);
-    // Every live caster commits its writes at once; this keeps none past the boundary.
+    events.extend(combat::runtime::resume_monster_action(
+        &mut candidate,
+        content,
+    )?);
+    // Every caster commits its writes at once, so none outlast the command.
     candidate.commit_alias_writes()?;
     candidate.store_spell_fatigue();
-    candidate.retain_npc_work();
-    candidate.retain_monster_work();
+    candidate.store_monster_turn_flags();
+    candidate.store_monster_pick();
     candidate.release_monster_template();
     let direct_return = std::mem::take(&mut candidate.command_return);
-    if kind.targeting_only || kind.retained_getup_return || direct_return {
+    if kind.targeting_only || kind.out_of_combat_getup_return || direct_return {
         candidate.validate(content)?;
         *state = candidate;
         return Ok(events);
     }
     finish_action(&mut candidate, content, &mut events, &kind)?;
     candidate.commit_alias_writes()?;
-    candidate.retain_npc_work();
+    candidate.store_monster_turn_flags();
     candidate.validate(content)?;
     *state = candidate;
     Ok(events)
 }
 
+/// Turns a combat click into the command it stands for (none if it stands for nothing), and a
+/// move while a warrior is choosing a capture target into a selection of the adjacent square.
 fn normalize(mut command: Command, state: &Session) -> Result<Option<Command>, RuleError> {
     if let Command::CombatClick { x, y } = command {
         let Some(resolved) = combat::click_command(state, x, y)? else {
@@ -103,7 +113,7 @@ fn normalize(mut command: Command, state: &Session) -> Result<Option<Command>, R
     if let Command::Move { dx, dy } = command
         && let Some(combat) = state.combat.as_ref().filter(|c| c.capture_actor.is_some())
     {
-        let origin = combat.squad.positions[combat.capture_actor.unwrap() as usize];
+        let origin = combat.squad.pos[combat.capture_actor.unwrap() as usize];
         command = Command::SelectCaptureTarget {
             x: origin.0.wrapping_add(i16::from(dx)),
             y: origin.1.wrapping_add(i16::from(dy)),
@@ -112,22 +122,25 @@ fn normalize(mut command: Command, state: &Session) -> Result<Option<Command>, R
     Ok(Some(command))
 }
 
+/// How a command is treated once it has run: whether it only changes targeting, returns from an
+/// out-of-combat getup, edits warriors or items, or is a melee or physical action.
 struct ExecutionKind {
     targeting_only: bool,
-    retained_getup_return: bool,
+    out_of_combat_getup_return: bool,
     editing: bool,
     melee_input: bool,
-    physical_work_input: bool,
+    physical_input: bool,
 }
 impl ExecutionKind {
+    /// Classifies a command in the current state.
     fn of(command: &Command, state: &Session) -> Self {
-        let retained_getup_return =
+        let out_of_combat_getup_return =
             matches!(command, Command::Continue | Command::SelectSurvivor { .. })
                 && matches!(
                     state.scripted_cleanup,
                     Some(
-                        crate::story_cleanup::Stage::RetainedGetupSurvivors { .. }
-                            | crate::story_cleanup::Stage::RetainedSelectedSurvivors { .. }
+                        crate::story::cleanup::Stage::OutOfCombatGetupSurvivors { .. }
+                            | crate::story::cleanup::Stage::OutOfCombatSelectedSurvivors { .. }
                     )
                 );
         let targeting_only = matches!(
@@ -190,7 +203,7 @@ impl ExecutionKind {
                     exchange: Some(false)
                 }
         );
-        let physical_work_input = matches!(
+        let physical_input = matches!(
             command,
             Command::AttackEnemy { .. }
                 | Command::AttackFriend { .. }
@@ -203,14 +216,18 @@ impl ExecutionKind {
         );
         Self {
             targeting_only,
-            retained_getup_return,
+            out_of_combat_getup_return,
             editing,
             melee_input,
-            physical_work_input,
+            physical_input,
         }
     }
 }
 
+/// The bookkeeping after an ordinary action. Combat results, attacks, spells and new turns set or
+/// clear the bandage-ready flag and the neighbor departure marker. Owned time, movement and field
+/// control continuations resume unless the command edits or produced an upgrade or message. Any
+/// messages produced become a message presentation in front of the current one.
 fn finish_action(
     candidate: &mut Session,
     content: &Content,
@@ -219,12 +236,12 @@ fn finish_action(
 ) -> Result<(), RuleError> {
     for event in events.iter() {
         match event {
-            Event::Feedback(feedback::NativeFeedback::CombatResult { .. }) => {
+            Event::Feedback(feedback::GameFeedback::CombatResult { .. }) => {
                 candidate.bandage_ready = 0;
                 if let Some(combat) = candidate.combat.as_mut() {
-                    combat.neighbor_work.departure = 0;
+                    combat.neighbors.departure = 0;
                 } else {
-                    candidate.native_work.neighbor_work.departure = 0;
+                    candidate.globals.neighbors.departure = 0;
                 }
             }
             Event::AttackResolved { damage, .. } if kind.melee_input || *damage > 0 => {
@@ -237,16 +254,16 @@ fn finish_action(
                 candidate.bandage_ready = 1;
                 if (0..6).contains(body) {
                     if let Some(combat) = candidate.combat.as_mut() {
-                        combat.neighbor_work.departure = 0;
+                        combat.neighbors.departure = 0;
                     } else {
-                        candidate.native_work.neighbor_work.departure = 0;
+                        candidate.globals.neighbors.departure = 0;
                     }
                 }
             }
             _ => {}
         }
     }
-    if candidate.retained_walk_choice.is_none()
+    if candidate.out_of_combat_walk_choice.is_none()
         && !kind.editing
         && !events
             .iter()
@@ -259,14 +276,14 @@ fn finish_action(
         events.extend(exploration::resume_movement(candidate, content)?);
         events.extend(field_controls::resume(candidate, content)?);
     }
-    if kind.physical_work_input
-        && let Some(item) = candidate.native_work.ammunition_work.item.as_ref()
+    if kind.physical_input
+        && let Some(item) = candidate.globals.loaded_items.item.as_ref()
     {
-        candidate.native_work.loaded_item_field32 =
-            centurions_content::records::ItemDefinition(item).retained_field32()?;
+        candidate.globals.loaded_item_field32 =
+            centurions_content::records::ItemDefinition(item).ammunition_caliber()?;
     }
-    combat::runtime::retain_last_defeated(candidate)?;
-    candidate.retain_combat_work();
+    combat::runtime::store_last_defeated(candidate)?;
+    candidate.store_combat_globals();
     let pages: Vec<_> = events
         .iter()
         .filter_map(|event| {

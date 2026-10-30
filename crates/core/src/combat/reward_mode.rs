@@ -1,7 +1,8 @@
-//! Integer prefix and mode selection for ordinary booty105748.
+//! How booty decides what a battle pays.
 use crate::{RandomState, RuleError, items};
 use centurions_content::{Content, InventoryRecord, records::TreasureRecord};
 
+/// What a treasure record pays before the monsters do: items, experience and credits.
 #[derive(Default)]
 pub(super) struct RewardPrefix {
     pub items: Vec<InventoryRecord>,
@@ -10,6 +11,7 @@ pub(super) struct RewardPrefix {
     pub last_item: Option<i16>,
 }
 
+/// How a battle pays: by its monsters, nothing, or from a treasure record.
 #[derive(Clone, Copy)]
 pub enum RewardMode<'a> {
     Ordinary,
@@ -18,6 +20,8 @@ pub enum RewardMode<'a> {
 }
 
 impl<'a> RewardMode<'a> {
+    /// Chooses how a battle pays from its mode number: 0 by the monsters, 5 nothing, 2 and 10 are
+    /// reported unsupported, and any other mode a treasure record.
     pub(crate) fn select(mode: i16, record: &'a [u8]) -> Result<Self, RuleError> {
         match mode {
             0 => Ok(Self::Ordinary),
@@ -30,6 +34,8 @@ impl<'a> RewardMode<'a> {
         }
     }
 
+    /// Rolls what a treasure record pays: each item with its enhancement raised by the difficulty,
+    /// and its experience and credits, a negative amount being a random draw up to that bound.
     pub(super) fn prefix(
         self,
         content: &Content,
@@ -79,9 +85,11 @@ impl<'a> RewardMode<'a> {
     }
 }
 
+/// What the booty needs to pay a battle: the difficulty, the deduction, the party's currency and
+/// how the battle pays.
 pub struct RewardContext<'a> {
     pub difficulty: i16,
-    pub npc_denominator: i16,
+    pub deduction: i16,
     pub currency: i32,
     pub mode: RewardMode<'a>,
 }

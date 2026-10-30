@@ -5,41 +5,41 @@ pub(super) fn project(state: &mut Session, snapshot: &Value) {
     snapshots::party_work(state, snapshot, &read);
     snapshots::carried_items(state, &read);
     state.ammunition = support::longs(&read("ammunition"));
-    state.selected_warrior = snapshot.n("selected_member");
-    state.native_work.loaded_item_field32 = snapshot.n("item_context");
+    state.char_select_new = snapshot.n("selected_member");
+    state.globals.loaded_item_field32 = snapshot.n("item_context");
     state.bandage_ready = snapshot.n("aid_gate");
-    state.native_work.weapon_work = snapshots::weapon_work(&read);
+    state.globals.weapon_traits = snapshots::weapon_traits(&read);
     let arena = state.combat.as_mut().unwrap();
-    let before = (arena.cursor, arena.round);
+    let before = (arena.battle_order_index, arena.combat_round);
     snapshots::records(arena, &|key| snapshot.bytes(key));
     snapshots::geometry(arena, &|key| snapshot.bytes(key), (0, 0));
     if let Some(rounds) = snapshot.get("inactive_rounds") {
-        arena.inactive_rounds = rounds.as_i64().unwrap() as i16;
+        arena.blank_round = rounds.as_i64().unwrap() as i16;
     }
-    arena.cursor = snapshot.n::<usize>("cursor");
-    arena.round = snapshot.n::<i16>("round");
+    arena.battle_order_index = snapshot.n::<usize>("cursor");
+    arena.combat_round = snapshot.n::<i16>("round");
     snapshots::turn_origin(arena, before);
-    arena.round_scripts.counter = snapshot
+    arena.round_macros.counter = snapshot
         .get("round_counter")
-        .map_or(arena.round as i8, |value| value.as_i64().unwrap() as i8);
-    arena.round_scripts.slots = snapshot.words("round_slots").try_into().unwrap();
+        .map_or(arena.combat_round as i8, |value| value.as_i64().unwrap() as i8);
+    arena.round_macros.slots = snapshot.words("round_slots").try_into().unwrap();
     snapshots::spell_work(arena, &read);
-    arena.unavailable = snapshot.n::<i8>("unavailable");
-    arena.attack_packet = state.native_work.attack_packet.clone();
-    arena.attack_identity = state.native_work.attack_identity;
-    arena.weapon_work = state.native_work.weapon_work;
+    arena.kill_party = snapshot.n::<i8>("unavailable");
+    arena.spell_info = state.globals.spell_info.clone();
+    arena.cast_identity = state.globals.cast_identity;
+    arena.weapon_traits = state.globals.weapon_traits;
     let mut health = centurions_core::story_health::context(
         &state.warriors,
-        state.selected_warrior,
-        Some(&state.native_work.health_context),
+        state.char_select_new,
+        Some(&state.globals.health_context),
     );
-    health.unavailable = arena.unavailable;
+    health.kill_party = arena.kill_party;
     health.marks_affected = snapshot.n::<u64>("heal_marks_affected") != 0;
     health
         .affected
         .copy_from_slice(&snapshot.words("markers")[..6]);
-    health.effect = state.native_work.attack_packet[18] as i8;
-    state.native_work.health_context = health;
+    health.effect = state.globals.spell_info[18] as i8;
+    state.globals.health_context = health;
     snapshots::actor_work(state, snapshot);
 }
 
@@ -151,7 +151,7 @@ fn native_learned_portrait_continuations_match_full_session_and_saved_replay() {
                 &state,
                 &content,
                 command,
-                vec![centurions_core::feedback::NativeFeedback::Sound { resource_id: 143 }],
+                vec![centurions_core::feedback::GameFeedback::Sound { resource_id: 143 }],
             );
             continue;
         }
@@ -180,8 +180,8 @@ fn higher_portrait_heals_keep_the_paid_selection_and_original_restoration() {
         caster[0x36..0x38].copy_from_slice(&(spell / 1000).to_be_bytes());
         caster[0x9f0..0xa21].fill(1);
         caster[0x58..0x5a].copy_from_slice(&2000_i16.to_be_bytes());
-        state.combat.as_mut().unwrap().weapon_work =
-            centurions_core::combat::weapon_work::WeaponWork::zero();
+        state.combat.as_mut().unwrap().weapon_traits =
+            centurions_core::combat::weapon_traits::WeaponTraits::zero();
         state.random = RandomState::new(12);
         support::saved_command(
             Command::BeginPsiTargeting { spell, power: 1 },
@@ -200,9 +200,9 @@ fn higher_portrait_heals_keep_the_paid_selection_and_original_restoration() {
         let combat = current_combat(&state);
         support::native_expect! {
             records &state.warriors => &native["party_after"], "higher portrait party";
-            records &combat.enemies.records => &native["npcs_after"], "higher portrait NPCs";
-            words combat.map.tiles => &native["map_after"], "higher portrait map";
-            positions combat.squad.positions => &native["positions_after"], "higher portrait placement";
+            records &combat.roster.records => &native["npcs_after"], "higher portrait NPCs";
+            words combat.field.tiles => &native["map_after"], "higher portrait map";
+            positions combat.squad.pos => &native["positions_after"], "higher portrait placement";
             rng state.random => (&native["seed_after"], &native["rng_draws"]), "higher portrait RNG";
         }
         assert_eq!(support::event_sounds(&events), sounds);
@@ -243,7 +243,7 @@ fn learned_preparation_rejects_unknown_powers_and_preserves_inventory() {
             };
             assert_eq!(
                 feedback,
-                vec![centurions_core::feedback::NativeFeedback::Sound { resource_id: 143 }]
+                vec![centurions_core::feedback::GameFeedback::Sound { resource_id: 143 }]
             );
             assert_eq!(pending, before);
         } else {
@@ -265,7 +265,7 @@ fn learned_preparation_rejects_unknown_powers_and_preserves_inventory() {
     }
     let mut marking = state.clone();
     marking
-        .native_work
+        .globals
         .health_context
         .marks_affected = true;
     let mut unmarked = state.clone();
@@ -284,7 +284,7 @@ fn learned_preparation_rejects_unknown_powers_and_preserves_inventory() {
     assert_eq!(marking.random, unmarked.random);
     assert_eq!(
         marking
-            .native_work
+            .globals
             .health_context
             .affected[target],
         -1
@@ -476,7 +476,7 @@ fn higher_portrait_powers_match_native_full_session_and_saved_continuations() {
         });
         support::same_captured_session(&state, &expected);
 
-        assert_eq!(state.native_work.attack_count, power);
+        assert_eq!(state.globals.attack_count, power);
         atomic(&state, &content, Command::EndTurn);
         atomic(
             &state,

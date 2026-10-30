@@ -7,7 +7,7 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
     let fixture: serde_json::Value = support::fixture("warrior-opportunity.json");
 
     let mut content = support::content();
-    content.scenario.as_mut().unwrap().maps[0].tile_properties =
+    content.scenario.as_mut().unwrap().maps[0].map_stats =
         fixture.bytes("properties")[64..12064].to_vec();
     for case in fixture.array("cases") {
         if case.n::<bool>("forced_kill_return") {
@@ -21,13 +21,13 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
         order[1] = 0;
         state.combat = Some(Combat {
             battle: 1,
-            map: TacticalMap {
+            field: CombatField {
                 tiles: case.words("map_before"),
-                shift: (0, 0),
+                map_shift: (0, 0),
                 edge_word: 0,
             },
             squad: SquadPlacement {
-                positions: (0..6)
+                pos: (0..6)
                     .map(|member| {
                         if member == 0 {
                             (20, 20)
@@ -36,11 +36,11 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
                         }
                     })
                     .collect(),
-                under_tiles: vec![1155; 6],
+                char_under: vec![1155; 6],
             },
-            enemies: EnemySetup {
+            roster: EnemySetup {
                 records: support::monsters(&case["records_before"]),
-                positions: case
+                mon_pos: case
                     .array("enemy_positions")
                     .iter()
                     .map(|point| {
@@ -51,7 +51,7 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
                     })
                     .collect(),
             },
-            order,
+            battle_order: order,
             ..support::battle()
         });
         crate::native_common::source_victory_context(&mut state);
@@ -60,17 +60,17 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
         let combat = current_combat(&state);
         support::native_expect! {
             records &state.warriors => &case["warriors_after"], &format!("{context} party");
-            records &combat.enemies.records => &case["records_after"], &format!("{context} monsters");
+            records &combat.roster.records => &case["records_after"], &format!("{context} monsters");
         }
-        assert_eq!(combat.map.tiles, case.words("map_after"), "{context} map");
+        assert_eq!(combat.field.tiles, case.words("map_after"), "{context} map");
         assert_eq!(
-            combat.squad.positions[0],
+            combat.squad.pos[0],
             (case.n::<i16>("x"), case.n::<i16>("y")),
             "{context} position"
         );
         support::native_expect! {
-            scalar combat.squad.under_tiles[0] => &case["under"], "binary_warrior_opportunity";
-            bytes combat.attack_packet => &case["packet"], &format!("{context} packet");
+            scalar combat.squad.char_under[0] => &case["under"], "binary_warrior_opportunity";
+            bytes combat.spell_info => &case["packet"], &format!("{context} packet");
             scalar state.random.seed => &case["seed_after"], "binary_warrior_opportunity";
             scalar state.random.draws => &case["rng_draws"], "binary_warrior_opportunity";
         }
@@ -99,9 +99,9 @@ fn warrior_walk_matches_native_factions_guard_departure_order_and_cost() {
                 .collect::<Vec<_>>(),
             "{context} reaction order"
         );
-        assert_eq!(combat.cursor, 1);
-        assert_eq!(combat.order[1], 0);
-        assert_eq!(combat.round, 0);
+        assert_eq!(combat.battle_order_index, 1);
+        assert_eq!(combat.battle_order[1], 0);
+        assert_eq!(combat.combat_round, 0);
     }
 }
 

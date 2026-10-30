@@ -2,7 +2,7 @@
 use super::detached_attacks::saved_return;
 use super::outdoor_deaths::{prepare, verify};
 use crate::combat::runtime::{CombatReturn, DeathStory};
-use crate::feedback::NativeFeedback;
+use crate::feedback::GameFeedback;
 use crate::test_support::{bytes, fixture};
 use crate::{Command, Content, Event, Presentation, ScriptState, Session, story_cleanup};
 use centurions_content::InventoryRecord;
@@ -35,23 +35,23 @@ fn input(case: &Value) -> (Session, Content, DeathStory, ScriptState) {
     let source = &case["declarations"]["source_input"];
     let before = &source["before"];
     let (mut state, content) = prepare(source);
-    state.allies = bytes(&before["allies"]);
-    state.ally_count = word(&before["ally_count"]) as usize;
-    state.suppress_allies = word(&before["suppress_allies"]);
+    state.holdover = bytes(&before["allies"]);
+    state.held_over = word(&before["ally_count"]) as usize;
+    state.suspend_allies = word(&before["suppress_allies"]);
     state.command_preferences.auto_refit = word(&before["auto_refit"]) != 0;
-    state.native_work.early_booty = word(&before["early_booty"]) as i8;
-    state.native_work.battle_rewards_suppressed = word(&before["battle_rewards_suppressed"]) as i8;
-    state.native_work.walking_confusion = word(&before["confusion_global"]);
-    state.native_work.npc_backing.active_count = word(&before["npc_count"]);
-    state.native_work.loot_quality = Some(bytes(&before["loot_flags"]));
-    state.booty_items = bytes(&before["loot_scratch"])
+    state.globals.coward = word(&before["early_booty"]) as i8;
+    state.globals.battle_rewards_suppressed = word(&before["battle_rewards_suppressed"]) as i8;
+    state.globals.possessed = word(&before["confusion_global"]);
+    state.globals.monsters.num_mon = word(&before["npc_count"]);
+    state.globals.loot_quality = Some(bytes(&before["loot_flags"]));
+    state.booty_list = bytes(&before["loot_scratch"])
         .as_chunks::<22>()
         .0
         .iter()
         .map(|raw| InventoryRecord(*raw))
         .collect();
     state.flags[..100].copy_from_slice(&bytes(&before["survivor_flags"]));
-    state.native_work.inventory_record =
+    state.globals.inventory_record =
         InventoryRecord::read(&bytes(&before["selected_inventory_record"])).unwrap();
     state.ammunition = bytes(&before["ammunition_reserves"])[..800]
         .as_chunks::<4>()
@@ -59,10 +59,10 @@ fn input(case: &Value) -> (Session, Content, DeathStory, ScriptState) {
         .iter()
         .map(|raw| i32::from_be_bytes(*raw))
         .collect();
-    state.native_work.round_work.counter = Some(word(&before["round_counter"]) as i8);
-    state.native_work.round_work.slot = Some(word(&before["round_slot"]));
-    state.native_work.round_work.processing = Some(word(&before["round_flag"]) as u8);
-    state.native_work.round_work.slots = Some(
+    state.globals.round_scripts.counter = Some(word(&before["round_counter"]) as i8);
+    state.globals.round_scripts.slot = Some(word(&before["round_slot"]));
+    state.globals.round_scripts.processing = Some(word(&before["round_flag"]) as u8);
+    state.globals.round_scripts.slots = Some(
         bytes(&before["rounds"])
             .as_chunks::<2>()
             .0
@@ -118,19 +118,16 @@ fn verify_stage(state: &Session, content: &Content, events: &[Event], case: &Val
     projection["draws"] = cumulative.into();
     verify(state, content, events, &projection);
     for (name, actual) in [
-        ("allies", state.allies.clone()),
+        ("allies", state.holdover.clone()),
         (
             "loot_scratch",
-            state.booty_items.iter().flat_map(|item| item.0).collect(),
+            state.booty_list.iter().flat_map(|item| item.0).collect(),
         ),
-        (
-            "loot_flags",
-            state.native_work.loot_quality.clone().unwrap(),
-        ),
+        ("loot_flags", state.globals.loot_quality.clone().unwrap()),
         ("survivor_flags", state.flags[..100].to_vec()),
         (
             "selected_inventory_record",
-            state.native_work.inventory_record.0.to_vec(),
+            state.globals.inventory_record.0.to_vec(),
         ),
         (
             "ammunition_reserves",
@@ -148,34 +145,34 @@ fn verify_stage(state: &Session, content: &Content, events: &[Event], case: &Val
         assert!(actual == expected, "{} {name}", case["name"]);
     }
     assert_eq!(
-        state.ally_count,
+        state.held_over,
         word(&case["memory"]["ally_count"]["hex"]) as usize
     );
     assert_eq!(
-        state.native_work.early_booty,
+        state.globals.coward,
         word(&case["memory"]["early_booty"]["hex"]) as i8
     );
     assert_eq!(
-        state.native_work.battle_rewards_suppressed,
+        state.globals.battle_rewards_suppressed,
         word(&case["memory"]["battle_rewards_suppressed"]["hex"]) as i8
     );
     assert_eq!(
-        state.native_work.npc_backing.active_count,
+        state.globals.monsters.num_mon,
         word(&case["memory"]["npc_count"]["hex"])
     );
     assert_eq!(
-        state.native_work.walking_confusion,
+        state.globals.possessed,
         word(&case["memory"]["confusion_global"]["hex"])
     );
     assert_eq!(state.bandage_ready, 1);
     assert_eq!(
-        state.native_work.character_bare_hand_bonus,
+        state.globals.character_bare_hand_bonus,
         word(&case["memory"]["character_work_bonus"]["hex"])
     );
     assert_eq!(
         state
-            .native_work
-            .round_work
+            .globals
+            .round_scripts
             .slots
             .unwrap()
             .into_iter()
@@ -184,18 +181,18 @@ fn verify_stage(state: &Session, content: &Content, events: &[Event], case: &Val
         bytes(&case["memory"]["rounds"]["hex"])
     );
     assert_eq!(
-        state.native_work.round_work.counter,
+        state.globals.round_scripts.counter,
         Some(word(&case["memory"]["round_counter"]["hex"]) as i8)
     );
     assert_eq!(
-        state.native_work.round_work.slot,
+        state.globals.round_scripts.slot,
         Some(word(&case["memory"]["round_slot"]["hex"]))
     );
     assert_eq!(
-        state.native_work.round_work.processing,
+        state.globals.round_scripts.processing,
         Some(word(&case["memory"]["round_flag"]["hex"]) as u8)
     );
-    let queue = state.native_work.retained_death_queue.as_ref().unwrap();
+    let queue = state.globals.outer_todo_queue.as_ref().unwrap();
     assert_eq!(
         queue
             .entries
@@ -217,7 +214,7 @@ fn verify_stage(state: &Session, content: &Content, events: &[Event], case: &Val
         )
     );
     assert_eq!(
-        state.native_work.death_processing.queue,
+        state.globals.death_processing.doing_queue,
         bytes(&case["memory"]["death_queue_flag"]["hex"])[0]
     );
     let rows: Vec<_> = bytes(&case["memory"]["survivor_rows"]["hex"])
@@ -243,7 +240,7 @@ fn verify_stage(state: &Session, content: &Content, events: &[Event], case: &Val
     let text: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
-            Event::Feedback(NativeFeedback::DialogText {
+            Event::Feedback(GameFeedback::DialogText {
                 dialog,
                 item,
                 address,
@@ -320,7 +317,7 @@ fn getup_early_booty_matches_native_and_preserves_its_callers() {
         checkpoint(&mut state, &content);
         if name.ends_with("no-survivors") {
             let mut missing = state.clone();
-            missing.native_work.npc_backing.slots[99] = None;
+            missing.globals.monsters.slots[99] = None;
             let before = missing.clone();
             let error = crate::apply(Command::Continue, &mut missing, &content).unwrap_err();
             assert!(matches!(

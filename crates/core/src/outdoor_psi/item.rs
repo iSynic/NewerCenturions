@@ -1,9 +1,11 @@
-//! Outdoor Items choice and its typed-return or inventory-loop continuation.
+//! Using an item outdoors from the Items screen, then returning to a typed
+//! encounter or the inventory.
 use super::{Selection, choice_limit, resolve};
 use crate::combat::item_activation::{self, Caller};
 use crate::{Content, Event, Phase, Presentation, RuleError, Session};
-use centurions_content::records::AttackPacket;
+use centurions_content::records::SpellInfoRecord;
 
+/// Begins using an item outdoors from the Items screen, with the owner's warrior as the user.
 pub(crate) fn begin_item(
     state: &mut Session,
     content: &Content,
@@ -20,12 +22,14 @@ pub(crate) fn begin_item(
         return Err("item use requires free exploration".into());
     }
     crate::exploration::check_item_actor(state, owner)?;
-    // The explicit inventory chooser owns BYTE44273f, independently of WORD4435d2.
+    // The inventory owner is chosen apart from the warrior whose turn it is.
     state.set_warrior_selector(owner);
     super::begin_item_selected(state, content, owner, slot)
 }
 
-/// Items12ae48 with a literal selected inventory owner and post-UI work.
+/// Uses an item of the chosen inventory owner, with the work after the screen.
+///
+/// Original: items
 pub(crate) fn begin_selected(
     state: &mut Session,
     content: &Content,
@@ -44,9 +48,9 @@ pub(crate) fn begin_selected(
     if activation.spell == 0 {
         return Err(RuleError::RefusedAfterEffects { feedback: vec![] });
     }
-    let packet = &state.native_work.attack_packet;
-    let mode = AttackPacket(packet).targeting_mode();
-    let power = state.native_work.attack_count;
+    let packet = &state.globals.spell_info;
+    let mode = SpellInfoRecord(packet).target_type();
+    let power = state.globals.attack_count;
     let targets = choice_limit(mode, power, state.warriors.len());
     state.outdoor_psi = Some(Selection {
         actor: owner,
@@ -57,10 +61,10 @@ pub(crate) fn begin_selected(
     });
     let mut events = activation.events;
     if mode == 5 {
-        state.native_work.party_mask[owner] = 1;
+        state.globals.party_track[owner] = 1;
         events.extend(resolve(state, content)?);
     } else if (mode as i8) > 2 || targets >= state.warriors.len() as i16 {
-        state.native_work.party_mask[..state.warriors.len()].fill(1);
+        state.globals.party_track[..state.warriors.len()].fill(1);
         events.extend(resolve(state, content)?);
     } else {
         events.push(Event::Sound { resource_id: 6001 });
@@ -68,6 +72,7 @@ pub(crate) fn begin_selected(
     Ok(events)
 }
 
+/// Returns to the typed encounter or the inventory when the item's cast is finished.
 pub(super) fn finish_return(
     state: &mut Session,
     content: &Content,
@@ -91,12 +96,11 @@ pub(super) fn finish_return(
         }
         Ok(events)
     } else {
-        // 12b1ee refreshes the owner's information before Ready0/UI reentry.
-        // This ordinary arm does not reach common RTS's marks reset at12c452.
-        item_activation::refresh_inventory_info_work(state, content, pending.actor)?;
-        // 12b202 clears WORD44719a with Ready.
-        state.native_work.fire_item = 0;
-        state.set_ready(0);
+        // The owner's information is refreshed before the screen returns; this
+        // path does not reset the marks.
+        item_activation::refresh_inventory_info_items(state, content, pending.actor)?;
+        state.globals.item_used = 0;
+        state.set_in_spell(0);
         Ok(vec![])
     }
 }

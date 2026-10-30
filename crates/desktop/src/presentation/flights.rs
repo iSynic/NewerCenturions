@@ -1,15 +1,16 @@
-//! cast 0x10d4fe's flight over the tactical map, one delay(1) tick at a time.
+//! A cast's flight over the tactical map, one delay(1) tick at a time.
 //!
-//! The sprite arm copies a 32-pixel cell of sprite GWorld 0x4386c8 (PICT 401) in
-//! transparent mode 0x24 at its walk point (0x10e566..0x10e58a). The line and
-//! oval arms set PenMode(srcXor) at 0x10ddde/0x10df26, so each frame inverts the
-//! pixels under it and its second drawing erases it.
+//! A sprite flight copies a 32-pixel cell of PICT 401 transparently at its walk
+//! point. Line and oval flights draw in PenMode(srcXor), so each frame inverts
+//! the pixels under it and its second drawing erases it.
 use super::UiState;
 use crate::{assets::Assets, combat_flight::FlightFrame, layout};
 use macroquad::prelude::*;
 
+/// The combat sprite picture (PICT 401).
 const SPRITES: i16 = 401;
 
+/// Original: cast
 pub(super) fn draw(assets: &Assets, ui: &UiState, (vx, vy): (i32, i32)) {
     let Some(frame) = ui
         .playback
@@ -76,6 +77,7 @@ fn ring(top_left: Vec2, bottom_right: Vec2, pen: f32) {
         return;
     }
     let inner = (outer - pen).max(Vec2::ZERO);
+    /// The number of straight segments that approximate the oval's outline.
     const SIDES: u16 = 32;
     let mut vertices = Vec::with_capacity(usize::from(SIDES) * 2);
     let mut indices = Vec::with_capacity(usize::from(SIDES) * 6);

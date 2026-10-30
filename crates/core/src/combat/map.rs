@@ -1,17 +1,19 @@
-//! Map for combat.
-use super::TacticalMap;
+//! Reading the battle map.
+use super::CombatField;
 use super::map_alias::MapAliases;
 use crate::{RandomState, RuleError};
 
-/// movemonster13e276 reads column × 90 + row with signed arithmetic and no clipping.
+/// The tile a monster steps onto, read without clipping at the map edge.
+///
+/// Original: movemonster
 pub(super) fn movement_tile(
-    map: &TacticalMap,
+    map: &CombatField,
     aliases: MapAliases<'_>,
     position: (i16, i16),
     offset: (i16, i16),
 ) -> Result<i16, RuleError> {
-    let x = i32::from(position.0) + i32::from(map.shift.0) + 5 + i32::from(offset.0);
-    let y = i32::from(position.1) + i32::from(map.shift.1) + 5 + i32::from(offset.1);
+    let (x, y) = crate::combat::records::grid_point(position, map.map_shift);
+    let (x, y) = (x + i32::from(offset.0), y + i32::from(offset.1));
     aliases
         .read(map, x * 90 + y)?
         .ok_or(RuleError::Unsupported {
@@ -20,12 +22,15 @@ pub(super) fn movement_tile(
         })
 }
 
+/// Builds the battle map from the thirty-by-thirty stretch of land around the party: each land
+/// square becomes a three-by-three block of tiles. When a step takes five minutes (outdoors),
+/// foliage is scattered over open ground, drawing random numbers.
 pub fn build_tactical_map(
     mission: &centurions_content::mission::OpeningMission,
     position: (i32, i32),
     edge_word: i16,
     random: &mut RandomState,
-) -> Result<TacticalMap, RuleError> {
+) -> Result<CombatField, RuleError> {
     let property = |tile: i16, offset: usize| -> Result<i16, RuleError> {
         Ok(mission.tile_word(tile, offset)?)
     };
@@ -36,10 +41,10 @@ pub fn build_tactical_map(
         ((requested.0 - origin.0) * 3) as i16,
         ((requested.1 - origin.1) * 3) as i16,
     );
-    let mut map = TacticalMap {
-        tiles: vec![0; 8100],
+    let mut map = CombatField {
+        tiles: vec![0; super::MAP_CELLS],
         edge_word,
-        shift,
+        map_shift: shift,
     };
     for y in 0..30 {
         for x in 0..30 {

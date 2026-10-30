@@ -1,15 +1,18 @@
-//! Character dialog fields, calculated directly from saved records. Original
-//! control IDs and font-size transitions follow ShowStats (0x159a96).
+//! Character dialog fields, calculated directly from saved records. Control IDs
+//! and font sizes follow the original dialog.
 use crate::{RuleError, Session};
 use centurions_content::{
-    native_text::NativeText,
+    game_text::GameText,
     records::{CharacterInformation, CharacterStatistics, Statistic},
 };
 use std::collections::BTreeMap;
 
+/// Character dialog fields by control id: the text and its font size.
 pub type Fields = BTreeMap<i16, (String, u16)>;
 
-/// viewcharacter detailed record page, 0x164174..0x164448.
+/// The detailed record page of the character view.
+///
+/// Original: viewcharacter
 pub fn statistics(state: &Session, member: usize) -> Result<Fields, RuleError> {
     let warrior = state
         .warriors
@@ -63,19 +66,22 @@ pub fn statistics(state: &Session, member: usize) -> Result<Fields, RuleError> {
     Ok(fields)
 }
 
+/// The character information page: the fields of the Information dialog for one squad member.
+///
+/// Original: ShowStats
 pub fn information(
     state: &Session,
     member: usize,
-    native: &NativeText,
+    game_text: &GameText,
     strings: &BTreeMap<i16, Vec<u8>>,
 ) -> Result<Fields, RuleError> {
     let warrior = state
         .warriors
         .get(member)
         .ok_or_else(|| RuleError::Invalid("information warrior is outside the squad".into()))?;
-    // Retain the previous adapter's required original-data ranges.
-    native.bytes(0x400af0, 0x50)?;
-    native.bytes(0x402f3c, 10)?;
+    // The page still requires these original text ranges to be present.
+    game_text.bytes(0x400af0, 0x50)?;
+    game_text.bytes(0x402f3c, 10)?;
     let record = warrior.record();
     let profile = CharacterInformation(&warrior.bytes);
     let mut fields = Fields::new();
@@ -88,7 +94,7 @@ pub fn information(
     }
     number(&mut fields, 71, profile.age_days()? / 365, 12);
     let mut credits = state.party_currency;
-    // ShowStats uses a signed-byte last-member bound, even for malformed parties.
+    // The last member is a signed byte, even for a malformed party.
     let last = state.warriors.len().saturating_sub(1) as u8 as i8;
     for index in 0..=i16::from(last) {
         let carried =
@@ -111,13 +117,13 @@ pub fn information(
         2 => 0x400b0a,
         _ => 0x400b04,
     };
-    fields.insert(47, (native.text(gender_text, true)?, 12));
+    fields.insert(47, (game_text.text(gender_text, true)?, 12));
     for (item, value) in [
-        (48, record.actions_per_round()?),
+        (48, record.normal_attacks()?),
         (49, record.attack_limit()?),
-        (25, record.scan_capacity()?),
+        (25, record.max_spells_attacks()?),
         (113, record.shield_points()?),
-        // Native TextSize(10) is immediately reset to 12 for shield capacity.
+        // The original sets size 10 for shield capacity and resets it to 12 at once.
         (106, profile.shield_capacity()?),
     ] {
         number(&mut fields, item, value, 12);
@@ -127,14 +133,14 @@ pub fn information(
     for (item, value) in [
         (34, record.shield_chance()?),
         (35, profile.shield_cost()?),
-        (36, record.armor()?),
+        (36, record.ac()?),
         (32, record.level()?),
-        (50, record.carried_weight()?),
-        (51, record.weight_capacity()?),
+        (50, record.load()?),
+        (51, record.load_max()?),
     ] {
         number(&mut fields, item, value, 12);
     }
-    if record.maximum_psi()? != 0 {
+    if record.psi_points_max()? != 0 {
         number(
             &mut fields,
             33,
@@ -142,7 +148,7 @@ pub fn information(
             12,
         );
     } else {
-        fields.insert(33, (native.text(0x400afe, true)?, 12));
+        fields.insert(33, (game_text.text(0x400afe, true)?, 12));
     }
     fields.insert(67, (decode(profile.name_bytes()?), 12));
     for (item, value) in [
@@ -160,23 +166,23 @@ pub fn information(
     ] {
         number(&mut fields, item, value, 12);
     }
-    if record.psi_school()? != 0 && record.maximum_psi()? != 0 {
-        let size = if record.maximum_psi()? > 999 { 10 } else { 12 };
+    if record.psi_school()? != 0 && record.psi_points_max()? != 0 {
+        let size = if record.psi_points_max()? > 999 {
+            10
+        } else {
+            12
+        };
         number(&mut fields, 112, record.psi_points()?, size);
-        number(&mut fields, 58, record.maximum_psi()?, size);
+        number(&mut fields, 58, record.psi_points_max()?, size);
     } else {
         for item in [112, 58] {
-            fields.insert(item, (native.text(0x400afc, true)?, 12));
+            fields.insert(item, (game_text.text(0x400afc, true)?, 12));
         }
     }
-    let size = if record.maximum_stamina()? > 999 {
-        10
-    } else {
-        12
-    };
+    let size = if record.stamina_max()? > 999 { 10 } else { 12 };
     for (item, value) in [
         (56, record.stamina()?),
-        (57, record.maximum_stamina()?),
+        (57, record.stamina_max()?),
         (59, profile.psionic_resistance()?),
         (26, profile.movement_rate()?),
     ] {
@@ -191,15 +197,15 @@ pub fn information(
         );
     }
     for item in 60..64 {
-        fields.insert(item, (native.text(0x400afc, true)?, 12));
+        fields.insert(item, (game_text.text(0x400afc, true)?, 12));
     }
     let mut shown = 0;
     for index in 0..12 {
-        let bonus = record.creature_category_bonus(index)?;
+        let bonus = record.special(index)?;
         if bonus == 0 {
             continue;
         }
-        let sign = native.text(if bonus > 0 { 0x400afa } else { 0x400af9 }, false)?;
+        let sign = game_text.text(if bonus > 0 { 0x400afa } else { 0x400af9 }, false)?;
         let mut label = sign.into_bytes();
         label.extend(bonus.to_string().bytes().take(3));
         label.extend(indexed(strings, 132, index as i16 + 1)?.iter().take(45));
@@ -209,7 +215,7 @@ pub fn information(
         }
     }
     for item in 27..32 {
-        fields.insert(item, (native.text(0x400afc, true)?, 12));
+        fields.insert(item, (game_text.text(0x400afc, true)?, 12));
     }
     let mut shown = 0;
     for index in 0..40 {
@@ -227,14 +233,17 @@ pub fn information(
     Ok(fields)
 }
 
+/// Sets a numeric field of the dialog.
 fn number(fields: &mut Fields, item: i16, value: impl ToString, size: u16) {
     fields.insert(item, (value.to_string(), size));
 }
 
+/// Decodes Mac Roman text from a resource or record into a string.
 fn decode(bytes: &[u8]) -> String {
     encoding_rs::MACINTOSH.decode(bytes).0.into_owned()
 }
 
+/// Fetches one string from a character STR# resource by its one-based index.
 fn indexed(
     strings: &BTreeMap<i16, Vec<u8>>,
     resource: i16,

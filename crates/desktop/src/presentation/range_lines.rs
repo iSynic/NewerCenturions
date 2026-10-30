@@ -1,21 +1,22 @@
-//! showrange 0x1580be: lines from the current warrior to every body.
+//! Range lines from the warrior whose turn it is to every body: green for
+//! friends, red for enemies and blue for bodies that are out of the fight.
 //!
-//! Reveal Friends (combat 0x116350) calls showrange(0): drawbody(body, 1, 0)
-//! frames every body, then 1-pixel lines are drawn straight into the window
-//! port 0x43879c, which has no ClipRect, until a click or key.
+//! Reveal Friends calls showrange(0): drawbody(body, 1, 0) frames every body,
+//! then 1-pixel lines are drawn straight into the window, unclipped, until a
+//! click or key.
 //!
-//! When the current queue body is a warrior (0x4470b8[0x447194] in 0..9),
-//! centerfieldlarge 0x10eb30..0x10ebf2 copies the field GWorld 0x4386c0 into
-//! 0x4386b4, calls showrange(1) to draw the same lines there, copies the field
-//! back over the view rect 0x4471b4 inset by 10, and copies 0x4386b4 to the
-//! window. Only each line's last 10 pixels inside the view survive. GWorldInit
-//! 0x127548 sets that GWorld's pen to 3 by 3.
+//! While a warrior has the turn, centerfieldlarge also draws the same lines with
+//! a 3 by 3 pen into a copy of the field and then copies the field back over the
+//! view inset by 10, so only each line's last 10 pixels inside the view survive
+//! as edge strokes.
 use crate::layout;
 use centurions_core::{Session, combat::Combat};
 use macroquad::prelude::*;
 
+/// The width of the view's border, in pixels.
 const BORDER: i32 = 10;
 
+/// How the range lines are drawn.
 #[derive(Clone, Copy)]
 enum Mode {
     /// showrange(1) in centerfieldlarge: 3 by 3 pen, the view's 10-pixel border.
@@ -43,32 +44,33 @@ pub(super) fn draw_reveal(state: &Session, ui: &super::UiState) {
     draw(state, combat, (i32::from(vx), i32::from(vy)), Mode::Reveal);
 }
 
+/// Original: showrange
 fn draw(state: &Session, combat: &Combat, (vx, vy): (i32, i32), mode: Mode) {
-    // WORD4435d2 is the warrior whose turn it is; centerfieldlarge only calls
-    // showrange while the queue's current body is a warrior.
+    // centerfieldlarge only calls showrange while the queue's current body is
+    // a warrior.
     let Some(current) = combat.active_body().filter(|body| (0..9).contains(body)) else {
         return;
     };
-    let Some(&(cx, cy)) = combat.squad.positions.get(current as usize) else {
+    let Some(&(cx, cy)) = combat.squad.pos.get(current as usize) else {
         return;
     };
     let (cx, cy) = (i32::from(cx) - vx, i32::from(cy) - vy);
-    // 0x1581a8: PtInRect against (0,0,9,9), otherwise (160,160).
+    // A warrior outside the view's (0,0,9,9) cells starts its lines at (160,160).
     let start = if (0..9).contains(&cx) && (0..9).contains(&cy) {
         (cx * 32 + 16, cy * 32 + 16)
     } else {
         (160, 160)
     };
-    // redColor, blueColor and the RGB at 0x443374 (ToolBoxInit 0x1322aa).
+    // redColor, blueColor and the green ToolBoxInit sets up.
     let red = Color::from_rgba(0xdd, 0x08, 0x06, 255);
     let blue = Color::from_rgba(0x00, 0x00, 0xd4, 255);
     let green = Color::from_rgba(0x00, 0xff, 0x32, 255);
-    // 0x158224: NPCs with stamina, the size class moving the end to the body centre.
-    for (index, record) in combat.enemies.records.iter().enumerate() {
+    // Monsters with stamina, the size class moving the end to the body centre.
+    for (index, record) in combat.roster.records.iter().enumerate() {
         if record.stamina().unwrap_or(0) <= 0 {
             continue;
         }
-        let Some(&(x, y)) = combat.enemies.positions.get(index) else {
+        let Some(&(x, y)) = combat.roster.mon_pos.get(index) else {
             continue;
         };
         let monster = record.record();
@@ -86,13 +88,13 @@ fn draw(state: &Session, combat: &Combat, (vx, vy): (i32, i32), mode: Mode) {
         );
         line(start, end, color, mode);
     }
-    // 0x158322: warriors in combat; faction 0x10 makes red, turn skip 0x60 blue.
+    // Warriors in combat; a faction makes red, a skipped turn blue.
     for (index, warrior) in state.warriors.iter().enumerate() {
         let record = warrior.record();
-        if record.active_flag() == 0 {
+        if record.in_battle() == 0 {
             continue;
         }
-        let Some(&(x, y)) = combat.squad.positions.get(index) else {
+        let Some(&(x, y)) = combat.squad.pos.get(index) else {
             continue;
         };
         let color = if record.turn_skip_duration().unwrap_or(0) != 0 {

@@ -1,6 +1,8 @@
 use crate::{ContentError, mission::MissionStage, word};
 
-/// Loaded owners following the tactical map in the original A5 data.
+/// The data that lies after the tactical map (`field`) in the game's globals:
+/// object layer, events and the mission table. A spell's target scan can index
+/// past the map into them.
 pub struct SpellMapAliases<'a> {
     objects: &'a [i16],
     events: &'a [i32],
@@ -8,6 +10,7 @@ pub struct SpellMapAliases<'a> {
 }
 
 impl<'a> SpellMapAliases<'a> {
+    /// Gathers the object layer, events and mission stages that follow the map.
     pub fn new(objects: &'a [i16], events: &'a [i32], stages: &'a [MissionStage]) -> Self {
         Self {
             objects,
@@ -16,7 +19,8 @@ impl<'a> SpellMapAliases<'a> {
         }
     }
 
-    /// spelltargets indexes from map4085b8; these reads do not write an owner.
+    /// A word read at a signed index from the start of the tactical map. It
+    /// never writes.
     pub fn tactical_word(&self, index: i32) -> Result<Option<i16>, ContentError> {
         let address = 0x4085b8_i64 + i64::from(index) * 2;
         if (0x40c500..0x410448).contains(&address) {
@@ -35,7 +39,7 @@ impl<'a> SpellMapAliases<'a> {
                 }
             }));
         }
-        // Displaymissionname133f3e loads the complete Data Mission table.
+        // The whole Data Mission table is loaded when the mission name is shown.
         if (0x41d1c4..0x41f604).contains(&address) {
             let offset = (address - 0x41d1c4) as usize;
             return self

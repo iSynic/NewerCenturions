@@ -2,7 +2,7 @@
 use crate::{prelude::*, support};
 
 #[test]
-fn encounter_replacement_preserves_native_read_and_write_strides_across_reload() {
+fn encounter_replacement_preserves_original_read_and_write_strides_across_reload() {
     for target in [-1_i16, -2] {
         let mut content = support::content();
         let map = &mut content.scenario.as_mut().unwrap().maps[0];
@@ -35,7 +35,7 @@ fn encounter_replacement_preserves_native_read_and_write_strides_across_reload()
         let source = &content.map(0).unwrap().menus;
         let tail = source.as_chunks::<426>().1;
         assert_eq!(
-            &state.native_work.encounter_work.header(false)[..tail.len()],
+            &state.globals.encounter_headers.header(false)[..tail.len()],
             tail
         );
         let random = state.random.clone();

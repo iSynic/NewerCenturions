@@ -1,10 +1,11 @@
-//! Body adapters for the shared resolvespell resolver.
+//! Body adapters for the shared spell resolver.
 use super::{
     BodySpellResult, DirectSpell, FieldUsage, RandomState, RestrictionMemoryView, RuleError,
     SupportSpellResult, resolve_support_inner,
 };
 use centurions_content::{Warrior, combat::MonsterRecord};
 
+/// A spell cast on the warriors and monsters its mask picks.
 pub fn resolve_bodies(
     warriors: &[Warrior],
     enemies: &[MonsterRecord],
@@ -15,6 +16,7 @@ pub fn resolve_bodies(
     resolve_bodies_inner(warriors, enemies, mask, context, None, None, random)
 }
 
+/// A spell cast on the picked bodies, with the item definition last loaded.
 pub fn resolve_bodies_with_item_cache(
     warriors: &[Warrior],
     enemies: &[MonsterRecord],
@@ -34,6 +36,7 @@ pub fn resolve_bodies_with_item_cache(
     )
 }
 
+/// A spell cast on the picked bodies, with the party's restriction memory.
 pub fn resolve_bodies_with_memory(
     warriors: &[Warrior],
     enemies: &[MonsterRecord],
@@ -45,6 +48,7 @@ pub fn resolve_bodies_with_memory(
     resolve_bodies_inner(warriors, enemies, mask, context, None, Some(memory), random)
 }
 
+/// A spell field strikes the bodies its mask picks and is marked used.
 pub fn resolve_collision(
     warriors: &[Warrior],
     enemies: &[MonsterRecord],
@@ -65,6 +69,7 @@ pub fn resolve_collision(
     .map(|result| result.body)
 }
 
+/// A spell field strikes the picked bodies, with the item definition last loaded.
 pub fn resolve_collision_with_item_cache(
     warriors: &[Warrior],
     enemies: &[MonsterRecord],
@@ -92,6 +97,8 @@ pub fn resolve_collision_with_item_cache(
     .map(|result| result.body)
 }
 
+/// A spell field strikes the picked bodies, with the current body and the party's restriction
+/// memory. Also gives what the field recovered or healed.
 pub(crate) fn resolve_collision_with_memory(
     warriors: &[Warrior],
     enemies: &[MonsterRecord],
@@ -112,12 +119,16 @@ pub(crate) fn resolve_collision_with_memory(
     )
 }
 
+/// What a field's strike did: the body result, and what it recovered or healed.
 pub(crate) struct CollisionResult {
     pub body: BodySpellResult,
     pub recovered: u8,
     pub healed: bool,
 }
 
+/// A spell field strikes bodies. A psi-drain field (effect 60 or 61, defense category 5) drains psi
+/// with its usage byte on behalf of the current body; any other field is resolved as a support
+/// spell. The usage marks are kept only if the strike succeeds.
 pub(super) fn resolve_collision_inner(
     warriors: &[Warrior],
     enemies: &[MonsterRecord],
@@ -134,16 +145,16 @@ pub(super) fn resolve_collision_inner(
         slot: usage.slot,
         used: usage.used.clone(),
     };
-    let attack = centurions_content::records::AttackPacket(context.packet);
+    let attack = centurions_content::records::SpellInfoRecord(context.packet);
     if matches!(attack.effect()?, 60 | 61) && attack.defense_category() == 5 {
-        // collide's resolvespell reaches spelllist 15ba5a with its usage byte.
-        // Every game collision passes the party memory and the current body; the
-        // record-only public resolvers, which no command reaches, pass neither.
+        // A field collision drains Psi with its usage byte. Every game collision
+        // passes the party memory and the current body; the record-only public
+        // resolvers, which no command reaches, pass neither.
         let Some(memory) = caller.1.filter(|_| !record_only) else {
             return Err("category-5 drain in a record-only collision resolver".into());
         };
-        // spelllist reads the body at 4470b8[447194]; a negative row reads before
-        // the warrior table, which the original never defines (memory-alias-audit).
+        // The caster is the battle order's current body; a negative row reads
+        // before the warrior table (docs/memory-alias-audit.md).
         let Some(caster) = caller.0 else {
             return Err(RuleError::Unsupported {
                 action: "combat.spell.collision",
@@ -185,6 +196,7 @@ pub(super) fn resolve_collision_inner(
     })
 }
 
+/// Resolves a spell on bodies as a support spell and keeps the body results.
 pub(super) fn resolve_bodies_inner(
     warriors: &[Warrior],
     enemies: &[MonsterRecord],
@@ -209,8 +221,8 @@ pub(super) fn resolve_bodies_inner(
     })
 }
 
-/// Support packets with effects 26/64 reach these callers only without ITEM work,
-/// shop work or map header owners, so no warrior-indexed write can be recorded.
+/// Support packets with effects 26 and 64 reach these callers without the item,
+/// shop or map owners, so they record no warrior-indexed write.
 fn no_alias_writes(result: &SupportSpellResult) -> Result<(), RuleError> {
     if result.alias_writes.is_empty() {
         Ok(())
@@ -219,6 +231,7 @@ fn no_alias_writes(result: &SupportSpellResult) -> Result<(), RuleError> {
     }
 }
 
+/// Keeps the body part of a support result.
 fn body_result(result: SupportSpellResult) -> BodySpellResult {
     BodySpellResult {
         total_delta: result.total_delta,

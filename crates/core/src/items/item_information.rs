@@ -1,17 +1,19 @@
-//! showiteminfo 0x1555f2, reached from the Items info button (CNTL 140,
-//! 12b5a6..12b6ec) and from row clicks while its DLOG 149 is open.
+//! The item information dialog (DLOG 149), opened from the Items info button
+//! and retargeted by row clicks while it is open.
 //!
-//! loaditem -> loadammo(record WORD+4) -> signed instance merge -> loadspell2
-//! for 1101..3999 -> WORD 76 = 1 when the shown damage is nonzero and the
-//! count is zero -> quickinfo132b0c under the preference. No RNG is drawn;
-//! the race and MOS profiles loaded by canuse are not retained work.
+//! It loads the item, its ammunition, the instance's own values and the item's
+//! spell. An item that shows damage but has no attack count shows one attack.
+//! With the quick-info preference the Items detail follows. No random numbers
+//! are drawn.
 use super::inventory_opening::{admit, check_scroll, redraw};
 use crate::{Event, ItemInformationList, RuleError, Session};
-use centurions_content::records::{InventorySlots, ItemDefinition, ItemPanelWorkMut};
+use centurions_content::records::{InventorySlots, ItemDefinition, ItemPanelMut};
 use centurions_content::{Content, InventoryRecord};
 
-/// Items 12b64e: sound 30005, updateitems on the shown row, then showiteminfo
-/// on row+scroll. An owner without items skips the control (12b5ca).
+/// The info button: sound 30005, the shown row redrawn, then the dialog for
+/// that row. An owner without items ignores the button.
+///
+/// Original: items, showiteminfo
 pub(crate) fn show(
     state: &mut Session,
     content: &Content,
@@ -28,7 +30,7 @@ pub(crate) fn show(
     if InventorySlots(&state.warriors[owner].bytes).count()? == 0 {
         return Ok(vec![]);
     }
-    state.native_work.inventory_scroll = scroll as u16;
+    state.globals.inventory_scroll = scroll as u16;
     redraw(state, content, owner, scroll, row, row)?;
     load(
         state,
@@ -40,11 +42,12 @@ pub(crate) fn show(
     Ok(vec![Event::Sound { resource_id: 30005 }])
 }
 
-/// A click inside DLOG 149 restarts showiteminfo without sound or redraw.
-/// Items rows (156988) need a slot below the selected owner's count and keep
-/// the earlier member; the second owner's list (156a00) sets the member from
-/// BYTE 44273d with no count test; a shop cell (156a6a) only moves the shop
-/// cursor WORDs 41f70a/0c, so a member's slot reloads unchanged.
+/// A click behind the open dialog shows another item without sound or redraw.
+/// An Items row needs a slot below the owner's count and keeps the earlier
+/// member; the second owner's list takes its own member with no count test; a
+/// shop cell only moves the shop cursor, so a member's slot reloads unchanged.
+///
+/// Original: showiteminfo
 pub(crate) fn retarget(
     state: &mut Session,
     content: &Content,
@@ -60,7 +63,7 @@ pub(crate) fn retarget(
     if list == ItemInformationList::Items && slot as i16 >= count {
         return Ok(vec![]);
     }
-    // A dialog opened with member 0xffff keeps it for Items rows and shop
+    // A dialog showing a bare item ID keeps doing so for Items rows and shop
     // cells, which then pass the clicked record or stock ID.
     let shown = match (item, list) {
         (Some(_), ItemInformationList::Items) => {
@@ -74,9 +77,11 @@ pub(crate) fn retarget(
     Ok(vec![])
 }
 
-/// DLOG 149 items 1 and 2 (1568e2, 156932): showcondition154a46 plays 609, then 607 on
-/// close. Mode 4 runs canuse(ITEM WORD 102) per member, and each canuse
-/// reloads ITEM from that WORD; mode 3 loads only profiles.
+/// The dialog's user and profession popups play 609, then 607 on close. The
+/// user list checks each member with canuse, which reloads the item from its
+/// description each time; the profession list loads only the profiles.
+///
+/// Original: showcondition
 pub(crate) fn list_users(
     state: &mut Session,
     content: &Content,
@@ -88,11 +93,11 @@ pub(crate) fn list_users(
     if !professions {
         let passes = if widened { state.warriors.len() } else { 1 };
         for _ in 0..passes * state.warriors.len() {
-            let item = state.native_work.ammunition_work.item.as_deref();
+            let item = state.globals.loaded_items.item.as_deref();
             let id =
                 ItemDefinition(item.ok_or("item information work missing")?).description_id()?;
             if id > 0 {
-                state.load_item_work(content, id)?;
+                state.load_item(content, id)?;
             }
         }
     }
@@ -115,20 +120,22 @@ fn admit_dialog(state: &Session, owner: usize) -> Result<(), RuleError> {
     } else if owner >= state.warriors.len() {
         return Err("inventory entry requires an available owner and caller".into());
     }
-    if state.native_work.health_context.selected_warrior != owner {
+    if state.globals.health_context.char_select_new != owner {
         return Err("item information owner is not selected".into());
     }
     Ok(())
 }
 
-/// showiteminfo's parameters: a member's slot, or member 0xffff with an item
-/// ID and the slot WORD (0xffff when the caller passes none).
+/// What the dialog shows: a member's slot, or a bare item ID with the slot the
+/// caller passes, if any.
 #[derive(Clone, Copy)]
 pub(super) enum Shown {
     Slot(usize, usize),
     Item(i16, Option<usize>),
 }
 
+/// Loads what the item information dialog shows: the item, its ammunition, the instance's own
+/// values and the item's spell.
 pub(super) fn load(
     state: &mut Session,
     content: &Content,
@@ -148,37 +155,38 @@ pub(super) fn load(
         }
     };
     let merged = matches!(shown, Shown::Slot(..));
-    state.load_item_work(content, record.id())?;
+    state.load_item(content, record.id())?;
     let loaded = merged && record.ammunition_id()? != 0;
     let ammo_id = if merged { record.ammunition_id()? } else { 0 };
     let ammo = crate::ammunition::definition(content, ammo_id)?;
-    state.native_work.weapon_work.load_ammunition(&ammo)?;
+    state.globals.weapon_traits.load_ammunition(&ammo)?;
     if let Some(combat) = state.combat.as_mut() {
-        combat.weapon_work.load_ammunition(&ammo)?;
+        combat.weapon_traits.load_ammunition(&ammo)?;
     }
-    let item = state.native_work.ammunition_work.item.as_mut().unwrap();
-    // 1556a6: member 0xffff loads ammunition 0 and merges no instance.
+    let item = state.globals.loaded_items.item.as_mut().unwrap();
+    // A bare item ID loads no ammunition and has no instance values.
     if merged {
-        ItemPanelWorkMut(item).merge_item_information(&record.0, &ammo)?;
+        ItemPanelMut(item).merge_item_information(&record.0, &ammo)?;
     }
     let spell = ItemDefinition(item).spell()?;
     let damage = shown_damage(item, &ammo, loaded, record.damage_enhancement())?;
     if damage.total != 0 && ItemDefinition(item).attack_count()? == 0 {
-        ItemPanelWorkMut(item).set_attack_count(1)?;
+        ItemPanelMut(item).set_attack_count(1)?;
     }
-    state.native_work.ammunition_work.ammo = Some(ammo);
+    state.globals.loaded_items.ammo = Some(ammo);
     super::inventory_detail::load_spell(state, content, spell)?;
-    // 1567ae: quickinfo runs on BYTE44273f and the slot WORD in each window
-    // mode; a negative slot returns before any load.
+    // The detail follows for the selected owner in every window; without a
+    // slot it loads nothing.
     if quick_info && let Some(slot) = slot {
         super::quick_info(state, content, owner, slot)?;
     }
     Ok(())
 }
 
-/// booty105748 option-click: loaditem(|ID|), the ammunition
-/// pickup when that is a 200..400 reserve item, else sound 30005 and
-/// showiteminfo(0xffff, 0xffff, ID).
+/// Option-clicking loot picks up reserve ammunition (200..400), or else plays
+/// sound 30005 and shows the item's information.
+///
+/// Original: booty, showiteminfo
 pub(crate) fn show_loot(
     state: &mut Session,
     content: &Content,
@@ -192,28 +200,27 @@ pub(crate) fn show_loot(
         return Err("no loot choice active".into());
     }
     let id = state
-        .booty_items
+        .booty_list
         .get(slot)
         .map(|item| item.id().wrapping_abs())
         .filter(|id| *id != 0)
         .ok_or("loot slot is empty")?;
-    state.load_item_work(content, id)?;
-    let reserve = ItemDefinition(state.native_work.ammunition_work.item.as_deref().unwrap())
+    state.load_item(content, id)?;
+    let reserve = ItemDefinition(state.globals.loaded_items.item.as_deref().unwrap())
         .reserve_ammunition_kind()?;
     if (200..=400).contains(&id) && reserve != 0 {
         return crate::exploration::take_loot(state, content, slot, None);
     }
-    let owner = state.native_work.health_context.selected_warrior;
+    let owner = state.globals.health_context.char_select_new;
     load(state, content, owner, Shown::Item(id, None), false)?;
     Ok(vec![Event::Sound { resource_id: 30005 }])
 }
 
-/// moveicon13c1ee's option-drag in the shop window. BYTE44273f takes the
-/// dragged list's member, then showiteminfo runs on that row (13c856 for the
-/// second member, 13c88e for the first) or, on a shop cell, with member and
-/// slot 0xffff and the stock's ITEM WORD 102 description ID (13c7fe). The
-/// prefix's ITEM, cost and canuse loads are replaced by showiteminfo's
-/// loaditem; Showitems and updateshopwings only redraw. No drag follows.
+/// Option-dragging in the shop window shows an item's information instead of
+/// moving it. A member's row selects that member and shows the row; a shop cell
+/// shows the stock item's description.
+///
+/// Original: moveicon, showiteminfo
 pub(crate) fn show_dragged(
     state: &mut Session,
     content: &Content,
@@ -229,11 +236,11 @@ pub(crate) fn show_dragged(
         return Err("item drag requires the shop window and a squad member".into());
     }
     let shown = if stock {
-        let work = &state.native_work.shop_work;
-        if work.quantity(slot)? == 0 {
+        let shop = &state.globals.the_shop;
+        if shop.quantity(slot)? == 0 {
             return Err("shop cell is empty".into());
         }
-        let definition = crate::ammunition::definition(content, work.item(slot)?)?;
+        let definition = crate::ammunition::definition(content, shop.item(slot)?)?;
         Shown::Item(ItemDefinition(&definition).description_id()?, None)
     } else {
         if slot as i16 >= InventorySlots(&state.warriors[member].bytes).count()? {
@@ -246,14 +253,19 @@ pub(crate) fn show_dragged(
     Ok(vec![])
 }
 
-/// The DLOG 149 damage rows: each value scaled by the Single factor
-/// (100 + instance BYTE 18) / 100 in extended precision and truncated.
+/// The dialog's damage rows: each value scaled by (100 + the instance's damage
+/// enhancement) / 100, rounded to single precision, multiplied in extended
+/// precision and truncated.
 pub struct ShownDamage {
     pub base: i16,
     pub elements: [i16; 7],
     pub total: i16,
 }
 
+/// The damage the information dialog shows for an item: its missile and melee damage (with the
+/// loaded ammunition's), multiplied by the rounds per shot when that is nonzero. Each element is
+/// the item's plus the ammunition's, multiplied by the rounds per shot. All are scaled by the
+/// enhancement percentage, and only positive elements add to the total.
 pub fn shown_damage(
     item: &[u8],
     ammo: &[u8],

@@ -69,15 +69,15 @@ fn npc_revival_matches_inert_backup_aliases_and_keeps_writing_cases_atomic() {
 
 fn combat(snapshot: &Value, caster: i16) -> Combat {
     let mut combat = support::psi_frame::combat(snapshot);
-    combat.order = vec![-1; 110];
-    combat.order[1] = caster;
-    combat.cursor = 1;
-    combat.round = 0;
+    combat.battle_order = vec![-1; 110];
+    combat.battle_order[1] = caster;
+    combat.battle_order_index = 1;
+    combat.combat_round = 0;
     combat
 }
 fn compare(c: &Combat, w: &[Warrior], s: &Value, label: &str) {
     support::psi_frame::compare(c, w, s, label);
-    assert_eq!(c.unavailable as u8, s.n::<u8>("unavailable"), "{label}");
+    assert_eq!(c.kill_party as u8, s.n::<u8>("unavailable"), "{label}");
 }
 use support::event_sounds as sounds;
 #[test]
@@ -105,7 +105,7 @@ fn support_casts_match_complete_native_records_packets_memory_rng_and_audio() {
         let mut memory = before.bytes("memory");
         let mut c = combat(before, 5);
         let target = if id == 1101 {
-            Some(c.squad.positions[case.n::<usize>("target")])
+            Some(c.squad.pos[case.n::<usize>("target")])
         } else {
             Some((20, 20))
         };
@@ -149,7 +149,7 @@ fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let weapon = case.n::<usize>("weapon");
         let buffs = before.bytes("party_buffs");
-        let retained = c.attack_packet.clone();
+        let retained = c.spell_info.clone();
         let (result, packet) = if weapon == 187 {
             enemy_weapons::melee_warrior_with_buffs(
                 &mut c,
@@ -165,7 +165,7 @@ fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
         } else {
             attack::natural_attack_with_buffs(
                 &mut w[0],
-                &mut c.enemies.records[0],
+                &mut c.roster.records[0],
                 0,
                 &mut random,
                 attacks,
@@ -175,7 +175,7 @@ fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
             )
         }
         .unwrap_or_else(|e| panic!("{label} {e:?}"));
-        c.attack_packet = packet;
+        c.spell_info = packet;
         compare(&c, &w, after, &label);
         assert_eq!(random, native_common::random_state(after));
         let mut sounds = result.sounds;
@@ -184,7 +184,7 @@ fn support_protection_matches_native_melee_and_natural_follow_on_attacks() {
         } else if weapon == 187 {
             word(&content.items[weapon], 14).unwrap()
         } else {
-            i16::from(c.enemies.records[0].bytes[0x95] as i8)
+            i16::from(c.roster.records[0].bytes[0x95] as i8)
         });
         assert_eq!(sounds, case.n::<Vec<i16>>("sounds"), "{label} sounds");
         assert!(!result.killed);

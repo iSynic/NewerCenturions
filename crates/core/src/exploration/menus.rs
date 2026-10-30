@@ -1,4 +1,4 @@
-//! Menus for maintained exploration.
+//! Simple and typed encounter menus.
 use super::{active_map, finish_typed_selection};
 use crate::{
     Event, MenuContinuation, Presentation, RuleError, ScriptState, Session, story, typed_encounter,
@@ -7,19 +7,27 @@ use centurions_content::mission::OpeningMission;
 use centurions_content::records::{EncounterMenu, StoryRecordMut};
 use centurions_content::{Content, ContentError, span};
 
+/// The session's rewritten encounter table once one exists, otherwise the map's own.
+pub(super) fn active_table<'a>(saved: &'a [u8], authored: &'a [u8]) -> &'a [u8] {
+    if saved.is_empty() { authored } else { saved }
+}
+
+/// Shows a scenario's simple encounter menu, loading its header when it is new. When the menu is
+/// out of choices, or its first selector is -4, the fourth branch runs instead and nothing is
+/// shown.
 pub(super) fn present_menu(
     map: &OpeningMission,
     table: &[u8],
     script: &mut ScriptState,
     id: i16,
-    work: &mut story::EncounterWork,
+    headers: &mut story::EncounterHeaders,
     reload: bool,
 ) -> Result<Option<Presentation>, RuleError> {
     if reload {
-        work.load(table, id, false)?;
+        headers.load(table, id, false)?;
     }
-    work.clear_disabled_labels()?;
-    let bytes = work.record(false)?;
+    headers.clear_disabled_labels()?;
+    let bytes = headers.record(false)?;
     let menu = bytes.as_slice();
     let record = EncounterMenu(menu);
     if script.menu.is_none() {
@@ -63,18 +71,19 @@ pub(super) fn present_menu(
     }))
 }
 
+/// Shows a scenario's typed encounter prompt, loading its header when it is new.
 pub(super) fn present_typed(
     map: &OpeningMission,
     table: &[u8],
     script: &mut ScriptState,
     id: i16,
-    work: &mut story::EncounterWork,
+    headers: &mut story::EncounterHeaders,
     reload: bool,
 ) -> Result<Presentation, RuleError> {
     if reload {
-        work.load(table, id, true)?;
+        headers.load(table, id, true)?;
     }
-    let bytes = work.record(true)?;
+    let bytes = headers.record(true)?;
     let record = bytes.as_slice();
     if script.menu.is_none() {
         script.menu = Some(MenuContinuation {
@@ -99,12 +108,13 @@ pub(super) fn present_typed(
     })
 }
 
+/// Takes the text the player typed for a typed prompt; the field holds at most 40 bytes.
 pub fn submit_text(
     state: &mut Session,
     content: &Content,
     text: &str,
 ) -> Result<Vec<Event>, RuleError> {
-    let input = centurions_content::native_text::NativeText::encode(text)?;
+    let input = centurions_content::game_text::GameText::encode(text)?;
     if input.len() > 40 {
         return Err(RuleError::Invalid(
             "typed input exceeds the original 40-byte field".into(),
@@ -114,16 +124,17 @@ pub fn submit_text(
     if input.is_empty() {
         return Ok(vec![]);
     }
-    let native =
-        centurions_content::native_text::NativeText::load(content, std::path::Path::new("."))?;
+    let game_text =
+        centurions_content::game_text::GameText::load(content, std::path::Path::new("."))?;
     let typed_encounter::PasswordSelection::Selected(selected) =
-        typed_encounter::select_password(&record, &input, native.bytes(0x3ffc50, 256)?)?
+        typed_encounter::select_password(&record, &input, game_text.bytes(0x3ffc50, 256)?)?
     else {
         return Ok(vec![]);
     };
     finish_typed_selection(state, content, selected)
 }
 
+/// The record of the typed encounter being shown.
 pub fn typed_record(state: &Session, _content: &Content) -> Result<Vec<u8>, RuleError> {
     if !matches!(
         state
@@ -134,17 +145,19 @@ pub fn typed_record(state: &Session, _content: &Content) -> Result<Vec<u8>, Rule
     ) {
         return Err(RuleError::Invalid("no typed encounter active".into()));
     }
-    state.native_work.encounter_work.record(true)
+    state.globals.encounter_headers.record(true)
 }
 
-/// saveencounter writes the current header, leaving the file labels untouched.
+/// Saves the current encounter header, leaving the file labels untouched.
+///
+/// Original: saveencounter
 pub(super) fn save_encounter(
     state: &mut Session,
     content: &Content,
     id: i16,
     typed: bool,
 ) -> Result<(), RuleError> {
-    let header = state.native_work.encounter_work.header(typed).to_vec();
+    let header = state.globals.encounter_headers.header(typed).to_vec();
     let map = active_map(state, content)?;
     let authored = if typed {
         &map.typed_encounters

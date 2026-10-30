@@ -56,7 +56,7 @@ fn party_selection_matches_original_masks_complete_records_and_randomness() {
         let mut state = support::mission_session(&content);
         state.warriors = warriors(&case["before"]);
         state.random = RandomState::new(12);
-        state.native_work.party_mask = case.words("mask_before").try_into().unwrap();
+        state.globals.party_track = case.words("mask_before").try_into().unwrap();
         let mut record = vec![0; 42];
         record[10..12].copy_from_slice(&30_i16.to_be_bytes());
         record[12..14].copy_from_slice(&1_i16.to_be_bytes());
@@ -71,7 +71,7 @@ fn party_selection_matches_original_masks_complete_records_and_randomness() {
         ));
         apply(Command::Continue, &mut state, &content).unwrap();
         assert_eq!(
-            state.native_work.party_mask.as_slice(),
+            state.globals.party_track.as_slice(),
             case.words("mask_after")
         );
         assert_eq!(state.random.seed, case.n::<u32>("seed"));
@@ -84,17 +84,17 @@ fn party_selection_matches_original_masks_complete_records_and_randomness() {
 fn late_group_filter_matches_original_tiles_formation_order_and_complete_warriors() {
     let fixture = support::fixture("story-party.json");
     for case in fixture.array("group_cases") {
-        let map = TacticalMap {
+        let map = CombatField {
             tiles: case.words("tiles_before"),
             edge_word: 0,
-            shift: (
+            map_shift: (
                 case["shift"][0].as_i64().unwrap() as i16,
                 case["shift"][1].as_i64().unwrap() as i16,
             ),
         };
         let squad = SquadPlacement {
-            positions: positions(&case["squad_before"]),
-            under_tiles: case.words("under_before"),
+            pos: positions(&case["squad_before"]),
+            char_under: case.words("under_before"),
         };
         let mask = std::array::from_fn(|index| case["mask"][index].as_i64().unwrap() as i16);
         let result = apply_group_mask(
@@ -110,9 +110,9 @@ fn late_group_filter_matches_original_tiles_formation_order_and_complete_warrior
             bytes flatten(&result.warriors) => &case["warriors_after"], "group warriors";
             words result.map.tiles => &case["tiles_after"], format!("group {} variant {}",case["group"],case["variant"]);
         }
-        assert_eq!(result.squad.positions, positions(&case["squad_after"]));
+        assert_eq!(result.squad.pos, positions(&case["squad_after"]));
         support::native_expect! {
-            words result.squad.under_tiles => &case["under_after"], "binary_story_party";
+            words result.squad.char_under => &case["under_after"], "binary_story_party";
             words result.order => &case["order_after"], "binary_story_party";
         }
     }

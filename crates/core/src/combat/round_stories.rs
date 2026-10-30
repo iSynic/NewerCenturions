@@ -1,11 +1,14 @@
 use crate::combat::Combat;
 use crate::exploration::Operation;
+use centurions_content::combat::MONSTER_BYTES;
 mod spawning;
 use crate::{RandomState, RuleError};
 use centurions_content::{mission::OpeningMission, records::StoryRecord, span, word};
 use spawning::spawn;
 pub(crate) use spawning::spawn_at;
 
+/// What a round script did, in order: a sound or text, a monster summoned or removed, or another
+/// script it handed on to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RoundEffect {
     Sound(i16),
@@ -15,14 +18,18 @@ pub enum RoundEffect {
     Dispatch { script: i16, cursor: u8 },
 }
 
+/// Who is running the round script: the active monster, the body killbody handled last, and the
+/// position of every party slot.
 #[derive(Clone, Copy)]
 pub struct RoundCaller {
     pub active_enemy: usize,
     pub last_defeated: Option<i16>,
-    /// Party positions 0x44709a for every slot; a battle's squad holds only its own.
+    /// Every party slot's position; a battle's squad holds only its own.
     pub party_positions: [(i16, i16); 6],
 }
 
+/// What a round's scripts accomplished: the extra record they ended on, their effects in order, and
+/// how many hostile monsters they added.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RoundOutcome {
     pub extra_record: Option<Vec<u8>>,
@@ -30,6 +37,7 @@ pub struct RoundOutcome {
     pub hostile_additions: i16,
 }
 
+/// Reports a round-script operation this build cannot yet run, without changing anything.
 fn unsupported(dependency: &'static str) -> RuleError {
     RuleError::Unsupported {
         action: "combat.round_story",
@@ -37,15 +45,18 @@ fn unsupported(dependency: &'static str) -> RuleError {
     }
 }
 
+/// The battle's round scripts: five slots read from the battle record, the round count, and a
+/// script waiting on a dialog.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct RoundScripts {
+pub struct RoundMacros {
     pub counter: i8,
     pub slots: [i16; 5],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending: Option<RoundProgram>,
 }
 
-impl Default for RoundScripts {
+impl Default for RoundMacros {
+    /// Round one, with no scripts loaded.
     fn default() -> Self {
         Self {
             counter: 1,
@@ -55,7 +66,8 @@ impl Default for RoundScripts {
     }
 }
 
-impl RoundScripts {
+impl RoundMacros {
+    /// Loads the five round-script slots from the battle record.
     pub fn read(battles: &[u8], battle: i16) -> Result<Self, RuleError> {
         let record = span(battles, usize::from(battle.unsigned_abs()) * 1372, 1372)?;
         Ok(Self {
@@ -72,6 +84,8 @@ impl RoundScripts {
     }
 }
 
+/// A round script paused at a dialog: its slot, script, how far it has run and the text it is
+/// showing.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RoundProgram {
     pub slot: u8,
@@ -82,10 +96,14 @@ pub struct RoundProgram {
     pub delegated: bool,
 }
 
+/// A round script's place while something it started runs: the story it suspended, whether a child
+/// battle is running, the battle it returns to, the dispatch above it and the story depth it was
+/// saved at.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RoundDispatch {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub retained: bool,
+    #[serde(rename = "retained")]
+    pub out_of_combat: bool,
     pub suspended_script: Option<crate::ScriptState>,
     #[serde(default)]
     pub child_battle: bool,
@@ -97,6 +115,8 @@ pub struct RoundDispatch {
     pub death_depth: Option<usize>,
 }
 
+/// What a battle started from a round script returns to when it ends: its after-battle message,
+/// treasure and rewards.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RoundBattleReturn {
     pub after_message: i16,
@@ -106,21 +126,26 @@ pub struct RoundBattleReturn {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<super::runtime::SelectedBattleTreasure>,
     pub group: Option<i16>,
-    pub npc: Option<crate::story_npc_battle::NpcBattleStart>,
+    pub npc: Option<crate::story::npc_battle::NpcBattleStart>,
 }
 
 impl RoundDispatch {
+    /// How long the chain of stories is from the running one up through its parents, itself
+    /// included, counted up to thirty-three.
     pub(crate) fn death_depth(state: &crate::Session) -> usize {
         std::iter::successors(state.combat_story.as_ref(), |story| story.parent.as_deref())
             .take(33)
             .count()
     }
 
+    /// Whether the chain of running stories is no longer than when this dispatch saved its depth,
+    /// or no depth was saved.
     pub(crate) fn owns_script(&self, state: &crate::Session) -> bool {
         let current = Self::death_depth(state);
         current <= self.death_depth.unwrap_or(current)
     }
 
+    /// Checks the saved dispatch chain, from this frame up, against the session.
     pub(crate) fn validate(
         &self,
         state: &crate::Session,
@@ -183,14 +208,14 @@ impl RoundDispatch {
             .as_ref()
             .is_none_or(|position| position.script.is_none())
             || (state.combat.is_none()
-                && !self.retained
+                && !self.out_of_combat
                 && !self.child_battle
                 && !matches!(
                     state.scripted_cleanup,
                     Some(
-                        crate::story_cleanup::Stage::Complete
-                            | crate::story_cleanup::Stage::Rewards
-                            | crate::story_cleanup::Stage::RetainedSurvivors { .. }
+                        crate::story::cleanup::Stage::Complete
+                            | crate::story::cleanup::Stage::Rewards
+                            | crate::story::cleanup::Stage::OutOfCombatSurvivors { .. }
                     )
                 ))
             || (state.combat.is_some()
@@ -199,7 +224,7 @@ impl RoundDispatch {
                     .combat
                     .as_ref()
                     .unwrap()
-                    .round_scripts
+                    .round_macros
                     .pending
                     .as_ref()
                     .is_none_or(|program| !program.delegated))
@@ -213,6 +238,8 @@ impl RoundDispatch {
 }
 
 impl RoundProgram {
+    /// Checks the paused script's slot and place, and that the text it shows is the dialogue its
+    /// script calls for.
     pub fn validate(&self, mission: &OpeningMission) -> Result<(), RuleError> {
         if self.slot >= 5 || !(1..=8).contains(&self.cursor) {
             return Err(RuleError::Invalid("invalid round script cursor".into()));
@@ -236,12 +263,14 @@ impl RoundProgram {
     }
 }
 
-/// getup125d74..125d8a calls newland(0, 0, -1, 0, 0) for each loaded round slot.
-/// Operations with round-local implementations stay here; the shared interpreter
-/// owns the rest of that script, including any modal continuation or replacement.
+/// Whether a round-script operation runs here. getup runs each loaded round slot's
+/// script; the shared interpreter takes every other operation, including any
+/// modal continuation or replacement.
+///
+/// Original: getup
 pub(crate) fn shared_operation(opcode: i16) -> bool {
     !matches!(
-        Operation::from_native(opcode),
+        Operation::from_opcode(opcode),
         Operation::NoAction
             | Operation::Unarmed(_)
             | Operation::EndScript
@@ -255,13 +284,17 @@ pub(crate) fn shared_operation(opcode: i16) -> bool {
     )
 }
 
+/// The ten-byte extra record with the given number.
 fn extra(extras: &[u8], id: i16) -> Result<&[u8], RuleError> {
     Ok(span(extras, usize::from(id.unsigned_abs()) * 10, 10)?)
 }
 
-/// newland126 tests the signed round byte and clears its slot before choosing a replacement.
+/// A round script replaces itself: the signed round count is tested and the slot
+/// cleared before the replacement is chosen.
+///
+/// Original: newland
 pub(crate) fn replacement(
-    state: &mut RoundScripts,
+    state: &mut RoundMacros,
     slot: u8,
     predicate: &[u8],
     random: &mut RandomState,
@@ -275,8 +308,10 @@ pub(crate) fn replacement(
     )
 }
 
-/// newland 0x7e clears WORD 0x439cec + 2 * slot; Getup's slot loop leaves WORD 0x408576
-/// at 5 when it finishes, and only clearing predicates write through it.
+/// The round slot a clearing operation empties: the one getup is running, or slot
+/// 5 once getup's loop has finished.
+///
+/// Original: newland
 pub(crate) fn replacement_slot(
     counter: Option<i8>,
     slots: Option<&mut [i16; 5]>,
@@ -284,9 +319,8 @@ pub(crate) fn replacement_slot(
     predicate: &[u8],
     random: &mut RandomState,
 ) -> Result<Option<i16>, RuleError> {
-    // BYTE44255c and WORD408576 are written only by battle setup and Getup's
-    // round scan; before either they keep their zero DATA launch values, as
-    // do WORDs439cec, so clearing an unloaded slot writes nothing new.
+    // Before any battle the round count, slot and scripts are zero, so clearing
+    // an unloaded slot changes nothing.
     let counter = counter.unwrap_or(0);
     let mode = word(predicate, 0)?;
     let eligible = if mode == 1 {
@@ -302,13 +336,10 @@ pub(crate) fn replacement_slot(
         let slot = slot.unwrap_or(0);
         match (slot, slots) {
             (0..5, Some(slots)) => slots[slot as usize] = 0,
-            // Slot 5 is battle record WORD 0x439cf6, the distance BYTE. Its only readers
-            // (combatsetup 0x11d630, 0x11d66a and 0x11d6e6) follow the record fread at
-            // 0x11d5a2, and updatemonstermenu reads it only in the cold tail, which ends
-            // at the first battle; so the clear changes nothing any reader sees.
+            // Slot 5 is the battle record's distance, which is read only while the
+            // battle is set up, so clearing it changes nothing anyone sees.
             (0..=5, _) => {}
-            // Getup's loop (clr.w 0x125d3a, addq.w 0x125da8, cmpi.w #5 0x125dae) is the
-            // only writer of WORD 0x408576, and session validation holds it in 0..=5.
+            // Only getup's loop sets the slot, and it stays within 0..=5.
             _ => return Err("round slot outside Getup's 0..=5 range".into()),
         }
     }
@@ -319,49 +350,57 @@ pub(crate) fn replacement_slot(
     }))
 }
 
+/// Makes every living monster of a class neutral and counts it as defeated. In the reverse form it
+/// takes the already neutral ones and takes them back off the count. The faction becomes zero
+/// either way (see docs/source-notes/combat.md).
 pub(crate) fn neutralize(combat: &mut Combat, extra: &[u8]) -> Result<(), RuleError> {
     let reverse = word(extra, 2)? != 0;
     let class = word(extra, 0)?;
     for index in 0..100 {
         let record = combat.story_record_mut(index)?;
-        if i16::from(record.record().definition_id()) == class
+        if i16::from(record.record().monster_id()) == class
             && record.record().stamina()? > 0
             && (record.record().faction()? == 0) == reverse
         {
-            // newland opcode122 writes zero in both arms, even in reverse mode.
+            // The faction becomes zero either way, even in reverse mode.
             record.record_mut().set_faction(0);
             combat
-                .victory_work
-                .add_defeated(if reverse { -1 } else { 1 });
+                .kill_counts
+                .add_kill_mon(if reverse { -1 } else { 1 });
         }
     }
     Ok(())
 }
 
-/// Party position 0x44709a + 4 * slot of killbody's body WORD 0x408574 (0x12e506).
+/// The position of the body killbody last handled.
+///
+/// Original: killbody
 fn killbody_origin(
     combat: &Combat,
     body: i16,
     party_positions: &[(i16, i16); 6],
 ) -> Result<(i16, i16), RuleError> {
     let slot = usize::try_from(body).map_err(|_| "killbody origin before the party positions")?;
-    if let Some(point) = combat.squad.positions.get(slot) {
+    if let Some(point) = combat.squad.pos.get(slot) {
         return Ok(*point);
     }
     match slot {
         // The battle squad holds only the warriors it entered with; combatsetup
         // leaves the later slots as the last writer left them.
         0..6 => Ok(party_positions[slot]),
-        // Slots 6 and 7 are the WORDs 0x4470b2..0x4470b7 that presentation shares.
+        // Slots 6 and 7 hold display values.
         6 | 7 => Err(unsupported(
             "killbody origin in a presentation-shared party slot",
         )),
-        // Slots 8 and 9 are initiative order rows 1..4 at 0x4470ba.
+        // Slots 8 and 9 fall in the battle order.
         _ => combat.script_target_position(body, false, party_positions),
     }
 }
 
-/// newland125 uses killbody's retained body, rather than the queued story origin.
+/// Destroys monsters of a class, starting from the body killbody last handled
+/// rather than the story's origin.
+///
+/// Original: newland
 pub(crate) fn destroy_class(
     combat: &mut Combat,
     extra: &[u8],
@@ -375,14 +414,13 @@ pub(crate) fn destroy_class(
         value => value,
     };
     if count < 0 {
-        let index = combat.selected_enemy;
-        // destroymonster takes the selected NPC WORD 0x447196 into the 100 records;
-        // every writer stores an NPC body - 10 and combat validation keeps it below 100.
+        let index = combat.monster_up;
+        // The selected monster always names one of the 100 slots.
         if index >= 100 {
             return Err("selected NPC past the NPC array".into());
         }
-        // Records past the battle roster are the retained NPC slots.
-        super::lifecycle::destroy_enemy(combat, index)?;
+        // Records past the battle roster are the monster slots kept from earlier.
+        super::lifecycle::destroy_monster(combat, index)?;
         return Ok(vec![index as i16 + 10]);
     }
     let class = word(extra, 0)?;
@@ -395,8 +433,8 @@ pub(crate) fn destroy_class(
     for _ in 0..count {
         let mut nearest = None;
         let mut distance = radius;
-        for (index, record) in combat.enemies.records.iter().enumerate() {
-            if record.stamina()? <= 0 || i16::from(record.record().definition_id()) != class {
+        for (index, record) in combat.roster.records.iter().enumerate() {
+            if record.stamina()? <= 0 || i16::from(record.record().monster_id()) != class {
                 continue;
             }
             let center = match center {
@@ -413,7 +451,7 @@ pub(crate) fn destroy_class(
                     point
                 }
             };
-            let point = combat.enemies.positions[index];
+            let point = combat.roster.mon_pos[index];
             let dx = f64::from(point.0.wrapping_sub(center.0));
             let dy = f64::from(point.1.wrapping_sub(center.1));
             let candidate = (dx * dx + dy * dy).sqrt().trunc() as i16;
@@ -423,16 +461,18 @@ pub(crate) fn destroy_class(
             }
         }
         let Some(index) = nearest else { break };
-        super::lifecycle::destroy_enemy(combat, index)?;
+        super::lifecycle::destroy_monster(combat, index)?;
         removed.push(index as i16 + 10);
     }
     Ok(removed)
 }
 
-/// getup125d34..125db8 dispatches BD round slots before hourly reduction.
+/// Runs the round scripts at the start of a round, before the hourly reduction.
+///
+/// Original: getup
 pub fn advance(
     combat: &mut Combat,
-    state: &mut RoundScripts,
+    state: &mut RoundMacros,
     mission: &OpeningMission,
     definitions: &[u8],
     extras: &[u8],
@@ -454,7 +494,7 @@ pub fn advance(
 /// Session predicates execute in the shared interpreter before their RNG draw.
 pub(crate) fn advance_for_session(
     combat: &mut Combat,
-    state: &mut RoundScripts,
+    state: &mut RoundMacros,
     mission: &OpeningMission,
     definitions: &[u8],
     extras: &[u8],
@@ -473,10 +513,11 @@ pub(crate) fn advance_for_session(
     )
 }
 
+/// Runs the round scripts and names the script, operation and place that failed when one does.
 #[allow(clippy::too_many_arguments)]
 fn advance_inner(
     combat: &mut Combat,
-    state: &mut RoundScripts,
+    state: &mut RoundMacros,
     mission: &OpeningMission,
     definitions: &[u8],
     extras: &[u8],
@@ -508,7 +549,7 @@ fn advance_inner(
 #[allow(clippy::too_many_arguments)]
 fn run(
     combat: &mut Combat,
-    state: &mut RoundScripts,
+    state: &mut RoundMacros,
     mission: &OpeningMission,
     definitions: &[u8],
     extras: &[u8],
@@ -517,16 +558,16 @@ fn run(
     dispatch_predicates: bool,
     step: &mut Option<(i16, i16, usize)>,
 ) -> Result<RoundOutcome, RuleError> {
-    if combat.enemies.records.len() > 100
+    if combat.roster.records.len() > 100
         || caller.active_enemy >= 100
-        || combat.enemies.positions.len() != combat.enemies.records.len()
+        || combat.roster.mon_pos.len() != combat.roster.records.len()
         || combat
-            .enemies
+            .roster
             .records
             .iter()
-            .any(|record| record.bytes.len() != 288)
-        || combat.order.len() != 110
-        || combat.map.tiles.len() != 8100
+            .any(|record| record.bytes.len() != MONSTER_BYTES)
+        || combat.battle_order.len() != 110
+        || combat.field.tiles.len() != 8100
     {
         return Err(RuleError::Invalid(
             "invalid battle round story input".into(),
@@ -539,8 +580,7 @@ fn run(
     {
         return Err(RuleError::Invalid("invalid round continuation".into()));
     }
-    // getup125a3a's slot loop runs each round macro without testing the queue byte
-    // 438584 or the killbody callback byte 438585.
+    // Round scripts run even while death scripts are running.
     let mut next = combat.clone();
     let mut next_state = state.clone();
     let mut next_random = random.clone();
@@ -564,8 +604,8 @@ fn run(
     });
     let mut completed = false;
     // Only a script replacement moves the cursor back, so every cycle passes a
-    // script entry. A repeated entry state means the original never leaves the
-    // loop; an RNG-driven loop keeps changing state and runs to its end.
+    // script entry. A repeated entry state means the game never leaves the loop;
+    // a loop driven by random draws keeps changing and runs to its end.
     let mut entries = std::collections::HashSet::new();
     loop {
         if program.script.is_none() {
@@ -608,11 +648,11 @@ fn run(
             value,
         );
         program.cursor += 1;
-        match Operation::from_native(opcode) {
+        match Operation::from_opcode(opcode) {
             Operation::NoAction | Operation::Unarmed(_) => {}
             Operation::EndScript => program.cursor = 8,
             Operation::ContinueIfMonster => {
-                if !crate::story_combat::monster_present(&next, value)? {
+                if !crate::story::combat::monster_present(&next, value)? {
                     program.cursor = 8;
                 }
             }

@@ -1,5 +1,6 @@
-//! Original Upgrade Warrior DITL identities, decoded once at input admission.
+//! The Upgrade Warrior dialog's items, decoded once when input arrives.
 //! These are desktop actions, not serialized command or save variants.
+/// The Upgrade Warrior dialog's controls.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum UpgradeControl {
     ScanSelection,
@@ -14,7 +15,8 @@ pub(super) enum UpgradeControl {
 }
 
 impl UpgradeControl {
-    pub(super) fn from_native(item: usize) -> Self {
+    /// The control for dialog item `item`.
+    pub(super) fn from_item(item: usize) -> Self {
         match item {
             39 => Self::ScanSelection,
             45 => Self::ApplyUpgrade,

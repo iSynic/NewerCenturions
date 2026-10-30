@@ -122,8 +122,8 @@ fn all_seven_reached_resolutions_match_native_records_cleanup_and_rng() {
     assert_eq!(impacts, [503, 503, 503, 402, 503, 108, 108]);
     assert_eq!(party_deaths, 1);
     support::native_expect! {
-        scalar combat.unavailable => &case["after"]["unavailable"], "compress unavailable";
-        words combat.order => &case["after"]["order"], "compress order";
-        words combat.map.tiles => &case["after"]["map"], "compress map";
+        scalar combat.kill_party => &case["after"]["unavailable"], "compress unavailable";
+        words combat.battle_order => &case["after"]["order"], "compress order";
+        words combat.field.tiles => &case["after"]["map"], "compress map";
     }
 }

@@ -8,7 +8,10 @@ use centurions_content::{
     span,
 };
 
-/// upgradewarrior 0x162bb2..0x1631e6: each cost iteration rounds through SINGLE.
+/// The price of a warrior's next upgrade. Each repeat purchase multiplies the
+/// price by the profession's percentage, rounding to single precision each time.
+///
+/// Original: upgradewarrior
 pub fn upgrade_cost(
     warrior: &Warrior,
     selector: u16,
@@ -18,7 +21,10 @@ pub fn upgrade_cost(
     Ok((cost.trunc() as i32, percent))
 }
 
-/// upgradewarrior 0x163200..0x1632f8 compares SINGLE-rounded points and truncates the debit.
+/// Whether the warrior can pay for an upgrade, and the points left if so. The
+/// points are compared in single precision and the remainder truncated.
+///
+/// Original: upgradewarrior
 pub fn upgrade_payment(
     warrior: &Warrior,
     selector: u16,
@@ -31,11 +37,17 @@ pub fn upgrade_payment(
     Ok((rounded >= cost).then(|| (f64::from(points) - f64::from(cost)).trunc() as i32))
 }
 
+/// The price of the next purchase of one upgrade: its base price multiplied by 100 plus the
+/// profession's percentage, over 100, once for every purchase already made, and held to 50,000,000
+/// at most. Returns the price and the profession's percentage.
+///
+/// Original: upgradewarrior
 fn upgrade_price(
     warrior: &Warrior,
     selector: u16,
     profile: &[u8],
 ) -> Result<(f32, i32), RuleError> {
+    /// Base prices of the 33 upgrades, before the profession's percentage.
     const BASE: [i16; 33] = [
         100, 100, 100, 100, 100, 100, 100, 50, 200, 200, 150, 150, 150, 150, 150, 150, 175, 125,
         200, 175, 100, 100, 300, 250, 350, 400, 100, 100, 100, 200, 250, 300, 1000,
@@ -51,15 +63,18 @@ fn upgrade_price(
     for _ in 0..count.max(0) {
         cost = (f64::from(cost) * f64::from(factor)) as f32;
     }
-    // The original caps only after the loop (0x4c3ebc20). For nonnegative
-    // percentages this equals stopping at the first cost above the cap.
+    // The cap applies only after the loop. For nonnegative percentages this
+    // equals stopping at the first cost above the cap.
     if cost >= 50_000_000. {
         cost = 50_000_000.;
     }
     Ok((cost, i32::from(percent)))
 }
 
-/// CODE 1 applyupgrade, 0x1634f8. The caller owns costs and eligibility.
+/// Applies one upgrade. The caller has already checked the price and
+/// eligibility.
+///
+/// Original: applyupgrade
 pub fn apply_upgrade(
     warrior: &mut Warrior,
     selector: u16,
@@ -85,12 +100,14 @@ pub fn apply_upgrade(
     let psi = Field::BasePsi
         .read(bytes)?
         .wrapping_add(Field::PsiBonus.read(bytes)?);
-    WarriorRecordMut::from_bytes(bytes).set_maximum_stamina(stamina);
-    WarriorRecordMut::from_bytes(bytes).set_maximum_psi(psi);
+    WarriorRecordMut::from_bytes(bytes).set_stamina_max(stamina);
+    WarriorRecordMut::from_bytes(bytes).set_psi_points_max(psi);
     Ok(())
 }
 
-/// CODE 1 strength, 0x138648: the two WORD work results, in native order.
+/// The two strength adjustments for a Brawn value, in the original order.
+///
+/// Original: strength
 pub fn strength_adjustments(attribute: i16) -> [i16; 2] {
     match attribute {
         ..=3 => [-20, 0],
@@ -107,7 +124,10 @@ pub fn strength_adjustments(attribute: i16) -> [i16; 2] {
     }
 }
 
-/// CODE 1 agility, 0x1388aa: signed WORD averaging precedes the lookup.
+/// The agility adjustment, looked up from the signed 16-bit average of
+/// Quickness and Coordination.
+///
+/// Original: agility
 pub fn agility_adjustment(warrior: &Warrior) -> Result<i16, RuleError> {
     let sum = Field::Attribute(Attribute::Quickness)
         .read(&warrior.bytes)?
@@ -122,7 +142,10 @@ pub fn agility_adjustment(warrior: &Warrior) -> Result<i16, RuleError> {
     })
 }
 
-/// CODE 1 savevsattr, 0x157c68: strict comparison after wrapped threshold.
+/// A saving throw against an attribute: the roll must be strictly below four
+/// times the attribute, which can wrap.
+///
+/// Original: savevsattr
 pub fn save_against_attribute(
     warrior: &Warrior,
     selector: i16,
@@ -148,7 +171,9 @@ pub fn save_against_attribute(
     Ok(random.bound(100) < threshold)
 }
 
-/// CODE 1 calcstats, 0x1636ec: derive statistics from the current record.
+/// Derives a warrior's statistics from the current record.
+///
+/// Original: calcstats
 pub fn calculate_statistics(warrior: &mut Warrior) -> Result<(), RuleError> {
     span(&warrior.bytes, 0, WARRIOR_BYTES)?;
     let bytes = &mut warrior.bytes;

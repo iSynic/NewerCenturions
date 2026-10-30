@@ -15,7 +15,7 @@ pub(super) fn compare_npc_preparation() {
             word(&input, 0x4c).unwrap()
         };
         let retained = definition(&content, 700).unwrap();
-        let mut work = WorkBuffers {
+        let mut work = LoadedItems {
             item: Some(retained.clone()),
             ..Default::default()
         };

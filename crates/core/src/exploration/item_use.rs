@@ -1,16 +1,20 @@
-//! Item use for maintained exploration.
+//! Using an item while exploring.
 use super::{active_map, finish_typed_selection, run_script};
+use crate::combat::item_activation;
+use crate::combat::item_activation::Caller;
+use crate::combat::runtime;
 use crate::{Event, Phase, Presentation, RuleError, ScriptState, Session};
 use centurions_content::Content;
 use centurions_content::records::ItemDefinition;
 
+/// Uses an item from a warrior's pack while exploring.
 pub fn use_item(
     state: &mut Session,
     content: &Content,
     warrior: usize,
     slot: usize,
 ) -> Result<Vec<Event>, RuleError> {
-    crate::combat::item_activation::check_selected_slot(slot)?;
+    item_activation::check_selected_slot(slot)?;
     if state
         .exploration
         .as_ref()
@@ -27,29 +31,29 @@ pub fn use_item(
         .cloned()
         .ok_or("inventory item unavailable")?;
     if (700..=703).contains(&item.id()) && state.phase == Phase::Combat {
-        return crate::combat::runtime::begin_medical_item(state, content, warrior, slot);
+        return runtime::begin_medical_item(state, content, warrior, slot);
     }
     let definition = crate::ammunition::definition(content, item.id())?;
     if state.combat.is_none()
         && !matches!(
-            ItemDefinition(&definition).category()?.wrapping_abs(),
+            ItemDefinition(&definition).item_type()?.wrapping_abs(),
             23 | 27
         )
         && ItemDefinition(&definition).spell()? > 1100
     {
         return crate::outdoor_psi::begin_item(state, content, warrior, slot);
     }
-    if ItemDefinition(&definition).category()? == 27 {
+    if ItemDefinition(&definition).item_type()? == 27 {
         return crate::item_modifiers::use_item(state, content, warrior, slot);
     }
     if state.combat.is_some()
         && ItemDefinition(&definition).spell()? > 1100
-        && ItemDefinition(&definition).category()?.wrapping_abs() != 23
+        && ItemDefinition(&definition).item_type()?.wrapping_abs() != 23
     {
-        return crate::combat::runtime::begin_medical_item(state, content, warrior, slot);
+        return runtime::begin_medical_item(state, content, warrior, slot);
     }
-    crate::story_item_use::reject_inert_item(&definition)?;
-    if state.phase == Phase::Combat && ItemDefinition(&definition).category()?.wrapping_abs() == 23
+    crate::story::item_use::reject_inert_item(&definition)?;
+    if state.phase == Phase::Combat && ItemDefinition(&definition).item_type()?.wrapping_abs() == 23
     {
         return refuse_combat_script_item(state, content, warrior, item.id(), false);
     }
@@ -66,26 +70,22 @@ pub fn use_item(
     let map = active_map(state, content)?;
     let races = &map.combat.as_ref().unwrap().race_moves;
     state.set_warrior_selector(warrior);
-    let used = crate::story_item_use::use_scenario_item(
+    let used = crate::story::item_use::use_scenario_item(
         &state.warriors,
         warrior,
         slot,
         content,
         races,
-        crate::story_item_use::ScriptItemContext::Exploration,
-        Some(&state.native_work.inventory_record),
+        crate::story::item_use::ScriptItemContext::Exploration,
+        Some(&state.globals.inventory_record),
     )?;
     state.apply_equipment_globals(&used.global_writes)?;
     let id = state.warriors[warrior].inventory()?[slot].id();
-    state.load_item_work(content, id)?;
+    state.load_item(content, id)?;
     state.warriors = used.warriors;
-    crate::combat::item_activation::finish_return(
-        state,
-        warrior,
-        crate::combat::item_activation::Caller::Ordinary,
-    );
-    // buttonchoice10a9e6 refreshes selection before decoding the script return.
-    crate::combat::item_activation::clear_active_affected(state);
+    item_activation::finish_return(state, warrior, Caller::Ordinary);
+    // Selection is refreshed before the item's script return is decoded.
+    item_activation::clear_active_affected(state);
     let mut effects: Vec<Event> = used
         .warnings
         .into_iter()
@@ -104,6 +104,8 @@ pub fn use_item(
     Ok(effects)
 }
 
+/// Checks that the warrior may use an item now: in a battle only the warrior whose turn it is, with
+/// an action point left.
 pub(crate) fn check_item_actor(state: &Session, warrior: usize) -> Result<(), RuleError> {
     let actor = state
         .warriors
@@ -112,20 +114,22 @@ pub(crate) fn check_item_actor(state: &Session, warrior: usize) -> Result<(), Ru
     if let Some(combat) = &state.combat {
         let warning = if combat.active_body() != Some(warrior as i16) {
             Some(10)
-        } else if actor.record().action_points()? < 1 {
+        } else if actor.record().attacks()? < 1 {
             Some(17)
         } else {
             None
         };
         if let Some(index) = warning {
             return Err(RuleError::Refused {
-                feedback: vec![crate::feedback::NativeFeedback::Warning { index }],
+                feedback: vec![crate::feedback::GameFeedback::Warning { index }],
             });
         }
     }
     Ok(())
 }
 
+/// Refuses an item a script's battle or encounter cannot use, with warning 52; outside an
+/// encounter, an item whose spell is below 1100 also gets warnings 88 and 89.
 pub(super) fn refuse_combat_script_item(
     state: &mut Session,
     content: &Content,
@@ -134,17 +138,18 @@ pub(super) fn refuse_combat_script_item(
     encounter: bool,
 ) -> Result<Vec<Event>, RuleError> {
     check_item_actor(state, warrior)?;
-    state.load_item_work(content, item)?;
+    state.load_item(content, item)?;
     let mut feedback = Vec::new();
     if !encounter
-        && ItemDefinition(state.native_work.ammunition_work.item.as_ref().unwrap()).spell()? < 1100
+        && ItemDefinition(state.globals.loaded_items.item.as_ref().unwrap()).spell()? < 1100
     {
-        feedback.extend([88, 89].map(|index| crate::feedback::NativeFeedback::Warning { index }));
+        feedback.extend([88, 89].map(|index| crate::feedback::GameFeedback::Warning { index }));
     }
-    feedback.push(crate::feedback::NativeFeedback::Warning { index: 52 });
+    feedback.push(crate::feedback::GameFeedback::Warning { index: 52 });
     Err(RuleError::RefusedAfterEffects { feedback })
 }
 
+/// Uses an item while a typed encounter prompt is showing.
 pub(super) fn use_encounter_item(
     state: &mut Session,
     content: &Content,
@@ -158,25 +163,17 @@ pub(super) fn use_encounter_item(
         .cloned()
         .ok_or("inventory item unavailable")?;
     let definition = crate::ammunition::definition(content, item.id())?;
-    let class = ItemDefinition(&definition).category()?.wrapping_abs();
-    if ItemDefinition(&definition).category()? == 27 {
+    let class = ItemDefinition(&definition).item_type()?.wrapping_abs();
+    if ItemDefinition(&definition).item_type()? == 27 {
         return crate::item_modifiers::use_item(state, content, warrior, slot);
     }
     if state.combat.is_some() && class == 23 {
         return refuse_combat_script_item(state, content, warrior, item.id(), true);
     }
     if state.combat.is_some() {
-        let used = crate::combat::item_activation::activate(
-            state,
-            content,
-            warrior,
-            slot,
-            crate::combat::item_activation::Caller::Encounter,
-        )?;
+        let used = item_activation::activate(state, content, warrior, slot, Caller::Encounter)?;
         let mut events = used.events;
-        if let Some(selected) =
-            crate::combat::item_activation::encounter_return(state, content, used.item)?
-        {
+        if let Some(selected) = item_activation::encounter_return(state, content, used.item)? {
             events.extend(finish_typed_selection(state, content, selected)?);
         }
         return Ok(events);
@@ -192,7 +189,7 @@ pub(super) fn use_encounter_item(
             .ok_or("typed item caller missing")?;
         let manual = frame.item_return;
         let map = active_map(state, content)?;
-        let used = crate::story_item_use::use_scenario_item(
+        let used = crate::story::item_use::use_scenario_item(
             &state.warriors,
             warrior,
             slot,
@@ -201,13 +198,13 @@ pub(super) fn use_encounter_item(
                 .as_ref()
                 .ok_or("item movement tables unavailable")?
                 .race_moves,
-            crate::story_item_use::ScriptItemContext::Encounter,
-            Some(&state.native_work.inventory_record),
+            crate::story::item_use::ScriptItemContext::Encounter,
+            Some(&state.globals.inventory_record),
         )?;
         state.apply_equipment_globals(&used.global_writes)?;
-        // Items 12ad2e and encounter2 1229de leave the script return in WORD44719a.
-        state.native_work.fire_item = used.return_code;
-        // Only manual buttonchoice10a9ee decodes the script-item return.
+        // Items and typed encounters leave the script return for the fire button.
+        state.globals.item_used = used.return_code;
+        // Only an item used by hand decodes its script return.
         let record = if manual {
             Some(
                 map.script(used.return_code.wrapping_abs().wrapping_sub(100))?
@@ -216,14 +213,10 @@ pub(super) fn use_encounter_item(
         } else {
             None
         };
-        state.load_item_work(content, item.id())?;
+        state.load_item(content, item.id())?;
         state.warriors = used.warriors;
-        crate::combat::item_activation::finish_return(
-            state,
-            warrior,
-            crate::combat::item_activation::Caller::Encounter,
-        );
-        crate::combat::item_activation::clear_active_affected(state);
+        item_activation::finish_return(state, warrior, Caller::Encounter);
+        item_activation::clear_active_affected(state);
         let position = state.exploration.as_mut().unwrap();
         position.presentation = None;
         position.script = record.map(|record| ScriptState::scheduled(record, 0));
@@ -236,21 +229,13 @@ pub(super) fn use_encounter_item(
         return Ok(effects);
     }
     let activating = ItemDefinition(&definition).spell()? > 1100
-        && (item.quantity()? > 0 || ItemDefinition(&definition).supplied_quantity()? < 0);
+        && (item.charge()? > 0 || ItemDefinition(&definition).supplied_quantity()? < 0);
     if activating && state.combat.is_none() {
         return crate::outdoor_psi::begin_item(state, content, warrior, slot);
     }
-    let used = crate::combat::item_activation::activate(
-        state,
-        content,
-        warrior,
-        slot,
-        crate::combat::item_activation::Caller::Encounter,
-    )?;
+    let used = item_activation::activate(state, content, warrior, slot, Caller::Encounter)?;
     let mut events = used.events;
-    if let Some(selected) =
-        crate::combat::item_activation::encounter_return(state, content, used.item)?
-    {
+    if let Some(selected) = item_activation::encounter_return(state, content, used.item)? {
         events.extend(finish_typed_selection(state, content, selected)?);
     }
     Ok(events)

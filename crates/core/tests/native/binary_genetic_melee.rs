@@ -12,14 +12,14 @@ fn genetic_loaded_melee178_matches_native_records_saves_and_both_attack_indices(
         let mut party = case.bytes("warriors_before");
         let member = case.n::<usize>("member");
         let mut warrior = crate::support::warrior_at(&party, member);
-        let mut enemy = MonsterRecord {
+        let mut monster = MonsterRecord {
             bytes: case.bytes("enemy_before"),
         };
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
-        let weapon = i16::from_be_bytes(enemy.bytes[0x28..0x2a].try_into().unwrap()) as usize;
+        let weapon = i16::from_be_bytes(monster.bytes[0x28..0x2a].try_into().unwrap()) as usize;
         let result = enemy_weapons::melee(
             &mut warrior,
-            &mut enemy,
+            &mut monster,
             &items[weapon],
             &mut random,
             0,
@@ -30,7 +30,7 @@ fn genetic_loaded_melee178_matches_native_records_saves_and_both_attack_indices(
         crate::support::put_warrior(&mut party, member, &warrior);
         support::native_expect! {
             bytes party => &case["warriors_after"], &format!("case{index} party");
-            bytes enemy.bytes => &case["enemy_after"], &format!("case{index} attacker");
+            bytes monster.bytes => &case["enemy_after"], &format!("case{index} attacker");
             rng random => (&case["seed_after"], &case["rng_draws"]), "binary_genetic_melee";
         }
         assert_eq!(

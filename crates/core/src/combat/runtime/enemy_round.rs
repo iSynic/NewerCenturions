@@ -1,20 +1,29 @@
-//! Enemy round in the original combat execution order.
+//! The monsters' health and conditions at the start of a round.
 use super::death::enemy_death_feedback;
 use super::{FieldActor, collide_fields_impl};
+use crate::combat::natural_conditions;
+use crate::combat::spells;
+use crate::combat::spells::summon::ItemRefresh;
 use crate::combat::{Combat, death_scripts::DeathProcessing, lifecycle};
 use crate::{Event, RandomState, RuleError};
+use centurions_content::WARRIOR_BYTES;
 use centurions_content::Warrior;
+use centurions_content::combat::MONSTER_BYTES;
 use serde::{Deserialize, Serialize};
 
+/// What the monsters' round start produced: the events, the last monster to fall and, when a death
+/// story must run first, where to resume.
 #[derive(Debug, PartialEq, Eq)]
 pub struct EnemyRoundOutcome {
     pub events: Vec<Event>,
     pub last_defeated_body: Option<i16>,
-    /// getup's health loop called killbody directly; its newland runs before this point.
+    /// A death in getup's health loop, whose death story runs before the loop resumes.
     pub suspended: Option<EnemyRoundCursor>,
 }
 
-/// The step after a direct killbody inside one NPC iteration of getup's health loop.
+/// Where a monster's step in getup's health loop resumes after its death story.
+///
+/// Original: getup
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EnemyRoundStage {
     #[default]
@@ -23,12 +32,14 @@ pub enum EnemyRoundStage {
     AfterPoison,
 }
 
+/// Where the monsters' health loop resumes after a death story: which monster and which step.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EnemyRoundCursor {
     pub index: usize,
     pub stage: EnemyRoundStage,
 }
 
+/// Remembers the last body that a spell in `events` defeated.
 pub(super) fn record_spell_deaths(events: &[Event], last_body: &mut Option<i16>) {
     for event in events {
         if let Event::SpellResolved {
@@ -42,33 +53,40 @@ pub(super) fn record_spell_deaths(events: &[Event], last_body: &mut Option<i16>)
     }
 }
 
+/// Runs the monsters' start of round for a record-only battle, checking its inputs first and
+/// leaving the battle untouched when anything fails.
+///
+/// Original: getup
 pub fn reduce_enemy_round_with_fields(
-    c: &mut Combat,
-    w: &mut [Warrior],
+    combat: &mut Combat,
+    warriors: &mut [Warrior],
     random: &mut RandomState,
     mission: Option<&centurions_content::mission::OpeningMission>,
     count: &mut i16,
-    party_mask: &mut [i16; 6],
-    (selected_warrior, movement_gate): (usize, &mut i16),
+    party_track: &mut [i16; 6],
+    (char_select_new, movement_gate): (usize, &mut i16),
 ) -> Result<EnemyRoundOutcome, RuleError> {
-    if c.enemies.records.len() > 100
-        || c.enemies.positions.len() != c.enemies.records.len()
-        || c.enemies
+    if combat.roster.records.len() > 100
+        || combat.roster.mon_pos.len() != combat.roster.records.len()
+        || combat
+            .roster
             .records
             .iter()
-            .any(|record| record.bytes.len() != 288)
-        || !(1..=6).contains(&w.len())
-        || w.iter().any(|warrior| warrior.bytes.len() != 3138)
-        || selected_warrior >= w.len()
+            .any(|record| record.bytes.len() != MONSTER_BYTES)
+        || !(1..=6).contains(&warriors.len())
+        || warriors
+            .iter()
+            .any(|warrior| warrior.bytes.len() != WARRIOR_BYTES)
+        || char_select_new >= warriors.len()
     {
         return Err(RuleError::Invalid("invalid enemy round input".into()));
     }
-    c.validate(w)?;
-    let mut next = c.clone();
-    let mut next_warriors = w.to_vec();
+    combat.validate(warriors)?;
+    let mut next = combat.clone();
+    let mut next_warriors = warriors.to_vec();
     let mut next_random = random.clone();
     let mut next_count = *count;
-    let mut next_mask = *party_mask;
+    let mut next_mask = *party_track;
     let mut next_gate = *movement_gate;
     let events = reduce_enemy_round_impl(
         &mut next,
@@ -77,74 +95,78 @@ pub fn reduce_enemy_round_with_fields(
         mission,
         &mut next_count,
         &mut next_mask,
-        (selected_warrior, None, &mut next_gate, None),
+        (char_select_new, None, &mut next_gate, None),
         EnemyRoundCursor::default(),
         None,
     )?;
     *movement_gate = next_gate;
-    *c = next;
-    w.clone_from_slice(&next_warriors);
+    *combat = next;
+    warriors.clone_from_slice(&next_warriors);
     *random = next_random;
     *count = next_count;
-    *party_mask = next_mask;
+    *party_track = next_mask;
     Ok(events)
 }
 
+/// Runs each monster's start of round: temporary conditions tick down, poison heals or harms, a psi
+/// drain wears on, a monster whose stamina runs out is killed, its psi points recover, and a
+/// monster still standing meets the spell fields in its cell. A death that starts a story suspends
+/// the loop to be resumed after it.
+///
+/// Original: getup
 #[allow(clippy::too_many_arguments)]
 pub(super) fn reduce_enemy_round_impl(
-    c: &mut Combat,
-    w: &mut [Warrior],
+    combat: &mut Combat,
+    warriors: &mut [Warrior],
     random: &mut RandomState,
     mission: Option<&centurions_content::mission::OpeningMission>,
     count: &mut i16,
-    party_mask: &mut [i16; 6],
-    mut actor: (
-        usize,
-        Option<i16>,
-        &mut i16,
-        crate::combat::spell_summon::ItemRefresh<'_>,
-    ),
+    party_track: &mut [i16; 6],
+    mut actor: (usize, Option<i16>, &mut i16, ItemRefresh<'_>),
     start: EnemyRoundCursor,
     processing: Option<DeathProcessing>,
 ) -> Result<EnemyRoundOutcome, RuleError> {
     let mut events = Vec::new();
     let mut last_defeated_body = None;
     // Live getup supplies its death predicate; record-only callers keep queueing.
-    let kill = |c: &mut Combat, w: &mut [Warrior], index: usize, events: &mut Vec<Event>| {
-        let feedback = enemy_death_feedback(&c.enemies.records[index], index as i16 + 10)?;
-        lifecycle::kill_body_with_processing(c, w, index as i16 + 10, processing)?;
-        events.extend(feedback);
-        Ok::<_, RuleError>(processing.is_some() && c.direct_death.is_some())
-    };
-    for index in start.index..c.enemies.records.len() {
+    let kill =
+        |combat: &mut Combat, warriors: &mut [Warrior], index: usize, events: &mut Vec<Event>| {
+            let feedback = enemy_death_feedback(&combat.roster.records[index], index as i16 + 10)?;
+            lifecycle::kill_body_with_processing(combat, warriors, index as i16 + 10, processing)?;
+            events.extend(feedback);
+            Ok::<_, RuleError>(processing.is_some() && combat.direct_death.is_some())
+        };
+    for index in start.index..combat.roster.records.len() {
         let stage = if index == start.index {
             start.stage
         } else {
             EnemyRoundStage::Start
         };
         if stage == EnemyRoundStage::Start {
-            let enemy = &mut c.enemies.records[index];
-            enemy.record_mut().decrement_temporary_conditions();
-            enemy.record_mut().clear_damage_marker();
+            let monster = &mut combat.roster.records[index];
+            monster.record_mut().decrement_temporary_conditions();
+            monster.record_mut().clear_been_attacked();
             if let Some(heal) =
-                crate::combat::natural_conditions::enemy_poison_heal(&c.enemies.records[index])?
+                natural_conditions::enemy_poison_heal(&combat.roster.records[index])?
             {
-                c.enemies.records[index]
+                combat.roster.records[index]
                     .record_mut()
                     .set_stamina(heal.health);
-                c.enemies.records[index].record_mut().mark_damaged();
+                combat.roster.records[index]
+                    .record_mut()
+                    .mark_been_attacked();
                 events.push(Event::Sound { resource_id: 624 });
             }
-            if let Some(tick) = crate::combat::natural_conditions::enemy_drain_tick(
-                &c.enemies.records[index].bytes,
-            )? {
-                c.enemies.records[index]
+            if let Some(tick) =
+                natural_conditions::enemy_drain_tick(&combat.roster.records[index].bytes)?
+            {
+                combat.roster.records[index]
                     .record_mut()
                     .set_stamina(tick.health);
                 events.push(Event::Sound { resource_id: 107 });
                 if tick.killed {
                     last_defeated_body = Some(index as i16 + 10);
-                    if kill(c, w, index, &mut events)? {
+                    if kill(combat, warriors, index, &mut events)? {
                         return Ok(suspended(
                             events,
                             last_defeated_body,
@@ -157,16 +179,18 @@ pub(super) fn reduce_enemy_round_impl(
         }
         if stage <= EnemyRoundStage::AfterDrain
             && let Some(tick) =
-                crate::combat::natural_conditions::enemy_poison_tick(&c.enemies.records[index])?
+                natural_conditions::enemy_poison_tick(&combat.roster.records[index])?
         {
-            c.enemies.records[index]
+            combat.roster.records[index]
                 .record_mut()
                 .set_stamina(tick.health);
-            c.enemies.records[index].record_mut().mark_damaged();
+            combat.roster.records[index]
+                .record_mut()
+                .mark_been_attacked();
             events.push(Event::Sound { resource_id: 104 });
             if tick.killed {
                 last_defeated_body = Some(index as i16 + 10);
-                if kill(c, w, index, &mut events)? {
+                if kill(combat, warriors, index, &mut events)? {
                     return Ok(suspended(
                         events,
                         last_defeated_body,
@@ -176,32 +200,32 @@ pub(super) fn reduce_enemy_round_impl(
                 }
             }
         }
-        crate::combat::natural_conditions::reduce_enemy_psi(&mut c.enemies.records[index].bytes)?;
-        c.field_used = crate::combat::spells::reset_used(&c.field_used)?;
-        if c.enemies.records[index].record().stamina()? > 0 {
+        natural_conditions::reduce_enemy_psi(&mut combat.roster.records[index].bytes)?;
+        combat.collide_check = spells::reset_used(&combat.collide_check)?;
+        if combat.roster.records[index].record().stamina()? > 0 {
             if let Some(mission) = mission {
                 let collision_events = collide_fields_impl(
-                    c,
-                    w,
+                    combat,
+                    warriors,
                     mission,
                     count,
                     random,
                     FieldActor {
                         body: index as i16 + 10,
-                        selected_warrior: actor.0,
-                        item_work_alias: actor.1,
+                        char_select_new: actor.0,
+                        item_restriction: actor.1,
                         movement_gate: &mut *actor.2,
                         items: actor
                             .3
                             .as_mut()
                             .map(|(items, buffers)| (*items, &mut **buffers)),
                     },
-                    party_mask,
+                    party_track,
                 )?;
                 record_spell_deaths(&collision_events, &mut last_defeated_body);
                 events.extend(collision_events);
-            } else if c
-                .spell_fields
+            } else if combat
+                .spell_queue
                 .as_chunks::<20>()
                 .0
                 .iter()
@@ -213,11 +237,13 @@ pub(super) fn reduce_enemy_round_impl(
                 });
             }
         }
-        c.enemies.records[index].record_mut().clear_damage_marker();
+        combat.roster.records[index]
+            .record_mut()
+            .clear_been_attacked();
     }
-    // The native loop also visits the known zero records after the represented bodies.
-    if c.enemies.records.len() < 100 {
-        c.field_used = crate::combat::spells::reset_used(&c.field_used)?;
+    // The loop visits all 100 monster records, including the empty ones.
+    if combat.roster.records.len() < 100 {
+        combat.collide_check = spells::reset_used(&combat.collide_check)?;
     }
     Ok(EnemyRoundOutcome {
         events,
@@ -226,6 +252,7 @@ pub(super) fn reduce_enemy_round_impl(
     })
 }
 
+/// A round start suspended at `index` and `stage`, waiting for a death story.
 fn suspended(
     events: Vec<Event>,
     last_defeated_body: Option<i16>,

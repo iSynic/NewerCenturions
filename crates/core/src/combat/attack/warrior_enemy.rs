@@ -1,5 +1,5 @@
-//! Warrior melee against an enemy, including damage reflected onto the warrior.
-//! attack 0x100af0: retain hit/reflection/damage/critical/sound draw order.
+//! A warrior's melee against a monster, including damage reflected onto the
+//! warrior. Hit, reflection, damage, critical and sound are drawn in that order.
 use super::AttackResult;
 use crate::{
     RandomState, RuleError,
@@ -13,13 +13,17 @@ use centurions_content::{
     records::{Condition, DamageTargetKind, ItemDefinition},
 };
 
+/// A warrior's blow on a monster: a warrior who has used all of his attacks this turn hears the
+/// warning sound and strikes no blow; otherwise the blow is rolled to hit, checked against the
+/// monster's immunity and weapon-reflection, and its damage, wounds and statistics are applied.
+/// Wielding a weapon needs that weapon's record.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn resolve(
     attacker: &mut Warrior,
     defender: &mut MonsterRecord,
     random: &mut RandomState,
     base: Vec<u8>,
-    retained: &[u8],
+    info: &[u8],
     difficulty: i16,
     weapon: Option<&[u8]>,
     rolls_condition: bool,
@@ -31,7 +35,7 @@ pub(super) fn resolve(
         });
     }
     if attacker.record().attacks_used()? >= attacker.record().attack_limit()? {
-        let mut result = no_damage(retained.to_vec(), false);
+        let mut result = no_damage(info.to_vec(), false);
         result.0.sounds.push(45);
         return Ok(result);
     }
@@ -56,8 +60,10 @@ pub(super) fn resolve(
     Ok((result, packet, reflected))
 }
 
-/// The caller owns attack-limit admission, count and retained work preparation.
-/// Immunity refusals carry their original showresults code independently of a miss.
+/// A warrior's blow on a monster, once the caller has allowed, counted and loaded
+/// it. An immunity refusal has its own result code, apart from a miss.
+///
+/// Original: attack
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_prepared(
     attacker: &mut Warrior,
@@ -72,7 +78,7 @@ pub(crate) fn resolve_prepared(
     bare_hand_bonus: i16,
 ) -> Result<(AttackResult, Vec<u8>, bool, Option<i16>), RuleError> {
     let mut packet = base;
-    // attack's NPC locals precede weapon-condition writes into the target.
+    // Read before the weapon condition can change the target.
     let target_turn_skip = defender.record().turn_skip_duration();
     let target_stamina = defender.record().stamina()?;
     let weapon_condition = match weapon.filter(|_| rolls_condition) {
@@ -128,8 +134,8 @@ pub(crate) fn resolve_prepared(
         },
         random,
     )?;
-    // attack accumulates a fifth of each creature-category bonus into the damage
-    // global, then clears it before resolvedamage; only the hit bonus survives.
+    // The creature-category bonus adds to the hit only; its damage share is cleared
+    // before damage is resolved.
     let mut damage = resolved.total;
     if damage <= 0 {
         attacker.record_mut().count_miss();
@@ -156,17 +162,17 @@ pub(crate) fn resolve_prepared(
         let health = attacker.record().stamina()?.wrapping_sub(damage);
         let mut record = attacker.record_mut();
         record.set_stamina(health);
-        record.mark_damaged();
+        record.mark_been_attacked();
         record.add_damage_received(damage);
         if (-9..=0).contains(&health) {
-            record.set_bleeding_flag(1);
+            record.set_bleeding(1);
         }
         killed = health < 1;
     } else {
         if target_turn_skip != 0 {
             damage = target_stamina;
         }
-        defender.record_mut().mark_damaged();
+        defender.record_mut().mark_been_attacked();
         let health = defender.record().stamina()?.wrapping_sub(damage);
         defender.record_mut().set_stamina(health);
         let mut record = attacker.record_mut();
@@ -195,6 +201,7 @@ pub(crate) fn resolve_prepared(
     ))
 }
 
+/// The outcome of a blow that did nothing, with the refusal code if immunity stopped it.
 fn prepared_no_damage(
     packet: Vec<u8>,
     reflected: bool,
@@ -204,6 +211,7 @@ fn prepared_no_damage(
     (result, packet, reflected, refusal)
 }
 
+/// The outcome of a blow that did nothing.
 fn no_damage(packet: Vec<u8>, reflected: bool) -> (AttackResult, Vec<u8>, bool) {
     (
         AttackResult {
@@ -218,6 +226,9 @@ fn no_damage(packet: Vec<u8>, reflected: bool) -> (AttackResult, Vec<u8>, bool) 
     )
 }
 
+/// The refusal a monster's immunity gives a weapon: immunity -1 and -2 turn away an armed weapon
+/// not of that class (-50, -51); any other immunity turns away every weapon but the one it names
+/// (-45); none refuses nothing.
 fn weapon_refusal(
     immunity: i16,
     weapon: Option<PreparedMeleeWeapon<'_>>,

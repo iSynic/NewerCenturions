@@ -31,7 +31,7 @@ fn no_loot_awards_only_the_first_npc_after_normalizing_both_records() {
             &content,
             RewardContext {
                 difficulty: before.n("difficulty"),
-                npc_denominator: before.n("npc_denominator"),
+                deduction: before.n("npc_denominator"),
                 currency,
                 mode,
             },
@@ -39,7 +39,7 @@ fn no_loot_awards_only_the_first_npc_after_normalizing_both_records() {
         )
         .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert_eq!(
-            support::record_bytes(&result.enemies),
+            support::record_bytes(&result.monsters),
             case.bytes("npcs_after"),
             "{name} complete active NPC records"
         );

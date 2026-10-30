@@ -2,15 +2,15 @@ use crate::{native_common, prelude::*, snapshots, support};
 
 use native_common::foundation_session as input;
 fn project(state: &mut Session, snapshot: &Value, baseline: &Value, prepared_pair: bool) {
-    let retained_body = state.native_work.health_context.last_body;
+    let retained_body = state.globals.health_context.last_body;
     snapshots::earned_projection(state, snapshot, baseline);
     // Frozen probes start with old body0; an unchanged native field retains the earned origin.
     if snapshot["health_last_body"] == baseline["health_last_body"] {
-        state.native_work.health_context.last_body = retained_body;
+        state.globals.health_context.last_body = retained_body;
     }
     if prepared_pair {
-        state.native_work.ammunition_work.weapon = Some(snapshot.bytes("weapon_work"));
-        state.native_work.ammunition_work.ammo = Some(snapshot.bytes("ammo_work"));
+        state.globals.loaded_items.weapon = Some(snapshot.bytes("weapon_work"));
+        state.globals.loaded_items.ammo = Some(snapshot.bytes("ammo_work"));
     }
 }
 
@@ -19,7 +19,7 @@ fn source_prefix_pair(state: &mut Session, content: &Content, index: usize) {
     // Seed1's last writer is owned needle700/0 at command40. Old neutral
     // tails do not capture these complete reached original loader outputs.
     let (weapon, ammo) = if index == 0 {
-        let record = &current_combat(state).enemies.records[0].bytes;
+        let record = &current_combat(state).roster.records[0].bytes;
         let weapon = word(record, 0x26).unwrap();
         let ammo = word(record, 0x4c).unwrap();
         (weapon as usize, ammo as usize)
@@ -47,19 +47,19 @@ fn source_prefix_pair(state: &mut Session, content: &Content, index: usize) {
         }
     }
     assert_eq!(
-        state.native_work.weapon_work.sound,
+        state.globals.weapon_traits.sound,
         word(&weapon, 14).unwrap()
     );
     assert_eq!(
-        state.native_work.weapon_work.weapon_armor_filter,
+        state.globals.weapon_traits.weapon_armor_filter,
         word(&weapon, 136).unwrap()
     );
     assert_eq!(
-        state.native_work.weapon_work.ammunition_armor_filter,
+        state.globals.weapon_traits.ammunition_armor_filter,
         word(&ammo, 136).unwrap()
     );
-    state.native_work.ammunition_work.weapon = Some(weapon);
-    state.native_work.ammunition_work.ammo = Some(ammo);
+    state.globals.loaded_items.weapon = Some(weapon);
+    state.globals.loaded_items.ammo = Some(ammo);
 }
 use native_common::refresh_item_work as source_item_refresh;
 
@@ -103,7 +103,7 @@ fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
         Some(centurions_core::MovementContinuation::RegionalReturn { header: false });
     // The recorded prefix defeats body16; native killbody retains that body.
     expected_input
-        .native_work
+        .globals
         .health_context
         .last_body = 16;
     let last_npc = ordered_events
@@ -119,24 +119,24 @@ fn replay(fixture: &Value, case: &Value, content: &Content) -> Session {
         .next_back()
         .unwrap() as usize
         - 10;
-    expected_input.combat.as_mut().unwrap().selected_enemy = last_npc;
+    expected_input.combat.as_mut().unwrap().monster_up = last_npc;
     snapshots::actor_work(&mut expected_input, &case["before"]);
     source_item_refresh(&mut expected_input, content);
     source_prefix_pair(&mut expected_input, content, index);
-    expected_input.native_work.inventory_record = native_common::earned_inventory_work(index);
+    expected_input.globals.inventory_record = native_common::earned_inventory_work(index);
     expected_input.combat.as_mut().unwrap().turn_origin =
         snapshots::recorded_turn_origin(&receipt, current_combat(&expected_input));
     // Both earned prefixes end at Move(1,0), which writes442736/442737.
     // The historical foundation retained the preceding outdoor Move(1,1).
     expected_input.exploration.as_mut().unwrap().last_move = [1, 0];
     support::same_captured_session(&state, &expected_input);
-    let effect = state.native_work.health_context.effect;
+    let effect = state.globals.health_context.effect;
     assert_eq!(
-        state.native_work.attack_packet[18] as i8,
+        state.globals.spell_info[18] as i8,
         effect
     );
     assert_eq!(
-        current_combat(&state).attack_packet[18] as i8,
+        current_combat(&state).spell_info[18] as i8,
         effect
     );
     state
@@ -159,7 +159,7 @@ fn native_events(initial: &Session, expected: &Session, case: &Value) -> Vec<Eve
         .unwrap() as usize;
     // The target key's firstt(76, 77) (combatchoice 11b026).
     events.push(Event::Feedback(
-        centurions_core::feedback::NativeFeedback::Tutorial {
+        centurions_core::feedback::GameFeedback::Tutorial {
             first: 76,
             last: 77,
         },
@@ -209,10 +209,10 @@ fn native_events(initial: &Session, expected: &Session, case: &Value) -> Vec<Eve
             }
         }
     }
-    if current_combat(expected).round != current_combat(initial).round {
+    if current_combat(expected).combat_round != current_combat(initial).combat_round {
         events.push(Event::TurnStarted {
             body: current_combat(expected).active_body().unwrap(),
-            round: current_combat(expected).round,
+            round: current_combat(expected).combat_round,
         });
     }
     events
@@ -247,7 +247,7 @@ fn party_range_membership_retains_the_original_truncated_boundary() {
         .unwrap();
     let combat = state.combat.as_mut().unwrap();
     assert_eq!(combat.active_body(), Some(14));
-    assert_eq!(combat.squad.positions[5], (35, 34));
+    assert_eq!(combat.squad.pos[5], (35, 34));
     let recorded: Vec<Event> =
         serde_json::from_value(receipt["ordered_events"][12].clone()).unwrap();
     let endpoint = recorded
@@ -262,13 +262,13 @@ fn party_range_membership_retains_the_original_truncated_boundary() {
     // Project only the original movement endpoint for this selection seam.
     // Getrange 125654..12565e uses checkrange's truncated party distance;
     // the separate NPC comparison at 125888 retains the extended distance.
-    combat.enemies.positions[4] = endpoint;
-    let actor = &mut combat.enemies.records[4];
+    combat.roster.mon_pos[4] = endpoint;
+    let actor = &mut combat.roster.records[4];
     let weapon = word(&actor.bytes, 0x26).unwrap();
     assert_eq!(weapon, 9);
     let ammo = centurions_core::combat::enemy_weapons::ammo_id(
         actor,
-        state.native_work.loaded_item_field32,
+        state.globals.loaded_item_field32,
     )
     .unwrap();
     let prepared = centurions_core::combat::enemy_weapons::prepare(
@@ -327,7 +327,7 @@ fn coherent_earned_prefixes_and_shots_match_complete_native_state_and_resume() {
         let events = replay_command(command.clone(), &mut state, &mut resumed, &content);
         let mut expected = initial.clone();
         project(&mut expected, &case["after"], &case["before"], true);
-        expected.combat.as_mut().unwrap().inactive_rounds = case["after"].n("inactivity_counter");
+        expected.combat.as_mut().unwrap().blank_round = case["after"].n("inactivity_counter");
         source_item_refresh(&mut expected, &content);
         support::same_captured_session(&state, &expected);
         assert_eq!(
@@ -347,21 +347,21 @@ fn coherent_earned_prefixes_and_shots_match_complete_native_state_and_resume() {
             .unwrap();
         assert_eq!(word(&loaded.0, 2).unwrap(), 0);
         assert_eq!(state.ammunition, initial.ammunition);
-        if current_combat(&state).enemies.records[0].stamina().unwrap() > 0 {
+        if current_combat(&state).roster.records[0].stamina().unwrap() > 0 {
             support::refuse_command(
                 &state,
                 &content,
                 command,
                 vec![
-                    centurions_core::feedback::NativeFeedback::Tutorial {
+                    centurions_core::feedback::GameFeedback::Tutorial {
                         first: 76,
                         last: 77,
                     },
-                    centurions_core::feedback::NativeFeedback::Tutorial {
+                    centurions_core::feedback::GameFeedback::Tutorial {
                         first: 78,
                         last: 78,
                     },
-                    centurions_core::feedback::NativeFeedback::Combat {
+                    centurions_core::feedback::GameFeedback::Combat {
                         kind: centurions_core::feedback::CombatRefusal::NotEnoughAmmo,
                     },
                 ],
@@ -377,11 +377,11 @@ fn coherent_earned_prefixes_and_shots_match_complete_native_state_and_resume() {
             &content,
             Command::ShootEnemy { body: 10 },
             vec![
-                centurions_core::feedback::NativeFeedback::Tutorial {
+                centurions_core::feedback::GameFeedback::Tutorial {
                     first: 76,
                     last: 77,
                 },
-                centurions_core::feedback::NativeFeedback::Silent,
+                centurions_core::feedback::GameFeedback::Silent,
             ],
         );
         checkpoint(&state, &content, &format!("shot-after-{index}"));
@@ -417,15 +417,15 @@ fn ordinary_firearm_kills_keep_native_death_feedback_and_saved_return() {
         source_item_refresh(&mut state, &content);
         let target = state.combat.as_mut().unwrap();
         // Assisted initiative isolates the next warrior's original item loader.
-        for body in &mut target.order {
+        for body in &mut target.battle_order {
             if *body == 0 {
                 *body = -1;
             }
         }
-        target.order[target.cursor + 1] = 0;
-        target.enemies.records[0].bytes[0x110..0x112].copy_from_slice(&1_i16.to_be_bytes());
-        target.enemies.records[0].bytes[0xb3] = 1;
-        target.enemies.records[0].bytes[0x6a..0x6c]
+        target.battle_order[target.battle_order_index + 1] = 0;
+        target.roster.records[0].bytes[0x110..0x112].copy_from_slice(&1_i16.to_be_bytes());
+        target.roster.records[0].bytes[0xb3] = 1;
+        target.roster.records[0].bytes[0x6a..0x6c]
             .copy_from_slice(&case.n::<i16>("record_sound").to_be_bytes());
         let events = support::saved_command(Command::ShootEnemy { body: 10 }, &mut state, &content);
         assert!(
@@ -461,7 +461,7 @@ fn ordinary_firearm_kills_keep_native_death_feedback_and_saved_return() {
         let category = word(&expected, 26).unwrap().wrapping_abs();
         expected[26..28].copy_from_slice(&category.to_be_bytes());
         assert_eq!(
-            state.native_work.ammunition_work.item.as_ref(),
+            state.globals.loaded_items.item.as_ref(),
             Some(&expected),
             "next native item after weapon {weapon}"
         );

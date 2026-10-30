@@ -9,12 +9,12 @@ fn controlled(case: &Value) -> Combat {
     order[1] = 1;
     let mut combat = support::battle();
     combat.battle = 85;
-    combat.map.tiles = case.words("map_before");
-    combat.squad.positions = positions(case.text("warrior_positions"));
-    combat.enemies.records = support::monsters(&case["records_before"]);
-    combat.enemies.positions = positions(case.text("monster_positions"));
-    combat.order = order;
-    combat.spell_fields = case.bytes("fields_before");
+    combat.field.tiles = case.words("map_before");
+    combat.squad.pos = positions(case.text("warrior_positions"));
+    combat.roster.records = support::monsters(&case["records_before"]);
+    combat.roster.mon_pos = positions(case.text("monster_positions"));
+    combat.battle_order = order;
+    combat.spell_queue = case.bytes("fields_before");
     combat
 }
 fn verify(
@@ -30,8 +30,8 @@ fn verify(
     let target = if id == 2204 {
         let raw = words(case["casts"][0]["targets"].as_str().unwrap());
         Some((
-            raw[0] - combat.map.shift.0 - 5,
-            raw[1] - combat.map.shift.1 - 5,
+            raw[0] - combat.field.map_shift.0 - 5,
+            raw[1] - combat.field.map_shift.1 - 5,
         ))
     } else {
         None
@@ -53,34 +53,34 @@ fn verify(
     )
     .unwrap();
     let actual_party: Vec<_> = support::record_bytes(&warriors);
-    let actual_records: Vec<_> = support::record_bytes(&combat.enemies.records);
+    let actual_records: Vec<_> = support::record_bytes(&combat.roster.records);
     support::native_expect! {
         bytes actual_party => &case["warriors_after"], &format!("{context} party");
         bytes actual_records => &case["records_after"], &format!("{context} enemies");
-        words &(combat.map.tiles) => &case["map_after"], "binary_player_psi";
+        words &(combat.field.tiles) => &case["map_after"], "binary_player_psi";
     }
     assert_eq!(
-        combat.squad.positions,
+        combat.squad.pos,
         positions(case.text("warrior_positions")),
         "{context} warrior positions"
     );
     assert_eq!(
-        combat.enemies.positions,
+        combat.roster.mon_pos,
         positions(case.text("monster_positions")),
         "{context} monster positions"
     );
     support::native_expect! {
-        bytes combat.spell_fields => &case["fields_after"], &format!("{context} fields");
-        bytes combat.field_used => &case["used_after"], &format!("{context} used");
+        bytes combat.spell_queue => &case["fields_after"], &format!("{context} fields");
+        bytes combat.collide_check => &case["used_after"], &format!("{context} used");
         bytes memory => &case["memory_after"], &format!("{context} memory");
     }
     assert_eq!(
-        combat.attack_packet,
+        combat.spell_info,
         case["resolutions"][0].bytes("packet"),
         "{context} packet"
     );
     assert_eq!(
-        combat.attack_identity,
+        combat.cast_identity,
         [id / 1000 - 1, id % 1000 / 100 - 1, id % 100 - 1],
         "{context} descriptor"
     );
@@ -127,22 +127,22 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
         digest(&startup),
         support::fixture("startup.json")["initialized_sha256"]
     );
-    let retained = centurions_core::combat::weapon_work::WeaponWork {
+    let retained = centurions_core::combat::weapon_traits::WeaponTraits {
         natural_attack_index: 0,
         sound: word(&startup, 0x453776 - 0x3fe210).unwrap(),
         weapon_armor_filter: word(&startup, 0x4537f0 - 0x3fe210).unwrap(),
         ammunition_armor_filter: word(&startup, 0x45375a - 0x3fe210).unwrap(),
     };
-    assert_eq!(Session::new(&content).native_work.weapon_work, retained);
+    assert_eq!(Session::new(&content).globals.weapon_traits, retained);
     let health = HealthContext {
-        unavailable: startup[0x442739 - 0x3fe210] as i8,
-        selected_warrior: usize::from(startup[0x44273f - 0x3fe210]),
+        kill_party: startup[0x442739 - 0x3fe210] as i8,
+        char_select_new: usize::from(startup[0x44273f - 0x3fe210]),
         effect: startup[0x443760 - 0x3fe210] as i8,
         last_body: word(&startup, 0x408574 - 0x3fe210).unwrap(),
         marks_affected: startup[0x442750 - 0x3fe210] != 0,
         affected: std::array::from_fn(|index| word(&startup, 0x442798 - 0x3fe210 + index * 2).unwrap()),
     };
-    assert_eq!(Session::new(&content).native_work.health_context, health);
+    assert_eq!(Session::new(&content).globals.health_context, health);
 
     let foundation = &data["route_foundation"];
     let combat: Combat = serde_json::from_value(foundation["combat"].clone()).unwrap();
@@ -153,9 +153,9 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
 
     for (i, case) in cases.iter().enumerate() {
         let mut combat = combat.clone();
-        combat.weapon_work = centurions_core::combat::weapon_work::WeaponWork::zero();
-        combat.spell_fields.fill(0);
-        combat.field_used.fill(0);
+        combat.weapon_traits = centurions_core::combat::weapon_traits::WeaponTraits::zero();
+        combat.spell_queue.fill(0);
+        combat.collide_check.fill(0);
         verify(case, combat, mission, &format!("campaign psi case {i}"));
     }
     // Resolution extensions are source-derived; ray dispatch also compares original instructions.
@@ -181,7 +181,7 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
             .map(|case| (case.n::<i16>("spell"), 1, false, Some(case))),
     ) {
         let mut state: Session = serde_json::from_value(foundation.clone()).unwrap();
-        state.native_work.psi_memory = vec![0; 480];
+        state.globals.define_spells = vec![0; 480];
         state.bandage_ready = gate;
         let actor = 1;
         let overflow = spell == 1101;
@@ -207,8 +207,8 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
             w[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
         }
         let combat = state.combat.as_mut().unwrap();
-        combat.order[combat.cursor] = actor as i16;
-        combat.weapon_work = WeaponWork::zero();
+        combat.battle_order[combat.battle_order_index] = actor as i16;
+        combat.weapon_traits = WeaponTraits::zero();
         let charm = matches!(spell, 1406 | 1506 | 3506);
         let drain = matches!(spell, 1502 | 1603 | 3503);
         let movement = matches!(spell, 1106 | 1403 | 2305 | 2604 | 3105);
@@ -217,19 +217,19 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
             state.random = RandomState::new(12);
         }
         if let Some(case) = ray_case {
-            combat.map.tiles = case.words("map");
-            combat.map.shift = (0, 0);
+            combat.field.tiles = case.words("map");
+            combat.field.map_shift = (0, 0);
             for index in 0..3 {
                 let position = (
                     39 + case.n::<i16>("dx") * (index + 1),
                     50 + case.n::<i16>("dy") * (index + 1),
                 );
                 if index < 2 {
-                    combat.enemies.positions[index as usize] = position;
-                    combat.enemies.records[index as usize].bytes[0x110..0x112]
+                    combat.roster.mon_pos[index as usize] = position;
+                    combat.roster.records[index as usize].bytes[0x110..0x112]
                         .copy_from_slice(&30000_i16.to_be_bytes());
                 } else {
-                    combat.squad.positions[0] = position;
+                    combat.squad.pos[0] = position;
                     state.warriors[0].bytes[0x50..0x52].copy_from_slice(&30000_i16.to_be_bytes());
                 }
             }
@@ -237,32 +237,32 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
         let target = if let Some(case) = ray_case {
             (39 + 4 * case.n::<i16>("dx"), 50 + 4 * case.n::<i16>("dy"))
         } else if charm || drain {
-            let m = &mut combat.enemies.records[1].bytes;
+            let m = &mut combat.roster.records[1].bytes;
             m[0xa..0xc].fill(0);
             m[0xc2..0xc9].fill(0);
             m[0x90] = 0;
             m[0x8c..0x8e].fill(0);
             m[0x10e..0x110].copy_from_slice(&1000_i16.to_be_bytes());
-            combat.enemies.positions[1]
+            combat.roster.mon_pos[1]
         } else if overflow {
             for offset in [0x50, 0x52] {
                 state.warriors[0].bytes[offset..offset + 2]
                     .copy_from_slice(&i16::MAX.to_be_bytes());
             }
             state.warriors[0].bytes[0x9a..0x9c].fill(0);
-            combat.squad.positions[0]
+            combat.squad.pos[0]
         } else if revival {
             state.warriors[0].bytes[0x50..0x52].copy_from_slice(&(-10_i16).to_be_bytes());
             centurions_core::combat::lifecycle::kill_body(combat, &mut state.warriors, 0).unwrap();
-            combat.squad.positions[0]
+            combat.squad.pos[0]
         } else if movement {
             if blocked {
-                combat.squad.positions[0]
+                combat.squad.pos[0]
             } else {
                 (38, 50)
             }
         } else {
-            combat.squad.positions[actor]
+            combat.squad.pos[actor]
         };
         if spell == 1705 {
             let mut portrait = state.clone();
@@ -277,7 +277,7 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
                 &portrait,
                 &content,
                 Command::FirePreparedPsiOnWarrior { warrior: 0 },
-                vec![centurions_core::feedback::NativeFeedback::Sound { resource_id: sound }],
+                vec![centurions_core::feedback::GameFeedback::Sound { resource_id: sound }],
             );
         }
         crate::native_common::source_victory_context(&mut state);
@@ -326,7 +326,7 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
         let events = replay_command(command, &mut state, &mut resumed, &content);
         if gate == 0 {
             assert!(events.contains(&Event::Feedback(
-                centurions_core::feedback::NativeFeedback::Warning { index: 87 }
+                centurions_core::feedback::GameFeedback::Warning { index: 87 }
             )));
         } else {
             assert!(events.iter().any(|event| matches!(event, Event::SpellResolved { spell: actual, .. } if *actual == spell)), "spell {spell}");
@@ -341,12 +341,12 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
             let combat = current_combat(&state);
             support::native_expect! {
                 records &state.warriors => &case["warriors_after"], "movement party";
-                words combat.map.tiles => &case["map_after"], "movement terrain";
-                bytes state.native_work.psi_memory => &case["memory_after"], "movement memory";
+                words combat.field.tiles => &case["map_after"], "movement terrain";
+                bytes state.globals.define_spells => &case["memory_after"], "movement memory";
                 scalar state.bandage_ready => &case["gate_after"], "movement gate";
                 scalar state.random.draws => &case["draws"], "movement draws";
             }
-            assert_eq!(combat.squad.positions, positions(&case["positions_after"]));
+            assert_eq!(combat.squad.pos, positions(&case["positions_after"]));
             support::expect_array(
                 &support::event_sounds(&events)[1..].to_vec(),
                 &case["sounds"],
@@ -363,7 +363,7 @@ fn learned_player_psi_matches_two_native_campaign_inputs() {
                 .unwrap();
             support::native_expect! {
                 records &state.warriors => &case["warriors_after"], "Psi party";
-                bytes support::record_bytes(&current_combat(&state).enemies.records) => &case["records_after"], "Psi NPCs";
+                bytes support::record_bytes(&current_combat(&state).roster.records) => &case["records_after"], "Psi NPCs";
             }
             if charm {
                 support::expect(state.bandage_ready, &case["gate_after"]);

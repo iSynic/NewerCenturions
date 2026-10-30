@@ -1,4 +1,4 @@
-//! Scan selection presentation, shared with the original promotion workflow.
+//! Scan selection, shared with promotion.
 use crate::{
     application::ApplicationAction,
     assets::Assets,
@@ -8,6 +8,8 @@ use centurions_content::Content;
 use centurions_core::Command;
 use macroquad::prelude::*;
 
+/// The scan selection screen: the scans chosen, the scan being described, and
+/// the questions and warnings waiting on the player.
 pub struct ScanEditor {
     pub(super) selection: centurions_core::story_promotion::ScanSelection,
     pub(super) controls: Vec<u16>,
@@ -16,6 +18,7 @@ pub struct ScanEditor {
     pub(super) warning: bool,
 }
 impl ScanEditor {
+    /// Draws the scan selection shown for a warrior's promotion.
     pub fn draw_promotion(
         progress: &centurions_core::story_promotion::Progress,
         content: &Content,
@@ -42,6 +45,7 @@ impl ScanEditor {
             };
         }
     }
+    /// Item `item` of the scan dialog as a rectangle in the window.
     fn rect(assets: &Assets, item: usize) -> Rect {
         let [top, left, bottom, right] = assets.scan_dialog[item - 1].rect;
         Rect::new(
@@ -51,6 +55,7 @@ impl ScanEditor {
             f32::from(bottom - top),
         )
     }
+    /// Draws the scan selection dialog and its controls.
     pub(super) fn draw(&self, content: &Content, assets: &Assets, controls: &mut Vec<Control>) {
         let bounds = Rect::new(222., 80., 356., 460.);
         draw_rectangle(bounds.x, bounds.y, bounds.w, bounds.h, BLACK);
@@ -84,16 +89,7 @@ impl ScanEditor {
         let portrait = warrior.record().portrait().unwrap_or(0);
         if let Some(texture) = assets.portraits.get(&portrait) {
             let rect = Self::rect(assets, 34);
-            draw_texture_ex(
-                texture,
-                rect.x,
-                rect.y,
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(vec2(rect.w, rect.h)),
-                    ..Default::default()
-                },
-            );
+            crate::assets::texture_in(texture, rect);
         }
         let rect = Self::rect(assets, 33);
         assets.text(&warrior.name, rect.x, rect.bottom() - 2., 12, YELLOW);
@@ -132,7 +128,7 @@ impl ScanEditor {
                 12,
                 YELLOW,
             );
-            if warrior.record().learned_scan(self.selection.tier, column) != 0 {
+            if warrior.record().known_scan(self.selection.tier, column) != 0 {
                 assets.panel(179, Rect::new(rect.x - 17., rect.y + 5., 9., 9.));
             }
             controls.push(Control {
@@ -151,12 +147,14 @@ impl ScanEditor {
             assets.wrapped_color(&description, rect, 12, 15., YELLOW);
         }
         let rect = Self::rect(assets, 32);
-        assets.panel(168, rect);
-        controls.push(Control {
+        crate::presentation::push_panel_control(
+            assets,
+            controls,
+            168,
             rect,
-            enabled: true,
-            action: Action::Application(ApplicationAction::EditorItem(32)),
-        });
+            true,
+            Action::Application(ApplicationAction::EditorItem(32)),
+        );
         if self.question || self.warning {
             controls.clear();
             let origin = vec2(221., 203.);
@@ -187,16 +185,18 @@ impl ScanEditor {
                     continue;
                 }
                 let rect = Rect::new(origin.x + x, origin.y + 127., 70., 35.);
-                assets.panel(if self.warning { 168 } else { id }, rect);
-                controls.push(Control {
+                crate::presentation::push_panel_control(
+                    assets,
+                    controls,
+                    if self.warning { 168 } else { id },
                     rect,
-                    enabled: true,
-                    action: Action::Application(if self.warning {
+                    true,
+                    Action::Application(if self.warning {
                         ApplicationAction::EditorItem(0)
                     } else {
                         ApplicationAction::ScanAnswer(answer)
                     }),
-                });
+                );
             }
         }
     }

@@ -3,10 +3,10 @@
 //! and complete retained records are compared. SANE model calls do not qualify ROM.
 use super::detached_attacks::{compare, initial, saved_return};
 use crate::Event;
-use crate::combat::runtime::detached_warrior::run;
+use crate::combat::runtime::out_of_combat_warrior::run;
 use crate::combat::runtime::reaction_calls::AttackCall;
 use crate::combat::runtime::reaction_frame::ReactionFrame;
-use crate::feedback::NativeFeedback;
+use crate::feedback::GameFeedback;
 use crate::test_support::{bytes, content, fixture};
 
 #[test]
@@ -41,7 +41,7 @@ fn detached_warrior_attacks_match_native_records_work_rng_and_requests() {
             }
         }
         let mut state = initial(source, &content);
-        state.native_work.character_bare_hand_bonus =
+        state.globals.character_bare_hand_bonus =
             source["character_work_bonus"].as_i64().unwrap() as i16;
         let actor = source["actor"].as_i64().unwrap() as i16;
         let (returned, events) = if source["parent"] == "checkforenemy-warrior-guard" {
@@ -58,7 +58,7 @@ fn detached_warrior_attacks_match_native_records_work_rng_and_requests() {
                     attacker: source["attacker"].as_i64().unwrap() as i16,
                     recipient: source["target"].as_i64().unwrap() as i16,
                     index: 0,
-                    retained_actor: actor,
+                    turn_actor: actor,
                 },
             )
             .unwrap_or_else(|error| panic!("{}: {error}", case["name"]));
@@ -73,7 +73,7 @@ fn detached_warrior_attacks_match_native_records_work_rng_and_requests() {
         compare(&state, &events, case);
         let bonus = bytes(&case["memory"]["character_work_bonus"]["hex"]);
         assert_eq!(
-            state.native_work.character_bare_hand_bonus,
+            state.globals.character_bare_hand_bonus,
             i16::from_be_bytes(bonus.try_into().unwrap()),
             "{} retained character bonus",
             case["name"]
@@ -81,7 +81,7 @@ fn detached_warrior_attacks_match_native_records_work_rng_and_requests() {
         let warnings: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
-                Event::Feedback(NativeFeedback::Warning { index }) => Some(*index),
+                Event::Feedback(GameFeedback::Warning { index }) => Some(*index),
                 _ => None,
             })
             .collect();
@@ -98,7 +98,7 @@ fn detached_warrior_attacks_match_native_records_work_rng_and_requests() {
         assert_eq!(warnings, native, "{} warning requests", case["name"]);
         if source["parent"] == "checkforenemy-warrior-guard" {
             let mut saved = initial(source, &content);
-            saved.native_work.character_bare_hand_bonus =
+            saved.globals.character_bare_hand_bonus =
                 source["character_work_bonus"].as_i64().unwrap() as i16;
             saved_return(&mut saved, &content);
             let events = crate::apply(crate::Command::Continue, &mut saved, &content).unwrap();
@@ -117,10 +117,10 @@ fn retained_character_bonus_survives_save_and_mission_end_after_an_actual_view_w
         &captures["cases"][0]["declarations"]["source_input"],
         &content,
     );
-    state.selected_warrior = 0;
+    state.char_select_new = 0;
     DevelopmentField::BareHandBonus.write(&mut state.warriors[0].bytes, -4);
     DevelopmentField::BareHandBonus.write(&mut state.warriors[1].bytes, 11);
-    state.native_work.character_bare_hand_bonus = -23;
+    state.globals.character_bare_hand_bonus = -23;
     let path = std::env::temp_dir().join(format!(
         "centurions-character-work-{}.json",
         std::process::id()
@@ -133,9 +133,9 @@ fn retained_character_bonus_survives_save_and_mission_end_after_an_actual_view_w
         &content,
     )
     .unwrap();
-    assert_eq!(state.selected_warrior, 0);
-    assert_eq!(state.native_work.character_bare_hand_bonus, 11);
+    assert_eq!(state.char_select_new, 0);
+    assert_eq!(state.globals.character_bare_hand_bonus, 11);
     crate::apply(crate::Command::EndMission, &mut state, &content).unwrap();
-    assert_eq!(state.native_work.character_bare_hand_bonus, 11);
+    assert_eq!(state.globals.character_bare_hand_bonus, 11);
     std::fs::remove_file(path).unwrap();
 }

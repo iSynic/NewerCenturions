@@ -1,4 +1,4 @@
-//! Carried-item editor: its own draft, selection and original modifier controls.
+//! The carried-item editor: its own draft, selection and modifier controls.
 use crate::{
     application::ApplicationAction,
     assets::Assets,
@@ -8,12 +8,19 @@ use centurions_content::Content;
 use centurions_core::{Command, Event, Session, apply};
 use macroquad::prelude::*;
 
+/// Item editor (DITL 141) control 2, which commits the draft and closes like
+/// item 1 (Done).
+pub const ITEM_EDITOR_CLOSE: usize = 2;
+
+/// The carried-item editor: a draft of the session in which one item of a
+/// warrior's pack is changed.
 pub struct ItemEditor {
     pub draft: Session,
     member: usize,
     slot: usize,
 }
 impl ItemEditor {
+    /// Opens the editor on item `slot` of squad member `member`'s pack.
     pub fn new(state: &Session, member: usize, slot: usize) -> Result<Self, String> {
         let count = state
             .warriors
@@ -31,6 +38,8 @@ impl ItemEditor {
             slot,
         })
     }
+    /// Carries out a click: moving to the previous or next warrior or item, or
+    /// changing the item's modifiers.
     pub fn handle(&mut self, control: usize, content: &Content) -> Result<Vec<Event>, String> {
         match control {
             67 | 68 => {
@@ -62,6 +71,7 @@ impl ItemEditor {
         }
         Ok(vec![])
     }
+    /// Item `item` of the item editor dialog as a rectangle in the window.
     fn rect(assets: &Assets, item: usize) -> Rect {
         let [top, left, bottom, right] = assets.item_dialog[item - 1].rect;
         Rect::new(
@@ -71,9 +81,11 @@ impl ItemEditor {
             f32::from(bottom - top),
         )
     }
+    /// Draws the item editor dialog: the item's name and modifiers, and the
+    /// controls.
     pub fn draw(&self, content: &Content, assets: &Assets, controls: &mut Vec<Control>) {
         clear_background(BLACK);
-        assets.panel(215, Rect::new(80., 80., 640., 460.));
+        assets.panel(215, crate::layout::DIALOG_FRAME);
         assets.panel(168, Self::rect(assets, 2));
         for item in 16..=27 {
             let rect = Self::rect(assets, item);
@@ -97,7 +109,7 @@ impl ItemEditor {
                 YELLOW,
             );
         }
-        for (number, value) in [(38, item.quantity()), (39, item.capacity())] {
+        for (number, value) in [(38, item.charge()), (39, item.capacity())] {
             let rect = Self::rect(assets, number);
             assets.text(
                 &value.unwrap_or(0).to_string(),
@@ -115,16 +127,7 @@ impl ItemEditor {
             && let Some(portrait) = assets.portraits.get(&id)
         {
             let rect = Self::rect(assets, 71);
-            draw_texture_ex(
-                portrait,
-                rect.x,
-                rect.y,
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(vec2(rect.w, rect.h)),
-                    ..Default::default()
-                },
-            );
+            crate::assets::texture_in(portrait, rect);
         }
         if let Some(definition) = content.items.get(usize::from(item.id().unsigned_abs())) {
             if let Ok(id) = centurions_content::records::ItemDefinition(definition).icon()

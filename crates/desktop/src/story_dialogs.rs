@@ -1,4 +1,4 @@
-//! Original Question, encounter picker and GetWord resources.
+//! The scenario's questions, encounter picker and GetWord text entry.
 use crate::{
     assets::Assets,
     presentation::{Action, Control, Inspection, UiState},
@@ -7,10 +7,11 @@ use centurions_content::Content;
 use centurions_core::{Command, Session};
 use macroquad::prelude::*;
 
+/// Draws a yes-or-no question (DLOG 137) with its two answers.
 pub fn question(assets: &Assets, text: &str, yes: Action, no: Action, controls: &mut Vec<Control>) {
     controls.clear();
     assets.draw_dialog(137);
-    assets.wrapped_color(text, assets.dialog_rect(137, 5), 12, 14., YELLOW);
+    assets.dialog_text(text, assets.dialog_rect(137, 5));
     for (item, action) in [(7, yes), (6, no)] {
         controls.push(Control {
             rect: assets.dialog_rect(137, item),
@@ -20,6 +21,7 @@ pub fn question(assets: &Assets, text: &str, yes: Action, no: Action, controls: 
     }
 }
 
+/// Draws a scenario's menu of choices (DLOG 147) under the message text.
 pub fn menu(
     content: &Content,
     state: &Session,
@@ -30,7 +32,7 @@ pub fn menu(
     controls: &mut Vec<Control>,
 ) {
     controls.clear();
-    assets.wrapped_color(text, Rect::new(12., 467., 444., 82.), 12, 16., YELLOW);
+    assets.wrapped_color(text, crate::layout::MESSAGE_TEXT, 12, 16., YELLOW);
     assets.draw_dialog(147);
     let table = if state.menus.is_empty() {
         state
@@ -64,13 +66,17 @@ pub fn menu(
     });
 }
 
+/// Whether the encounter takes typed text: only when it has a password.
 pub fn text_entry_available(state: &Session, content: &Content) -> bool {
-    // encounter2 0x121ae8 gates GetWord on the original password selector.
+    // encounter2 offers GetWord only when the encounter has a password selector.
     centurions_core::typed_record(state, content).is_ok_and(|record| {
         centurions_content::records::TypedEncounterRecord(&record).password_selector() != 0
     })
 }
 
+/// Draws the typed encounter dialog (DLOG 153) under the message text, with its scan, physical
+/// action, item, typed word and cancel controls, each available only as the encounter allows.
+/// While a word is being typed, draws the word entry (DLOG 157) with the text typed so far.
 pub fn typed(
     content: &Content,
     state: &Session,
@@ -80,7 +86,7 @@ pub fn typed(
     controls: &mut Vec<Control>,
 ) {
     controls.clear();
-    assets.wrapped_color(text, Rect::new(12., 467., 444., 82.), 12, 16., YELLOW);
+    assets.wrapped_color(text, crate::layout::MESSAGE_TEXT, 12, 16., YELLOW);
     assets.draw_dialog(153);
     for (item, action, enabled) in [
         (
@@ -120,7 +126,7 @@ pub fn typed(
     if ui.typed_entry && text_entry_available(state, content) {
         controls.clear();
         assets.draw_dialog(157);
-        assets.wrapped_color(&ui.typed_text, assets.dialog_rect(157, 2), 12, 14., YELLOW);
+        assets.dialog_text(&ui.typed_text, assets.dialog_rect(157, 2));
         controls.push(Control {
             rect: assets.dialog_rect(157, 4),
             enabled: true,
@@ -131,13 +137,15 @@ pub fn typed(
     }
 }
 
+/// Draws the squad's portraits as a strip of choices; a member with no action
+/// is not offered.
 pub fn portraits(
     state: &Session,
     assets: &Assets,
     controls: &mut Vec<Control>,
     action: impl Fn(usize) -> Option<Action>,
 ) {
-    // getchoice125112 confines selection to the existing portrait strip.
+    // getchoice confines selection to the portrait strip.
     for (member, warrior) in state.warriors.iter().enumerate() {
         if let Some(action) = action(member) {
             let rect = Rect::new(490., 20. + member as f32 * 50., 50., 50.);
@@ -147,16 +155,7 @@ pub fn portraits(
                 .ok()
                 .and_then(|id| assets.portraits.get(&id))
             {
-                draw_texture_ex(
-                    image,
-                    rect.x,
-                    rect.y,
-                    WHITE,
-                    DrawTextureParams {
-                        dest_size: Some(rect.size()),
-                        ..Default::default()
-                    },
-                );
+                crate::assets::texture_in(image, rect);
             }
             controls.push(Control {
                 rect,

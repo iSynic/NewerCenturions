@@ -1,11 +1,12 @@
-//! showp 0x12dc58: what booty 0x105748 draws around one cell's item icon.
+//! What the booty screen draws around one cell's item icon.
 //!
-//! The definition is the ITEM work record loaditem leaves for the cell's id
-//! (0x45363c); the instance is the 22-byte booty record 0x41fc74. Positions are
-//! offsets from the 32x32 icon rectangle, sums wrap at WORD width and the labels
-//! are the original Pascal strings, named by their data address.
+//! The definition is the item record (`item`) loaded for the cell's id; the
+//! instance is the cell's 22-byte booty record. Positions are offsets from the
+//! 32x32 icon rectangle, sums wrap at word width, and each label is one of the
+//! game's own Pascal strings, identified by its place in the executable's data.
 use crate::{ContentError, InventoryRecord, span, word};
 
+/// The pen colours the booty screen uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CellColor {
     /// blackColor 33.
@@ -18,6 +19,7 @@ pub enum CellColor {
     Blue,
 }
 
+/// Where a run of text starts, relative to the cell's item icon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CellAnchor {
     /// The icon's right edge plus one, top plus `y`.
@@ -26,7 +28,7 @@ pub enum CellAnchor {
     Below,
 }
 
-/// One MoveTo followed by its DrawString calls.
+/// One pen move followed by the strings drawn from there.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CellText {
     pub anchor: CellAnchor,
@@ -34,47 +36,50 @@ pub struct CellText {
     pub y: i16,
     pub size: u8,
     pub color: CellColor,
-    /// NumToString of the value; `signed` is stringplus 0x13832a, which prefixes
-    /// "+" (0x40227a) to positive values.
+    /// The value drawn as a number; `signed` prefixes "+" to positive values.
     pub value: Option<(i16, bool)>,
     /// Pascal strings drawn after the value, at the pen position it left.
     pub labels: Vec<u32>,
 }
 
+/// Everything the booty screen draws around one cell's item icon.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LootCell {
-    /// ploticon3 cicn in the 16x16 rectangle at the icon's right edge plus one,
-    /// top plus 14, for a weapon holding ammunition.
+    /// For a weapon holding ammunition, the cicn drawn in the 16x16 rectangle at
+    /// the icon's right edge plus one, top plus 14.
     pub caliber_icon: Option<i16>,
     pub texts: Vec<CellText>,
 }
 
-/// showp 0x12dcca..0x12dd7e, indexed by definition WORD 32 minus 8.
+/// Caliber cicns, indexed by definition word 32 minus 8.
 const CALIBER_ICONS: [i16; 25] = [
     0x83d, 0x83d, 0x838, 0x83e, 0x83e, 0x838, 0x841, 0x835, 0x837, 0x836, 0x837, 0x834, 0x838,
     0x836, 0x838, 0x83c, 0x838, 0x839, 0x838, 0x83a, 0x838, 0x83b, 0x838, 0x840, 0x83f,
 ];
 
-/// showp's jump table at 0x12de7c, indexed by definition WORD 34. Zero entries
-/// branch past the label.
+/// Reserve ammunition labels, indexed by definition word 34. A zero entry
+/// draws no label.
 const RESERVE_LABELS: [u32; 33] = [
     0, 0x4033ec, 0x4033e4, 0x4033dc, 0x4033d4, 0, 0x4033cc, 0x4033c6, 0x4033c0, 0x4033ba, 0,
     0x4033b0, 0x4033a6, 0, 0x40339c, 0x403394, 0x40338a, 0x403386, 0x40337c, 0x403372, 0, 0x40336a,
     0, 0x403362, 0x403356, 0x40334e, 0, 0x40334a, 0, 0x403342, 0, 0x40333a, 0x403334,
 ];
 
-/// cicn drawn at 8x8 for each loot-quality step (showp 0x12e4b2).
+/// The cicn drawn at 8x8 for each step of loot quality.
 pub const QUALITY_ICON: i16 = 0xd0;
 
 /// Upper-left corner of quality step `step`, relative to the icon's top-left.
 /// Each step moves nine pixels right; steps 7, 14, 21 and 28 first return 63
-/// left and move 8 down (OffsetRect at 0x12e4a4).
+/// left and move 8 down.
 pub fn quality_position(step: usize) -> (i16, i16) {
     let wraps = [7, 14, 21, 28].iter().filter(|n| step >= **n).count() as i16;
     let column = step as i16 - wraps * 7;
     (-2 + column * 9, -10 + wraps * 8)
 }
 
+/// What the booty screen draws around one cell's item icon.
+///
+/// Original: showp
 pub fn loot_cell(definition: &[u8], record: &InventoryRecord) -> Result<LootCell, ContentError> {
     span(definition, 0, 150)?;
     let byte = |offset: usize| i16::from(definition[offset] as i8);

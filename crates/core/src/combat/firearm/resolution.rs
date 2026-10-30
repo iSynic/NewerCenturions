@@ -2,32 +2,39 @@ use super::PreparedFirearm;
 use crate::combat::attack::AttackResult;
 use crate::combat::damage::{DamageFlags, DamagePacket, resolve_damage};
 use crate::{RandomState, RuleError};
-use centurions_content::{Warrior, combat::MonsterRecord, records::AttackPacket};
+use centurions_content::WARRIOR_BYTES;
+use centurions_content::combat::MONSTER_BYTES;
+use centurions_content::{Warrior, combat::MonsterRecord, records::SpellInfoRecord};
 
+/// A monster's firearm shot at a warrior: draws the shot's duration, then resolves it.
 pub fn resolve_enemy(
     warrior: &mut Warrior,
-    enemy: &mut MonsterRecord,
+    monster: &mut MonsterRecord,
     prepared: &PreparedFirearm,
     random: &mut RandomState,
     difficulty: i16,
 ) -> Result<AttackResult, RuleError> {
-    let (minimum, maximum) = AttackPacket(&prepared.packet).duration_bounds();
+    let (minimum, maximum) = SpellInfoRecord(&prepared.packet).duration_range();
     random.range(minimum, maximum);
-    resolve_enemy_after_duration(warrior, enemy, prepared, random, difficulty)
+    resolve_enemy_after_duration(warrior, monster, prepared, random, difficulty)
 }
 
+/// A monster's firearm shot at a warrior once the duration is drawn: 33 plus 5 per hit die and the
+/// missile bonus, less the warrior's missile dodge, 5, a draw below a third of his quickness, and
+/// guarding times level; clamped by difficulty, then damage through shield, armor and saves. A
+/// warrior who has lost his turn, or a shot with the armor filter, is not rolled to hit.
 pub fn resolve_enemy_after_duration(
     warrior: &mut Warrior,
-    enemy: &mut MonsterRecord,
+    monster: &mut MonsterRecord,
     prepared: &PreparedFirearm,
     random: &mut RandomState,
     difficulty: i16,
 ) -> Result<AttackResult, RuleError> {
-    let p = &prepared.packet;
+    let packet = &prepared.packet;
     if !prepared.armor_filter && warrior.record().turn_skip_duration()? == 0 {
         let hit = 33_i16
-            .wrapping_add(enemy.record().level()?.wrapping_mul(5))
-            .wrapping_add(enemy.record().missile_accuracy_bonus()?)
+            .wrapping_add(monster.record().hit_dice()?.wrapping_mul(5))
+            .wrapping_add(monster.record().missile_accuracy_bonus()?)
             .wrapping_sub(warrior.record().missile_dodge()?)
             .wrapping_sub(5)
             .wrapping_sub(random.bound(warrior.record().quickness()? / 3))
@@ -51,7 +58,7 @@ pub fn resolve_enemy_after_duration(
         &mut warrior.bytes,
         false,
         &DamagePacket {
-            bytes: p.clone(),
+            bytes: packet.clone(),
             attack_count: prepared.shots,
         },
         DamageFlags {
@@ -67,13 +74,13 @@ pub fn resolve_enemy_after_duration(
         sounds.push(206);
     }
     if result.total != 0 {
-        if !AttackPacket(p).plays_impact_when_wounded() {
+        if !SpellInfoRecord(packet).plays_impact_when_wounded() {
             sounds.push(prepared.sound);
         }
         let health = warrior.record().stamina()?.wrapping_sub(result.total);
         warrior.record_mut().set_stamina(health);
         if result.total > 0 {
-            warrior.record_mut().mark_damaged();
+            warrior.record_mut().mark_been_attacked();
         }
     }
     Ok(AttackResult {
@@ -85,21 +92,22 @@ pub fn resolve_enemy_after_duration(
     })
 }
 
+/// A warrior's firearm shot at a monster, committed only if the whole shot succeeds.
 pub fn resolve(
     warrior: &mut Warrior,
-    enemy: &mut MonsterRecord,
+    monster: &mut MonsterRecord,
     prepared: &PreparedFirearm,
     random: &mut RandomState,
     difficulty: i16,
 ) -> Result<AttackResult, RuleError> {
-    centurions_content::span(&warrior.bytes, 0, 3138)?;
-    centurions_content::span(&enemy.bytes, 0, 288)?;
+    centurions_content::span(&warrior.bytes, 0, WARRIOR_BYTES)?;
+    centurions_content::span(&monster.bytes, 0, MONSTER_BYTES)?;
     centurions_content::span(&prepared.packet, 0, 58)?;
     if prepared.slot >= warrior.inventory()?.len() || !(-2..=2).contains(&difficulty) {
         return Err("invalid firearm resolver context".into());
     }
     let mut next_warrior = warrior.clone();
-    let mut next_enemy = enemy.clone();
+    let mut next_enemy = monster.clone();
     let mut next_random = random.clone();
     let result = resolve_inner(
         &mut next_warrior,
@@ -109,11 +117,14 @@ pub fn resolve(
         difficulty,
     )?;
     *warrior = next_warrior;
-    *enemy = next_enemy;
+    *monster = next_enemy;
     *random = next_random;
     Ok(result)
 }
 
+/// A warrior's firearm shot at another warrior, with the duration already drawn: 33 plus the
+/// shooter's missile accuracy, less the target's missile dodge, 5, a draw below a third of his
+/// quickness, and guarding times level.
 pub(crate) fn resolve_friendly_after_duration(
     attacker: &Warrior,
     target: &mut Warrior,
@@ -121,7 +132,7 @@ pub(crate) fn resolve_friendly_after_duration(
     random: &mut RandomState,
     difficulty: i16,
 ) -> Result<AttackResult, RuleError> {
-    let p = &prepared.packet;
+    let packet = &prepared.packet;
     if !prepared.armor_filter && target.record().turn_skip_duration()? == 0 {
         let hit = 33_i16
             .wrapping_add(attacker.record().missile_accuracy()?)
@@ -148,7 +159,7 @@ pub(crate) fn resolve_friendly_after_duration(
         &mut target.bytes,
         false,
         &DamagePacket {
-            bytes: p.clone(),
+            bytes: packet.clone(),
             attack_count: prepared.shots,
         },
         DamageFlags {
@@ -178,36 +189,42 @@ pub(crate) fn resolve_friendly_after_duration(
     })
 }
 
+/// Draws the shot's duration, then resolves it.
 fn resolve_inner(
     warrior: &mut Warrior,
-    enemy: &mut MonsterRecord,
+    monster: &mut MonsterRecord,
     prepared: &PreparedFirearm,
     random: &mut RandomState,
     difficulty: i16,
 ) -> Result<AttackResult, RuleError> {
-    let (minimum, maximum) = AttackPacket(&prepared.packet).duration_bounds();
+    let (minimum, maximum) = SpellInfoRecord(&prepared.packet).duration_range();
     random.range(minimum, maximum);
-    resolve_after_duration(warrior, enemy, prepared, random, difficulty)
+    resolve_after_duration(warrior, monster, prepared, random, difficulty)
 }
 
+/// A warrior's firearm shot at a monster once the duration is drawn: 33 plus missile accuracy, less
+/// the monster's missile dodge, a draw against its agility, 3 per hit die and its guarding, and
+/// adjusted by its size; clamped by difficulty. A hit does damage through shield, armor and saves
+/// and counts toward the warrior's statistics. A shot at a monster that has lost its turn is not
+/// rolled to hit, nor is one with the armor filter.
 pub(crate) fn resolve_after_duration(
     warrior: &mut Warrior,
-    enemy: &mut MonsterRecord,
+    monster: &mut MonsterRecord,
     prepared: &PreparedFirearm,
     random: &mut RandomState,
     difficulty: i16,
 ) -> Result<AttackResult, RuleError> {
-    let p = &prepared.packet;
+    let packet = &prepared.packet;
     let mut hit = 33_i16.wrapping_add(warrior.record().missile_accuracy()?);
-    if !prepared.armor_filter && enemy.record().turn_skip_duration() == 0 {
+    if !prepared.armor_filter && monster.record().turn_skip_duration() == 0 {
         hit = hit
-            .wrapping_sub(enemy.record().missile_dodge_bonus()?)
-            .wrapping_sub(random.bound(enemy.record().speed()? / 3));
-        hit = hit.wrapping_sub(enemy.record().level()?.wrapping_mul(3));
+            .wrapping_sub(monster.record().missile_dodge_bonus()?)
+            .wrapping_sub(random.bound(monster.record().agility()? / 3));
+        hit = hit.wrapping_sub(monster.record().hit_dice()?.wrapping_mul(3));
         hit = hit.wrapping_sub(
-            i16::from(enemy.record().guarding()).wrapping_mul(enemy.record().level()?),
+            i16::from(monster.record().guarding()).wrapping_mul(monster.record().hit_dice()?),
         );
-        hit = hit.wrapping_add(match enemy.record().size()?.wrapping_abs() {
+        hit = hit.wrapping_add(match monster.record().size()?.wrapping_abs() {
             0 => -5,
             1 | 2 => 5,
             3 => 10,
@@ -226,10 +243,10 @@ pub(crate) fn resolve_after_duration(
         }
     }
     let result = resolve_damage(
-        &mut enemy.bytes,
+        &mut monster.bytes,
         true,
         &DamagePacket {
-            bytes: p.clone(),
+            bytes: packet.clone(),
             attack_count: prepared.shots,
         },
         DamageFlags {
@@ -246,8 +263,8 @@ pub(crate) fn resolve_after_duration(
         sounds.push(206);
     }
     if damage != 0 {
-        let health = enemy.record().stamina()?.wrapping_sub(damage);
-        enemy.record_mut().set_stamina(health);
+        let health = monster.record().stamina()?.wrapping_sub(damage);
+        monster.record_mut().set_stamina(health);
         warrior.record_mut().add_damage_dealt(damage);
         warrior.record_mut().count_hit();
         if health <= 0 {
@@ -260,7 +277,7 @@ pub(crate) fn resolve_after_duration(
         icon: result.sound,
         feedback: None,
         damage,
-        killed: enemy.record().stamina()? <= 0,
+        killed: monster.record().stamina()? <= 0,
         sounds,
     })
 }

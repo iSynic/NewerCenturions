@@ -1,15 +1,21 @@
-use crate::{Event, InventoryRecord, RuleError, Session, equipment, feedback::NativeFeedback};
+use crate::{Event, InventoryRecord, RuleError, Session, equipment, feedback::GameFeedback};
 use centurions_content::records::{InventorySlots, InventorySlotsMut};
 use centurions_content::{Content, Warrior};
 use serde::{Deserialize, Serialize};
 
+/// The party's equipment taken away by a scenario script, held until it is given back.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConfiscatedEquipment {
+    /// Whether equipment is currently held.
     pub active: bool,
+    /// The money held: the party's pooled money plus every member's carried credits.
     pub money: i32,
+    /// The held item records, 100 slots for each of six members.
     pub items: Vec<InventoryRecord>,
 }
 impl ConfiscatedEquipment {
+    /// Checks that the stored equipment has its 600 item records and that none has an item id of
+    /// 1000 or more in magnitude.
     pub(crate) fn validate(&self) -> Result<(), RuleError> {
         if self.items.len() != 600
             || self
@@ -23,8 +29,9 @@ impl ConfiscatedEquipment {
     }
 }
 
+/// The flash feedback shown when equipment is taken or returned.
 fn flash(address: u32) -> Event {
-    Event::Feedback(NativeFeedback::Flash {
+    Event::Feedback(GameFeedback::Flash {
         address,
         x: 50,
         y: 50,
@@ -33,7 +40,10 @@ fn flash(address: u32) -> Event {
     })
 }
 
-/// newland opcode 36, 0x144ce8..0x144f90. The forward force-drop loop is intentional.
+/// Confiscate takes items from the party. The forward force-drop loop is
+/// deliberate.
+///
+/// Original: newland
 pub(crate) fn apply(
     state: &mut Session,
     content: &Content,
@@ -67,8 +77,8 @@ pub(crate) fn apply(
             InventorySlotsMut(&mut warrior.bytes).set_count(0);
         }
         state.apply_equipment_globals(&globals)?;
-        state.load_item_work(content, 0)?;
-        state.native_work.recovery_work.held_money = saved.money;
+        state.load_item(content, 0)?;
+        state.globals.storage.wealth_store = saved.money;
         state.confiscated = Some(saved);
         return Ok(vec![flash(0x401c02)]);
     }
@@ -83,12 +93,12 @@ pub(crate) fn apply(
                 continue;
             }
             let id = InventorySlots(&warrior.bytes).item_id(slot)?;
-            state.native_work.recovery_work.displaced_items[displaced.len()] = id;
+            state.globals.storage.storage_items[displaced.len()] = id;
             displaced.push(id);
             let count = InventorySlots(&warrior.bytes).count()?.wrapping_add(1);
             InventorySlotsMut(&mut warrior.bytes).set_count(count);
             warrior.record_mut().set_inventory_slot(slot, record);
-            if record.equipment_flag() != 0 {
+            if record.equipped() != 0 {
                 let (restored, _, writes) =
                     crate::editor_items::equipment_record_restored(warrior, content, slot)?;
                 *warrior = restored;
@@ -101,13 +111,13 @@ pub(crate) fn apply(
     }
     state.apply_equipment_globals(&globals)?;
     saved.active = false;
-    state.native_work.recovery_work.held_money = saved.money;
+    state.globals.storage.wealth_store = saved.money;
     state.confiscated = Some(saved);
     let mut events = vec![flash(0x401bdc)];
     if !displaced.is_empty() {
         events.push(flash(0x401bac));
         let caller = crate::loot_recovery::RecoveryReturn::Confiscation {
-            detached: state.combat.is_some(),
+            in_combat: state.combat.is_some(),
         };
         events.extend(crate::loot_recovery::begin(state, content, caller)?);
     }

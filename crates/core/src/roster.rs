@@ -4,6 +4,7 @@ use centurions_content::{Content, Warrior};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// The warriors the player keeps between missions, stored apart from the supplied ones.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Roster {
     schema_version: u32,
@@ -13,6 +14,7 @@ pub struct Roster {
     path: Option<PathBuf>,
 }
 impl Roster {
+    /// A roster of the warriors supplied with the game, not yet saved anywhere.
     pub fn supplied(content: &Content) -> Self {
         Self {
             schema_version: 1,
@@ -21,6 +23,8 @@ impl Roster {
             path: None,
         }
     }
+    /// Opens the roster file, or the supplied warriors when none exists yet; a roster over the size
+    /// limit or written for other content is refused.
     pub fn open(path: &Path, content: &Content) -> Result<Self, RuleError> {
         let mut roster = match std::fs::metadata(path) {
             Ok(metadata) => {
@@ -50,6 +54,7 @@ impl Roster {
         roster.path = Some(path.to_path_buf());
         Ok(roster)
     }
+    /// Checks that the roster holds at most 1024 warriors, each valid and none repeated.
     fn validate(&self) -> Result<(), RuleError> {
         if self.warriors.len() > 1024 {
             return Err(RuleError::Invalid(
@@ -69,6 +74,7 @@ impl Roster {
         }
         Ok(())
     }
+    /// Stores warriors in the roster; a warrior already there is replaced.
     pub fn store(&mut self, warriors: &[Warrior]) -> Result<(), RuleError> {
         let mut next = self.clone();
         for warrior in warriors {
@@ -91,7 +97,10 @@ impl Roster {
         Ok(())
     }
 }
-/// savecharacter 0x1374bc filters temporary mission items and verifies the saved copy.
+/// The warriors as saved to the roster: temporary mission items are dropped and
+/// the saved copy is checked.
+///
+/// Original: savecharacter
 pub fn mission_records(state: &Session, content: &Content) -> Result<Vec<Warrior>, RuleError> {
     let mission = state
         .exploration
@@ -106,7 +115,7 @@ pub fn mission_records(state: &Session, content: &Content) -> Result<Vec<Warrior
                 .items
                 .get(usize::from(id.unsigned_abs()))
                 .ok_or("roster item definition missing")?;
-            let kind = ItemDefinition(definition).category()?;
+            let kind = ItemDefinition(definition).item_type()?;
             if kind < 0 || matches!(kind, 23..=25) {
                 // The roster copy has no Session to receive party-wide writes.
                 let globals = crate::equipment::drop(warrior, slot, content, mission)?;
@@ -114,13 +123,14 @@ pub fn mission_records(state: &Session, content: &Content) -> Result<Vec<Warrior
             }
         }
         CharacterIdentityMut(&mut warrior.bytes).refresh_save_checksums()?;
-        let psi = &state.native_work.psi_memory;
+        let psi = &state.globals.define_spells;
         LearnedScansMut(&mut warrior.bytes)
             .restore_selection_memory(&psi[member * 80..(member + 1) * 80]);
     }
     Ok(records)
 }
 
+/// Checks a warrior's record: its name matches the record and its original checksum is well formed.
 fn validate_warrior(warrior: &Warrior) -> Result<(), RuleError> {
     if Warrior::read(&warrior.bytes)?.name != warrior.name
         || warrior.original_sha256.len() != 64
@@ -134,6 +144,7 @@ fn validate_warrior(warrior: &Warrior) -> Result<(), RuleError> {
     warrior.inventory()?;
     Ok(())
 }
+/// Checks that a squad has one to six distinct warriors.
 pub(crate) fn validate_squad(warriors: &[Warrior]) -> Result<(), RuleError> {
     if !(1..=6).contains(&warriors.len()) {
         return Err(RuleError::Invalid(
@@ -151,6 +162,8 @@ pub(crate) fn validate_squad(warriors: &[Warrior]) -> Result<(), RuleError> {
     }
     Ok(())
 }
+/// Refuses unless warriors may be managed now: exploring with nothing on screen and no script
+/// running, and no medical choice pending.
 pub(crate) fn admit_management(state: &Session) -> Result<(), RuleError> {
     if state.phase != Phase::Exploration
         || state.medical_continuation.is_some()
@@ -164,10 +177,12 @@ pub(crate) fn admit_management(state: &Session) -> Result<(), RuleError> {
     Ok(())
 }
 
-/// partyselect's Add with the level's restrictions open (0x148b0c..0x148c9e):
-/// warnings 0x86 for a level above the limit, 0x87 for a full squad, 0x88 for a
-/// banned race and 0x89 for a banned M.O.S., checked in that order. `squad` is
-/// the number of warriors already chosen.
+/// Adds a warrior to the squad under the level's restrictions: warnings 0x86
+/// for a level above the limit, 0x87 for a full squad, 0x88 for a banned race
+/// and 0x89 for a banned M.O.S., checked in that order. `squad` is the number of
+/// warriors already chosen.
+///
+/// Original: partyselect
 pub fn admit_to_squad(
     restrictions: &[u8],
     warrior: &Warrior,
@@ -177,7 +192,7 @@ pub fn admit_to_squad(
     let record = warrior.record();
     let refuse = |index| {
         Err(RuleError::Refused {
-            feedback: vec![crate::feedback::NativeFeedback::Warning { index }],
+            feedback: vec![crate::feedback::GameFeedback::Warning { index }],
         })
     };
     let maximum = limits.maximum_level()?;

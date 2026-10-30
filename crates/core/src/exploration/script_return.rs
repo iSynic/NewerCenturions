@@ -1,10 +1,10 @@
-//! Script return for maintained exploration.
+//! Ending a script and returning to whoever ran it.
 use crate::{Event, RuleError, ScriptState, Session, combat};
 use centurions_content::mission::OpeningMission;
 use centurions_content::records::{EventHeaderTableMut, StoryRecord, StoryRecordMut};
 use centurions_content::{Content, Warrior};
 
-/// Derived caller ownership; no extra persistent state or new admission rule.
+/// Who ran the script, worked out from the session.
 #[derive(Clone, Copy)]
 enum ScriptOwner {
     Turn,
@@ -13,8 +13,10 @@ enum ScriptOwner {
     Exploration,
 }
 
+/// Finds who is running the script that is ending: a battle's turn, round or death dispatch, or
+/// plain exploration.
 fn script_owner(state: &Session) -> ScriptOwner {
-    // A calendar child entered under a battle owner returns to timeclick first.
+    // A calendar script started during a battle returns to the clock first.
     if state
         .zero_time
         .as_ref()
@@ -44,6 +46,8 @@ fn script_owner(state: &Session) -> ScriptOwner {
     }
 }
 
+/// Hands an ended script back to the battle dispatch that started it. Returns nothing when
+/// exploration owns the script.
 pub(super) fn finish_dispatch(
     state: &mut Session,
     content: &Content,
@@ -56,19 +60,23 @@ pub(super) fn finish_dispatch(
     }
 }
 
-/// newland's early `return 0`: the script stops without its end processing
-/// (event retirement, encounter loop or destination); battle owners still finish.
+/// Stops the script without its end processing (event retirement, encounter
+/// loop or destination); battle callers still finish.
+///
+/// Original: newland
 pub(super) fn abandon_script(
     state: &mut Session,
     content: &Content,
 ) -> Result<Vec<Event>, RuleError> {
     if let Some(script) = state.exploration.as_mut().unwrap().script.take() {
-        retain_turn_header(state, &script.record);
-        combat::runtime::retain_death_header(state, &script.record);
+        store_turn_header(state, &script.record);
+        combat::runtime::store_death_header(state, &script.record);
     }
     Ok(finish_dispatch(state, content)?.unwrap_or_default())
 }
 
+/// Ends the running script: the battle dispatch that owns it is told, otherwise an exhausted event
+/// is retired and the party continues at the script's destination.
 pub(super) fn finish_script(
     state: &mut Session,
     content: &Content,
@@ -86,13 +94,13 @@ pub(super) fn finish_script(
         );
         return Ok(vec![]);
     };
-    retain_turn_header(state, &script.record);
-    combat::runtime::retain_death_header(state, &script.record);
+    store_turn_header(state, &script.record);
+    combat::runtime::store_death_header(state, &script.record);
     if let Some(events) = finish_dispatch(state, content)? {
         return Ok(events);
     }
     state.scripted_cleanup = None;
-    crate::time::retain_zero_work(state, &script.record);
+    crate::time::store_zero_record(state, &script.record);
     let calendar = state.zero_time.is_some();
     let position = state.exploration.as_mut().unwrap();
     if script.scheduled && !calendar {
@@ -132,13 +140,13 @@ pub(super) fn finish_script(
         };
         EventHeaderTableMut(headers).set_trigger_chance(script.map_slot, 255);
     }
-    let current = crate::story_destination::Location {
+    let current = crate::story::destination::Location {
         map: position.map,
         x: position.x,
         y: position.y,
         level: state.scenario_level,
     };
-    let Some(plan) = crate::story_destination::destination(
+    let Some(plan) = crate::story::destination::destination(
         &script.record,
         current,
         state.phase == crate::Phase::Combat,
@@ -159,21 +167,20 @@ pub(super) fn finish_script(
         .map_at(state.mission.as_deref(), plan.target.level, plan.target.map)
         .ok_or_else(|| RuleError::Invalid("door destination map unavailable".into()))?;
     crate::mission::travel(state, content, plan.target)?;
-    let row = state.native_work.header_row;
+    let row = state.globals.header_row;
     let position = state.exploration.as_mut().unwrap();
-    // 14686c..1468c0 copy DOOR, with the saved A4/A3 low bytes, into header row
-    // WORD4427c2 of the land now current, after any land change.
+    // A persistent event is written into the header row of the land now current,
+    // after any land change.
     if script.persist {
         let (x, y) = script.persist_cell;
         let record =
-            crate::story_destination::persistent_record(&script.record, x.into(), y.into())?;
+            crate::story::destination::persistent_record(&script.record, x.into(), y.into())?;
         EventHeaderTableMut(&mut position.event_headers).replace(row as usize, &record);
     }
     if calendar {
-        // newland1468ce..146916 clears the movement offsets before its tile test.
         position.last_move = [0; 2];
-        // A new location on a header tile runs that walking event inside the calendar
-        // newland (14692e..140320), which returns to the schedule scan afterwards.
+        // A new location on a header tile runs that walking event inside the
+        // calendar script, which then returns to the schedule scan.
         if moved
             && position.floor[OpeningMission::index(position.x, position.y)?].wrapping_abs() >= 1000
         {
@@ -192,7 +199,7 @@ pub(super) fn finish_script(
                     centurions_content::mission::long(&record[..], 0).is_ok_and(|v| v == key)
                 });
             if let Some(record) = matched.map(|record| record.to_vec()) {
-                crate::time::retain_zero_work(state, &record);
+                crate::time::store_zero_record(state, &record);
             }
             events.extend(super::movement::walking_header(state, content)?);
             return Ok(events);
@@ -204,6 +211,8 @@ pub(super) fn finish_script(
     }])
 }
 
+/// The text of a dialogue with ^1, ^2 and so on replaced by the names of the first, second and so
+/// on warrior; a fallen warrior's name gives way to the last warrior still standing.
 pub(crate) fn dialogue(
     map: &OpeningMission,
     warriors: &[Warrior],
@@ -224,9 +233,11 @@ pub(crate) fn dialogue(
     Ok(text)
 }
 
-/// loaddoor2 leaves this byte shared. Turn/round frames restore actions and byte40;
-/// death frames restore actions only.
-pub(crate) fn retain_script_stamp(state: &mut Session, stamp: u8) {
+/// Every suspended script shares the dispatch stamp loaddoor2 writes. Turn and
+/// round scripts restore their actions and the stamp; death scripts restore
+/// their actions only.
+pub(crate) fn store_script_stamp(state: &mut Session, stamp: u8) {
+    /// Writes the dispatch stamp into a suspended script's record.
     fn write(script: Option<&mut ScriptState>, stamp: u8) {
         if let Some(script) = script {
             centurions_content::records::StoryRecordMut(&mut script.record)
@@ -254,11 +265,11 @@ pub(crate) fn retain_script_stamp(state: &mut Session, stamp: u8) {
     }
 }
 
-/// Each surrounding battle caller owns its saved actions or the live DOOR body.
-pub(crate) fn retain_turn_header(state: &mut Session, record: &[u8]) {
+/// Each surrounding battle caller keeps its saved actions or the running script.
+pub(crate) fn store_turn_header(state: &mut Session, record: &[u8]) {
     let mut current = state.turn_dispatch.as_mut();
     while let Some(frame) = current {
-        frame.work = Some(record.to_vec());
+        frame.script_record = Some(record.to_vec());
         if let Some(caller) = frame.suspended_script.as_mut() {
             if frame.shared_record {
                 caller.record.copy_from_slice(record);

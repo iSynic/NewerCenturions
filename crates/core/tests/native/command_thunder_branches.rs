@@ -136,9 +136,9 @@ fn authored_item_variable_ally_and_random_branches_resume_without_repeating_effe
         let mut state = frame(&content, 8, None, 42, 580);
         if allied {
             let definitions = &content.map(8).unwrap().combat.as_ref().unwrap().monsters;
-            state.allies[..288]
+            state.holdover[..288]
                 .copy_from_slice(&definitions[112 * MONSTER_BYTES..113 * MONSTER_BYTES]);
-            state.ally_count = 1;
+            state.held_over = 1;
         }
         continue_saved(&mut state, &content);
         assert_eq!(dialogue(&state), Some(if allied { 1186 } else { 1175 }));
@@ -148,7 +148,7 @@ fn authored_item_variable_ally_and_random_branches_resume_without_repeating_effe
         let mut state = frame(&content, 0, Some(161), 0, 318);
         // A recorded setup seed and party selection, never a mid-action RNG edit.
         state.random = RandomState::new(seed);
-        state.native_work.party_mask.fill(1);
+        state.globals.party_track.fill(1);
         continue_saved(&mut state, &content);
         let id = dialogue(&state).unwrap();
         assert!((603..=606).contains(&id));
@@ -161,14 +161,14 @@ fn authored_item_variable_ally_and_random_branches_resume_without_repeating_effe
             serde_json::from_value(foundation["foundations"][0]["session"].clone()).unwrap();
         crate::native_common::source_victory_context(&mut state);
         let combat = state.combat.as_mut().unwrap();
-        combat.order.fill(-1);
-        combat.order[109] = 4;
-        combat.cursor = 109;
-        combat.round_scripts.slots = [case.n("script"), 0, 0, 0, 0];
-        combat.round_scripts.counter = case.n::<i8>("counter").wrapping_sub(1);
+        combat.battle_order.fill(-1);
+        combat.battle_order[109] = 4;
+        combat.battle_order_index = 109;
+        combat.round_macros.slots = [case.n("script"), 0, 0, 0, 0];
+        combat.round_macros.counter = case.n::<i8>("counter").wrapping_sub(1);
         state.random = RandomState::new(case.n("seed_before"));
         support::saved_command(Command::EndTurn, &mut state, &content);
-        let scripts = &current_combat(&state).round_scripts;
+        let scripts = &current_combat(&state).round_macros;
         assert_eq!(scripts.slots[0], case.n::<i16>("slot_after"));
         assert_eq!(
             scripts.pending.as_ref().and_then(|p| p.script),
@@ -185,7 +185,7 @@ fn authored_item_variable_ally_and_random_branches_resume_without_repeating_effe
         word(definition, 0x6a).unwrap(),
         &support::fixture("death-feedback.json")["alternate"]["record_sound"],
     );
-    let mut enemy = centurions_core::combat::monster::summon(
+    let mut monster = centurions_core::combat::monster::summon(
         MonsterRecord {
             bytes: definition.to_vec(),
         },
@@ -195,17 +195,17 @@ fn authored_item_variable_ally_and_random_branches_resume_without_repeating_effe
     )
     .unwrap();
     let combat = state.combat.as_mut().unwrap();
-    enemy.bytes[0x11e..0x120].copy_from_slice(&combat.enemies.records[0].bytes[0x11e..0x120]);
-    enemy.bytes[0x110..0x112].copy_from_slice(&1_i16.to_be_bytes());
-    enemy.bytes[0xce] = 2;
-    combat.enemies.records[0] = enemy;
-    combat.order.fill(-1);
-    combat.order[109] = 4;
-    combat.cursor = 109;
+    monster.bytes[0x11e..0x120].copy_from_slice(&combat.roster.records[0].bytes[0x11e..0x120]);
+    monster.bytes[0x110..0x112].copy_from_slice(&1_i16.to_be_bytes());
+    monster.bytes[0xce] = 2;
+    combat.roster.records[0] = monster;
+    combat.battle_order.fill(-1);
+    combat.battle_order[109] = 4;
+    combat.battle_order_index = 109;
     let events = support::saved_command(Command::EndTurn, &mut state, &content);
     assert!(events.iter().any(|event| matches!(
         event,
-        Event::Feedback(centurions_core::feedback::NativeFeedback::CombatResult {
+        Event::Feedback(centurions_core::feedback::GameFeedback::CombatResult {
             body: 10,
             code: -14,
             audible: false,
@@ -213,6 +213,6 @@ fn authored_item_variable_ally_and_random_branches_resume_without_repeating_effe
         })
     )));
     assert!(support::event_sounds(&events).contains(&word(definition, 0x6a).unwrap()));
-    assert!(current_combat(&state).enemies.records[0].stamina().unwrap() < 1);
+    assert!(current_combat(&state).roster.records[0].stamina().unwrap() < 1);
     checkpoint(&state, &content, "alternate-death-after");
 }

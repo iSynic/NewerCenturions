@@ -52,27 +52,26 @@ fn retained_input(source: &Value) -> (Session, Content) {
     let mut logical = source.clone();
     logical["before"]["warriors"] = before["warriors"].as_str().unwrap()[..count * 3138 * 2].into();
     let (mut state, content) = prepare(&logical);
-    state.selected_warrior = scalar(&before["selected_warrior"]) as usize;
-    state.allies = bytes(&before["allies"]);
-    state.ally_count = scalar(&before["ally_count"]) as usize;
-    state.suppress_allies = scalar(&before["suppress_allies"]);
+    state.char_select_new = scalar(&before["selected_warrior"]) as usize;
+    state.holdover = bytes(&before["allies"]);
+    state.held_over = scalar(&before["ally_count"]) as usize;
+    state.suspend_allies = scalar(&before["suppress_allies"]);
     state.command_preferences.auto_refit = scalar(&before["auto_refit"]) != 0;
-    state.native_work.early_booty = scalar(&before["early_booty"]) as i8;
-    state.native_work.battle_rewards_suppressed =
-        scalar(&before["battle_rewards_suppressed"]) as i8;
-    state.native_work.walking_confusion = scalar(&before["confusion_global"]);
-    state.native_work.npc_backing.active_count = scalar(&before["npc_count"]);
-    state.native_work.extra_record = bytes(&before["extra_work"]);
-    state.native_work.treasure_record = bytes(&before["treasure_work"]);
-    state.native_work.loot_quality = Some(bytes(&before["loot_flags"]));
-    state.booty_items = bytes(&before["loot_scratch"])
+    state.globals.coward = scalar(&before["early_booty"]) as i8;
+    state.globals.battle_rewards_suppressed = scalar(&before["battle_rewards_suppressed"]) as i8;
+    state.globals.possessed = scalar(&before["confusion_global"]);
+    state.globals.monsters.num_mon = scalar(&before["npc_count"]);
+    state.globals.extra_record = bytes(&before["extra_work"]);
+    state.globals.treasure = bytes(&before["treasure_work"]);
+    state.globals.loot_quality = Some(bytes(&before["loot_flags"]));
+    state.booty_list = bytes(&before["loot_scratch"])
         .as_chunks::<22>()
         .0
         .iter()
         .map(|raw| InventoryRecord(*raw))
         .collect();
     state.flags[..100].copy_from_slice(&bytes(&before["survivor_flags"]));
-    state.native_work.inventory_record =
+    state.globals.inventory_record =
         InventoryRecord::read(&bytes(&before["selected_inventory_record"])).unwrap();
     state.ammunition = bytes(&before["ammunition_reserves"])[..800]
         .as_chunks::<4>()
@@ -80,10 +79,10 @@ fn retained_input(source: &Value) -> (Session, Content) {
         .iter()
         .map(|raw| i32::from_be_bytes(*raw))
         .collect();
-    state.native_work.round_work.counter = Some(scalar(&before["round_counter"]) as i8);
-    state.native_work.round_work.slot = Some(scalar(&before["round_slot"]));
-    state.native_work.round_work.processing = Some(scalar(&before["round_flag"]) as u8);
-    state.native_work.round_work.slots = Some(words(&before["rounds"]).try_into().unwrap());
+    state.globals.round_scripts.counter = Some(scalar(&before["round_counter"]) as i8);
+    state.globals.round_scripts.slot = Some(scalar(&before["round_slot"]));
+    state.globals.round_scripts.processing = Some(scalar(&before["round_flag"]) as u8);
+    state.globals.round_scripts.slots = Some(words(&before["rounds"]).try_into().unwrap());
     (state, content)
 }
 
@@ -135,7 +134,7 @@ fn started_owner(source: &Value, content: &mut Content, count: usize) -> Session
             .cursor,
         1
     );
-    assert_eq!(state.native_work.extra_record, entry);
+    assert_eq!(state.globals.extra_record, entry);
     state
 }
 
@@ -149,81 +148,80 @@ fn input(source: &Value, getup: bool) -> (Session, Content) {
         .script
         .clone()
         .unwrap();
-    state.native_work.tactical_work.saved_land =
-        started.native_work.tactical_work.saved_land.clone();
+    state.globals.battlefield.saved_land = started.globals.battlefield.saved_land.clone();
     state.battle_group_script = started.battle_group_script;
     state.battle_after_message = started.battle_after_message;
     state.battle_treasure = started.battle_treasure;
-    state.native_work.extra_record = bytes(&source["controlled_postcombat_extra"]);
+    state.globals.extra_record = bytes(&source["controlled_postcombat_extra"]);
     if let Some(flags) = source["controlled_return_active_flags"].as_array() {
         assert_eq!(flags.len(), state.warriors.len());
         for (warrior, flag) in state.warriors.iter_mut().zip(flags) {
             warrior
                 .record_mut()
-                .set_active_flag(flag.as_u64().unwrap() as u8);
+                .set_in_battle(flag.as_u64().unwrap() as u8);
         }
     }
     let owner = started.selected_battle_treasure.take().unwrap();
     if getup {
-        state.warriors[0].record_mut().set_movement_points(
+        state.warriors[0].record_mut().set_movement(
             source["controlled_return_warrior0_movement"]
                 .as_i64()
                 .unwrap() as i16,
         );
-        let work = &state.native_work.tactical_work;
+        let work = &state.globals.battlefield;
         let mut arena = started.combat.take().unwrap();
-        arena.map = work.map.clone();
-        arena.squad.positions = work
-            .positions
+        arena.field = work.field.clone();
+        arena.squad.pos = work
+            .pos
             .iter()
             .take(state.warriors.len())
             .copied()
             .collect();
-        arena.squad.under_tiles = work
-            .under_tiles
+        arena.squad.char_under = work
+            .char_under
             .iter()
             .take(state.warriors.len())
             .copied()
             .collect();
-        arena.retained_npcs = state.native_work.npc_backing.clone();
-        arena.enemies.records = state.native_work.npc_backing.active_records().unwrap();
-        arena.enemies.positions = state
-            .native_work
-            .npc_backing
+        arena.monsters = state.globals.monsters.clone();
+        arena.roster.records = state.globals.monsters.active_records().unwrap();
+        arena.roster.mon_pos = state
+            .globals
+            .monsters
             .slots
             .iter()
-            .take(arena.enemies.records.len())
+            .take(arena.roster.records.len())
             .map(|slot| {
                 let point = slot.as_ref().unwrap().position.unwrap();
                 (
-                    (point.0 - state.native_work.npc_backing.origin.0) as i16,
-                    (point.1 - state.native_work.npc_backing.origin.1) as i16,
+                    (point.0 - state.globals.monsters.origin.0) as i16,
+                    (point.1 - state.globals.monsters.origin.1) as i16,
                 )
             })
             .collect();
-        arena.order = state.native_work.initiative_work.order.clone();
-        arena.cursor = state.native_work.initiative_work.cursor;
-        arena.round = state.native_work.turn_round.unwrap();
-        arena.round_scripts.counter = state.native_work.round_work.counter.unwrap();
-        arena.round_scripts.slots = state.native_work.round_work.slots.unwrap();
-        arena.round_scripts.pending = None;
-        arena.inactive_rounds = state.native_work.round_work.inactive_rounds.unwrap();
-        arena.victory_work = state.native_work.victory_work;
-        arena.neighbor_work = state.native_work.neighbor_work.clone();
-        arena.ready = state.native_work.ready;
-        arena.selected_enemy = state.native_work.selected_enemy;
-        arena.script_enemy = state.native_work.script_enemy;
-        arena.death_queue = state.native_work.retained_death_queue.clone().unwrap();
-        arena.spell_fields = work.spell_fields.clone();
-        arena.field_used = work.field_used.clone();
-        arena.attack_packet = state.native_work.attack_packet.clone();
-        arena.attack_identity = state.native_work.attack_identity;
-        arena.weapon_work = state.native_work.weapon_work;
-        arena.unavailable = state.native_work.health_context.unavailable;
+        arena.battle_order = state.globals.battle_order.order.clone();
+        arena.battle_order_index = state.globals.battle_order.index;
+        arena.combat_round = state.globals.turn_round.unwrap();
+        arena.round_macros.counter = state.globals.round_scripts.counter.unwrap();
+        arena.round_macros.slots = state.globals.round_scripts.slots.unwrap();
+        arena.round_macros.pending = None;
+        arena.blank_round = state.globals.round_scripts.blank_round.unwrap();
+        arena.kill_counts = state.globals.kill_counts;
+        arena.neighbors = state.globals.neighbors.clone();
+        arena.in_spell = state.globals.in_spell;
+        arena.monster_up = state.globals.monster_up;
+        arena.macro_monster = state.globals.macro_monster;
+        arena.todo_queue = state.globals.outer_todo_queue.clone().unwrap();
+        arena.spell_queue = work.spell_queue.clone();
+        arena.collide_check = work.collide_check.clone();
+        arena.spell_info = state.globals.spell_info.clone();
+        arena.cast_identity = state.globals.cast_identity;
+        arena.weapon_traits = state.globals.weapon_traits;
+        arena.kill_party = state.globals.health_context.kill_party;
         arena.selection_pending = false;
         arena.capture_actor = None;
         arena.turn_origin = None;
-        arena.automatic = [false; 6];
+        arena.do_auto = [false; 6];
         arena.direct_death = None;
         arena.pending_last_defeated = None;
         state.phase = Phase::Combat;
@@ -240,7 +238,7 @@ fn input(source: &Value, getup: bool) -> (Session, Content) {
             Some(serde_json::from_value::<SelectedBattleTreasure>(declaration).unwrap());
         state.scripted_cleanup = Some(story_cleanup::Stage::Complete);
         state.round_dispatch = Some(RoundDispatch {
-            retained: true,
+            out_of_combat: true,
             suspended_script: Some(caller),
             ..Default::default()
         });
@@ -252,7 +250,7 @@ fn input(source: &Value, getup: bool) -> (Session, Content) {
             next: None,
         });
         // Literal controlled Combat return.
-        state.native_work.early_booty = source["controlled_return_early_booty"]
+        state.globals.coward = source["controlled_return_early_booty"]
             .as_i64()
             .unwrap_or(1) as i8;
     }
@@ -283,25 +281,22 @@ fn verify_stage(state: &Session, content: &Content, events: &[Event], case: &Val
         .into();
     compare(state, events, &projection);
     for (name, actual) in [
-        ("allies", state.allies.clone()),
+        ("allies", state.holdover.clone()),
         (
             "loot_scratch",
-            state.booty_items.iter().flat_map(|item| item.0).collect(),
+            state.booty_list.iter().flat_map(|item| item.0).collect(),
         ),
-        (
-            "loot_flags",
-            state.native_work.loot_quality.clone().unwrap(),
-        ),
+        ("loot_flags", state.globals.loot_quality.clone().unwrap()),
         ("survivor_flags", state.flags[..100].to_vec()),
-        ("extra_work", state.native_work.extra_record.clone()),
-        ("treasure_work", state.native_work.treasure_record.clone()),
+        ("extra_work", state.globals.extra_record.clone()),
+        ("treasure_work", state.globals.treasure.clone()),
         (
             "current_shop_work",
-            state.native_work.shop_work.record().to_vec(),
+            state.globals.the_shop.record().to_vec(),
         ),
         (
             "selected_inventory_record",
-            state.native_work.inventory_record.0.to_vec(),
+            state.globals.inventory_record.0.to_vec(),
         ),
         (
             "ammunition_reserves",
@@ -314,8 +309,8 @@ fn verify_stage(state: &Session, content: &Content, events: &[Event], case: &Val
         (
             "rounds",
             state
-                .native_work
-                .round_work
+                .globals
+                .round_scripts
                 .slots
                 .unwrap()
                 .into_iter()
@@ -325,8 +320,8 @@ fn verify_stage(state: &Session, content: &Content, events: &[Event], case: &Val
         (
             "death_queue",
             state
-                .native_work
-                .retained_death_queue
+                .globals
+                .outer_todo_queue
                 .as_ref()
                 .unwrap()
                 .entries
@@ -350,39 +345,34 @@ fn verify_stage(state: &Session, content: &Content, events: &[Event], case: &Val
         );
     }
     for (name, actual) in [
-        ("early_booty", state.native_work.early_booty as i16),
+        ("early_booty", state.globals.coward as i16),
         (
             "battle_rewards_suppressed",
-            state.native_work.battle_rewards_suppressed as i16,
+            state.globals.battle_rewards_suppressed as i16,
         ),
-        ("ally_count", state.ally_count as i16),
-        ("npc_count", state.native_work.npc_backing.active_count),
-        ("confusion_global", state.native_work.walking_confusion),
+        ("ally_count", state.held_over as i16),
+        ("npc_count", state.globals.monsters.num_mon),
+        ("confusion_global", state.globals.possessed),
         (
             "character_work_bonus",
-            state.native_work.character_bare_hand_bonus,
+            state.globals.character_bare_hand_bonus,
         ),
         (
             "round_counter",
-            state.native_work.round_work.counter.unwrap() as i16,
+            state.globals.round_scripts.counter.unwrap() as i16,
         ),
-        ("round_slot", state.native_work.round_work.slot.unwrap()),
+        ("round_slot", state.globals.round_scripts.slot.unwrap()),
         (
             "round_flag",
-            state.native_work.round_work.processing.unwrap() as i16,
+            state.globals.round_scripts.processing.unwrap() as i16,
         ),
         (
             "death_queue_count",
-            state
-                .native_work
-                .retained_death_queue
-                .as_ref()
-                .unwrap()
-                .count as i16,
+            state.globals.outer_todo_queue.as_ref().unwrap().count as i16,
         ),
         (
             "death_queue_flag",
-            state.native_work.death_processing.queue as i16,
+            state.globals.death_processing.doing_queue as i16,
         ),
     ] {
         assert_eq!(
@@ -393,12 +383,7 @@ fn verify_stage(state: &Session, content: &Content, events: &[Event], case: &Val
         );
     }
     assert_eq!(
-        state
-            .native_work
-            .retained_death_queue
-            .as_ref()
-            .unwrap()
-            .pointer,
+        state.globals.outer_todo_queue.as_ref().unwrap().pointer,
         i32::from_be_bytes(
             bytes(&case["memory"]["death_queue_pointer"]["hex"])
                 .try_into()

@@ -1,7 +1,8 @@
-//! Party-only public adapter for the shared resolvespell resolver.
+//! Party-only public adapter for the shared spell resolver.
 use super::{DirectSpell, RandomState, RuleError, WarriorSpellResult, resolve_support_inner};
 use centurions_content::Warrior;
 
+/// A spell cast on warriors alone.
 pub fn resolve_warriors(
     warriors: &[Warrior],
     packet: &[u8],

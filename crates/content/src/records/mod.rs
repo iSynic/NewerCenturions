@@ -1,8 +1,11 @@
-//! Borrowed views over original records. These never change their serialized storage.
+//! Views over the game's records, borrowed in their saved form.
 //!
-//! Field names follow their callers in Centurions, not the superficially similar
-//! Realmz layouts. Reads retain signed big-endian words; writes touch only the
-//! specified bytes. Unknown fields stay opaque.
+//! Field names use the author's vocabulary where New Centurions confirms it
+//! (see docs/glossary.md); Realmz layouts differ, so no field is named from its
+//! position alone. Reads keep signed big-endian words; writes touch only the
+//! named bytes. Unknown fields stay opaque.
+use crate::bytes::put_word;
+
 mod attack;
 mod character;
 mod condition_target;
@@ -41,33 +44,38 @@ pub use spell_map::SpellMapAliases;
 mod typed_encounter;
 mod upgrade;
 mod warrior;
+pub mod warrior_layout;
 mod weapon_attack;
 
-pub use attack::{AttackPacket, AttackPacketMut};
+pub use attack::{SpellInfoRecord, SpellInfoRecordMut};
 pub use character::{CharacterIdentityMut, CharacterInformation};
 pub use condition_target::{ConditionTarget, SavingThrow};
 pub use conditions::Condition;
 pub use damage::{DamageDefenses, DamageDefinition, DamageTargetKind, DamageTargetRecord};
 pub use development::{ATTRIBUTES, Attribute, DevelopmentField};
 pub use equipment::{
-    EquipmentModifiers, EquipmentStat, InventoryModifier, ItemUpgrade, RetainedEquipmentModifiers,
+    EquipmentModifiers, EquipmentStat, InstanceModifiers, InventoryModifier, ItemUpgrade,
 };
 pub use equipment_eligibility::{EquipmentEligibility, ProfessionEquipment, RaceEquipment};
 pub use exploration_extras::{
-    AllyClassBranchExtra, ChanceBranchExtra, ClinicExtra, ExtraTable, LimitedTreasureExtra,
-    MapEffectExtra, MapMutationExtra, PaymentBranchExtra, RandomBranchExtra, RegionChangeExtra,
+    AllyClassBranchExtra, BoatCampingExtra, ChanceBranchExtra, ClinicExtra, DisableChoiceExtra,
+    DropCreditsExtra, ExtraTable, GiveConditionExtra, LandLightExtra, LimitedTreasureExtra,
+    MapEffectExtra, MapMutationExtra, PaymentBranchExtra, PickByCasteExtra, PickByTraitExtra,
+    RandomBranchExtra, RandomTreasureExtra, RegionChangeExtra, ShiftPartyExtra, VictoryPointsExtra,
 };
 pub use exploration_tables::{
-    EncounterMenu, EventHeaderTable, EventHeaderTableMut, RegionTable, RegionTableMut,
-    TreasureTable,
+    EncounterMenu, EncounterMenuMut, EventHeaderTable, EventHeaderTableMut, RegionTable,
+    RegionTableMut, TreasureTable,
 };
 pub use inventory_slots::{InventorySlots, InventorySlotsMut};
 pub use item::{ItemDefinition, WeaponCondition, item_class};
-pub use item_panel::{ItemPanelRecord, ItemPanelWorkMut};
+pub use item_panel::{ItemPanelMut, ItemPanelRecord};
 pub use learned_scans::{LearnedScans, LearnedScansMut};
 pub use monster::{EnemyRecord, EnemyRecordMut, FootprintCell, NaturalAttack};
 pub use party_restrictions::PartyRestrictions;
-pub use profiles::{ProfessionProfile, RaceProfile};
+pub use profiles::{
+    PROFESSION_PROFILE_BYTES, ProfessionProfile, ProfileTable, RACE_PROFILE_BYTES, RaceProfile,
+};
 pub use psi_memory::PsiSelectionMemoryMut;
 pub use shop::{SHOP_BYTES, SHOP_SLOTS, ShopRecord, ShopRecordMut};
 pub use spell_field::{SPELL_FIELD_BYTES, SpellField, SpellFieldMut};
@@ -91,7 +99,3 @@ pub use typed_encounter::{QuestionExtra, TYPED_ENCOUNTER_BYTES, TypedEncounterRe
 pub use upgrade::UpgradeRecord;
 pub use warrior::{WarriorRecord, WarriorRecordMut};
 pub use weapon_attack::{WeaponAttackModifiers, WeaponAttackParameters};
-
-fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
-    bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
-}

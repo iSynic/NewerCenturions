@@ -6,6 +6,7 @@ use crate::{
 use centurions_content::word;
 use macroquad::prelude::*;
 
+/// A monster or ally record viewed on the creature page.
 pub struct Creature {
     pub index: usize,
     pub ally: bool,
@@ -14,6 +15,8 @@ pub struct Creature {
 }
 
 impl Creature {
+    /// Draws the creature page (dialog 158): the creature's name, description,
+    /// picture and statistics, and the buttons.
     pub fn draw(&self, assets: &Assets, controls: &mut Vec<Control>) {
         assets.draw_dialog(158);
         for number in [1, 2, 3, 4] {
@@ -39,22 +42,13 @@ impl Creature {
         assets.panel(142, assets.dialog_rect(158, 37));
         if let Some(texture) = assets.icons.get(&icon) {
             let rect = assets.dialog_rect(158, 37);
-            draw_texture_ex(
-                texture,
-                rect.x,
-                rect.y,
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(rect.size()),
-                    ..Default::default()
-                },
-            );
+            crate::assets::texture_in(texture, rect);
         }
         if word(r, 78).unwrap_or(0) != 0 {
             for (number, address) in [(8, 0x40406a), (9, 0x404062), (10, 0x40405a)] {
                 field(
                     number,
-                    assets.native_text.text(address, true).unwrap_or_default(),
+                    assets.game_text.text(address, true).unwrap_or_default(),
                 );
             }
         } else {
@@ -83,7 +77,10 @@ impl Creature {
                 }
             }
         }
-        let mut special = assets.native_text.text(0x404046, true).unwrap_or_default();
+        let mut special = assets
+            .game_text
+            .text(crate::game_strings::NO_SPECIAL_ATTACKS, true)
+            .unwrap_or_default();
         for i in 0..5 {
             let value = r[150 + i * 4] as i8;
             if value != 0 {
@@ -106,6 +103,7 @@ impl Creature {
             }
         }
     }
+    /// Draws a check box in its on (PICT 179) or off (PICT 180) look at dialog item `number`.
     fn mark(&self, assets: &Assets, number: usize, checked: bool) {
         assets.panel(
             if checked { 179 } else { 180 },

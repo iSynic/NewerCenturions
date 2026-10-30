@@ -3,8 +3,14 @@ use crate::{
     warrior_management_available,
 };
 
+/// Refuses a command the current state cannot take. While a pending choice is open (an occupied
+/// square, a combat selection, a clinic or shop visit, a medical target, a promotion, encounter
+/// actions, outdoor psi, a capture, a psi or firearm selection) only the commands that answer it
+/// are accepted; a warrior under computer control takes no commands of its own; the warrior editor
+/// is refused outside warrior management; and a story shown during combat must be continued
+/// first. A command that is not part of a targeting exchange clears the pending target quantity.
 pub(super) fn check(command: &Command, state: &mut Session) -> Result<(), RuleError> {
-    if state.retained_walk_choice.is_some() {
+    if state.out_of_combat_walk_choice.is_some() {
         return if matches!(command, Command::AnswerOccupiedChoice { .. }) {
             Ok(())
         } else {
@@ -26,7 +32,7 @@ pub(super) fn check(command: &Command, state: &mut Session) -> Result<(), RuleEr
         )
     {
         return Err(RuleError::Refused {
-            feedback: vec![feedback::NativeFeedback::Silent],
+            feedback: vec![feedback::GameFeedback::Silent],
         });
     }
     if state

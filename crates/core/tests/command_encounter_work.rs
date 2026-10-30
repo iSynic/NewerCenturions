@@ -45,7 +45,7 @@ fn replacement_redraw_keeps_shared_labels_and_executes_the_loaded_header_after_r
         replacement.copy_from_slice(&support::script_record(&[(9, 611), (24, 0)]));
         let mut state = support::mission_session(&content);
         start(&mut state, &content, typed);
-        let before = state.native_work.encounter_work.record(typed).unwrap();
+        let before = state.globals.encounter_headers.record(typed).unwrap();
         let initial_random = state.random.clone();
         support::saved_command(select.clone(), &mut state, &content);
         assert!(matches!(
@@ -53,7 +53,7 @@ fn replacement_redraw_keeps_shared_labels_and_executes_the_loaded_header_after_r
             Some(Presentation::Dialogue { id: 1, .. })
         ));
         assert_eq!(
-            &state.native_work.encounter_work.record(typed).unwrap()[header..],
+            &state.globals.encounter_headers.record(typed).unwrap()[header..],
             &before[header..]
         );
         support::saved_command(Command::Continue, &mut state, &content);
@@ -69,7 +69,7 @@ fn replacement_redraw_keeps_shared_labels_and_executes_the_loaded_header_after_r
 }
 
 #[test]
-fn round_predicate_reads_retained_headers_once_and_resumes_the_next_slot_after_saved_pages() {
+fn round_predicate_reads_kept_headers_once_and_resumes_the_next_slot_after_saved_pages() {
     let foundation = support::fixture("round-stories.json");
     for mode in 1_i16..=3 {
         let mut content = content();
@@ -99,9 +99,9 @@ fn round_predicate_reads_retained_headers_once_and_resumes_the_next_slot_after_s
             crate::binary_round_stories::input(&foundation, &foundation.array("cases")[0]);
         state.warriors = warriors;
         state.random = random;
-        arena.cursor = 109;
-        arena.order[109] = 0;
-        arena.round_scripts = RoundScripts {
+        arena.battle_order_index = 109;
+        arena.battle_order[109] = 0;
+        arena.round_macros = RoundMacros {
             slots: [1, 2, 0, 0, 0],
             ..Default::default()
         };
@@ -137,39 +137,39 @@ fn round_predicate_reads_retained_headers_once_and_resumes_the_next_slot_after_s
                 .count(),
             1
         );
-        assert!(current_combat(&state).round_scripts.pending.is_none());
+        assert!(current_combat(&state).round_macros.pending.is_none());
     }
 }
 
 #[test]
-fn mission_end_and_defeat_retain_health_work_across_saved_commands() {
+fn mission_end_and_defeat_keep_health_context_across_saved_commands() {
     let content = content();
     for command in [Command::EndMission, Command::EndTurn] {
         let mut state = support::mission_session(&content);
-        let health = &mut state.native_work.health_context;
+        let health = &mut state.globals.health_context;
         health.last_body = 12;
         health.effect = 7;
         health.affected = [3; 6];
         health.marks_affected = true;
-        health.unavailable = 2;
+        health.kill_party = 2;
         let mut expected = health.clone();
         expected.marks_affected = false;
-        expected.unavailable = 0;
+        expected.kill_party = 0;
         if matches!(command, Command::EndTurn) {
             state.combat = Some(support::battle());
             // Teardown copies the combat packet's health effect.
-            state.combat.as_mut().unwrap().attack_packet[18] = 7;
+            state.combat.as_mut().unwrap().spell_info[18] = 7;
             state.combat.as_mut().unwrap().pending_last_defeated = Some(0);
             state.warriors.resize(6, state.warriors[0].clone());
             expected.last_body = 0;
             state.phase = Phase::Combat;
             crate::native_common::source_victory_context(&mut state);
             for warrior in &mut state.warriors {
-                warrior.record_mut().set_active_flag(0);
+                warrior.record_mut().set_in_battle(0);
             }
         }
         support::saved_command(command, &mut state, &content);
         assert_eq!(state.phase, Phase::SquadSelection);
-        assert_eq!(state.native_work.health_context, expected);
+        assert_eq!(state.globals.health_context, expected);
     }
 }

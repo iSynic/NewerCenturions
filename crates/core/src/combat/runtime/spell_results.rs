@@ -1,15 +1,25 @@
-//! Spell results in the original combat execution order.
+//! Showing spell results.
+use crate::combat::attack::AttackResult;
+use crate::combat::spells::DirectSpell;
+use crate::combat::spells::RestrictionMemoryView;
+use crate::combat::spells::conditions;
+use crate::combat::spells::spell_level;
 use crate::combat::{Combat, lifecycle};
 use crate::{Event, RandomState, RuleError};
 use centurions_content::{
     Warrior,
-    records::{AttackPacket, AttackPacketMut, EnemyRecord},
+    records::{EnemyRecord, SpellInfoRecord, SpellInfoRecordMut},
 };
 
+/// Reports what a spell did to each target in order: the sound of any race-excluded body before
+/// it, the target's sounds, the result sound for a party member who survives a damaging hit of a
+/// category 8 spell with no effect, the kill of a fallen body, the result message of a spell that
+/// succeeds without damage, and the resolved spell. Race-excluded bodies after the last target
+/// sound at the end.
 pub(crate) fn append_spell_outcomes(
-    c: &mut Combat,
-    w: &mut [Warrior],
-    targets: Vec<(usize, crate::combat::attack::AttackResult)>,
+    combat: &mut Combat,
+    warriors: &mut [Warrior],
+    targets: Vec<(usize, AttackResult)>,
     race_excluded: Vec<usize>,
     identity: (Option<i16>, i16, &[u8], &[i16]),
     enemy_defeat_feedback: bool,
@@ -17,7 +27,7 @@ pub(crate) fn append_spell_outcomes(
 ) -> Result<(), RuleError> {
     let mut excluded = race_excluded.into_iter().peekable();
     for (target, outcome) in targets {
-        c.neighbor_work.departure = 0;
+        combat.neighbors.departure = 0;
         while excluded.peek().is_some_and(|body| *body < target) {
             excluded.next();
             events.push(Event::Sound { resource_id: 651 });
@@ -28,42 +38,47 @@ pub(crate) fn append_spell_outcomes(
                 .into_iter()
                 .map(|resource_id| Event::Sound { resource_id }),
         );
-        // Native result audio follows surviving party hits at 151bca/1587b8.
-        if AttackPacket(identity.2).defense_category() == 8
-            && AttackPacket(identity.2).effect()? == 0
-            && target < w.len()
+        // A party member who survives the hit plays the result sound.
+        if SpellInfoRecord(identity.2).defense_category() == 8
+            && SpellInfoRecord(identity.2).effect()? == 0
+            && target < warriors.len()
             && identity.3[target] >= 0
             && !outcome.killed
             && outcome.damage != 0
         {
-            let caster = identity.0.unwrap_or(c.order[c.cursor]);
+            let caster = identity
+                .0
+                .unwrap_or(combat.battle_order[combat.battle_order_index]);
             let sound = if caster >= 10 {
-                let enemy = &c.enemies.records[(caster - 10) as usize].bytes;
-                if EnemyRecord::from_bytes(enemy).selected_item()? != 0 {
-                    c.weapon_work.sound()
+                let monster = &combat.roster.records[(caster - 10) as usize].bytes;
+                if EnemyRecord::from_bytes(monster).weapon()? != 0 {
+                    combat.weapon_traits.sound()
                 } else {
-                    c.weapon_work.natural_result_sound(enemy)?
+                    combat.weapon_traits.natural_result_sound(monster)?
                 }
             } else {
-                AttackPacket(identity.2).impact_sound()?
+                SpellInfoRecord(identity.2).impact_sound()?
             };
             events.push(Event::Sound { resource_id: sound });
         }
         if outcome.killed {
             let feedback = if target >= 10 && enemy_defeat_feedback {
-                super::death::enemy_death_feedback(&c.enemies.records[target - 10], target as i16)?
+                super::death::enemy_death_feedback(
+                    &combat.roster.records[target - 10],
+                    target as i16,
+                )?
             } else {
                 vec![]
             };
-            lifecycle::kill_body(c, w, target as i16)?;
+            lifecycle::kill_body(combat, warriors, target as i16)?;
             events.extend(feedback);
         }
-        // resolvespell151a88 presents successful zero-damage spelllist results.
-        // showresults clears the interaction gate even when its code has no label.
-        let effect = AttackPacket(identity.2).effect()?.wrapping_abs();
+        // A spell that succeeds without damage still shows its result, and showing
+        // a result clears the interaction gate even when it has no label.
+        let effect = SpellInfoRecord(identity.2).effect()?.wrapping_abs();
         if matches!(effect, 1..=41 | 51 | 64) && outcome.damage == 0 {
             events.push(Event::Feedback(
-                crate::feedback::NativeFeedback::CombatResult {
+                crate::feedback::GameFeedback::CombatResult {
                     body: target as i16,
                     code: effect,
                     amount: 0,
@@ -85,34 +100,37 @@ pub(crate) fn append_spell_outcomes(
     Ok(())
 }
 
+/// Resolves a spell on the bodies the mask marks and returns its events.
+///
+/// Original: resolvespell
 pub(crate) fn resolve_spell_mask(
-    c: &mut Combat,
-    w: &mut [Warrior],
+    combat: &mut Combat,
+    warriors: &mut [Warrior],
     random: &mut RandomState,
     spell: (i16, &[u8], i16),
     mask: &[i16; 110],
     caster: i16,
-    memory: crate::combat::spells::RestrictionMemoryView<'_>,
+    memory: RestrictionMemoryView<'_>,
 ) -> Result<Vec<Event>, RuleError> {
     let (id, packet, count) = spell;
-    c.mark_monster_spell_work(packet, mask);
-    if AttackPacket(packet).targeting_mode() == 7 {
-        c.ready = 0;
+    combat.mark_monster_spell_pick(packet, mask);
+    if SpellInfoRecord(packet).is_party_duration() {
+        combat.in_spell = 0;
     }
-    c.inactive_rounds = 0;
-    if id == 1703 && count > 0 && crate::combat::spell_conditions::is_1703_packet(packet)? {
-        let result = crate::combat::spell_conditions::resolve_1703(
-            w,
-            &c.enemies.records,
+    combat.blank_round = 0;
+    if id == 1703 && count > 0 && conditions::is_1703_packet(packet)? {
+        let result = conditions::resolve_1703(
+            warriors,
+            &combat.roster.records,
             packet,
             count,
             mask,
             random,
         )?;
-        w.clone_from_slice(&result.warriors);
-        c.enemies.records = result.enemies;
+        warriors.clone_from_slice(&result.warriors);
+        combat.roster.records = result.enemies;
         if mask.iter().any(|flag| *flag > 0) {
-            c.field_used[0] = 1;
+            combat.collide_check[0] = 1;
         }
         let mut events: Vec<_> = result
             .sounds
@@ -135,43 +153,43 @@ pub(crate) fn resolve_spell_mask(
         );
         return Ok(events);
     }
-    let previous_hp = w
+    let previous_hp = warriors
         .iter()
         .map(Warrior::stamina)
         .collect::<Result<Vec<_>, _>>()?;
-    // NPC casts enter the same ordered condition/healing resolver as party casts.
+    // Monster casts enter the same ordered condition/healing resolver as party casts.
     if crate::combat::spells::is_support(packet)? {
-        let pending = std::mem::take(&mut c.alias_writes);
+        let pending = std::mem::take(&mut combat.alias_writes);
         let result = crate::combat::spells::resolve_support_for_caster(
-            w,
-            &c.enemies.records,
+            warriors,
+            &combat.roster.records,
             mask,
             id,
-            &crate::combat::spells::DirectSpell {
+            &DirectSpell {
                 packet,
-                level: id % 1000 / 100 - 1,
+                level: spell_level(id),
                 count,
-                armor_filter: c.weapon_work.armor_filter(),
-                weapon_sound: c.weapon_work.sound(),
+                armor_filter: combat.weapon_traits.armor_filter(),
+                weapon_sound: combat.weapon_traits.sound(),
             },
             (Some(caster), Some(memory.with_pending(&pending))),
             random,
         )?;
-        c.alias_writes = pending;
-        c.alias_writes.extend(result.alias_writes);
-        w.clone_from_slice(&result.warriors);
-        c.fatigue_reset |= result.fatigue_reset;
+        combat.alias_writes = pending;
+        combat.alias_writes.extend(result.alias_writes);
+        warriors.clone_from_slice(&result.warriors);
+        combat.fatigue_reset |= result.fatigue_reset;
         if let Some(shape) = result.area_shape {
-            AttackPacketMut(&mut c.attack_packet).set_area_shape(shape);
+            SpellInfoRecordMut(&mut combat.spell_info).set_area_size(shape);
         }
-        c.victory_work.add_total(result.total_delta);
-        c.enemies.records = result.enemies;
-        c.unavailable = c.unavailable.wrapping_sub(result.recovered as i8);
+        combat.kill_counts.add_num_enemy(result.total_delta);
+        combat.roster.records = result.enemies;
+        combat.kill_party = combat.kill_party.wrapping_sub(result.recovered as i8);
         if result.healed {
-            AttackPacketMut(&mut c.attack_packet).set_health_effect(4);
+            SpellInfoRecordMut(&mut combat.spell_info).set_health_effect(4);
         }
         if !result.targets.is_empty() {
-            c.field_used[0] = 1;
+            combat.collide_check[0] = 1;
         }
         let mut events = result
             .sounds
@@ -179,8 +197,8 @@ pub(crate) fn resolve_spell_mask(
             .map(|resource_id| Event::Sound { resource_id })
             .collect();
         append_spell_outcomes(
-            c,
-            w,
+            combat,
+            warriors,
             result.targets,
             result.race_excluded,
             (Some(caster), id, packet, &previous_hp),
@@ -189,21 +207,20 @@ pub(crate) fn resolve_spell_mask(
         )?;
         return Ok(events);
     }
-    let direct = crate::combat::spells::DirectSpell {
+    let direct = DirectSpell {
         packet,
-        level: id % 1000 / 100 - 1,
+        level: spell_level(id),
         count,
-        armor_filter: c.weapon_work.armor_filter(),
-        weapon_sound: c.weapon_work.sound(),
+        armor_filter: combat.weapon_traits.armor_filter(),
+        weapon_sound: combat.weapon_traits.sound(),
     };
-    // resolvespell's body loop has no category test; a category-5 drain reaches
-    // spelllist 15ba5a through the drain resolver the party caster uses.
-    let result = if matches!(AttackPacket(packet).effect()?, 60 | 61)
-        && AttackPacket(packet).defense_category() == 5
+    // Any category can drain; a category-5 drain uses the party's drain rules.
+    let result = if matches!(SpellInfoRecord(packet).effect()?, 60 | 61)
+        && SpellInfoRecord(packet).defense_category() == 5
     {
         crate::combat::spells::resolve_psi_drain(
-            w,
-            &c.enemies.records,
+            warriors,
+            &combat.roster.records,
             mask,
             &direct,
             caster,
@@ -212,19 +229,19 @@ pub(crate) fn resolve_spell_mask(
         )?
     } else {
         crate::combat::spells::resolve_bodies_with_memory(
-            w,
-            &c.enemies.records,
+            warriors,
+            &combat.roster.records,
             mask,
             &direct,
             memory,
             random,
         )?
     };
-    w.clone_from_slice(&result.warriors);
-    c.victory_work.add_total(result.total_delta);
-    c.enemies.records = result.enemies;
+    warriors.clone_from_slice(&result.warriors);
+    combat.kill_counts.add_num_enemy(result.total_delta);
+    combat.roster.records = result.enemies;
     if !result.targets.is_empty() {
-        c.field_used[0] = 1;
+        combat.collide_check[0] = 1;
     }
     let mut events: Vec<_> = result
         .sounds
@@ -232,8 +249,8 @@ pub(crate) fn resolve_spell_mask(
         .map(|resource_id| Event::Sound { resource_id })
         .collect();
     append_spell_outcomes(
-        c,
-        w,
+        combat,
+        warriors,
         result.targets,
         result.race_excluded,
         (Some(caster), id, packet, &previous_hp),

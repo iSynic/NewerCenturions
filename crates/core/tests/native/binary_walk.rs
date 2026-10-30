@@ -25,20 +25,20 @@ fn walking_matches_instruction_state_and_effects() {
             case.n::<i16>("tile");
         let mut combat = support::battle();
         combat.battle = 2;
-        combat.map.tiles = tiles;
-        combat.squad.positions = vec![(20, 20); 6];
-        combat.order = vec![-1, 0];
+        combat.field.tiles = tiles;
+        combat.squad.pos = vec![(20, 20); 6];
+        combat.battle_order = vec![-1, 0];
         state.combat = Some(combat);
         crate::native_common::source_victory_context(&mut state);
         let events = move_warrior(&mut state, &content, dx, dy).unwrap();
         assert_eq!(state.warriors[0].bytes, case.bytes("after"));
         let combat = state.combat.unwrap();
-        assert_eq!(support::word_bytes(&combat.map.tiles), case.bytes("tiles"));
+        assert_eq!(support::word_bytes(&combat.field.tiles), case.bytes("tiles"));
         assert_eq!(
-            combat.squad.positions[0],
+            combat.squad.pos[0],
             (case.n::<i16>("x"), case.n::<i16>("y"))
         );
-        support::expect(combat.squad.under_tiles[0], &case["under"]);
+        support::expect(combat.squad.char_under[0], &case["under"]);
         let sounds = support::event_sounds(&events);
         let mut expected_sounds = case.n::<Vec<i16>>("sounds");
         // This probe stops at the failure label before the caller's final sound.

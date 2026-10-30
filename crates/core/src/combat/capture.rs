@@ -1,7 +1,6 @@
-//! Mechanical disable/capture: updatecontrols16043e, entercapturemode136928,
-//! combatchoice11c15a and attack100af0..1010e2.
+//! Capture mode: a warrior disables a mechanical enemy instead of destroying it.
 use crate::combat::runtime;
-use crate::feedback::NativeFeedback;
+use crate::feedback::GameFeedback;
 use crate::{Event, Phase, RandomState, RuleError, Session};
 use centurions_content::combat::MonsterRecord;
 use centurions_content::{
@@ -9,10 +8,13 @@ use centurions_content::{
     records::{CharacterStatisticsMut, Condition, Statistic},
 };
 
+/// A refusal that shows the player nothing.
 fn silent() -> RuleError {
     RuleError::Refused { feedback: vec![] }
 }
 
+/// Checks that a capture in progress still has its warrior's turn, a live warrior in the battle,
+/// and no other selection, dialog or story open.
 pub(crate) fn validate_selection(state: &Session) -> Result<(), RuleError> {
     let Some(combat) = state.combat.as_ref() else {
         return Ok(());
@@ -25,7 +27,7 @@ pub(crate) fn validate_selection(state: &Session) -> Result<(), RuleError> {
         .and_then(|i| state.warriors.get(i));
     if state.phase != Phase::Combat
         || combat.active_body() != Some(actor)
-        || member.is_none_or(|w| w.stamina().unwrap_or(0) <= 0 || w.record().active_flag() == 0)
+        || member.is_none_or(|w| w.stamina().unwrap_or(0) <= 0 || w.record().in_battle() == 0)
         || combat.selection_pending
         || combat.firearm_selection.is_some()
         || state.psi_selection.is_some()
@@ -47,6 +49,9 @@ pub(crate) fn validate_selection(state: &Session) -> Result<(), RuleError> {
     Ok(())
 }
 
+/// Whether the warrior whose turn it is can try to disable or capture: the first special skill
+/// above zero, attacks above one, and an adjacent living opposing monster that is a working machine
+/// (mechanical state 1) or, with the second skill, one with the capture flag set.
 pub fn available(state: &Session) -> bool {
     let Some(combat) = &state.combat else {
         return false;
@@ -67,36 +72,36 @@ pub fn available(state: &Session) -> bool {
         || state.medical_continuation.is_some()
         || combat.firearm_selection.is_some()
         || runtime::controlled_warrior(state).is_some()
-        || warrior.special_skill(0).unwrap_or(0) <= 0
-        || warrior.action_points().unwrap_or(0) <= 1
+        || warrior.spec(0).unwrap_or(0) <= 0
+        || warrior.attacks().unwrap_or(0) <= 1
     {
         return false;
     }
-    let origin = combat.squad.positions[actor as usize];
+    let origin = combat.squad.pos[actor as usize];
     (-1..=1).any(|dx| {
         (-1..=1).any(|dy| {
-            let Ok(index) = centurions_content::mission::OpeningMission::index(
-                i32::from(origin.0 + dx) + i32::from(combat.map.shift.0) + 5,
-                i32::from(origin.1 + dy) + i32::from(combat.map.shift.1) + 5,
+            let Ok(index) = crate::combat::records::grid_index(
+                (origin.0 + dx, origin.1 + dy),
+                combat.field.map_shift,
             ) else {
                 return false;
             };
-            let body = combat.map.tiles[index].wrapping_abs();
-            let Some(enemy) = usize::try_from(body - 10)
+            let body = combat.field.tiles[index].wrapping_abs();
+            let Some(monster) = usize::try_from(body - 10)
                 .ok()
-                .and_then(|i| combat.enemies.records.get(i))
+                .and_then(|i| combat.roster.records.get(i))
             else {
                 return false;
             };
-            enemy.record().faction().ok() != warrior.faction().ok()
-                && enemy.stamina().unwrap_or(0) > 0
-                && (enemy.record().mechanical_state() == 1
-                    || warrior.special_skill(1).unwrap_or(0) != 0
-                        && enemy.record().capture_flag() != 0)
+            monster.record().faction().ok() != warrior.faction().ok()
+                && monster.stamina().unwrap_or(0) > 0
+                && (monster.record().mechanical_state() == 1
+                    || warrior.spec(1).unwrap_or(0) != 0 && monster.record().capture_flag() != 0)
         })
     })
 }
 
+/// Enters capture mode for the active warrior and prompts for a target.
 pub fn begin(state: &mut Session) -> Result<Vec<Event>, RuleError> {
     if !available(state) {
         return Err(silent());
@@ -105,15 +110,17 @@ pub fn begin(state: &mut Session) -> Result<Vec<Event>, RuleError> {
     combat.capture_actor = combat.active_body();
     Ok(vec![
         flash(0x4024de, -1, 5000),
-        Event::Feedback(NativeFeedback::Tutorial {
+        Event::Feedback(GameFeedback::Tutorial {
             first: 113,
             last: 115,
         }),
     ])
 }
 
+/// The event that flashes the text at `address` at a fixed spot on screen, with the given wait and
+/// sound.
 fn flash(address: u32, wait: i16, sound: i16) -> Event {
-    Event::Feedback(NativeFeedback::Flash {
+    Event::Feedback(GameFeedback::Flash {
         address,
         x: 30,
         y: 300,
@@ -122,6 +129,7 @@ fn flash(address: u32, wait: i16, sound: i16) -> Event {
     })
 }
 
+/// Leaves capture mode without attacking.
 pub fn cancel(state: &mut Session) -> Result<Vec<Event>, RuleError> {
     let combat = state.combat.as_mut().ok_or_else(silent)?;
     if combat.capture_actor.take().is_none() {
@@ -130,6 +138,8 @@ pub fn cancel(state: &mut Session) -> Result<Vec<Event>, RuleError> {
     Ok(vec![flash(0x40250d, -1, 0)])
 }
 
+/// Attacks the monster in the cell next to the warrior toward the chosen point. Capture mode
+/// attacks and never walks.
 pub fn select(
     state: &mut Session,
     content: &Content,
@@ -138,37 +148,35 @@ pub fn select(
 ) -> Result<Vec<Event>, RuleError> {
     let combat = state.combat.as_ref().ok_or_else(silent)?;
     let actor = combat.capture_actor.ok_or_else(silent)? as usize;
-    let origin = combat.squad.positions[actor];
+    let origin = combat.squad.pos[actor];
     let point = (
         origin.0.wrapping_add(x.wrapping_sub(origin.0).signum()),
         origin.1.wrapping_add(y.wrapping_sub(origin.1).signum()),
     );
-    let index = centurions_content::mission::OpeningMission::index(
-        i32::from(point.0) + i32::from(combat.map.shift.0) + 5,
-        i32::from(point.1) + i32::from(combat.map.shift.1) + 5,
-    )?;
-    let body = combat.map.tiles[index].wrapping_abs();
-    // The original passes the next cell to attack, never walks in capture mode.
-    let Some(enemy) = usize::try_from(body - 10)
+    let index = crate::combat::records::grid_index(point, combat.field.map_shift)?;
+    let body = combat.field.tiles[index].wrapping_abs();
+    // Capture mode attacks the next cell; it never walks.
+    let Some(monster) = usize::try_from(body - 10)
         .ok()
-        .filter(|i| *i < combat.enemies.records.len())
+        .filter(|i| *i < combat.roster.records.len())
     else {
         return Err(silent());
     };
     let combat = state.combat.as_mut().unwrap();
-    let prior_mechanical = combat.enemies.records[enemy].record().mechanical_state();
+    let prior_mechanical = combat.roster.records[monster].record().mechanical_state();
     let effects = resolve(
         &mut state.warriors[actor],
-        &mut combat.enemies.records[enemy],
+        &mut combat.roster.records[monster],
         &mut state.random,
     )?;
-    if prior_mechanical != 255 && combat.enemies.records[enemy].record().mechanical_state() == 255 {
-        combat.victory_work.add_total(-1);
+    if prior_mechanical != 255 && combat.roster.records[monster].record().mechanical_state() == 255
+    {
+        combat.kill_counts.add_num_enemy(-1);
     }
-    // The attack-limit warning returns before exitcapturemode in the original.
+    // The attack-limit warning leaves capture mode on.
     if !effects
         .iter()
-        .any(|e| matches!(e, Event::Feedback(NativeFeedback::Warning { index: 45 })))
+        .any(|e| matches!(e, Event::Feedback(GameFeedback::Warning { index: 45 })))
     {
         combat.capture_actor = None;
     }
@@ -180,28 +188,34 @@ pub fn select(
     Ok(events)
 }
 
-/// Complete native record mutations; presentation services are returned in order.
+/// Resolves one disable or capture attempt on a machine. It counts one use against the attack limit
+/// (only warning 45 when none are left) and takes two from the warrior's attacks. The roll uses the
+/// first special skill to disable a working machine or the second to capture a disabled one.
+/// Success moves a reward from the warrior's remaining experience into upgrade points and may raise
+/// the skill. Sounds and messages come back in order.
+///
+/// Original: attack
 pub fn resolve(
     warrior: &mut Warrior,
-    enemy: &mut MonsterRecord,
+    monster: &mut MonsterRecord,
     random: &mut RandomState,
 ) -> Result<Vec<Event>, RuleError> {
     if warrior.record().attacks_used()? >= warrior.record().attack_limit()? {
-        return Ok(vec![Event::Feedback(NativeFeedback::Warning { index: 45 })]);
+        return Ok(vec![Event::Feedback(GameFeedback::Warning { index: 45 })]);
     }
     let attacks = warrior.record().attacks_used()?.wrapping_add(1);
     warrior.record_mut().set_attacks_used(attacks);
     let mut events = vec![flash(0x40250d, -1, 0)];
-    if enemy.record().mechanical_state() == 0 {
-        events.push(Event::Feedback(NativeFeedback::Warning { index: 16 }));
+    if monster.record().mechanical_state() == 0 {
+        events.push(Event::Feedback(GameFeedback::Warning { index: 16 }));
         return Ok(events);
     }
-    let capture = enemy.record().mechanical_state() == 255;
+    let capture = monster.record().mechanical_state() == 255;
     let skill_index = usize::from(capture);
-    let level = enemy.record().level()?;
+    let level = monster.record().hit_dice()?;
     let skill = warrior
         .record()
-        .special_skill(skill_index)?
+        .spec(skill_index)?
         .wrapping_add(warrior.record().special_skill_bonus(skill_index)?);
     let chance = crate::rules::pin(
         skill.wrapping_sub(
@@ -212,17 +226,17 @@ pub fn resolve(
         if capture { 3 } else { 5 },
         if capture { 90 } else { 95 },
     );
-    let ap = warrior.record().action_points()?.wrapping_sub(2);
-    warrior.record_mut().set_action_points(ap);
+    let ap = warrior.record().attacks()?.wrapping_sub(2);
+    warrior.record_mut().set_attacks(ap);
     if random.bound(100) > chance
-        || capture && enemy.record().faction()? == warrior.record().faction()?
+        || capture && monster.record().faction()? == warrior.record().faction()?
     {
         events.push(flash(0x404088, 60, 6000));
         return Ok(events);
     }
-    let reward = enemy
+    let reward = monster
         .record()
-        .maximum_stamina()?
+        .stamina_max()?
         .wrapping_mul(if capture { 3 } else { 2 })
         .wrapping_add(level.wrapping_mul(if capture { 15 } else { 10 }));
     warrior
@@ -236,11 +250,11 @@ pub fn resolve(
     for resource_id in if capture { [-209, 208] } else { [-206, 205] } {
         events.push(Event::Sound { resource_id });
     }
-    enemy
+    monster
         .record_mut()
         .set_mechanical_state(if capture { 1 } else { 255 });
     if !capture {
-        enemy.record_mut().set_condition(Condition::Helpless, -1);
+        monster.record_mut().set_condition(Condition::Helpless, -1);
     }
     if !capture || warrior.record().faction()? == 0 {
         let bound = crate::rules::pin(
@@ -250,11 +264,9 @@ pub fn resolve(
             if capture { 1950 } else { 2925 },
         );
         if random.bound(bound) <= level && skill < 95 {
-            let improved = warrior.record().special_skill(skill_index)?.wrapping_add(1);
-            warrior
-                .record_mut()
-                .set_special_skill(skill_index, improved);
-            events.push(Event::Feedback(NativeFeedback::Warning {
+            let improved = warrior.record().spec(skill_index)?.wrapping_add(1);
+            warrior.record_mut().set_spec(skill_index, improved);
+            events.push(Event::Feedback(GameFeedback::Warning {
                 index: if capture { 143 } else { 142 },
             }));
         }
@@ -267,11 +279,13 @@ pub fn resolve(
             1,
         );
         if capture {
-            enemy.record_mut().set_condition(Condition::Helpless, 0);
-            enemy.record_mut().set_faction(0);
+            monster.record_mut().set_condition(Condition::Helpless, 0);
+            monster.record_mut().set_faction(0);
         }
     } else {
-        enemy.record_mut().set_faction(warrior.record().faction()?);
+        monster
+            .record_mut()
+            .set_faction(warrior.record().faction()?);
     }
     Ok(events)
 }

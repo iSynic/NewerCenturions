@@ -1,3 +1,4 @@
+pub use crate::bytes::long;
 use crate::tile_sets::{self, TileSet};
 use crate::{ContentError, span, word};
 use std::{
@@ -5,53 +6,95 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+/// Cells along one side of a map.
 pub const MAP_SIDE: usize = 90;
+/// Cells in a map.
 pub const MAP_CELLS: usize = MAP_SIDE * MAP_SIDE;
+/// The scenario directory the loaders read, before a level is substituted.
 pub(crate) const SCENARIO: &str = "TheNewCenturions/Scenarios/The Thunder of Guns/0/";
 
+/// One map of a scenario: its terrain, objects and events, with the tables the
+/// whole scenario level shares.
 #[derive(Clone, Debug)]
 pub struct OpeningMission {
+    /// The mission's name, from the first record of `Data Mission`.
     pub name: String,
+    /// Where the party enters the opening map, from `Data CS`.
     pub start: (i32, i32),
+    /// The map's 4200-byte record from `Data DD`, kept as stored.
     pub header: Vec<u8>,
+    /// The map's 644-byte region record from `Data RD`; it names the map's tile set.
     pub regions: Vec<u8>,
+    /// The tile on each cell of the map's floor layer, `MAP_CELLS` of them.
     pub floor: Vec<i16>,
+    /// The tile on each cell of the object layer.
     pub objects: Vec<i16>,
+    /// The event code on each cell; it says what stepping on the cell does.
     pub events: Vec<i32>,
-    pub tile_properties: Vec<u8>,
+    /// The tile set's stats per tile: sound, time, solidity and shore.
+    pub map_stats: Vec<u8>,
+    /// The terrain number of the tile set the map uses.
     pub terrain: u8,
+    /// The tile set's default tile.
     pub default_tile: i16,
+    /// Game minutes one step takes on this tile set.
     pub minutes_per_tick: i16,
+    /// The tables every map of the scenario level uses.
     pub shared: Arc<StoryTables>,
 }
 
+/// The scenario level's data files, held as stored and read through the record
+/// views.
 #[derive(Clone, Debug, Default)]
 pub struct StoryTables {
+    /// `Data AD`: the spell area shapes, 49 bytes each.
     pub areas: Vec<u8>,
-    /// ToolBoxInit13273e..132758 loads the immutable tutorial rectangle table.
+    /// The tutorial rectangle table, loaded once at startup and never changed.
     pub tutorial_rectangles: Option<Vec<u8>>,
+    /// The first 200 records of the stock item table, `Data ID`.
     pub item_cache: Vec<u8>,
+    /// `Data Race`: the race records.
     pub races: Vec<u8>,
+    /// `Data MOS`: the profession and level-up tables.
     pub profiles: Vec<u8>,
+    /// `Data ED3`: the story scripts, 42 bytes each, that doors and events run.
     pub door_scripts: Vec<u8>,
+    /// `Data SD2`: the scenario's dialogue, 256 bytes a message.
     pub dialogue: Vec<u8>,
+    /// `Data TD`: the treasure records.
     pub treasure: Vec<u8>,
+    /// `Data SD`: the shop records.
     pub shops: Vec<u8>,
+    /// The text shown as the game opens: `TEXT 1000` of the scenario.
     pub prologue: String,
+    /// `Data NI Des`: descriptions of the scenario's own items.
     pub item_descriptions: Vec<u8>,
+    /// `Data ID DES`: descriptions of the stock items.
     pub stock_item_descriptions: Vec<u8>,
+    /// `Data Scan DES`: one description for each scan of each school.
     pub scan_descriptions: Vec<u8>,
+    /// `Data TD3`: the timed events, 40 bytes each.
     pub schedule: Vec<u8>,
+    /// `Data ED3` as the scripts the timed events run.
     pub scheduled_scripts: Vec<u8>,
+    /// `Data ED`: the menu encounters a story offers.
     pub menus: Vec<u8>,
+    /// `Data ED2`: the typed encounter records.
     pub typed_encounters: Vec<u8>,
+    /// The scenario's `TEXT` resources by id, the movies a story script plays.
     pub movies: std::collections::BTreeMap<i16, String>,
+    /// The battle, monster, encounter and attack tables.
     pub combat: Option<crate::combat::CombatContent>,
+    /// `Data DES`: the creature descriptions, 256 bytes each.
     pub creature_descriptions: Vec<u8>,
-    /// The scenario's Data MENU: 251 big-endian WORD record numbers, one-based.
+    /// The scenario's Data MENU: 251 big-endian word record numbers, one-based.
     pub archive_table: Option<Vec<u16>>,
+    /// `Data MD2`: the map notes, 340 bytes each.
     pub map_notes: Vec<u8>,
+    /// The labels of the note list, from `STR# -102` of the scenario.
     pub note_labels: Vec<String>,
+    /// The labels the note list shows before the party has identified a note, from
+    /// `STR# -101` of the scenario.
     pub unknown_note_labels: Vec<String>,
 }
 
@@ -62,28 +105,42 @@ impl Deref for OpeningMission {
     }
 }
 
+/// One stage of the mission, a 464-byte record of `Data Mission`.
 #[derive(Clone, Debug)]
 pub struct MissionStage {
+    /// The record as stored.
     pub record: Vec<u8>,
+    /// The stage's name; an empty name means the stage does not exist.
     pub name: String,
+    /// Where the stage starts: x, y and the number of the map.
     pub start: (i32, i32, i32),
+    /// The story script that runs as the stage begins; zero runs none.
     pub start_script: i16,
 }
 
+/// One level of a scenario: its maps, mission stages and tables, with the other
+/// scenarios and levels the installation holds.
 #[derive(Clone, Debug)]
 pub struct ScenarioContent {
+    /// The level's maps, in map-number order.
     pub maps: Vec<OpeningMission>,
+    /// The mission's stages.
     pub stages: Vec<MissionStage>,
+    /// The scenario's name.
     pub name: String,
+    /// The level number the party plays this scenario at.
     pub level: u8,
+    /// The map a new game begins on.
     pub opening_map: i32,
+    /// The scenario's own item definitions, the 200 of `Data NI`.
     pub items: Vec<Vec<u8>>,
-    /// partyselect 0x1478b6 reads the first LONG of the level's file named after
-    /// the scenario as "Recommended Levels". Absent when that file is.
+    /// The first long of the level's file named after the scenario, shown as
+    /// "Recommended Levels" when choosing a party. Absent when that file is.
     pub recommended_levels: Option<i32>,
-    /// The 0x140-byte party restrictions "Data RI" (partyselect 0x147d3a). Its
-    /// presence shows View Restrictions.
+    /// The 0x140-byte party restrictions "Data RI". When present, choosing a
+    /// party offers View Restrictions.
     pub restrictions: Option<Vec<u8>>,
+    /// Every scenario level the installation holds, by name and level.
     pub catalog: Arc<std::collections::BTreeMap<(String, u8), ScenarioContent>>,
     /// The installation's tile sets, shared by every level.
     pub tile_sets: Arc<Vec<TileSet>>,
@@ -101,6 +158,7 @@ impl Clone for SwitchedMaps {
     }
 }
 
+/// Makes empty room for the switched copies of `maps` maps.
 fn switch_slots(maps: usize) -> SwitchedMaps {
     SwitchedMaps(
         (0..maps)
@@ -110,6 +168,7 @@ fn switch_slots(maps: usize) -> SwitchedMaps {
 }
 
 impl ScenarioContent {
+    /// Wraps one map as a one-map scenario.
     pub fn single(map: OpeningMission) -> Self {
         Self {
             maps: vec![map],
@@ -126,6 +185,7 @@ impl ScenarioContent {
         }
     }
 
+    /// Reads the opening scenario, The Thunder of Guns, level 0.
     pub fn read(
         mut read: impl FnMut(&str) -> Result<Vec<u8>, ContentError>,
     ) -> Result<Self, ContentError> {
@@ -133,6 +193,8 @@ impl ScenarioContent {
         Self::read_level(&mut read, "The Thunder of Guns", 0, tile_sets)
     }
 
+    /// Reads one level of the scenario `name` from its directory, with the maps, mission
+    /// stages, items and party tables it holds.
     pub fn read_level(
         mut read: impl FnMut(&str) -> Result<Vec<u8>, ContentError>,
         name: &str,
@@ -191,7 +253,7 @@ impl ScenarioContent {
                     .iter()
                     .map(|v| i32::from_be_bytes(*v))
                     .collect(),
-                tile_properties: set.properties,
+                map_stats: set.properties,
                 terrain,
                 default_tile: set.default_tile,
                 minutes_per_tick: set.minutes_per_tick,
@@ -273,7 +335,7 @@ impl ScenarioContent {
         })?;
         let slot = self.switched.0.get(index)?.get(usize::from(terrain))?;
         Some(slot.get_or_init(|| OpeningMission {
-            tile_properties: set.properties.clone(),
+            map_stats: set.properties.clone(),
             terrain,
             default_tile: set.default_tile,
             minutes_per_tick: set.minutes_per_tick,
@@ -281,6 +343,7 @@ impl ScenarioContent {
         }))
     }
 
+    /// The scenario level called `name` at `level`: this one, or one from the catalog.
     pub fn selection(&self, name: &str, level: u8) -> Option<&Self> {
         if self.name == name && self.level == level {
             Some(self)
@@ -290,13 +353,8 @@ impl ScenarioContent {
     }
 }
 
-pub fn long(bytes: &[u8], offset: usize) -> Result<i32, ContentError> {
-    Ok(i32::from_be_bytes(
-        span(bytes, offset, 4)?.try_into().unwrap(),
-    ))
-}
-
 impl OpeningMission {
+    /// Reads the opening map and the scenario tables around it.
     pub fn read(
         mut read: impl FnMut(&str) -> Result<Vec<u8>, ContentError>,
     ) -> Result<Self, ContentError> {
@@ -347,7 +405,7 @@ impl OpeningMission {
             floor,
             objects,
             events,
-            tile_properties: set.properties,
+            map_stats: set.properties,
             terrain,
             default_tile: set.default_tile,
             minutes_per_tick: set.minutes_per_tick,
@@ -393,6 +451,8 @@ impl OpeningMission {
         })
     }
 
+    /// The position of the cell (`x`, `y`) in a map's layers; a coordinate off the 90 by
+    /// 90 map is refused.
     pub fn index(x: i32, y: i32) -> Result<usize, ContentError> {
         if !(0..90).contains(&x) || !(0..90).contains(&y) {
             return Err(ContentError::Invalid(format!(
@@ -401,47 +461,47 @@ impl OpeningMission {
         }
         Ok(x as usize * MAP_SIDE + y as usize)
     }
-    /// A tile past the loaded file reads bytes an earlier land left in the
-    /// 16000-byte native buffer; that retained tail is not represented.
+    /// In the game a tile past the loaded file reads bytes an earlier land left
+    /// in the 16000-byte property table; that leftover tail is not represented.
     pub fn tile_word(&self, tile: i16, field: usize) -> Result<i16, ContentError> {
         if !(0..400).contains(&tile) || field >= 40 || !field.is_multiple_of(2) {
             return Err(ContentError::Invalid(
                 "tile property outside recovered table".into(),
             ));
         }
-        if (tile as usize + 1) * 40 > self.tile_properties.len() {
+        if (tile as usize + 1) * 40 > self.map_stats.len() {
             return Err(ContentError::Invalid(
                 "tile property retained from an earlier land's tile set".into(),
             ));
         }
-        word(&self.tile_properties, tile as usize * 40 + field)
+        word(&self.map_stats, tile as usize * 40 + field)
     }
 
+    /// How the tile blocks movement.
     pub fn movement_blocker(&self, tile: i16) -> Result<i16, ContentError> {
         self.tile_word(tile, 4)
     }
 
-    /// getmovecost 0x153de6 uses unsigned WORD addressing after stripping the
-    /// tactical terrain marker. Preserve this caller's bounds/error behavior.
+    /// The battle-map movement property. Movement cost strips the battle-map
+    /// terrain marker, then indexes the table unsigned; this keeps its own
+    /// bounds and errors.
     pub fn tactical_movement_property(&self, tile: i16) -> Result<i16, ContentError> {
         let normalized = if tile > 999 {
             tile.wrapping_sub(1000)
         } else {
             tile
         };
-        word(
-            &self.tile_properties,
-            usize::from(normalized as u16) * 40 + 2,
-        )
+        word(&self.map_stats, usize::from(normalized as u16) * 40 + 2)
     }
 
+    /// The sound the party's step makes on the tile.
     pub fn movement_sound(&self, tile: i16) -> Result<i16, ContentError> {
         self.tile_word(tile, 0)
     }
 }
 
 impl StoryTables {
-    /// Zero-based Data MD records in Data MENU order; zero WORDs are skipped.
+    /// Zero-based Data MD records in Data MENU order; zero words are skipped.
     pub fn archive_order(&self) -> Option<Vec<usize>> {
         self.archive_table.as_ref().map(|table| {
             table
@@ -451,6 +511,7 @@ impl StoryTables {
                 .collect()
         })
     }
+    /// The text of message `id`.
     pub fn dialogue(&self, id: i16) -> Result<String, ContentError> {
         let record = span(&self.dialogue, usize::from(id.unsigned_abs()) * 256, 256)?;
         Ok(encoding_rs::MACINTOSH
@@ -458,6 +519,7 @@ impl StoryTables {
             .0
             .into_owned())
     }
+    /// The 42-byte story script `id`.
     pub fn script(&self, id: i16) -> Result<[u8; 42], ContentError> {
         if id < 0 {
             return Err(ContentError::Invalid("negative door script".into()));
@@ -466,6 +528,7 @@ impl StoryTables {
             .try_into()
             .unwrap())
     }
+    /// The description of item `id`: stock items below 800, the scenario's own from 800.
     pub fn item_description(&self, id: i16) -> Result<String, ContentError> {
         if !(0..1000).contains(&id) {
             return Err(ContentError::Invalid(
@@ -482,6 +545,7 @@ impl StoryTables {
             .0
             .into_owned())
     }
+    /// The description of the scan at row `tier` and column `column` of `school`'s table.
     pub fn scan_description(
         &self,
         school: i16,

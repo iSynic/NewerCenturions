@@ -32,7 +32,7 @@ pub(super) fn compare_endgame_default194_melee_matches_native_full_records_packe
         );
         let (result, packet) =
             result.unwrap_or_else(|error| panic!("case{index} weapon{id}: {error:?}"));
-        let actual: Vec<_> = support::record_bytes(&combat.enemies.records);
+        let actual: Vec<_> = support::record_bytes(&combat.roster.records);
         support::native_expect! {
             bytes actual => &case["records_after"], &format!("case{index} records");
             bytes packet => &case["packet_after"], &format!("case{index} packet");
@@ -41,7 +41,7 @@ pub(super) fn compare_endgame_default194_melee_matches_native_full_records_packe
         let sound = if result.damage == 0 {
             650
         } else if case["loaded"] == 0 {
-            let b = &before.enemies.records[0].bytes;
+            let b = &before.roster.records[0].bytes;
             let a = case.n::<usize>("index");
             let offset = if b[0x93 + a * 4] == 0 {
                 0x95

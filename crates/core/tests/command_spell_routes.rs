@@ -1,6 +1,6 @@
 //! Source-derived scripted effects and prepared status-weapon command routes.
 use crate::{prelude::*, support};
-use centurions_core::feedback::NativeFeedback::Warning;
+use centurions_core::feedback::GameFeedback::Warning;
 
 #[test]
 fn scripted_save_selection_uses_live_ready() {
@@ -8,14 +8,14 @@ fn scripted_save_selection_uses_live_ready() {
     let tables = Arc::make_mut(&mut content.scenario.as_mut().unwrap().maps[0].shared);
     tables.combat.as_mut().unwrap().encounters[..10]
         .copy_from_slice(&support::word_bytes(&[5, 0, 0, 0, 0]));
-    for (ready, mode) in [(0, 3_i8), (1, 3), (-1, 3), (1, -1)] {
+    for (in_spell, mode) in [(0, 3_i8), (1, 3), (-1, 3), (1, -1)] {
         let mut state = support::mission_session(&content);
         let mut combat = support::battle();
-        combat.ready = ready;
-        combat.attack_packet[9] = mode as u8;
+        combat.in_spell = in_spell;
+        combat.spell_info[9] = mode as u8;
         state.combat = Some(combat);
         state.phase = Phase::Combat;
-        state.native_work.ready = 99;
+        state.globals.in_spell = 99;
         for warrior in &mut state.warriors {
             centurions_content::records::DevelopmentField::Resistance(0)
                 .write(&mut warrior.bytes, 100);
@@ -23,7 +23,7 @@ fn scripted_save_selection_uses_live_ready() {
         let record = support::script_record(&[(52, 0)]);
         support::pause_script(&mut state, record, 0);
         let before = state.clone();
-        let skip = mode >= 2 && ready != 0;
+        let skip = mode >= 2 && in_spell != 0;
         let mut random = state.random.clone();
         if !skip {
             for _ in &state.warriors {
@@ -31,10 +31,10 @@ fn scripted_save_selection_uses_live_ready() {
             }
         }
         support::saved_command(Command::Continue, &mut state, &content);
-        assert_eq!(state.native_work.party_mask, [i16::from(skip); 6]);
+        assert_eq!(state.globals.party_track, [i16::from(skip); 6]);
         assert_eq!(state.random, random);
         assert_eq!(state.warriors, before.warriors);
-        assert_eq!(state.combat.as_ref().unwrap().ready, ready);
+        assert_eq!(state.combat.as_ref().unwrap().in_spell, in_spell);
     }
 }
 
@@ -70,18 +70,19 @@ fn scripted_party_condition_keeps_mask_rng_and_saved_return() {
 }
 
 #[test]
-fn player_and_npc_status_weapons_use_shared_effects_and_saved_commands() {
-    for (role, npc) in (0..4).map(|role| (role, role != 0)) {
+fn player_and_monster_status_weapons_use_shared_effects_and_saved_commands() {
+    for (role, mon) in (0..4).map(|role| (role, role != 0)) {
         let mut content = content();
         let mut state = crate::native_common::loaded_shot_frame(0);
-        let (weapon, command) = if npc {
+        let (weapon, command) = if mon {
             // This authored caller includes Getup's selector and shared-WORD writes.
-            crate::native_common::npc_command_input(&mut state, 0, [0, 0]);
+            crate::native_common::monster_command_input(&mut state, 0, [0, 0]);
             let combat = state.combat.as_mut().unwrap();
-            combat.cursor = combat.order.iter().position(|id| *id == 10).unwrap();
-            let record = &mut combat.enemies.records[0];
+            combat.battle_order_index =
+                combat.battle_order.iter().position(|id| *id == 10).unwrap();
+            let record = &mut combat.roster.records[0];
             record.record_mut().set_action_points(6);
-            record.record_mut().set_movement_points(0);
+            record.record_mut().set_movement(0);
             record.record_mut().set_psi_points(100);
             record.bytes[0x48..0x4a].copy_from_slice(&100_i16.to_be_bytes());
             if role >= 2 {
@@ -94,7 +95,7 @@ fn player_and_npc_status_weapons_use_shared_effects_and_saved_commands() {
                     record.bytes[0x12 + slot * 2..0x14 + slot * 2]
                         .copy_from_slice(&2206_i16.to_be_bytes());
                 }
-                state.native_work.loaded_item_field32 = 0;
+                state.globals.loaded_item_field32 = 0;
                 state.enemy_spell_disabled = u8::from(role == 3);
             }
             (
@@ -102,12 +103,12 @@ fn player_and_npc_status_weapons_use_shared_effects_and_saved_commands() {
                 Command::RunEnemyTurn,
             )
         } else {
-            state.warriors[4].record_mut().set_action_points(6);
+            state.warriors[4].record_mut().set_attacks(6);
             let command = Command::SelectCombatWeapon { slot: 3 };
             support::saved_command(command, &mut state, &content);
             (1, Command::FireSelectedTargets)
         };
-        for (offset, value) in [(44, 2206_i16), (56, 1), (60, 30), (76, 1 + 7 * !npc as i16)] {
+        for (offset, value) in [(44, 2206_i16), (56, 1), (60, 30), (76, 1 + 7 * !mon as i16)] {
             content.items[weapon][offset..offset + 2].copy_from_slice(&value.to_be_bytes());
         }
         let map = &mut content.scenario.as_mut().unwrap().maps
@@ -129,10 +130,10 @@ fn player_and_npc_status_weapons_use_shared_effects_and_saved_commands() {
         }
         let loaded = |s: &Session| s.warriors[4].record().inventory_quantity(0).unwrap();
         let before = loaded(&state);
-        if !npc {
+        if !mon {
             // 118544..1185d2: below two action points the fire button only warns 0x11.
             let (saved, warn) = (state.clone(), Warning { index: 0x11 });
-            state.warriors[4].record_mut().set_action_points(1);
+            state.warriors[4].record_mut().set_attacks(1);
             let before = state.clone();
             let refused = apply(Command::BeginFireTargets, &mut state, &content);
             assert!(matches!(refused, Err(RuleError::Refused { feedback }) if feedback == [warn]));
@@ -142,7 +143,7 @@ fn player_and_npc_status_weapons_use_shared_effects_and_saved_commands() {
             let mut rng = state.random.clone();
             support::saved_command(Command::BeginFireTargets, &mut state, &content);
             let (q, r) = (state.target_quantity.clone().unwrap(), state.random.clone());
-            assert_eq!((q.power, q.target_ceiling(), r), (rng.bound(7), 8, rng));
+            assert_eq!((q.power, q.num_of_targets(), r), (rng.bound(7), 8, rng));
             support::saved_command(Command::ShootEnemy { body: 10 }, &mut state, &content);
         }
         let events = support::saved_command(command, &mut state, &content);
@@ -152,7 +153,7 @@ fn player_and_npc_status_weapons_use_shared_effects_and_saved_commands() {
             continue;
         }
         if role < 2 {
-            assert!(events.iter().any(|event| matches!(event, Event::SpellResolved { damage, .. } if if npc { *damage < 0 } else { *damage > 0 })), "role {role}: {events:?}");
+            assert!(events.iter().any(|event| matches!(event, Event::SpellResolved { damage, .. } if if mon { *damage < 0 } else { *damage > 0 })), "role {role}: {events:?}");
         }
         if role >= 2 {
             assert!(state.warriors.iter().any(|w| {
@@ -161,14 +162,14 @@ fn player_and_npc_status_weapons_use_shared_effects_and_saved_commands() {
                     .unwrap()
                     > 0
             }));
-        } else if !npc {
+        } else if !mon {
             assert!(
-                state.combat.as_ref().unwrap().enemies.records[0]
+                state.combat.as_ref().unwrap().roster.records[0]
                     .record()
                     .condition(centurions_content::records::Condition::Poisoned)
                     > 0
             );
-            assert_eq!(state.warriors[4].record().action_points().unwrap(), 3);
+            assert_eq!(state.warriors[4].record().attacks().unwrap(), 3);
             assert_eq!(loaded(&state), before - 1);
         }
     }

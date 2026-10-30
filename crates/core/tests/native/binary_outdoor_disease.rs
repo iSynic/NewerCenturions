@@ -22,8 +22,8 @@ pub(super) fn compare_outdoor_disease_reduction_matches_original_complete_warrio
         let warriors: Vec<_> = support::warriors(&before);
         let affected = case.bytes("affected_before");
         let context = HealthContext {
-            unavailable: case.n::<i8>("unavailable_before"),
-            selected_warrior: 0,
+            kill_party: case.n::<i8>("unavailable_before"),
+            char_select_new: 0,
             effect: 77,
             last_body: -7,
             marks_affected: false,
@@ -42,7 +42,7 @@ pub(super) fn compare_outdoor_disease_reduction_matches_original_complete_warrio
         }
         assert_eq!(digest(&actual), case["after_sha256"], "output {index}");
         support::native_expect! {
-            scalar outcome.context.unavailable => &case["unavailable_after"], "binary_outdoor_disease";
+            scalar outcome.context.kill_party => &case["unavailable_after"], "binary_outdoor_disease";
             scalar outcome.context.effect => &case["effect_after"], "binary_outdoor_disease";
             scalar outcome.context.last_body => &case["last_body_after"], "binary_outdoor_disease";
         }

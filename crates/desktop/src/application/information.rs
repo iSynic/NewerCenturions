@@ -1,4 +1,4 @@
-//! Information workflow ownership.
+//! The information windows: warrior statistics, notes and creature pages.
 use super::{Application, ApplicationAction, HandleOutcome};
 use crate::{assets::Assets, presentation::Action};
 use centurions_content::Content;
@@ -6,6 +6,8 @@ use centurions_core::{Command, Event, Session, apply};
 use macroquad::prelude::*;
 
 impl Application {
+    /// Carries out the choices on the information windows: warrior statistics,
+    /// notes and creature pages.
     pub(super) fn handle_information(
         &mut self,
         action: ApplicationAction,
@@ -15,7 +17,7 @@ impl Application {
         let mut next = None;
         let mut events = Vec::new();
         match action {
-            ApplicationAction::CloseNote => self.note = None,
+            ApplicationAction::CloseNote => self.notes.open = None,
             ApplicationAction::CreatureItem(item) => {
                 let view = self
                     .creature
@@ -28,7 +30,7 @@ impl Application {
                 } else if matches!(item, 2 | 3) {
                     if self.combat_information {
                         let c = state.combat.as_ref().ok_or("combat information missing")?;
-                        let count = c.enemies.records.len();
+                        let count = c.roster.records.len();
                         let index = view.index.saturating_sub(10);
                         let next = if item == 2 {
                             index.saturating_sub(1)
@@ -44,7 +46,7 @@ impl Application {
                             .map(|(next, events)| HandleOutcome::Return(next, events));
                     }
                     let entries: Vec<_> = if view.ally {
-                        (0..state.ally_count).collect()
+                        (0..state.held_over).collect()
                     } else {
                         self.archives.iter().map(|(id, _)| *id).collect()
                     };
@@ -88,7 +90,7 @@ impl Application {
             }
             ApplicationAction::CombatInformation(body) => {
                 events = apply(Command::ViewCombatBody { body }, state, content)?;
-                if body < 10 {
+                if crate::acting::is_warrior_body(body) {
                     self.characters.information =
                         Some(crate::information::WarriorInformation::new(body as usize));
                 } else {
@@ -128,7 +130,7 @@ impl Application {
                 if self.characters.information.as_ref().unwrap().detailed {
                     let info = self.characters.information.as_mut().unwrap();
                     match item {
-                        58 => {
+                        crate::information::DETAILED_SUMMARY => {
                             info.detailed = false;
                             events.push(Event::Sound { resource_id: 214 });
                         }
@@ -141,7 +143,7 @@ impl Application {
                     return Ok(HandleOutcome::Return(next, events));
                 }
                 match item {
-                    1 | 72 => self.characters.information = None,
+                    1 | crate::information::SUMMARY_CLOSE => self.characters.information = None,
                     2..=5 => {
                         let inspection = match item {
                             2 => crate::presentation::Inspection::Conditions,
@@ -200,9 +202,12 @@ impl Application {
         Ok(HandleOutcome::Complete(next, events))
     }
 
+    /// Reopens a member's information screen, as after returning from a sub-dialog.
     pub fn restore_information(&mut self, member: usize) {
         self.characters.information = Some(crate::information::WarriorInformation::new(member));
     }
+    /// Builds the text fields of the open information screen, or of the new
+    /// warrior's review, once each time it opens.
     pub fn prepare_information(
         &mut self,
         state: &Session,
@@ -216,7 +221,7 @@ impl Application {
             creation.fields = Some(centurions_core::character_display::information(
                 &creation.draft,
                 0,
-                &assets.native_text,
+                &assets.game_text,
                 &assets.character_strings,
             )?);
         }
@@ -227,7 +232,7 @@ impl Application {
             info.fields = Some(centurions_core::character_display::information(
                 state,
                 info.member,
-                &assets.native_text,
+                &assets.game_text,
                 &assets.character_strings,
             )?);
         }

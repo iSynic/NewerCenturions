@@ -1,73 +1,84 @@
-//! Read-only updateodds (0x161068) and calcdamage estimates. These deliberately
-//! retain the display algorithm's differences from actual attack resolution.
-use crate::{RuleError, ammunition::WorkBuffers};
+//! The odds and damage estimates on the warrior panel. They differ from real
+//! attack resolution on purpose: the panel shows what the original panel shows.
+use crate::{RuleError, ammunition::LoadedItems};
 use centurions_content::{
     Content, Warrior,
     records::{Condition, EnemyRecord, ItemDefinition},
 };
 
+/// The chance, damage range and average the warrior panel shows for the selected weapon against a
+/// monster.
 pub(crate) struct AttackEstimate {
     pub chance: i16,
     pub minimum: i16,
     pub maximum: i16,
     pub average: i16,
-    pub work: WorkBuffers,
+    pub loaded: LoadedItems,
 }
 
+/// Works out the chance to hit and the damage the panel shows. Chance is capped at 90 less five per
+/// difficulty step, for the standard difficulties.
+///
+/// Original: updateodds, calcdamage
 pub(crate) fn calculate(
     warrior: &Warrior,
     enemy_bytes: &[u8],
     difficulty: i16,
-    work: &WorkBuffers,
+    loaded: &LoadedItems,
     content: &Content,
 ) -> Result<AttackEstimate, RuleError> {
     let actor = warrior.record();
-    let enemy = EnemyRecord::from_bytes(enemy_bytes);
-    let mut chance = if !actor.firing_mode() {
+    let monster = EnemyRecord::from_bytes(enemy_bytes);
+    let mut chance = if !actor.toggle() {
         super::attack::melee_accuracy::against_enemy(&warrior.bytes, enemy_bytes)?
             .wrapping_add(i16::from(actor.inventory_slot(1).accuracy_modifier()))
             .max(5)
     } else {
-        missile_chance(warrior, &enemy, difficulty, work)?
+        missile_chance(warrior, &monster, difficulty, loaded)?
     };
-    // Only the five original difficulties have this additional display cap.
+    // Only the five standard difficulties have this display cap.
     if (-2..=2).contains(&difficulty) {
         chance = chance.min(90 - difficulty * 5);
     }
-    let mut retained = work.clone();
-    let (maximum, weapon_count) = damage_total(warrior, content, &mut retained)?;
-    let minimum = if actor.firing_mode() {
+    let mut loaded_after = loaded.clone();
+    let (maximum, weapon_count) = damage_total(warrior, content, &mut loaded_after)?;
+    let minimum = if actor.toggle() {
         weapon_count
     } else {
         actor.condition(Condition::BonusDamage)?.wrapping_add(1)
     };
-    let mut average = if actor.firing_mode() {
+    let mut average = if actor.toggle() {
         (maximum.wrapping_sub(minimum) / 2).wrapping_add(minimum)
     } else {
         maximum / 2
     };
-    average = reduce_estimate(average, enemy.armor()?);
-    if actor.firing_mode() {
-        average = reduce_estimate(average, enemy.shield_chance()?);
+    average = reduce_estimate(average, monster.ac()?);
+    if actor.toggle() {
+        average = reduce_estimate(average, monster.shield_chance()?);
     }
     Ok(AttackEstimate {
         chance,
         minimum,
         maximum,
         average,
-        work: retained,
+        loaded: loaded_after,
     })
 }
 
+/// The panel's chance to hit with a missile weapon: 999 when the loaded ammunition or weapon
+/// bypasses the hit roll, 100 against a monster that skips turns, otherwise the warrior's skill
+/// less the monster's defenses, kept between 15 and 90 less five per difficulty step.
+///
+/// Original: updateodds
 fn missile_chance(
     warrior: &Warrior,
-    enemy: &EnemyRecord<'_>,
+    monster: &EnemyRecord<'_>,
     difficulty: i16,
-    work: &WorkBuffers,
+    loaded: &LoadedItems,
 ) -> Result<i16, RuleError> {
-    // updateodds reads the retained ammo/weapon independently, before loading
-    // the displayed weapon. Summing these fields would change cancellation.
-    for bytes in [&work.ammo, &work.weapon].into_iter().flatten() {
+    // The loaded ammunition and weapon count separately, before the displayed
+    // weapon loads; summing them first would change the result.
+    for bytes in [&loaded.ammo, &loaded.weapon].into_iter().flatten() {
         if ItemDefinition(bytes).bypasses_hit_roll()? {
             return Ok(999);
         }
@@ -76,15 +87,15 @@ fn missile_chance(
     let mut chance = 33_i16
         .wrapping_add(actor.missile_accuracy()?)
         .wrapping_add(i16::from(actor.inventory_slot(0).accuracy_modifier()));
-    if enemy.turn_skip_duration() != 0 {
+    if monster.turn_skip_duration() != 0 {
         return Ok(100);
     }
     chance = chance
-        .wrapping_sub(enemy.missile_dodge_bonus()?)
-        .wrapping_sub(enemy.speed()? / 6)
-        .wrapping_sub(enemy.level()?.wrapping_mul(3))
-        .wrapping_sub(i16::from(enemy.guarding()).wrapping_mul(enemy.level()?));
-    chance = chance.wrapping_add(match enemy.size()?.wrapping_abs() {
+        .wrapping_sub(monster.missile_dodge_bonus()?)
+        .wrapping_sub(monster.agility()? / 6)
+        .wrapping_sub(monster.hit_dice()?.wrapping_mul(3))
+        .wrapping_sub(i16::from(monster.guarding()).wrapping_mul(monster.hit_dice()?));
+    chance = chance.wrapping_add(match monster.size()?.wrapping_abs() {
         0 => -5,
         1 | 2 => 5,
         3 => 10,
@@ -97,13 +108,18 @@ fn missile_chance(
     ))
 }
 
+/// The most damage the displayed weapon can do in a turn, and the weapon's attack count. The total
+/// is half the warrior's normal attacks times the weapon's damage with its elements, loaded
+/// ammunition and enhancement, plus bare-hand damage when not firing.
+///
+/// Original: calcdamage
 fn damage_total(
     warrior: &Warrior,
     content: &Content,
-    work: &mut WorkBuffers,
+    loaded: &mut LoadedItems,
 ) -> Result<(i16, i16), RuleError> {
     let actor = warrior.record();
-    let firing = actor.firing_mode();
+    let firing = actor.toggle();
     let id = actor.displayed_weapon(firing)?;
     let mut damage = 0_i16;
     let mut weapon_count = 0;
@@ -122,7 +138,7 @@ fn damage_total(
         };
         if let Some(bytes) = &ammunition {
             damage = damage.wrapping_add(combined_damage(ItemDefinition(bytes), true)?);
-            work.ammo = Some(bytes.clone());
+            loaded.ammo = Some(bytes.clone());
         }
         if weapon.rounds_per_shot()? > 1 {
             damage = damage.wrapping_mul(weapon.rounds_per_shot()?);
@@ -131,14 +147,14 @@ fn damage_total(
             damage = damage.wrapping_mul(weapon_count);
         }
         let mut multiplier = 1.0_f32;
-        // The original searches all stored slots, independently of item count.
+        // Every inventory slot is searched, whatever the item count.
         for slot in 0..99 {
             let item = actor.inventory_slot(slot);
-            if item.id() == id && item.equipment_flag() != 0 {
+            if item.id() == id && item.equipped() != 0 {
                 let ammo_bonus = if firing {
                     ammunition
                         .as_deref()
-                        .or(work.ammo.as_deref())
+                        .or(loaded.ammo.as_deref())
                         .map(|bytes| i16::from(ItemDefinition(bytes).damage_enhancement()))
                         .unwrap_or(0)
                 } else {
@@ -149,9 +165,9 @@ fn damage_total(
                 break;
             }
         }
-        // SANE stores Single before widening and truncating to a signed Long.
+        // Rounded to single precision before truncating.
         damage = ((f64::from(damage) * f64::from(multiplier)) as f32).trunc() as i32 as i16;
-        work.item = Some(bytes);
+        loaded.item = Some(bytes);
     }
     if !firing {
         damage = damage.wrapping_add(
@@ -160,13 +176,16 @@ fn damage_total(
                 .wrapping_add(actor.bare_hand_bonus()?),
         );
     }
-    let mut total = (actor.actions_per_round()? / 2).wrapping_mul(damage);
+    let mut total = (actor.normal_attacks()? / 2).wrapping_mul(damage);
     if firing && weapon_count > 1 {
         total = total.wrapping_mul(weapon_count);
     }
     Ok((total, weapon_count))
 }
 
+/// A weapon's damage including every positive element.
+///
+/// Original: calcdamage
 fn combined_damage(item: ItemDefinition<'_>, firing: bool) -> Result<i16, RuleError> {
     let mut damage = if firing {
         item.missile_damage()?
@@ -182,8 +201,11 @@ fn combined_damage(item: ItemDefinition<'_>, firing: bool) -> Result<i16, RuleEr
     Ok(damage)
 }
 
+/// Reduces damage by a percentage, rounding to the nearest whole point.
+///
+/// Original: calcdamage
 fn reduce_estimate(damage: i16, resistance: i16) -> i16 {
-    // Preserve each Single rounding in updateodds' two separate reductions.
+    // Each of the two reductions rounds to single precision.
     let fraction = (f64::from(f32::from(resistance)) / 100.0) as f32;
     let remainder = (1.0 - f64::from(fraction)) as f32;
     let reduced = (f64::from(remainder) * f64::from(f32::from(damage))) as f32;

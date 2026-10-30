@@ -2,7 +2,7 @@ use crate::{CommandPreferences, MedicalTarget, creation, field_controls};
 use centurions_content::{InventoryRecord, Warrior};
 use serde::{Deserialize, Serialize};
 
-/// The window of a click inside DLOG 149 (156988, 156a00, 156a6a).
+/// The list clicked while the item information dialog (DLOG 149) is open.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ItemInformationList {
     #[default]
@@ -11,6 +11,8 @@ pub enum ItemInformationList {
     Shop,
 }
 
+/// Everything the player can ask the game to do. The desktop and replays give the game the same
+/// commands.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
     FieldControl {
@@ -92,7 +94,8 @@ pub enum Command {
         warrior: usize,
         selector: u16,
     },
-    /// upgradewarrior's entry for a warrior, on opening and on each member switch.
+    /// Enters the upgrade screen for a warrior, on opening and on each member
+    /// switch.
     EnterWarriorUpgrade {
         warrior: usize,
     },
@@ -195,8 +198,7 @@ pub enum Command {
         scroll: usize,
         #[serde(default)]
         quick_info: bool,
-        /// The native selected display row WORD4471aa, kept across owners; zero
-        /// at startup.
+        /// The highlighted display row, kept across owners; zero at startup.
         #[serde(default, skip_serializing_if = "is_zero_row")]
         selected_row: i16,
     },
@@ -207,22 +209,22 @@ pub enum Command {
         #[serde(default)]
         quick_info: bool,
     },
-    /// Clicking an Items row: the display row is WORD4471aa (0..10).
+    /// Clicking an Items row highlights display row 0..10.
     HighlightInventoryRow {
         warrior: usize,
         scroll: usize,
         row: usize,
         quick_info: bool,
     },
-    /// The Items info button (CNTL 140): showiteminfo on display row+scroll.
+    /// The Items info button: item information for display row plus scroll.
     ShowItemInformation {
         warrior: usize,
         scroll: usize,
         row: usize,
         quick_info: bool,
     },
-    /// A list click while DLOG 149 is open. `member` and `slot` are the
-    /// dialog's member and slot after the click: an Items row keeps the
+    /// A list click while the item information dialog is open. `member` and
+    /// `slot` are the dialog's member and slot after the click: an Items row keeps the
     /// earlier member, the second list sets it, and a shop cell keeps both.
     RetargetItemInformation {
         warrior: usize,
@@ -235,21 +237,21 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         item: Option<i16>,
     },
-    /// booty's option-click on a loot cell: showiteminfo on that item ID.
+    /// Option-clicking a loot cell shows that item's information.
     ShowLootItemInformation {
         slot: usize,
     },
-    /// moveicon's option-drag on a shop window row: `stock` marks a shop
-    /// work cell, otherwise `slot` is the member's inventory slot.
-    /// The Items ammunition button (CNTL 176) and the chosen MENU 1000 item
-    /// of loadammoproc's popup on the row+scroll slot; zero when the item has
-    /// no caliber and the button only warns.
+    /// The Items ammunition button and the item chosen from the ammunition
+    /// popup (MENU 1000) for the row plus scroll slot; zero when the item has no
+    /// caliber and the button only warns.
     ChooseAmmunition {
         warrior: usize,
         scroll: usize,
         row: usize,
         item: u16,
     },
+    /// Option-dragging a shop window row shows its information: `stock` marks a
+    /// shop cell, otherwise `slot` is the member's inventory slot.
     ShowDraggedItemInformation {
         warrior: usize,
         slot: usize,
@@ -258,8 +260,9 @@ pub enum Command {
         #[serde(default)]
         quick_info: bool,
     },
-    /// DLOG 149 items 1 and 2: showcondition154a46 mode 4 (`professions`
-    /// false) or 3. `widened` is the shift key that walks the whole squad.
+    /// The dialog's two buttons that list who can use the item, through
+    /// showcondition mode 4 (`professions` false) or mode 3. `widened` is the
+    /// shift key that walks the whole squad.
     ListItemUsers {
         warrior: usize,
         professions: bool,
@@ -400,6 +403,7 @@ pub enum Command {
     },
 }
 
+/// Whether a row is zero, so it can be left out of a serialized command.
 fn is_zero_row(row: &i16) -> bool {
     *row == 0
 }

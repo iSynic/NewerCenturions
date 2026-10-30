@@ -1,10 +1,12 @@
-//! Lifecycle workflow ownership.
+//! The logo, title, introduction, About box, exchange choice and quitting.
 use super::{Application, ApplicationAction, HandleOutcome, Screen};
 use crate::presentation::Action;
 use centurions_content::Content;
 use centurions_core::{Command, Phase, Session, apply};
 
 impl Application {
+    /// Carries out the choices on the logo, introduction, About box, occupied-cell
+    /// question, combat escape question and quit question.
     pub(super) fn handle_lifecycle(
         &mut self,
         action: ApplicationAction,
@@ -15,7 +17,7 @@ impl Application {
         let mut events = Vec::new();
         match action {
             ApplicationAction::ExchangeChoice(choice) => {
-                if state.retained_walk_choice.is_some() {
+                if state.out_of_combat_walk_choice.is_some() {
                     events = apply(
                         self.command(Command::AnswerOccupiedChoice { exchange: choice }),
                         state,
@@ -23,6 +25,7 @@ impl Application {
                     )?;
                 } else {
                     let body = self
+                        .questions
                         .exchange_offer
                         .ok_or("no occupied-cell choice is open")?;
                     if let Some(exchange) = choice {
@@ -37,11 +40,11 @@ impl Application {
                         )?;
                     }
                 }
-                self.exchange_offer = None;
+                self.questions.exchange_offer = None;
             }
             ApplicationAction::CloseAbout => self.about = false,
             ApplicationAction::EscapeAnswer(answer) => {
-                self.escape_question = false;
+                self.questions.escape = false;
                 if answer {
                     events = apply(self.command(Command::EscapeCombat), state, content)?;
                 }
@@ -54,7 +57,7 @@ impl Application {
                 }
             }
             ApplicationAction::QuitAnswer(answer) => {
-                self.quit_question = false;
+                self.questions.quit = false;
                 if answer {
                     self.quit = true;
                 } else if state.phase != Phase::Combat {

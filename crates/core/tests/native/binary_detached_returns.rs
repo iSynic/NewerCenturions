@@ -1,9 +1,9 @@
 //! Saved source joins around bounded original walking/reaction instruction tails.
 use crate::{prelude::*, support};
-use centurions_core::combat::neighbor_work::NeighborWork;
-use centurions_core::combat::retained::{InitiativeWork, NpcBacking, NpcSlot};
+use centurions_core::combat::neighbor_scan::Neighbors;
+use centurions_core::combat::globals::{BattleOrder, Monsters, MonsterSlot};
 use centurions_core::combat::runtime::{CombatReturn, DeathStory};
-use centurions_core::combat::tactical_work::TacticalWork;
+use centurions_core::combat::battlefield::Battlefield;
 
 #[test]
 fn detached_returns_match_native_work_records_rng_and_sound_order() {
@@ -14,20 +14,20 @@ fn detached_returns_match_native_work_records_rng_and_sound_order() {
         let input = &case["declarations"]["source"];
         let mut state = initial(input, &content);
         let events = support::saved_command(Command::Continue, &mut state, &content);
-        let work = &state.native_work.tactical_work;
+        let work = &state.globals.battlefield;
         let npcs: Vec<_> = state
-            .native_work
-            .npc_backing
+            .globals
+            .monsters
             .slots
             .iter()
             .flat_map(|slot| slot.as_ref().unwrap().record.bytes.iter().copied())
             .collect();
         let positions: Vec<_> = work
-            .positions
+            .pos
             .iter()
             .flat_map(|point| [point.0, point.1])
             .collect();
-        let neighbors = &state.native_work.neighbor_work;
+        let neighbors = &state.globals.neighbors;
         let presence: Vec<_> = neighbors
             .presence
             .iter()
@@ -39,25 +39,25 @@ fn detached_returns_match_native_work_records_rng_and_sound_order() {
             ("npcs", npcs),
             (
                 "map",
-                support::word_bytes(&work.map.tiles),
+                support::word_bytes(&work.field.tiles),
             ),
             ("party_positions", support::word_bytes(&positions)),
             (
                 "under",
-                support::word_bytes(&work.under_tiles),
+                support::word_bytes(&work.char_under),
             ),
-            ("fields", work.spell_fields.clone()),
-            ("used", work.field_used.clone()),
+            ("fields", work.spell_queue.clone()),
+            ("used", work.collide_check.clone()),
             ("presence", support::word_bytes(&presence)),
             ("bodies", support::word_bytes(&bodies)),
-            ("mask", support::word_bytes(&state.native_work.party_mask)),
+            ("mask", support::word_bytes(&state.globals.party_track)),
             (
                 "departure",
                 support::word_bytes(&[neighbors.departure]),
             ),
             (
                 "natural_index",
-                support::word_bytes(&[state.native_work.weapon_work.natural_attack_index]),
+                support::word_bytes(&[state.globals.weapon_traits.natural_attack_index]),
             ),
             (
                 "direction",
@@ -106,11 +106,11 @@ pub(super) fn initial(input: &Value, content: &Content) -> Session {
     let before = &input["before"];
     let mut state = support::mission_session(content);
     state.warriors = support::warriors(&before["warriors"]);
-    state.selected_warrior = input.n("selected");
+    state.char_select_new = input.n("selected");
     state
-        .native_work
+        .globals
         .health_context
-        .selected_warrior = state.selected_warrior;
+        .char_select_new = state.char_select_new;
     state.exploration.as_mut().unwrap().last_move = before
         .bytes("direction")
         .iter()
@@ -119,14 +119,14 @@ pub(super) fn initial(input: &Value, content: &Content) -> Session {
         .try_into()
         .unwrap();
     let npc_positions = before.words("npc_positions");
-    state.native_work.npc_backing = NpcBacking {
-        active_count: 1,
+    state.globals.monsters = Monsters {
+        num_mon: 1,
         origin: (5, 5),
         slots: support::monsters(&before["npcs"])
             .into_iter()
             .enumerate()
             .map(|(i, record)| {
-                Some(NpcSlot {
+                Some(MonsterSlot {
                     record,
                     position: Some((
                         i32::from(npc_positions[i * 2]) + 5,
@@ -138,32 +138,32 @@ pub(super) fn initial(input: &Value, content: &Content) -> Session {
     };
     let positions = before.words("party_positions");
     let under = before.words("under");
-    state.native_work.tactical_work = TacticalWork {
-        map: TacticalMap {
+    state.globals.battlefield = Battlefield {
+        field: CombatField {
             tiles: before.words("map"),
-            shift: (0, 0),
+            map_shift: (0, 0),
             edge_word: 0,
         },
         saved_land: None,
-        positions: std::array::from_fn(|i| (positions[i * 2], positions[i * 2 + 1])),
-        under_tiles: std::array::from_fn(|i| under[i]),
-        spell_fields: before.bytes("fields"),
-        field_used: before.bytes("used"),
+        pos: std::array::from_fn(|i| (positions[i * 2], positions[i * 2 + 1])),
+        char_under: std::array::from_fn(|i| under[i]),
+        spell_queue: before.bytes("fields"),
+        collide_check: before.bytes("used"),
         battle: None,
     };
     let mut order = vec![-1; 110];
     order[0] = input.n("actor");
-    state.native_work.initiative_work = InitiativeWork { order, cursor: 0 };
-    state.native_work.victory_work.total = 5;
-    state.native_work.victory_work.defeated = 0;
-    state.native_work.weapon_work.natural_attack_index = 0;
+    state.globals.battle_order = BattleOrder { order, index: 0 };
+    state.globals.kill_counts.num_enemy = 5;
+    state.globals.kill_counts.kill_mon = 0;
+    state.globals.weapon_traits.natural_attack_index = 0;
     let presence = before.words("presence");
-    state.native_work.neighbor_work = NeighborWork {
+    state.globals.neighbors = Neighbors {
         departure: 0,
         presence: std::array::from_fn(|i| presence[i * 110..(i + 1) * 110].to_vec()),
         bodies: before.words("bodies"),
     };
-    state.native_work.party_mask = before.words("mask").try_into().unwrap();
+    state.globals.party_track = before.words("mask").try_into().unwrap();
     state.random = RandomState::new(input.n("seed"));
     state.random.draws = input.n("draws");
     let caller: CombatReturn =

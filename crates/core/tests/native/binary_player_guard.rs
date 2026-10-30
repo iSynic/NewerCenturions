@@ -5,13 +5,13 @@ use native_common::snapshot_party as warriors;
 use native_common::psi_work as work;
 fn state(content: &Content, snapshot: &Value) -> Session {
     let mut state = native_common::psi_snapshot(content, snapshot);
-    state.combat.as_mut().unwrap().round_scripts.counter = snapshot.n("round");
+    state.combat.as_mut().unwrap().round_macros.counter = snapshot.n("round");
     state
 }
 
 fn assert_snapshot(state: &Session, snapshot: &Value) {
     let combat = current_combat(state);
-    assert_eq!(combat.round_scripts.counter, snapshot.n::<i8>("round"));
+    assert_eq!(combat.round_macros.counter, snapshot.n::<i8>("round"));
     support::psi_frame::compare_session(state, snapshot, "player guard");
 }
 
@@ -46,7 +46,7 @@ fn inactive_turns_match_original_recovery_retreat_and_saved_command() {
         if case.n::<u8>("retreated") == 0 {
             assert_snapshot(&state, &case["after"]);
             assert_eq!(
-                current_combat(&state).inactive_rounds,
+                current_combat(&state).blank_round,
                 case.n::<i16>("inactive_rounds")
             );
             resumed = support::checkpoint(&state, &content, "inactive-recovered");
@@ -93,7 +93,7 @@ fn guarded_player_reaction_and_enemy_counterattack_match_original_complete_calle
             10,
             &content.items,
             attacks,
-            &state.party_buffs,
+            &state.party_condition,
         )
         .unwrap();
         assert_snapshot(&state, &case["after"]);
@@ -114,9 +114,9 @@ fn guarded_player_reaction_and_enemy_counterattack_match_original_complete_calle
         }
         expected.random = state.random.clone();
         let expected_combat = expected.combat.as_mut().unwrap();
-        expected_combat.enemies.records = support::monsters(&case["after"]["records"]);
-        expected_combat.attack_packet = case["after"].bytes("packet");
-        expected_combat.weapon_work = work(&case["after"]);
+        expected_combat.roster.records = support::monsters(&case["after"]["records"]);
+        expected_combat.spell_info = case["after"].bytes("packet");
+        expected_combat.weapon_traits = work(&case["after"]);
         support::same_captured_session(&state, &expected);
     }
 }
@@ -150,18 +150,18 @@ fn public_guard_preserves_complete_native_state_and_resumes_from_save() {
                 let combat = current_combat(&expected);
                 let mut health = centurions_core::story_health::context(
                     &expected.warriors,
-                    expected.selected_warrior,
+                    expected.char_select_new,
                     None,
                 );
-                health.unavailable = combat.unavailable;
+                health.kill_party = combat.kill_party;
                 health.effect = case["after"].bytes("packet")[18] as i8;
-                expected.native_work.health_context = health;
+                expected.globals.health_context = health;
                 support::checkpoint(&actual, &content, "guard-after");
                 events
             } else {
                 // Native AP-zero prefix starts after public admission; retain its original suffix.
                 support::reject_command(&actual, &content, Command::Guard);
-                expected.native_work.attack_packet = actual.native_work.attack_packet.clone();
+                expected.globals.spell_info = actual.globals.spell_info.clone();
                 let member = case.n::<usize>("member");
                 actual.warriors[member].bytes[0x16..0x18].copy_from_slice(&1_i16.to_be_bytes());
                 assert_party(&actual, &case["guarded"]);
@@ -172,7 +172,7 @@ fn public_guard_preserves_complete_native_state_and_resumes_from_save() {
             support::same_captured_session(&actual, &expected);
             let mut expected_events: Vec<_> = support::sound_events(case.n::<Vec<i16>>("sounds"));
             expected_events.push(Event::Feedback(
-                centurions_core::feedback::NativeFeedback::CombatResult {
+                centurions_core::feedback::GameFeedback::CombatResult {
                     body: case.n("member"),
                     code: -5,
                     amount: 0,
@@ -181,7 +181,7 @@ fn public_guard_preserves_complete_native_state_and_resumes_from_save() {
             ));
             expected_events.push(Event::TurnStarted {
                 body: current_combat(&expected).active_body().unwrap(),
-                round: current_combat(&expected).round,
+                round: current_combat(&expected).combat_round,
             });
             assert_eq!(events, expected_events);
         }
@@ -202,7 +202,7 @@ fn public_guard_rejects_interrupted_or_unavailable_input_atomically() {
             2 => state.warriors[member].bytes[0x9df] = 0,
             3 => {
                 let combat = state.combat.as_mut().unwrap();
-                combat.cursor = 2;
+                combat.battle_order_index = 2;
                 assert!(combat.active_body().unwrap() >= 10);
             }
             4 => {

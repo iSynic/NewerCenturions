@@ -1,8 +1,10 @@
-//! Continuations for maintained exploration.
+//! Resuming a script after the player answers.
 use super::{active_map, finish_script, run_script};
 use crate::{Event, Presentation, RuleError, Session, combat};
 use centurions_content::Content;
 
+/// Dismisses the message page on screen. The next page, or the presentation that follows the
+/// messages, is shown; when nothing follows, the script goes on (in a battle nothing happens).
 pub fn continue_messages(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let position = state
         .exploration
@@ -38,19 +40,23 @@ pub fn continue_messages(state: &mut Session, content: &Content) -> Result<Vec<E
     }
 }
 
+/// Continues past the page the player is looking at.
 pub fn continue_story(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     continue_with_spells(state, content, false)
 }
 
+/// Whether a warrior has gained enough experience to advance and has psi, so the player must
+/// confirm the spells before moving on.
 pub fn needs_spell_confirmation(state: &Session) -> bool {
     state.warriors.iter().any(|warrior| {
         warrior.stamina().unwrap_or(0) > 0
             && warrior.record().remaining_experience().unwrap() < 0
-            && warrior.record().maximum_psi().unwrap_or(0) != 0
+            && warrior.record().psi_points_max().unwrap_or(0) != 0
             && warrior.record().psi_school().unwrap_or(0) != 0
     })
 }
 
+/// Keeps the warriors' current spells instead of changing them on advancing.
 pub fn keep_current_spells(
     state: &mut Session,
     content: &Content,
@@ -68,6 +74,9 @@ pub fn keep_current_spells(
     continue_with_spells(state, content, true)
 }
 
+/// Continues past a page. Closing a shop leaves it. At the loot window, a warrior who must confirm
+/// spells starts the promotion unless the player keeps the current spells; once the loot is gone
+/// the warriors who earned it advance, and the story goes on.
 pub(super) fn continue_with_spells(
     state: &mut Session,
     content: &Content,
@@ -85,19 +94,19 @@ pub(super) fn continue_with_spells(
         .as_ref()
         .is_some_and(|position| matches!(position.presentation, Some(Presentation::Loot)));
     if loot && needs_spell_confirmation(state) && !keep_spells {
-        return crate::story_promotion::begin(state, content);
+        return crate::story::promotion::begin(state, content);
     }
     let mut events = vec![];
-    if loot && !state.booty_items.iter().any(|item| item.id() != 0) {
+    if loot && !state.booty_list.iter().any(|item| item.id() != 0) {
         let map = active_map(state, content)?;
-        let mut library_random = crate::story_promotion::LibraryRandom {
+        let mut library_random = crate::story::promotion::LibraryRandom {
             seed: state.library_random_seed,
             draws: state.library_random_draws,
         };
         let close = if state.recovery_return.is_some() {
-            crate::story_promotion::close_recovery
+            crate::story::promotion::close_recovery
         } else {
-            crate::story_promotion::close
+            crate::story::promotion::close
         };
         let closed = close(
             &state.warriors,
@@ -133,6 +142,8 @@ pub(super) fn continue_with_spells(
     Ok(events)
 }
 
+/// Finishes a story page, refusing while a question or menu is open or equipment waits to be taken,
+/// and carries the script on.
 pub(crate) fn finish_story_page(
     state: &mut Session,
     content: &Content,
@@ -162,7 +173,7 @@ pub(crate) fn finish_story_page(
     if position.presentation.take().is_none() {
         return Err(RuleError::Invalid("no story page to continue".into()));
     }
-    if state.booty_items.iter().any(|item| item.id() != 0) {
+    if state.booty_list.iter().any(|item| item.id() != 0) {
         return Err(RuleError::Invalid(
             "collect or store the equipment before continuing".into(),
         ));
@@ -173,7 +184,7 @@ pub(crate) fn finish_story_page(
     if loot && let Some(continued) = crate::loot_recovery::close(state, content)? {
         return Ok(continued);
     }
-    if loot && let Some(continued) = crate::story_cleanup::close_rewards(state, content)? {
+    if loot && let Some(continued) = crate::story::cleanup::close_rewards(state, content)? {
         return Ok(continued);
     }
     if loot && let Some(continued) = combat::runtime::close_selected_rewards(state, content)? {
@@ -185,15 +196,15 @@ pub(crate) fn finish_story_page(
         return Ok(events);
     }
     if state.actor_replacement.is_some() {
-        let (feedback, progress) = crate::story_actor::resume(state, content)?;
+        let (feedback, progress) = crate::story::actor::resume(state, content)?;
         events.extend(feedback);
         match progress {
-            crate::story_actor::Progress::Waiting => return Ok(events),
-            crate::story_actor::Progress::Stop => {
+            crate::story::actor::Progress::Waiting => return Ok(events),
+            crate::story::actor::Progress::Stop => {
                 events.extend(finish_script(state, content, false)?);
                 return Ok(events);
             }
-            crate::story_actor::Progress::Continue => {}
+            crate::story::actor::Progress::Continue => {}
         }
     }
     if state

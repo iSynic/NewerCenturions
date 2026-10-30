@@ -1,16 +1,19 @@
-//! combatsetup11d46c returns the first table match; placement11ea30 keeps the last.
+//! The weapons monsters carry. Battle setup takes the first table match; placement
+//! keeps the last.
 use crate::{RandomState, RuleError};
 use centurions_content::records::{EnemyRecord, EnemyRecordMut};
 
+/// Whether a weapon roll that matches several table entries takes the first or the last.
 #[derive(Clone, Copy)]
 pub(crate) enum MatchOrder {
     First,
     Last,
 }
 
+/// A weapon table: five bands of a hundred-sided roll, each with the weapon it gives.
 type WeaponTable = [(i16, i16, i16); 5];
 
-// Nine five-entry tables copied from DATA403ac6 by combatsetup11d406.
+/// Nine five-entry weapon tables.
 const TABLES: [WeaponTable; 9] = [
     [
         (0, 50, 10),
@@ -77,6 +80,8 @@ const TABLES: [WeaponTable; 9] = [
     ],
 ];
 
+/// The weapon table a monster's negative weapon number selects, or none when the number names a
+/// weapon directly.
 fn table(selected: i16) -> Result<Option<&'static WeaponTable>, RuleError> {
     if selected >= 0 {
         return Ok(None);
@@ -90,17 +95,19 @@ fn table(selected: i16) -> Result<Option<&'static WeaponTable>, RuleError> {
         })
 }
 
+/// Checks that the monster's weapon number names a table the game has.
 pub(crate) fn validate(bytes: &[u8]) -> Result<(), RuleError> {
-    table(EnemyRecord::from_bytes(bytes).selected_item()?)?;
+    table(EnemyRecord::from_bytes(bytes).weapon()?)?;
     Ok(())
 }
 
+/// Rolls the weapon for a monster whose weapon number selects a table, and gives it that weapon.
 pub(crate) fn initialize(
     bytes: &mut [u8],
     random: &mut RandomState,
     order: MatchOrder,
 ) -> Result<(), RuleError> {
-    let Some(table) = table(EnemyRecord::from_bytes(bytes).selected_item()?)? else {
+    let Some(table) = table(EnemyRecord::from_bytes(bytes).weapon()?)? else {
         return Ok(());
     };
     let roll = random.bound(100);
@@ -114,6 +121,6 @@ pub(crate) fn initialize(
     .map_or(0, |&(_, _, item)| item);
     let mut record = EnemyRecordMut::from_bytes(bytes);
     record.set_primary_weapon(selected);
-    record.set_selected_item(selected);
+    record.set_weapon(selected);
     Ok(())
 }

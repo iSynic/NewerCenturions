@@ -5,17 +5,17 @@ pub use centurions_content::combat::{MONSTER_BYTES, MonsterRecord};
 pub use centurions_content::mission::{OpeningMission, StoryTables};
 pub use centurions_content::{Content, InventoryRecord, WARRIOR_BYTES, Warrior, digest, word};
 pub use centurions_core::combat::attack::natural_attack;
-pub use centurions_core::combat::death_scripts::DeathQueue;
+pub use centurions_core::combat::death_scripts::TodoQueue;
 pub use centurions_core::combat::player_psi::CastRequest;
-pub use centurions_core::combat::round_stories::RoundScripts;
-pub use centurions_core::combat::runtime::{EnemyWork, enemy_action_with_work};
+pub use centurions_core::combat::round_stories::RoundMacros;
+pub use centurions_core::combat::runtime::{EnemyGlobals, enemy_action_with_globals};
 pub use centurions_core::combat::spells::{
     BodySpellResult, DirectSpell, FieldUsage, resolve_bodies, resolve_bodies_with_item_cache,
     resolve_collision,
 };
-pub use centurions_core::combat::weapon_work::WeaponWork;
+pub use centurions_core::combat::weapon_traits::WeaponTraits;
 pub use centurions_core::combat::{
-    Combat, EnemySetup, SquadPlacement, TacticalMap, begin_battle, enemy_weapons, firearm,
+    Combat, CombatField, EnemySetup, SquadPlacement, begin_battle, enemy_weapons, firearm,
     initialize_turn, medical, player_psi, runtime, spell_conditions, spells,
 };
 pub use centurions_core::story_health::{HealthContext, HealthEvent};

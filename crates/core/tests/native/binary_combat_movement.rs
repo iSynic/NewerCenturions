@@ -21,7 +21,7 @@ fn zero_capacity_movement_follows_the_modern_ieee_policy() {
         let mut rows = fpu.array("movement").iter();
         let row = rows.find(|r| r["route"] == "FPU" && r["case"] == case["case"]);
         let (record, case) = (warrior.record(), case.text("case"));
-        let actual = (record.weight_capacity().unwrap(), record.movement_per_round().unwrap());
+        let actual = (record.load_max().unwrap(), record.movement_max().unwrap());
         assert_eq!(actual, (row.unwrap().n("capacity"), row.unwrap().n("movement")), "{case}");
     }
 }

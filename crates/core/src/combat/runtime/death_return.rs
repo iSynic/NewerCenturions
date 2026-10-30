@@ -1,23 +1,26 @@
-//! Rule-side combatupdate2 work after killbody's newland returns.
+//! Refreshing a body's weapon after its death story returns.
 use crate::{RuleError, Session};
 use centurions_content::Content;
 
+/// Reloads the weapon of the body whose turn it is, which a death script may have changed.
 pub(super) fn refresh_actor(state: &mut Session, content: &Content) -> Result<(), RuleError> {
     let body = if let Some(combat) = &state.combat {
         combat
-            .order
-            .get(combat.cursor)
+            .battle_order
+            .get(combat.battle_order_index)
             .copied()
-            .unwrap_or(combat.cursor as i16)
+            .unwrap_or(combat.battle_order_index as i16)
     } else {
         state
-            .native_work
-            .initiative_work
-            .current(state.native_work.selected_enemy)?
+            .globals
+            .battle_order
+            .current(state.globals.monster_up)?
     };
     refresh_body(state, content, body)
 }
 
+/// Reloads the weapon and attack context of one body after a death script, for a warrior or a
+/// monster.
 pub(in crate::combat::runtime) fn refresh_body(
     state: &mut Session,
     content: &Content,
@@ -27,37 +30,37 @@ pub(in crate::combat::runtime) fn refresh_body(
         return Ok(());
     }
     if (0..10).contains(&body) {
-        // Bodies 0..9 address 0x448aa0 + body * 0xc42: the squad, the records past
-        // it, the Upgrade records and the first two editor backup records.
+        // Bodies 0..9 are warrior records: the squad, the records past it, the
+        // Upgrade records and the first two editor backup records.
         let body = body as usize;
         let mut warrior = state
             .table_record(body)
             .ok_or("callback refresh body outside the warrior table")?;
         let record = warrior.record();
-        let secondary = record.firing_mode();
+        let secondary = record.toggle();
         let item = if secondary {
             record.equipped_weapon()?
         } else {
             record.melee_weapon()?
         };
         // The active warrior's early panel branch loads even record zero.
-        state.load_item_work(content, item)?;
+        state.load_item(content, item)?;
         if secondary && item == 0 {
-            warrior.record_mut().set_firing_mode(false);
+            warrior.record_mut().set_toggle(false);
             state.store_table_record(body, warrior)?;
         } else if item != 0 {
-            state.load_item_work(content, item)?;
+            state.load_item(content, item)?;
         }
     } else if (10..110).contains(&body) {
         let index = (body - 10) as usize;
-        let enemy = if let Some(combat) = &state.combat {
+        let monster = if let Some(combat) = &state.combat {
             combat.story_record(index)?
         } else {
-            &state.native_work.npc_backing.slot(index)?.record
+            &state.globals.monsters.slot(index)?.record
         };
-        let item = enemy.record().selected_item()?;
+        let item = monster.record().weapon()?;
         if item != 0 {
-            state.load_item_work(content, item)?;
+            state.load_item(content, item)?;
         }
     } else if body < 0 {
         return Err(RuleError::Unsupported {

@@ -9,12 +9,14 @@ use centurions_core::{Session, item_display::InformationField};
 use macroquad::prelude::*;
 use std::collections::BTreeMap;
 
+/// The item information fields already built for an item record.
 pub(super) type ItemInformation = (Vec<u8>, BTreeMap<u16, InformationField>);
 /// Centered between the panes so both lists keep clickable rows, as DLOG 149
 /// opens beside the Items and second-owner windows.
 const ORIGIN: Vec2 = vec2(222., 20.);
 
 impl Inventory {
+    /// Draws the item information window (DLOG 149) over the booty screen.
     pub fn draw_loot_information(
         &self,
         content: &Content,
@@ -24,6 +26,7 @@ impl Inventory {
     ) {
         self.draw_information(content, state, assets, controls);
     }
+    /// Draws the item information window (DLOG 149) over the Items lists.
     pub(super) fn draw_information(
         &self,
         content: &Content,
@@ -49,7 +52,7 @@ impl Inventory {
             },
         );
         assets.draw_dialog_at(149, ORIGIN);
-        // Items 1 and 2 open showcondition154a46 modes 4 and 3.
+        // Items 1 and 2 open showcondition modes 4 and 3.
         for (item, professions) in [(1, false), (2, true)] {
             controls.push(Control {
                 rect: assets.dialog_rect_at(149, item, ORIGIN),
@@ -60,7 +63,7 @@ impl Inventory {
         let (Some(owner), Some(warrior), Some(map)) = (
             state
                 .warriors
-                .get(state.native_work.health_context.selected_warrior),
+                .get(state.globals.health_context.char_select_new),
             state.warriors.get(member),
             state.land(content),
         ) else {
@@ -84,7 +87,7 @@ impl Inventory {
                 map,
                 owner,
                 (&record, merged),
-                &assets.native_text,
+                &assets.game_text,
                 &assets.character_strings,
             )
             .unwrap_or_else(|error| {
@@ -105,16 +108,7 @@ impl Inventory {
                 }
                 InformationField::Icon(id) => {
                     if let Some(image) = assets.icons.get(id) {
-                        draw_texture_ex(
-                            image,
-                            rect.x,
-                            rect.y,
-                            WHITE,
-                            DrawTextureParams {
-                                dest_size: Some(vec2(32., 32.)),
-                                ..Default::default()
-                            },
-                        );
+                        crate::assets::icon_in(image, vec2(rect.x, rect.y));
                     }
                 }
             }
@@ -131,7 +125,7 @@ impl Inventory {
         assets: &Assets,
         controls: &mut Vec<Control>,
     ) {
-        let Some((professions, widened, work)) = &self.use_list else {
+        let Some((professions, widened, item)) = &self.use_list else {
             return;
         };
         controls.clear();
@@ -140,7 +134,7 @@ impl Inventory {
             enabled: true,
             action: Action::Inventory(InventoryAction::CloseInformation),
         });
-        let selected = state.native_work.health_context.selected_warrior;
+        let selected = state.globals.health_context.char_select_new;
         let passes = if *widened { state.warriors.len() } else { 1 };
         let (Some(owner), Some(map)) = (state.warriors.get(selected), state.land(content)) else {
             return;
@@ -149,8 +143,8 @@ impl Inventory {
             centurions_core::item_display::profession_list(
                 map,
                 owner,
-                work,
-                &assets.native_text,
+                item,
+                &assets.game_text,
                 &assets.character_strings,
                 passes,
             )
@@ -160,8 +154,8 @@ impl Inventory {
                 map,
                 &state.warriors,
                 selected,
-                work,
-                &assets.native_text,
+                item,
+                &assets.game_text,
                 passes,
             )
         };

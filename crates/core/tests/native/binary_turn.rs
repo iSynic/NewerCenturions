@@ -33,25 +33,25 @@ fn first_turn_matches_whole_records_and_random_draws() {
         position.script = None;
         let mut c = support::battle();
         // VerifyTurnContexts writes total6/defeated0 before the captured entry.
-        c.victory_work = centurions_core::combat::victory_work::VictoryWork {
-            total: 6,
-            defeated: 0,
+        c.kill_counts = centurions_core::combat::kill_counts::KillCounts {
+            num_enemy: 6,
+            kill_mon: 0,
         };
-        c.enemies.records = vec![MonsterRecord {
+        c.roster.records = vec![MonsterRecord {
             bytes: case.bytes("enemy"),
         }];
-        c.enemies.positions = vec![(20, 20)];
-        c.order[1..4].copy_from_slice(&[1, 0, 2]);
+        c.roster.mon_pos = vec![(20, 20)];
+        c.battle_order[1..4].copy_from_slice(&[1, 0, 2]);
         state.combat = Some(c);
         state.phase = Phase::Combat;
         let events = support::saved_command(Command::EndTurn, &mut state, &content);
         support::native_expect! {
             records &state.warriors => &case["after_warriors"], "conditioned Getup party";
-            records &current_combat(&state).enemies.records => &case["after_enemy"], "conditioned Getup NPC";
+            records &current_combat(&state).roster.records => &case["after_enemy"], "conditioned Getup NPC";
             rng state.random => (&case["seed"], &case["draws"]), "conditioned Getup RNG";
-            scalar current_combat(&state).cursor => &case["cursor"], "conditioned Getup skip";
-            scalar current_combat(&state).unavailable => &case["unavailable"], "conditioned Getup counter";
-            scalar state.selected_warrior => &case["selected_warrior"], "conditioned Getup selection";
+            scalar current_combat(&state).battle_order_index => &case["cursor"], "conditioned Getup skip";
+            scalar current_combat(&state).kill_party => &case["unavailable"], "conditioned Getup counter";
+            scalar state.char_select_new => &case["selected_warrior"], "conditioned Getup selection";
             scalar support::event_sounds(&events) => &case["sounds"], "conditioned Getup sounds";
         }
     }
@@ -73,16 +73,16 @@ fn map_edge_turn_exit_matches_original_caller_and_cursor() {
         .unwrap();
         // VerifyEnemyTurnExit's input control writes total7 and the captured
         // defeated prefix. These are harness writes, not a live roster recount.
-        state.combat.as_mut().unwrap().victory_work =
-            centurions_core::combat::victory_work::VictoryWork {
-                total: 7,
-                defeated: case.n("removed_before"),
+        state.combat.as_mut().unwrap().kill_counts =
+            centurions_core::combat::kill_counts::KillCounts {
+                num_enemy: 7,
+                kill_mon: case.n("removed_before"),
             };
         // VerifyEnemyTurnExit's loaded A5 image has zero438780/43877e.
-        crate::native_common::npc_command_input(&mut state, fixture.n("enemy_index"), [0, 0]);
-        let queue = current_combat(&state).death_queue.clone();
+        crate::native_common::monster_command_input(&mut state, fixture.n("enemy_index"), [0, 0]);
+        let queue = current_combat(&state).todo_queue.clone();
         if index != 0 {
-            state.combat.as_mut().unwrap().enemies.records[fixture.n::<usize>("enemy_index")]
+            state.combat.as_mut().unwrap().roster.records[fixture.n::<usize>("enemy_index")]
                 .bytes = case.bytes("enemy_before");
         }
         let events = if index == 0 {
@@ -98,7 +98,7 @@ fn map_edge_turn_exit_matches_original_caller_and_cursor() {
             .position(|event| {
                 matches!(
                     event,
-                    Event::Feedback(centurions_core::feedback::NativeFeedback::CombatResult {
+                    Event::Feedback(centurions_core::feedback::GameFeedback::CombatResult {
                         code: -5,
                         ..
                     })
@@ -107,21 +107,21 @@ fn map_edge_turn_exit_matches_original_caller_and_cursor() {
             .unwrap();
         let events = &events[start..];
         let combat = current_combat(&state);
-        assert_eq!(combat.victory_work.defeated, case.n::<i16>("removed_after"));
-        assert_eq!(combat.victory_work.total, 7);
+        assert_eq!(combat.kill_counts.kill_mon, case.n::<i16>("removed_after"));
+        assert_eq!(combat.kill_counts.num_enemy, 7);
         support::native_expect! {
             records &state.warriors => &case["warriors_after"], "Getup exit party";
-            records &combat.enemies.records => &case["records_after"], "Getup exit enemies";
-            bytes support::word_bytes(&combat.map.tiles) => &case["map_after"], "Getup exit footprint";
-            bytes support::word_bytes(&combat.order) => &case["order_after"], "Getup exit order";
-            scalar combat.cursor => &case["cursor"], "Getup exit cursor";
+            records &combat.roster.records => &case["records_after"], "Getup exit enemies";
+            bytes support::word_bytes(&combat.field.tiles) => &case["map_after"], "Getup exit footprint";
+            bytes support::word_bytes(&combat.battle_order) => &case["order_after"], "Getup exit order";
+            scalar combat.battle_order_index => &case["cursor"], "Getup exit cursor";
             rng state.random => (&case["seed"], &case["total_draws_after"]), "Getup exit RNG";
             scalar support::event_sounds(events) => &case["sounds"], "Getup exit sounds";
         }
         let results: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
-                Event::Feedback(centurions_core::feedback::NativeFeedback::CombatResult {
+                Event::Feedback(centurions_core::feedback::GameFeedback::CombatResult {
                     body,
                     code,
                     ..
@@ -130,6 +130,6 @@ fn map_edge_turn_exit_matches_original_caller_and_cursor() {
             })
             .collect();
         assert_eq!(json!(results), case["results"]);
-        assert_eq!(combat.death_queue, queue);
+        assert_eq!(combat.todo_queue, queue);
     }
 }

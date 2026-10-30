@@ -1,7 +1,10 @@
 use crate::RuleError;
 use centurions_content::{WARRIOR_BYTES, Warrior, span};
 
-/// CODE 1 pool, 0x1366a8: unsigned carried WORDs added to a wrapping LONG pool.
+/// Pools the party's credits: each member's unsigned carried credits are added to
+/// a wrapping 32-bit pool.
+///
+/// Original: pool
 pub fn pool_credits(warriors: &mut [Warrior], pool: &mut i32) -> Result<(), RuleError> {
     if warriors.len() > 128 {
         return Err(RuleError::Invalid(
@@ -18,7 +21,9 @@ pub fn pool_credits(warriors: &mut [Warrior], pool: &mut i32) -> Result<(), Rule
     Ok(())
 }
 
-/// CODE 1 share, 0x13684a: signed LONG division; remainder is discarded.
+/// Shares the pool equally; the remainder is lost.
+///
+/// Original: share
 pub fn share_credits(warriors: &mut [Warrior], pool: &mut i32) -> Result<i16, RuleError> {
     let count = i32::try_from(warriors.len())
         .ok()
@@ -33,7 +38,9 @@ pub fn share_credits(warriors: &mut [Warrior], pool: &mut i32) -> Result<i16, Ru
     Ok(each)
 }
 
-/// CODE 1 checkforcharge, 0x11279a: include every matching pack in record order.
+/// Counts the charges of every matching pack, in record order.
+///
+/// Original: checkforcharge
 pub fn item_charges(warriors: &[Warrior], item_id: i16) -> Result<i16, RuleError> {
     if warriors.len() > 128 {
         return Err(RuleError::Invalid(
@@ -44,7 +51,7 @@ pub fn item_charges(warriors: &[Warrior], item_id: i16) -> Result<i16, RuleError
     for warrior in warriors {
         for item in warrior.inventory()? {
             if item.id() == item_id {
-                total = total.wrapping_add(item.quantity()?);
+                total = total.wrapping_add(item.charge()?);
             }
         }
     }

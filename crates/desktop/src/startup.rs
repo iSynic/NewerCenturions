@@ -3,6 +3,7 @@ use crate::{layout, preferences};
 use centurions_core::Session;
 use macroquad::prelude::*;
 use std::{io::Write, path::PathBuf};
+/// The value that follows the command line option `name`.
 pub(crate) fn option(name: &str) -> Option<String> {
     std::env::args()
         .collect::<Vec<_>>()
@@ -10,9 +11,11 @@ pub(crate) fn option(name: &str) -> Option<String> {
         .find(|a| a[0] == name)
         .map(|a| a[1].clone())
 }
+/// The window the game opens: titled The New Centurions, at the size asked for
+/// but no smaller than the screen size preference needs.
 pub(crate) fn config() -> Conf {
     let preferences = startup_preferences();
-    let minimum = if preferences.enabled(22) {
+    let minimum = if preferences.enabled(crate::preferences::pref::SCREEN_800_X_600) {
         (800, 600)
     } else {
         (640, 480)
@@ -27,17 +30,20 @@ pub(crate) fn config() -> Conf {
         window_title: "The New Centurions".into(),
         window_width: width.max(minimum.0),
         window_height: height.max(minimum.1),
-        // The original Hide The Desktop default is not a request for Windows fullscreen.
+        // The game's Hide The Desktop default is not a request for Windows fullscreen.
         fullscreen: false,
         high_dpi: false,
         ..Default::default()
     }
 }
+/// Where the preferences are kept: the path given on the command line, or the
+/// player's data folder.
 pub(crate) fn preferences_path() -> PathBuf {
     option("--preferences-path")
         .map(PathBuf::from)
         .unwrap_or_else(|| user_directory().join("ui.json"))
 }
+/// The per-user folder where the game keeps its files.
 pub(crate) fn user_directory() -> PathBuf {
     #[cfg(windows)]
     {
@@ -61,6 +67,7 @@ pub(crate) fn user_directory() -> PathBuf {
         base.join("NewCenturions")
     }
 }
+/// The saved preferences, read before the window opens to pick its size.
 pub(crate) fn startup_preferences() -> preferences::Preferences {
     std::fs::metadata(preferences_path())
         .ok()
@@ -70,6 +77,8 @@ pub(crate) fn startup_preferences() -> preferences::Preferences {
         .and_then(|v| preferences::Preferences::decode(&v["native"]).ok())
         .unwrap_or_default()
 }
+/// Appends a line to the audit log: the command, the session before and after,
+/// the random seed and draws, and the window scale.
 pub(crate) fn audit(
     path: &Option<String>,
     label: &str,

@@ -32,7 +32,7 @@ fn clinic_command_treatments_and_saved_return_match_original() {
         let restored = apply(command, &mut resumed, &content);
         if case.n::<i32>("credits_before") == 0 {
             assert!(
-                matches!(result, Err(RuleError::Refused { feedback }) if feedback == vec![centurions_core::feedback::NativeFeedback::Warning { index: 50 }])
+                matches!(result, Err(RuleError::Refused { feedback }) if feedback == vec![centurions_core::feedback::GameFeedback::Warning { index: 50 }])
             );
             assert!(restored.is_err());
             assert_eq!(state, before);
@@ -115,8 +115,8 @@ fn outdoor_heal_and_party_callers_match_original_records_effect_order_and_rng() 
         let warriors: Vec<_> = support::warriors(&before);
         let affected = case.bytes("affected_before");
         let context = HealthContext {
-            unavailable: case.n::<i8>("unavailable_before"),
-            selected_warrior: case.n::<usize>("member"),
+            kill_party: case.n::<i8>("unavailable_before"),
+            char_select_new: case.n::<usize>("member"),
             effect: 77,
             last_body: -7,
             marks_affected: case.n::<bool>("marks_affected"),
@@ -128,7 +128,7 @@ fn outdoor_heal_and_party_callers_match_original_records_effect_order_and_rng() 
         let outcome = if case["kind"] == "heal" {
             heal_outdoors(
                 &warriors,
-                context.selected_warrior,
+                context.char_select_new,
                 case.n::<i16>("amount"),
                 case.n::<bool>("animate"),
                 &context,
@@ -150,7 +150,7 @@ fn outdoor_heal_and_party_callers_match_original_records_effect_order_and_rng() 
         changes(&mut expected, &case["after_changes"]);
         assert_eq!(actual, expected, "full warrior state {index}");
         support::native_expect! {
-            scalar outcome.context.unavailable => &case["unavailable_after"], "binary_story_health";
+            scalar outcome.context.kill_party => &case["unavailable_after"], "binary_story_health";
             scalar outcome.context.effect => &case["effect_after"], "binary_story_health";
             scalar outcome.context.last_body => &case["last_body_after"], "binary_story_health";
         }

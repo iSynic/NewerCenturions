@@ -2,7 +2,7 @@
 use super::detached_attacks::saved_return;
 use super::outdoor_deaths::{prepare, verify};
 use crate::combat::runtime::CombatReturn;
-use crate::feedback::NativeFeedback;
+use crate::feedback::GameFeedback;
 use crate::test_support::{bytes, fixture};
 use crate::{Command, Content, Event, Session};
 use centurions_content::InventoryRecord;
@@ -22,11 +22,11 @@ fn walking(source: &Value) -> (Session, Content) {
         .iter()
         .map(|raw| i32::from_be_bytes(*raw))
         .collect();
-    state.native_work.inventory_record =
+    state.globals.inventory_record =
         InventoryRecord::read(&bytes(&before["selected_inventory_record"])).unwrap();
-    state.native_work.walking_confusion = word(&before["confusion_global"]);
-    state.allies = bytes(&before["allies"]);
-    let current = state.native_work.initiative_work.order[0];
+    state.globals.possessed = word(&before["confusion_global"]);
+    state.holdover = bytes(&before["allies"]);
+    let current = state.globals.battle_order.order[0];
     saved_return(&mut state, &content);
     let locals = &source["loop_locals"];
     let caller: CombatReturn = serde_json::from_value(json!({"WarriorMove": {
@@ -63,7 +63,7 @@ fn occupied_and_involuntary_walking_match_native_shared_work_and_choices() {
             );
             let restored = crate::load(&path, &content).unwrap();
             assert!(state == restored);
-            assert_eq!(restored.native_work.walking_confusion, 1);
+            assert_eq!(restored.globals.possessed, 1);
             state = restored;
             std::fs::remove_file(path).unwrap();
         }
@@ -75,7 +75,7 @@ fn occupied_and_involuntary_walking_match_native_shared_work_and_choices() {
         if questions != 0 {
             assert_eq!(questions, 1);
             let pending = state
-                .retained_walk_choice
+                .out_of_combat_walk_choice
                 .as_ref()
                 .expect("captured question not offered");
             assert_eq!(pending.body, source["target"].as_i64().unwrap() as i16);
@@ -105,7 +105,7 @@ fn occupied_and_involuntary_walking_match_native_shared_work_and_choices() {
                 .unwrap_or_else(|error| panic!("{} answer: {error}", case["name"])),
             );
         } else {
-            assert!(state.retained_walk_choice.is_none());
+            assert!(state.out_of_combat_walk_choice.is_none());
         }
         let mut omitted = 0;
         events.retain(|event| {
@@ -123,13 +123,13 @@ fn occupied_and_involuntary_walking_match_native_shared_work_and_choices() {
         );
         verify(&state, &content, &events, case);
         assert_eq!(
-            state.native_work.walking_confusion,
+            state.globals.possessed,
             word(&case["memory"]["confusion_global"]["hex"]),
             "{} confusion WORD",
             case["name"]
         );
         assert_eq!(
-            state.native_work.character_bare_hand_bonus,
+            state.globals.character_bare_hand_bonus,
             word(&case["memory"]["character_work_bonus"]["hex"])
         );
         assert_eq!(
@@ -143,7 +143,7 @@ fn occupied_and_involuntary_walking_match_native_shared_work_and_choices() {
             case["name"]
         );
         assert_eq!(
-            state.native_work.inventory_record.0.to_vec(),
+            state.globals.inventory_record.0.to_vec(),
             bytes(&case["memory"]["selected_inventory_record"]["hex"]),
             "{} retained inventory record",
             case["name"]
@@ -151,7 +151,7 @@ fn occupied_and_involuntary_walking_match_native_shared_work_and_choices() {
         let warnings: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
-                Event::Feedback(NativeFeedback::Warning { index }) => Some(*index),
+                Event::Feedback(GameFeedback::Warning { index }) => Some(*index),
                 _ => None,
             })
             .collect();
@@ -186,6 +186,6 @@ fn occupied_firing_past_seven_triples_writes_the_defeated_word_and_packet() {
         .set_inventory_quantity(0, 100);
     crate::apply(Command::Continue, &mut state, &content).unwrap();
     let target = source["target"].as_i64().unwrap() as i16;
-    assert_eq!(state.native_work.victory_work.defeated, target);
-    assert_eq!(state.native_work.attack_packet[2..4], [0, 2]);
+    assert_eq!(state.globals.kill_counts.kill_mon, target);
+    assert_eq!(state.globals.spell_info[2..4], [0, 2]);
 }

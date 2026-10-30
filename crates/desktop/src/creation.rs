@@ -3,12 +3,29 @@ use crate::{
     assets::Assets,
     presentation::{Action, Control},
 };
+use centurions_content::records::{ProfileTable, RACE_PROFILE_BYTES};
 use centurions_content::{Content, ui, word};
 use centurions_core::{
     Command, Event, RuleError, Session, apply, character_display::Fields, creation::Request,
 };
 use macroquad::prelude::*;
 
+/// Done button of the race (DITL 190) and M.O.S. (DITL 131) dialogs: item 56.
+pub const RACE_DONE: usize = 56;
+/// Done button of the gender dialog (DITL 133): item 6.
+pub const GENDER_DONE: usize = 6;
+/// Done button of the level dialog (DITL 161): item 29.
+pub const LEVEL_DONE: usize = 29;
+/// Done button of the name dialog (DITL 132): item 4.
+pub const NAME_DONE: usize = 4;
+/// Done control of the portrait and icon dialog (DITL 170): item 2.
+pub const APPEARANCE_DONE: usize = 2;
+/// Done control of the review dialog (DITL 128): item 66.
+pub const REVIEW_DONE: usize = 66;
+
+/// The steps of making a new warrior, each with its own dialog and taken in this order: name,
+/// level, M.O.S., race, gender (only for a race that offers a choice), portrait, icon and
+/// review, then the scan choice, and last keeping the finished warrior.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     Race,
@@ -22,6 +39,9 @@ pub enum Stage {
     Scans,
     Keep,
 }
+/// A new warrior being made on a draft of the session, with the choices made so
+/// far; `read_only` shows a warrior's race or M.O.S. profile without changing
+/// anything.
 pub struct Creation {
     pub read_only: bool,
     pub stage: Stage,
@@ -33,6 +53,8 @@ pub struct Creation {
     pub fields_attempted: bool,
 }
 impl Creation {
+    /// Starts a new warrior at the name step, on a fresh draft that shares the
+    /// session's random state.
     pub fn new(state: &Session, content: &Content) -> Self {
         let mut draft = Session::new(content);
         draft.random = state.random.clone();
@@ -57,6 +79,8 @@ impl Creation {
             fields_attempted: false,
         }
     }
+    /// Shows the race or M.O.S. profile of squad member `member` as the same dialog
+    /// used to choose them, read only.
     pub fn profile(
         state: &Session,
         content: &Content,
@@ -73,9 +97,10 @@ impl Creation {
         view.request.race = warrior.record().race()?;
         view.request.mos = warrior.record().profession()?;
         view.request.portrait = warrior.record().portrait()?;
-        view.request.icon = warrior.record().tactical_icon()?;
+        view.request.icon = warrior.record().icon()?;
         Ok(view)
     }
+    /// The dialog resource for the current step.
     pub fn dialog(&self) -> i16 {
         match self.stage {
             Stage::Race => 190,
@@ -87,6 +112,8 @@ impl Creation {
             _ => 128,
         }
     }
+    /// The race (STR# 129) or M.O.S. (STR# 131) names that can be chosen, with their
+    /// numbers; a race is offered only if it allows the chosen M.O.S.
     pub fn choices(&self, content: &Content, assets: &Assets) -> Vec<(i16, String)> {
         let resource = if self.stage == Stage::Race { 129 } else { 131 };
         assets
@@ -102,13 +129,14 @@ impl Creation {
                     && (self.read_only
                         || self.stage == Stage::Mos
                         || content.map(0).is_some_and(|m| {
-                            let at = i * 408 + 208 + self.request.mos as usize - 1;
+                            let at = i * RACE_PROFILE_BYTES + 208 + self.request.mos as usize - 1;
                             m.races.get(at).is_some_and(|b| *b != 0)
                         }))
             })
             .map(|(i, name)| (i as i16 + 1, name))
             .collect()
     }
+    /// Takes a choice at the current step (race, M.O.S., gender or level).
     pub fn choice(&mut self, value: i16, content: &Content) -> Result<Vec<Event>, RuleError> {
         match self.stage {
             Stage::Race => {
@@ -116,12 +144,15 @@ impl Creation {
                     return Err("Race choice is unavailable.".into());
                 }
                 let map = content.map(0).ok_or("Race profiles missing.")?;
-                centurions_content::span(&map.races, (value as usize - 1) * 408, 408)?;
+                ProfileTable::races(&map.races).row(value as usize - 1)?;
                 self.request.race = value;
                 self.request.portrait = value * 6 + 251;
                 self.request.icon = self.request.portrait + 9000;
                 if !self.read_only
-                    && map.races[(value as usize - 1) * 408 + 208 + self.request.mos as usize - 1]
+                    && map.races[(value as usize - 1) * RACE_PROFILE_BYTES
+                        + 208
+                        + self.request.mos as usize
+                        - 1]
                         == 0
                 {
                     return Err("Race is incompatible with MOS.".into());
@@ -142,6 +173,7 @@ impl Creation {
         self.popup = false;
         Ok(vec![Event::Sound { resource_id: 130 }])
     }
+    /// Carries out a click on a dialog item of the current step.
     pub fn item(
         &mut self,
         item: usize,
@@ -197,12 +229,12 @@ impl Creation {
             return self.roll(state, content);
         }
         let done = match self.stage {
-            Stage::Race | Stage::Mos => matches!(item, 1 | 56),
-            Stage::Gender => matches!(item, 1 | 6),
-            Stage::Level => matches!(item, 1 | 29),
-            Stage::Name => matches!(item, 1 | 4),
+            Stage::Race | Stage::Mos => matches!(item, 1 | RACE_DONE),
+            Stage::Gender => matches!(item, 1 | GENDER_DONE),
+            Stage::Level => matches!(item, 1 | LEVEL_DONE),
+            Stage::Name => matches!(item, 1 | NAME_DONE),
             Stage::Portrait | Stage::Icon => item < 3,
-            Stage::Review => matches!(item, 1 | 66),
+            Stage::Review => matches!(item, 1 | REVIEW_DONE),
             _ => false,
         };
         if !done {
@@ -214,7 +246,11 @@ impl Creation {
             Stage::Mos if self.request.mos != 0 => (Stage::Race, 128),
             Stage::Race if self.request.race != 0 => {
                 let map = content.map(0).ok_or("Race profiles missing")?;
-                if word(&map.races, (self.request.race as usize - 1) * 408 + 194)? != 0 {
+                if word(
+                    &map.races,
+                    (self.request.race as usize - 1) * RACE_PROFILE_BYTES + 194,
+                )? != 0
+                {
                     (Stage::Gender, 126)
                 } else {
                     (Stage::Portrait, 129)
@@ -246,7 +282,7 @@ impl Creation {
         }
         if page != 0 {
             events.push(Event::Feedback(
-                centurions_core::feedback::NativeFeedback::Tutorial {
+                centurions_core::feedback::GameFeedback::Tutorial {
                     first: page,
                     last: page,
                 },
@@ -254,6 +290,8 @@ impl Creation {
         }
         Ok(events)
     }
+    /// Gives the new warrior its starting equipment, returns the random state to the
+    /// session and keeps the warrior.
     pub fn finish(
         &mut self,
         state: &mut Session,
@@ -266,6 +304,8 @@ impl Creation {
         self.stage = Stage::Keep;
         Ok(events)
     }
+    /// Generates the warrior's record from the choices made, using the session's
+    /// random state.
     fn roll(&mut self, state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
         self.draft.random = state.random.clone();
         let events = apply(
@@ -283,6 +323,7 @@ impl Creation {
         self.fields_attempted = false;
         Ok(events)
     }
+    /// Draws the dialog for the current step with its choices and controls.
     pub fn draw(&self, content: &Content, assets: &Assets, controls: &mut Vec<Control>) {
         if matches!(self.stage, Stage::Scans | Stage::Keep) {
             return;
@@ -291,7 +332,7 @@ impl Creation {
         if id != 170 {
             assets.draw_dialog(id);
         } else {
-            assets.panel(214, Rect::new(80., 80., 640., 460.));
+            assets.panel(214, crate::layout::DIALOG_FRAME);
             for item in [73, 93, 94] {
                 let r = appearance_rect(assets, item);
                 let picture = i16::from_be_bytes(
@@ -306,102 +347,7 @@ impl Creation {
         match self.stage {
             Stage::Race | Stage::Mos => {
                 enabled.extend([56, 58, 74]);
-                // race/caste draw the selected warrior in DITL item74.
-                if let Some(image) = assets.portraits.get(&self.request.portrait) {
-                    let rect = assets.dialog_rect(id, 74);
-                    draw_texture_ex(
-                        image,
-                        rect.x,
-                        rect.y,
-                        WHITE,
-                        DrawTextureParams {
-                            dest_size: Some(rect.size()),
-                            ..Default::default()
-                        },
-                    );
-                }
-                let chosen = if self.stage == Stage::Race {
-                    self.request.race
-                } else {
-                    self.request.mos
-                };
-                if let Some((_, name)) = self
-                    .choices(content, assets)
-                    .iter()
-                    .find(|(v, _)| *v == chosen)
-                {
-                    assets.wrapped_color(name, assets.dialog_rect(id, 58), 12, 14., YELLOW);
-                }
-                if let Some(map) = content.map(0) {
-                    let (records, index, length) = if self.stage == Stage::Race {
-                        (&map.races, self.request.race, 408)
-                    } else {
-                        (&map.profiles, self.request.mos, 576)
-                    };
-                    if index > 0
-                        && let Ok(record) =
-                            centurions_content::span(records, (index as usize - 1) * length, length)
-                    {
-                        let mut fields = Vec::new();
-                        for (first, count, offset) in if self.stage == Stage::Race {
-                            [
-                                (2, 14, 74),
-                                (16, 7, 60),
-                                (36, 8, 0),
-                                (59, 14, 16),
-                                (28, 8, 44),
-                            ]
-                        } else {
-                            [(2, 14, 110), (16, 7, 72), (59, 14, 0), (0, 0, 0), (0, 0, 0)]
-                        } {
-                            fields.extend((0..count).map(|i| (first + i, offset + i * 2)));
-                        }
-                        fields.extend(if self.stage == Stage::Race {
-                            vec![
-                                (44, 196),
-                                (45, 198),
-                                (46, 200),
-                                (47, 202),
-                                (50, 204),
-                                (51, 206),
-                            ]
-                        } else {
-                            vec![
-                                (44, 258),
-                                (45, 260),
-                                (46, 266),
-                                (49, 452),
-                                (50, 268),
-                                (51, 224),
-                                (37, 264),
-                                (38, 262),
-                                (40, 222),
-                                (90, 224),
-                                (41, 234),
-                                (91, 236),
-                                (42, 238),
-                                (92, 240),
-                                (43, 242),
-                                (93, 244),
-                                (104, 250),
-                                (106, 252),
-                                (105, 246),
-                                (107, 248),
-                            ]
-                        });
-                        for (item, offset) in fields {
-                            if let Ok(value) = word(record, offset) {
-                                assets.wrapped_color(
-                                    &value.to_string(),
-                                    assets.dialog_rect(id, item),
-                                    12,
-                                    14.,
-                                    YELLOW,
-                                );
-                            }
-                        }
-                    }
-                }
+                self.draw_record_fields(content, assets, id);
             }
             Stage::Gender => {
                 enabled.extend([2, 3, 6]);
@@ -444,16 +390,7 @@ impl Creation {
                     };
                     if let Some(image) = texture {
                         let r = appearance_rect(assets, item);
-                        draw_texture_ex(
-                            image,
-                            r.x,
-                            r.y,
-                            WHITE,
-                            DrawTextureParams {
-                                dest_size: Some(r.size()),
-                                ..Default::default()
-                            },
-                        );
+                        crate::assets::texture_in(image, r);
                         enabled.push(item);
                     }
                 }
@@ -463,15 +400,12 @@ impl Creation {
                 } else {
                     0x4034e2
                 };
-                if let Ok(title) = assets.native_text.text(address, true) {
-                    assets.wrapped_color(&title, appearance_rect(assets, 71), 12, 14., YELLOW);
+                if let Ok(title) = assets.game_text.text(address, true) {
+                    assets.dialog_text(&title, appearance_rect(assets, 71));
                 }
-                assets.wrapped_color(
+                assets.dialog_text(
                     &assets.appearance_dialog[71].text(),
                     appearance_rect(assets, 72),
-                    12,
-                    14.,
-                    YELLOW,
                 );
             }
             Stage::Review => {
@@ -482,16 +416,7 @@ impl Creation {
                 ] {
                     if let Some(image) = image {
                         let rect = assets.dialog_rect(128, item);
-                        draw_texture_ex(
-                            image,
-                            rect.x,
-                            rect.y,
-                            WHITE,
-                            DrawTextureParams {
-                                dest_size: Some(rect.size()),
-                                ..Default::default()
-                            },
-                        );
+                        crate::assets::texture_in(image, rect);
                     }
                 }
                 if let Some(fields) = &self.fields {
@@ -543,7 +468,60 @@ impl Creation {
             }
         }
     }
+
+    /// Race or MOS: the warrior's portrait, the chosen name and the chosen
+    /// row's fields in their dialog items.
+    fn draw_record_fields(&self, content: &Content, assets: &Assets, id: i16) {
+        if let Some(image) = assets.portraits.get(&self.request.portrait) {
+            let rect = assets.dialog_rect(id, 74);
+            crate::assets::texture_in(image, rect);
+        }
+        let chosen = if self.stage == Stage::Race {
+            self.request.race
+        } else {
+            self.request.mos
+        };
+        if let Some((_, name)) = self
+            .choices(content, assets)
+            .iter()
+            .find(|(v, _)| *v == chosen)
+        {
+            assets.dialog_text(name, assets.dialog_rect(id, 58));
+        }
+        if let Some(map) = content.map(0) {
+            let (table, index, runs, singles) = if self.stage == Stage::Race {
+                (
+                    ProfileTable::races(&map.races),
+                    self.request.race,
+                    &RACE_FIELD_RUNS[..],
+                    &RACE_FIELDS[..],
+                )
+            } else {
+                (
+                    ProfileTable::professions(&map.profiles),
+                    self.request.mos,
+                    &PROFILE_FIELD_RUNS[..],
+                    &PROFILE_FIELDS[..],
+                )
+            };
+            if index > 0
+                && let Ok(record) = table.row(index as usize - 1)
+            {
+                let mut fields = Vec::new();
+                for &(first, count, offset) in runs {
+                    fields.extend((0..count).map(|i| (first + i, offset + i * 2)));
+                }
+                fields.extend_from_slice(singles);
+                for (item, offset) in fields {
+                    if let Ok(value) = word(record, offset) {
+                        assets.dialog_text(&value.to_string(), assets.dialog_rect(id, item));
+                    }
+                }
+            }
+        }
+    }
 }
+/// Item `item` of the appearance dialog as a rectangle in the window.
 fn appearance_rect(assets: &Assets, item: usize) -> Rect {
     let [top, left, bottom, right] = assets.appearance_dialog[item - 1].rect;
     Rect::new(
@@ -553,3 +531,46 @@ fn appearance_rect(assets: &Assets, item: usize) -> Rect {
         (bottom - top) as f32,
     )
 }
+
+/// Race dialog runs of 16-bit fields: (first DITL item, count, first record offset).
+const RACE_FIELD_RUNS: [(usize, usize, usize); 5] = [
+    (2, 14, 74),
+    (16, 7, 60),
+    (36, 8, 0),
+    (59, 14, 16),
+    (28, 8, 44),
+];
+/// Race dialog single 16-bit fields: (DITL item, record offset).
+const RACE_FIELDS: [(usize, usize); 6] = [
+    (44, 196),
+    (45, 198),
+    (46, 200),
+    (47, 202),
+    (50, 204),
+    (51, 206),
+];
+/// MOS dialog runs of 16-bit fields: (first DITL item, count, first record offset).
+const PROFILE_FIELD_RUNS: [(usize, usize, usize); 3] = [(2, 14, 110), (16, 7, 72), (59, 14, 0)];
+/// MOS dialog single 16-bit fields: (DITL item, record offset).
+const PROFILE_FIELDS: [(usize, usize); 20] = [
+    (44, 258),
+    (45, 260),
+    (46, 266),
+    (49, 452),
+    (50, 268),
+    (51, 224),
+    (37, 264),
+    (38, 262),
+    (40, 222),
+    (90, 224),
+    (41, 234),
+    (91, 236),
+    (42, 238),
+    (92, 240),
+    (43, 242),
+    (93, 244),
+    (104, 250),
+    (106, 252),
+    (105, 246),
+    (107, 248),
+];

@@ -1,6 +1,6 @@
 //! Source-derived field transitions; fixture inputs do not qualify these cases.
 use crate::{prelude::*, support};
-use centurions_content::records::{AttackPacket, AttackPacketMut, Condition};
+use centurions_content::records::{Condition, SpellInfoRecord, SpellInfoRecordMut};
 
 #[test]
 fn fields_check_resistance_before_shared_usage_and_do_not_repeat_effects() {
@@ -19,13 +19,13 @@ fn fields_check_resistance_before_shared_usage_and_do_not_repeat_effects() {
         let resisted = spell == 2603;
         let mut enemies = enemies.clone();
         if resisted {
-            for enemy in &mut enemies {
-                enemy.record_mut().set_magic_immunity(0);
-                enemy.record_mut().set_movement_points(6);
+            for monster in &mut enemies {
+                monster.record_mut().set_psi_resistance(0);
+                monster.record_mut().set_movement(6);
             }
         }
         let mut packet = spells::load_packet(&data("Data S"), spell).unwrap();
-        AttackPacketMut(&mut packet).prepare_field_collision();
+        SpellInfoRecordMut(&mut packet).prepare_field_collision();
         if !resisted {
             packet[9] = 3;
         }
@@ -63,7 +63,7 @@ fn fields_check_resistance_before_shared_usage_and_do_not_repeat_effects() {
         assert_eq!(targets, if excluded { vec![] } else { vec![target] });
         if resisted {
             assert_eq!(first.enemies[0].record().condition(Condition::Helpless), 3);
-            assert_eq!(first.enemies[0].record().movement_points(), 0);
+            assert_eq!(first.enemies[0].record().movement(), 0);
             assert_eq!(first.enemies[1], enemies[1]);
             assert_eq!(random.draws, 6);
         } else if excluded {
@@ -79,16 +79,16 @@ fn fields_check_resistance_before_shared_usage_and_do_not_repeat_effects() {
         if revive != 0 {
             assert_eq!(
                 first.warriors[0].stamina().unwrap(),
-                warriors[0].record().maximum_stamina().unwrap() / 4 - first.targets[0].1.damage
+                warriors[0].record().stamina_max().unwrap() / 4 - first.targets[0].1.damage
             );
-            assert_eq!(first.warriors[0].record().automatic_mode().unwrap(), -1);
+            assert_eq!(first.warriors[0].record().computer_control().unwrap(), -1);
         }
         assert_eq!(first.warriors[1], warriors[1]);
         assert_eq!(usage.used[8], u8::from(!excluded));
         let mut expected = random.clone();
-        let (minimum, maximum) = AttackPacket(&packet).duration_bounds();
+        let (minimum, maximum) = SpellInfoRecord(&packet).duration_range();
         expected.range(minimum, maximum);
-        let (minimum, maximum) = AttackPacket(&packet).additional_duration_bounds();
+        let (minimum, maximum) = SpellInfoRecord(&packet).power_duration_range();
         if minimum != 0 {
             for _ in 0..count {
                 expected.range(minimum, maximum);

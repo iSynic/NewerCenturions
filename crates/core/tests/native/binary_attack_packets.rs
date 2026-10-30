@@ -7,11 +7,11 @@ use native_common::original_file as data;
 fn combat(records: &[u8], member: i16) -> Combat {
     let mut combat = support::battle();
     combat.battle = 117;
-    combat.map.tiles.fill(1155);
-    combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
-    combat.enemies.records = support::monsters(records);
-    combat.enemies.positions = vec![(40 + member, 40); records.len() / MONSTER_BYTES];
-    combat.attack_identity = [2, 4, 6];
+    combat.field.tiles.fill(1155);
+    combat.squad.pos = (0..6).map(|i| (40 + i, 40)).collect();
+    combat.roster.records = support::monsters(records);
+    combat.roster.mon_pos = vec![(40 + member, 40); records.len() / MONSTER_BYTES];
+    combat.cast_identity = [2, 4, 6];
     combat
 }
 
@@ -30,7 +30,7 @@ fn attack_packets_match_native_complete_writers_and_retention() {
         let kind = case.text("kind");
         let mut warrior = Warrior::read(&case.bytes("warrior_before")).unwrap();
         let records = case.bytes("records_before");
-        let mut enemy = MonsterRecord {
+        let mut monster = MonsterRecord {
             bytes: records[..288].to_vec(),
         };
         let retained = case.bytes("packet_before");
@@ -41,19 +41,19 @@ fn attack_packets_match_native_complete_writers_and_retention() {
             "unarmed" => {
                 let (result, packet) = attack::unarmed_attack_with_packet(
                     &mut warrior,
-                    &mut enemy,
+                    &mut monster,
                     &mut random,
                     &attacks,
                     &retained,
                     0,
                 )
                 .unwrap();
-                (result, packet, enemy.bytes.clone())
+                (result, packet, monster.bytes.clone())
             }
             "natural" => {
                 let (result, packet) = attack::natural_attack_with_packet(
                     &mut warrior,
-                    &mut enemy,
+                    &mut monster,
                     slot,
                     &mut random,
                     &attacks,
@@ -61,13 +61,13 @@ fn attack_packets_match_native_complete_writers_and_retention() {
                     0,
                 )
                 .unwrap();
-                (result, packet, enemy.bytes.clone())
+                (result, packet, monster.bytes.clone())
             }
             "melee" => {
-                let id = i16::from_be_bytes(enemy.bytes[0x28..0x2a].try_into().unwrap()) as usize;
+                let id = i16::from_be_bytes(monster.bytes[0x28..0x2a].try_into().unwrap()) as usize;
                 let (result, packet) = enemy_weapons::melee_with_packet(
                     &mut warrior,
-                    &mut enemy,
+                    &mut monster,
                     &items[id * 150..(id + 1) * 150],
                     &mut random,
                     0,
@@ -77,7 +77,7 @@ fn attack_packets_match_native_complete_writers_and_retention() {
                     &retained,
                 )
                 .unwrap();
-                (result, packet, enemy.bytes.clone())
+                (result, packet, monster.bytes.clone())
             }
             "ally" => {
                 let mut c = combat(&records, member);
@@ -93,7 +93,7 @@ fn attack_packets_match_native_complete_writers_and_retention() {
                     &retained,
                 )
                 .unwrap();
-                let records = support::record_bytes(&c.enemies.records);
+                let records = support::record_bytes(&c.roster.records);
                 warrior = party[0].clone();
                 (result, packet, records)
             }

@@ -1,12 +1,18 @@
-use crate::{Event, RuleError, Session, feedback::NativeFeedback};
+use crate::combat::party_buffs;
+use crate::combat::player_psi;
+use crate::combat::spells::spell_identity;
+use crate::{Event, RuleError, Session, feedback::GameFeedback};
 use centurions_content::records::{
-    AttackPacket, Condition, PsiSelectionMemoryMut, QuestionExtra, TypedEncounterRecord,
+    Condition, PsiSelectionMemoryMut, QuestionExtra, SpellInfoRecord, TypedEncounterRecord,
 };
 use centurions_content::{Content, span};
 
 pub use centurions_content::records::TYPED_ENCOUNTER_BYTES as RECORD_BYTES;
 
-/// Encounter2 calls castspell with an encounter active, bypassing location flags.
+/// A typed encounter casts with the encounter active, so location limits do not
+/// apply.
+///
+/// Original: encounter2
 pub fn validate_spell(
     state: &Session,
     content: &Content,
@@ -40,7 +46,8 @@ pub fn validate_spell(
         || actor.stamina()? <= 0
         || actor.psi_points()? <= 0
         || state.combat.is_some()
-            && (record.damage_marker()? != 0 || record.scans_used()? >= record.scan_capacity()?)
+            && (record.been_attacked()? != 0
+                || record.spells_so_far()? >= record.max_spells_attacks()?)
         || state
             .combat
             .as_ref()
@@ -56,9 +63,9 @@ pub fn validate_spell(
             .attacks,
         spell,
     )?;
-    let view = AttackPacket(&packet);
+    let view = SpellInfoRecord(&packet);
     let indexed = 0x442562_i64 + 2 * i64::from(view.effect()?);
-    if view.targeting_mode() == 7
+    if view.is_party_duration()
         && !matches!(view.effect()?, 0..=9 | 50 | 110)
         && state.information_word(indexed).is_none()
     {
@@ -67,14 +74,17 @@ pub fn validate_spell(
             dependency: "indexed spell effect WORD 0x442562 + 2 * effect without an owner",
         });
     }
-    if actor.psi_points()? < crate::combat::player_psi::cost(&packet, power)? {
+    if actor.psi_points()? < player_psi::cost(&packet, power)? {
         return Err(RuleError::Refused {
-            feedback: vec![NativeFeedback::Warning { index: 18 }],
+            feedback: vec![GameFeedback::Warning { index: 18 }],
         });
     }
     Ok(packet)
 }
 
+/// Casts a known psi spell for a warrior during a typed encounter. It spends the psi points, plays
+/// the impact sound and applies the spell's party-duration effect if it has one. The encounter then
+/// takes the branch whose spell alternative matches the spell or its defense category, or branch 4.
 pub fn cast_spell(
     state: &mut Session,
     content: &Content,
@@ -83,61 +93,59 @@ pub fn cast_spell(
     power: i16,
 ) -> Result<Vec<Event>, RuleError> {
     let packet = validate_spell(state, content, warrior, spell, power)?;
-    crate::combat::player_psi::select_native_caster(state);
+    player_psi::select_combat_caster(state);
     let actor = &mut state.warriors[warrior];
     let remaining = actor
         .psi_points()?
-        .wrapping_sub(crate::combat::player_psi::cost(&packet, power)?);
+        .wrapping_sub(player_psi::cost(&packet, power)?);
     actor.record_mut().set_psi_points(remaining);
     if state.combat.is_some() {
         actor.record_mut().count_scan_cast();
-        let casts = actor.record().scans_used()?.wrapping_add(1);
-        actor.record_mut().set_scans_used(casts);
+        let casts = actor.record().spells_so_far()?.wrapping_add(1);
+        actor.record_mut().set_spells_so_far(casts);
     }
-    let identity = [spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1];
-    state.selected_warrior = warrior;
-    state.native_work.attack_identity = identity;
-    state.native_work.attack_count = power;
-    state.native_work.attack_packet = packet.clone();
+    let identity = spell_identity(spell);
+    state.char_select_new = warrior;
+    state.globals.cast_identity = identity;
+    state.globals.attack_count = power;
+    state.globals.spell_info = packet.clone();
     if let Some(combat) = state.combat.as_mut() {
-        combat.attack_packet = packet.clone();
-        combat.attack_identity = identity;
+        combat.spell_info = packet.clone();
+        combat.cast_identity = identity;
     }
-    // castspell 0x10d328 stores the cast power in WORD 0x437a7a + 2 * member.
-    state.native_work.psi_powers[warrior] = None;
+    // castspell remembers the cast power with the menu choice.
+    state.globals.old_power_level[warrior] = None;
     state.psi_menu_choices[warrior] = Some(crate::PsiMenuChoice {
         row: identity[1] as u8,
         column: identity[2] as u8,
         power,
     });
-    // encounter2 1228ee calls cleartarget before the impact sound.
+    // Targets clear before the impact sound.
     state.clear_targets();
-    let view = AttackPacket(&packet);
+    let view = SpellInfoRecord(&packet);
     let mut events = vec![Event::Sound {
         resource_id: view.impact_sound()?,
     }];
-    if view.targeting_mode() == 7 {
-        PsiSelectionMemoryMut(&mut state.native_work.psi_memory)
+    if view.is_party_duration() {
+        PsiSelectionMemoryMut(&mut state.globals.define_spells)
             .remember_cast(warrior, identity, power);
-        let (minimum, maximum) = view.duration_bounds();
+        let (minimum, maximum) = view.duration_range();
         let mut duration = state.random.range(minimum, maximum);
-        let (minimum, maximum) = view.additional_duration_bounds();
+        let (minimum, maximum) = view.power_duration_range();
         if minimum != 0 {
             for _ in 0..power {
                 duration = duration.wrapping_add(state.random.range(minimum, maximum));
             }
         }
         match view.effect()? {
-            110 => crate::combat::party_buffs::extend_scenario_tail(state, duration)?,
+            110 => party_buffs::extend_scenario_tail(state, duration)?,
             50 => {
                 events.push(Event::Sound { resource_id: 601 });
-                crate::combat::party_buffs::extend_from_count(&mut state.party_buffs, power)?;
+                party_buffs::extend_from_count(&mut state.party_condition, power)?;
             }
-            effect @ 0..=9 => {
-                crate::combat::party_buffs::extend(&mut state.party_buffs, effect, duration)?
-            }
+            effect @ 0..=9 => party_buffs::extend(&mut state.party_condition, effect, duration)?,
             effect => {
-                if !crate::combat::party_buffs::extend_indexed(state, effect, duration)? {
+                if !party_buffs::extend_indexed(state, effect, duration)? {
                     return Err(RuleError::Unsupported {
                         action: "story.encounter_spell",
                         dependency: "indexed spell effect WORD 0x442562 + 2 * effect without an owner",
@@ -146,8 +154,8 @@ pub fn cast_spell(
             }
         }
     }
-    // encounter21228c6 clears Ready after castspell, before the selected branch.
-    state.set_ready(0);
+    // `in_spell` clears after the cast, before the selected branch.
+    state.set_in_spell(0);
     let bytes = crate::exploration::typed_record(state, content)?;
     let record = TypedEncounterRecord(&bytes);
     let mut selector = 4;
@@ -168,6 +176,7 @@ pub fn cast_spell(
     Ok(events)
 }
 
+/// Opens the choice of physical actions for a typed encounter that offers them.
 pub fn begin_actions(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let bytes = crate::exploration::typed_record(state, content)?;
     let record = TypedEncounterRecord(&bytes);
@@ -178,6 +187,8 @@ pub fn begin_actions(state: &mut Session, content: &Content) -> Result<Vec<Event
     Ok(vec![])
 }
 
+/// Handles a click while the physical actions are chosen: toggles one of eight actions, confirms
+/// the choice against the encounter's required actions, or cancels.
 pub fn action_control(
     state: &mut Session,
     content: &Content,
@@ -201,7 +212,7 @@ pub fn action_control(
             let count = required.iter().filter(|value| **value != 0).count();
             if selected.iter().filter(|value| **value).count() != count {
                 return Err(RuleError::Refused {
-                    feedback: vec![NativeFeedback::Warning { index: 58 }],
+                    feedback: vec![GameFeedback::Warning { index: 58 }],
                 });
             }
             let matched = count != 0
@@ -221,6 +232,7 @@ pub fn action_control(
     }
 }
 
+/// Checks that a pending choice of actions belongs to a typed encounter that offers them.
 pub fn validate_actions(state: &Session, content: &Content) -> Result<(), RuleError> {
     if state.encounter_actions.is_some() {
         let bytes = crate::exploration::typed_record(state, content)?;
@@ -246,7 +258,9 @@ pub fn validate_actions(state: &Session, content: &Content) -> Result<(), RuleEr
     Ok(())
 }
 
-/// encounter2 122a1a matches the selected item against five authored alternatives.
+/// Matches the selected item against the encounter's five items.
+///
+/// Original: encounter2
 pub fn select_item(record: &[u8], item: i16) -> Result<i8, RuleError> {
     let record = TypedEncounterRecord(span(record, 0, RECORD_BYTES)?);
     if record.item_alternative(0)? == 0 {
@@ -260,14 +274,15 @@ pub fn select_item(record: &[u8], item: i16) -> Result<i8, RuleError> {
     Ok(4)
 }
 
+/// What a typed password gave: nothing typed, so try again, or the branch it selects.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PasswordSelection {
     Retry,
     Selected(i8),
 }
 
-/// newland44 on the loaded buffer: each eliminated branch keeps only its last
-/// action, which becomes opcode 24 with its parameter unchanged.
+/// Eliminate Complex Branch: each eliminated branch keeps only its last action,
+/// which becomes End Script with its parameter unchanged.
 pub fn eliminate_branches(record: &mut [u8], eliminated: u8) {
     for branch in (0..4).filter(|branch| eliminated >> branch & 1 != 0) {
         record[branch * 8..branch * 8 + 7].fill(0);
@@ -276,15 +291,18 @@ pub fn eliminate_branches(record: &mut [u8], eliminated: u8) {
     }
 }
 
+/// How many attempts the typed encounter allows.
 pub fn attempt_count(record: &[u8]) -> Result<i16, RuleError> {
     let record = TypedEncounterRecord(span(record, 0, TypedEncounterRecord::HEADER_BYTES)?);
     Ok(i16::from(record.attempts()))
 }
 
+/// The dialogue the typed encounter shows.
 pub fn dialogue(record: &[u8]) -> Result<i16, RuleError> {
     Ok(TypedEncounterRecord(span(record, 0, TypedEncounterRecord::HEADER_BYTES)?).dialogue()?)
 }
 
+/// The word the player is asked to type, up to 39 characters.
 pub fn password_label(record: &[u8]) -> Result<&[u8], RuleError> {
     let label = TypedEncounterRecord(record).password_label()?;
     if label[0] > 39 {
@@ -295,6 +313,9 @@ pub fn password_label(record: &[u8]) -> Result<&[u8], RuleError> {
     Ok(&label[1..1 + usize::from(label[0])])
 }
 
+/// Compares what the player typed, folded to lowercase, with the password up to its first space;
+/// extra typed characters after the password do not matter. A match selects the encounter's
+/// branch and a miss selects branch 4. Nothing typed asks again.
 pub fn select_password(
     record: &[u8],
     input: &[u8],
@@ -312,8 +333,7 @@ pub fn select_password(
     let mut normalized = input.to_vec();
     let expected = password_label(record)?;
     let mut matched = true;
-    // encounter2 0x121b52 folds only the compared prefix, stopping on a mismatch.
-    // CODE 3 0x300a58 uses the initialized DATA table at A5-0x3b0.
+    // Only the compared prefix is case-folded, stopping on a mismatch.
     for (index, value) in expected.iter().take(40).enumerate() {
         if *value == 0 || *value == b' ' {
             break;
@@ -341,6 +361,7 @@ pub fn select_password(
     }))
 }
 
+/// How a typed encounter ends: abandoned, cancelled, or a branch with its script body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TypedContinuation {
     Abort,
@@ -348,6 +369,8 @@ pub enum TypedContinuation {
     Branch { selector: i8, body: [u8; 32] },
 }
 
+/// Decides how the encounter ends from the branch selected: -1 abandons it, 0 cancels it and 1 to 4
+/// run that branch. A miss (4) on the last of several attempts runs branch 3.
 pub fn continuation(
     record: &[u8],
     selected: i8,
@@ -376,10 +399,13 @@ pub fn continuation(
     }
 }
 
+/// Uses up an attempt, returning the attempts left and whether the player may try again.
 pub fn finish_attempt(remaining: i16) -> (i16, bool) {
     (remaining.wrapping_sub(1), remaining > 1)
 }
 
+/// Where a yes or no question sends the script: on, back a step, to another script, to a menu or
+/// typed branch, or to the end.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QuestionPlan {
     Continue,
@@ -390,10 +416,13 @@ pub enum QuestionPlan {
     EndScript,
 }
 
+/// The labels of a question's two answers.
 pub fn question_labels(extra: &[u8]) -> Result<(i16, i16), RuleError> {
     Ok(QuestionExtra(extra).labels()?)
 }
 
+/// Decides what a question does for the answer given: nothing for the answer the question does not
+/// act on, otherwise the outcome the question names.
 pub fn question_plan(extra: &[u8], answer: bool) -> Result<QuestionPlan, RuleError> {
     let extra = QuestionExtra(span(extra, 0, QuestionExtra::BYTES)?);
     if answer != (extra.answer()? == 0) {

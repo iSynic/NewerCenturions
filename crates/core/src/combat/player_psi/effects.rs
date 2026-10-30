@@ -1,9 +1,11 @@
-//! Effects for combat/player_psi.
+//! What a psi power does to its targets: bodies, rays and moving the caster.
 use super::{CastRequest, Combat, Event, RandomState, RuleError, runtime, spells};
+use crate::combat::spells::spell_level;
 use centurions_content::Warrior;
 use centurions_content::mission::OpeningMission;
-use centurions_content::records::{AttackPacket, AttackPacketMut};
+use centurions_content::records::{SpellInfoRecord, SpellInfoRecordMut};
 
+/// Applies the spell to every body its mask picks. A summon replaces the loop over bodies.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_mask(
     combat: &mut Combat,
@@ -14,16 +16,15 @@ pub(crate) fn resolve_mask(
     request: CastRequest,
     packet: &[u8],
     mask: &[i16; 110],
-    (item_work_alias, owners, refresh): (
+    (item_restriction, owners, refresh): (
         Option<i16>,
         crate::combat::warrior_alias::Owners<'_>,
-        crate::combat::spell_summon::ItemRefresh<'_>,
+        crate::combat::spells::summon::ItemRefresh<'_>,
     ),
 ) -> Result<Vec<Event>, RuleError> {
-    // resolvespell's 0x3a arm replaces the body loop and its NPC copies; a full
-    // roster reloads ITEM work through combatupdate2.
-    if AttackPacket(packet).effect()?.wrapping_abs() == 58 {
-        return crate::combat::spell_summon::summon(
+    // A summon replaces the loop over bodies; a full roster refreshes the panel.
+    if SpellInfoRecord(packet).effect()?.wrapping_abs() == 58 {
+        return crate::combat::spells::summon::summon(
             combat,
             warriors,
             mission,
@@ -35,19 +36,19 @@ pub(crate) fn resolve_mask(
             refresh,
         );
     }
-    // A caller that lends the ITEM work for the refusal reads its aliases there too.
+    // The item work lent for the refusal also serves monster reads past the table.
     let owners = crate::combat::warrior_alias::Owners {
-        item_work: match &refresh {
+        loaded_item: match &refresh {
             Some((_, buffers)) => buffers.item.as_deref(),
-            None => owners.item_work,
+            None => owners.loaded_item,
         },
         ..owners
     };
-    combat.mark_monster_spell_work(packet, mask);
+    combat.mark_monster_spell_pick(packet, mask);
     let mut events = vec![];
     let condition_caller = combat.item_condition_caller.unwrap_or(actor as i16);
     let memory_view =
-        spells::RestrictionMemoryView::ordinary_startup(&mission.item_cache, item_work_alias)
+        spells::RestrictionMemoryView::ordinary_startup(&mission.item_cache, item_restriction)
             .with_tables(mission)
             .with_alias_owners(owners)
             .with_live_caster(combat, warriors);
@@ -64,15 +65,15 @@ pub(crate) fn resolve_mask(
         let pending = std::mem::take(&mut combat.alias_writes);
         let result = spells::resolve_support_for_caster(
             warriors,
-            &combat.enemies.records,
+            &combat.roster.records,
             mask,
             request.spell,
             &spells::DirectSpell {
                 packet,
-                level: request.spell % 1000 / 100 - 1,
+                level: spell_level(request.spell),
                 count: request.power,
-                armor_filter: combat.weapon_work.armor_filter(),
-                weapon_sound: combat.weapon_work.sound(),
+                armor_filter: combat.weapon_traits.armor_filter(),
+                weapon_sound: combat.weapon_traits.sound(),
             },
             (
                 Some(condition_caller),
@@ -85,16 +86,16 @@ pub(crate) fn resolve_mask(
         warriors.clone_from_slice(&result.warriors);
         combat.fatigue_reset |= result.fatigue_reset;
         if let Some(shape) = result.area_shape {
-            AttackPacketMut(&mut combat.attack_packet).set_area_shape(shape);
+            SpellInfoRecordMut(&mut combat.spell_info).set_area_size(shape);
         }
-        combat.victory_work.add_total(result.total_delta);
-        combat.enemies.records = result.enemies;
-        combat.unavailable = combat.unavailable.wrapping_sub(result.recovered as i8);
+        combat.kill_counts.add_num_enemy(result.total_delta);
+        combat.roster.records = result.enemies;
+        combat.kill_party = combat.kill_party.wrapping_sub(result.recovered as i8);
         if result.healed {
-            AttackPacketMut(&mut combat.attack_packet).set_health_effect(4);
+            SpellInfoRecordMut(&mut combat.spell_info).set_health_effect(4);
         }
         if !result.targets.is_empty() {
-            combat.field_used[0] = 1;
+            combat.collide_check[0] = 1;
         }
         events.extend(
             result
@@ -124,15 +125,15 @@ pub(crate) fn resolve_mask(
     }
     let context = spells::DirectSpell {
         packet,
-        level: request.spell % 1000 / 100 - 1,
+        level: spell_level(request.spell),
         count: request.power,
-        armor_filter: combat.weapon_work.armor_filter(),
-        weapon_sound: combat.weapon_work.sound(),
+        armor_filter: combat.weapon_traits.armor_filter(),
+        weapon_sound: combat.weapon_traits.sound(),
     };
-    let result = if matches!(AttackPacket(packet).effect()?, 60 | 61) {
+    let result = if matches!(SpellInfoRecord(packet).effect()?, 60 | 61) {
         spells::resolve_psi_drain(
             warriors,
-            &combat.enemies.records,
+            &combat.roster.records,
             mask,
             &context,
             condition_caller,
@@ -142,7 +143,7 @@ pub(crate) fn resolve_mask(
     } else {
         spells::resolve_bodies_with_memory(
             warriors,
-            &combat.enemies.records,
+            &combat.roster.records,
             mask,
             &context,
             memory_view,
@@ -150,10 +151,10 @@ pub(crate) fn resolve_mask(
         )?
     };
     warriors.clone_from_slice(&result.warriors);
-    combat.victory_work.add_total(result.total_delta);
-    combat.enemies.records = result.enemies;
+    combat.kill_counts.add_num_enemy(result.total_delta);
+    combat.roster.records = result.enemies;
     if !result.targets.is_empty() {
-        combat.field_used[0] = 1;
+        combat.collide_check[0] = 1;
     }
     events.extend(
         result
@@ -182,8 +183,10 @@ pub(crate) fn resolve_mask(
     Ok(events)
 }
 
-/// cast10e0c8..10e642 resolves each newly crossed body before continuing the ray.
-/// SINGLE accumulators and truncation match the retained SANE boundary model.
+/// A ray resolves each body it crosses before travelling on. Its steps add and
+/// truncate in single precision.
+///
+/// Original: cast
 #[allow(clippy::too_many_arguments)]
 pub(super) fn cast_ray(
     combat: &mut Combat,
@@ -197,10 +200,10 @@ pub(super) fn cast_ray(
     (alias, owners, mut refresh): (
         Option<i16>,
         crate::combat::warrior_alias::Owners<'_>,
-        crate::combat::spell_summon::ItemRefresh<'_>,
+        crate::combat::spells::summon::ItemRefresh<'_>,
     ),
 ) -> Result<Vec<Event>, RuleError> {
-    let start = combat.squad.positions[actor];
+    let start = combat.squad.pos[actor];
     let end = request.target.ok_or("ray destination missing")?;
     let steps = 128 + animation_delay;
     let mut point = (
@@ -225,11 +228,11 @@ pub(super) fn cast_ray(
         let x = (point.0.trunc() as i16).wrapping_add(16) / 32;
         let y = (point.1.trunc() as i16).wrapping_add(16) / 32;
         let cell = OpeningMission::index(
-            i32::from(x) + i32::from(combat.map.shift.0) + 5,
-            i32::from(y) + i32::from(combat.map.shift.1) + 5,
+            i32::from(x) + i32::from(combat.field.map_shift.0) + 5,
+            i32::from(y) + i32::from(combat.field.map_shift.1) + 5,
         )?;
-        let body = combat.map.tiles[cell].wrapping_abs();
-        if AttackPacket(packet).range_per_power() + AttackPacket(packet).base_range() > 0
+        let body = combat.field.tiles[cell].wrapping_abs();
+        if SpellInfoRecord(packet).range_per_power() + SpellInfoRecord(packet).range_base() > 0
             && body > 1000
             && mission.tile_word(body - 1000, 12)? != 0
         {
@@ -266,7 +269,10 @@ pub(super) fn cast_ray(
     Ok(events)
 }
 
-/// resolvespell151418..1516e6 moves the caster without a destination resistance test.
+/// Moves the caster to the target cell; the destination is not tested for
+/// resistance.
+///
+/// Original: resolvespell
 #[allow(clippy::too_many_arguments)]
 pub(super) fn move_caster(
     combat: &mut Combat,
@@ -278,10 +284,9 @@ pub(super) fn move_caster(
     request: CastRequest,
     gate: i16,
 ) -> Result<Vec<Event>, RuleError> {
-    let (minimum, maximum) = AttackPacket(packet).duration_bounds();
+    let (minimum, maximum) = SpellInfoRecord(packet).duration_range();
     random.range(minimum, maximum);
-    let (additional_minimum, additional_maximum) =
-        AttackPacket(packet).additional_duration_bounds();
+    let (additional_minimum, additional_maximum) = SpellInfoRecord(packet).power_duration_range();
     if additional_minimum != 0 {
         for _ in 0..request.power {
             random.range(additional_minimum, additional_maximum);
@@ -289,16 +294,16 @@ pub(super) fn move_caster(
     }
     if gate == 0 {
         return Ok(vec![Event::Feedback(
-            crate::feedback::NativeFeedback::Warning { index: 87 },
+            crate::feedback::GameFeedback::Warning { index: 87 },
         )]);
     }
     let target = request.target.ok_or("movement spell destination missing")?;
     let (mut events, defeated) = land_mover(
         MoveArena {
-            map: &mut combat.map,
-            positions: &mut combat.squad.positions,
-            under_tiles: &mut combat.squad.under_tiles,
-            cursor: &mut combat.cursor,
+            map: &mut combat.field,
+            positions: &mut combat.squad.pos,
+            under_tiles: &mut combat.squad.char_under,
+            cursor: &mut combat.battle_order_index,
         },
         warriors,
         mission,
@@ -321,17 +326,19 @@ pub(super) fn move_caster(
     Ok(events)
 }
 
-/// The tactical arrays resolvespell's movement arm writes, live or after teardown.
+/// What a moving spell writes, during or after a battle.
 pub(crate) struct MoveArena<'a> {
-    pub map: &'a mut crate::combat::TacticalMap,
+    pub map: &'a mut crate::combat::CombatField,
     pub positions: &'a mut [(i16, i16)],
     pub under_tiles: &'a mut [i16],
-    /// WORD447194, the initiative cursor.
+    /// The battle-order cursor.
     pub cursor: &'a mut usize,
 }
 
-/// resolvespell151418..1516e6 after its duration draws and WORD438786 test: moves
-/// WORD4435d2 to the target cell. A defeated landing leaves killbody to the caller.
+/// Moves the selected warrior to the target cell, after the duration draws. A
+/// landing that kills leaves killbody to the caller.
+///
+/// Original: resolvespell
 pub(crate) fn land_mover(
     arena: MoveArena<'_>,
     warriors: &mut [Warrior],
@@ -340,10 +347,10 @@ pub(crate) fn land_mover(
     packet: &[u8],
     target: (i16, i16),
 ) -> Result<(Vec<Event>, bool), RuleError> {
-    if AttackPacket(packet).effect()? == 55 {
-        warriors[actor].record_mut().set_movement_points(0);
-        let maximum = warriors[actor].record().scan_capacity()?;
-        warriors[actor].record_mut().set_scans_used(maximum);
+    if SpellInfoRecord(packet).effect()? == 55 {
+        warriors[actor].record_mut().set_movement(0);
+        let maximum = warriors[actor].record().max_spells_attacks()?;
+        warriors[actor].record_mut().set_spells_so_far(maximum);
     }
     let position = *arena
         .positions
@@ -354,10 +361,7 @@ pub(crate) fn land_mover(
         .get(actor)
         .ok_or_else(|| RuleError::Invalid("body-field warrior under-tile unavailable".into()))?;
     *arena.map = crate::combat::footprint::restore_warrior(arena.map, position, under)?;
-    let cell = OpeningMission::index(
-        i32::from(target.0) + i32::from(arena.map.shift.0) + 5,
-        i32::from(target.1) + i32::from(arena.map.shift.1) + 5,
-    )?;
+    let cell = crate::combat::records::grid_index(target, arena.map.map_shift)?;
     arena.positions[actor] = target;
     let ground = arena.map.tiles[cell];
     arena.under_tiles[actor] = ground;
@@ -374,17 +378,17 @@ pub(crate) fn land_mover(
     let defeated = ground < 999 || ground > 999 && mission.tile_word(ground - 1000, 4)? != 0;
     if defeated {
         events.push(Event::Sound { resource_id: 631 });
-        events.push(Event::Feedback(crate::feedback::NativeFeedback::Warning {
+        events.push(Event::Feedback(crate::feedback::GameFeedback::Warning {
             index: 123,
         }));
         warriors[actor].record_mut().set_stamina(-10);
     } else {
-        // 1516b4: a repeated-initiative packet steps the initiative cursor back
-        // so the caster acts again; a defeated landing does not.
+        // A packet with repeated initiative steps the battle-order cursor back so
+        // the caster acts again; a landing that kills does not.
         if packet[31] != 0 {
             *arena.cursor = usize::from((*arena.cursor as u16).wrapping_sub(1));
         }
-        warriors[actor].record_mut().mark_damaged();
+        warriors[actor].record_mut().mark_been_attacked();
     }
     Ok((events, defeated))
 }

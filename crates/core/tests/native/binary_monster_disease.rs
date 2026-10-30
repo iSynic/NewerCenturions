@@ -29,11 +29,11 @@ pub(super) fn compare(fixture: Value, elemental_audio: bool) {
             };
             let mut combat = support::battle();
             combat.battle = 15;
-            combat.map.tiles = case.words("map_before");
-            combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
-            combat.enemies.records = support::monsters(&before_records);
-            combat.enemies.positions = positions;
-            combat.order = case.words("order_before");
+            combat.field.tiles = case.words("map_before");
+            combat.squad.pos = (0..6).map(|i| (40 + i, 40)).collect();
+            combat.roster.records = support::monsters(&before_records);
+            combat.roster.mon_pos = positions;
+            combat.battle_order = case.words("order_before");
             let mut warriors: Vec<_> = support::warriors(&fixture["party"]);
             let mut random = RandomState::new(case.n::<u32>("seed_before"));
             let sounds = if family == "attack_cases" {
@@ -51,11 +51,11 @@ pub(super) fn compare(fixture: Value, elemental_audio: bool) {
                     &[0; 58],
                 )
                 .unwrap_or_else(|error| panic!("{context}: {error:?}"));
-                combat.attack_packet = packet;
+                combat.spell_info = packet;
                 let mut sounds = result.sounds;
                 sounds.push(if elemental_audio {
                     centurions_core::combat::ally_turns::result_audio(
-                        &combat.enemies.records[(source - 10) as usize],
+                        &combat.roster.records[(source - 10) as usize],
                         case.n::<usize>("index"),
                         result.damage,
                         0,
@@ -88,16 +88,16 @@ pub(super) fn compare(fixture: Value, elemental_audio: bool) {
                 .unwrap_or_else(|error| panic!("{context}: {error:?}"));
                 sound_ids(&events)
             };
-            let actual: Vec<_> = support::record_bytes(&combat.enemies.records);
+            let actual: Vec<_> = support::record_bytes(&combat.roster.records);
             support::native_expect! {
                 bytes actual => &case["records_after"], &format!("{context} records");
-                bytes combat.attack_packet => &case["packet_after"], &format!("{context} packet");
+                bytes combat.spell_info => &case["packet_after"], &format!("{context} packet");
             }
-            assert_eq!(combat.map.tiles, case.words("map_after"), "{context} map");
-            assert_eq!(combat.order, case.words("order_after"), "{context} order");
+            assert_eq!(combat.field.tiles, case.words("map_after"), "{context} map");
+            assert_eq!(combat.battle_order, case.words("order_after"), "{context} order");
 
             support::native_expect! {
-            positions combat.enemies.positions => &case["positions_after"], "{context} positions";
+            positions combat.roster.mon_pos => &case["positions_after"], "{context} positions";
             records &warriors => &fixture["party"], &format!("{context} party");
             rng random => (&case["seed_after"], &case["rng_draws"]), "binary_monster_disease";
                 }

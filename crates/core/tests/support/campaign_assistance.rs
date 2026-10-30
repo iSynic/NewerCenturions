@@ -54,12 +54,12 @@ pub fn assist(state: &mut Session, assistance: &[Assistance], content: &Content)
             }
             Assistance::DefeatEnemies => {
                 if let Some(combat) = state.combat.as_mut() {
-                    for index in 0..combat.enemies.records.len() {
-                        let enemy = &mut combat.enemies.records[index];
-                        if i16::from_be_bytes(enemy.bytes[0x110..0x112].try_into().unwrap()) > 0
-                            && i16::from_be_bytes(enemy.bytes[14..16].try_into().unwrap()) != 0
+                    for index in 0..combat.roster.records.len() {
+                        let monster = &mut combat.roster.records[index];
+                        if i16::from_be_bytes(monster.bytes[0x110..0x112].try_into().unwrap()) > 0
+                            && i16::from_be_bytes(monster.bytes[14..16].try_into().unwrap()) != 0
                         {
-                            enemy.bytes[0x110..0x112].fill(0);
+                            monster.bytes[0x110..0x112].fill(0);
                             centurions_core::combat::lifecycle::kill_body(
                                 combat,
                                 &mut state.warriors,
@@ -68,9 +68,9 @@ pub fn assist(state: &mut Session, assistance: &[Assistance], content: &Content)
                             .unwrap();
                         }
                     }
-                    assert!(combat.round_scripts.pending.is_none());
-                    combat.cursor = combat
-                        .order
+                    assert!(combat.round_macros.pending.is_none());
+                    combat.battle_order_index = combat
+                        .battle_order
                         .iter()
                         .position(|body| (0..10).contains(body))
                         .unwrap();
@@ -165,10 +165,10 @@ pub fn assist(state: &mut Session, assistance: &[Assistance], content: &Content)
             }
             Assistance::FragileEnemies => {
                 if let Some(combat) = state.combat.as_mut() {
-                    for enemy in &mut combat.enemies.records {
-                        if i16::from_be_bytes(enemy.bytes[0x110..0x112].try_into().unwrap()) > 0 {
+                    for monster in &mut combat.roster.records {
+                        if i16::from_be_bytes(monster.bytes[0x110..0x112].try_into().unwrap()) > 0 {
                             for offset in [0x110, 0x112] {
-                                enemy.bytes[offset..offset + 2]
+                                monster.bytes[offset..offset + 2]
                                     .copy_from_slice(&1_i16.to_be_bytes());
                             }
                         }

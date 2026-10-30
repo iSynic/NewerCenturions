@@ -11,7 +11,7 @@ fn inactive_battle_entry_matches_original_complete_records_formation_order_and_r
         let mut state = support::mission_session(&content);
         state.warriors = support::warriors(&case["warriors_before"]);
         // The original probe explicitly seeds BYTE442739 before combatsetup.
-        state.native_work.health_context.unavailable = case.n("unavailable");
+        state.globals.health_context.kill_party = case.n("unavailable");
         let map = content.map(case.n::<i32>("map")).unwrap();
         let position = state.exploration.as_mut().unwrap();
         position.map = case.n::<i32>("map");

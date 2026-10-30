@@ -1,5 +1,6 @@
 use crate::{Command, RuleError, Session};
 use centurions_content::Warrior;
+use centurions_content::combat::MONSTER_BYTES;
 use serde::{Deserialize, Serialize};
 
 pub mod allies;
@@ -25,104 +26,134 @@ pub mod mission_deaths;
 pub mod monster;
 pub(crate) mod monster_weapons;
 pub mod natural_conditions;
-pub mod neighbor_work;
-pub mod npc_work;
+pub use runtime::monster_turn_flags;
+pub use runtime::neighbor_scan;
 mod occupied_cell;
 pub(crate) mod outdoor_health;
 pub mod party_buffs;
 pub mod player_psi;
-pub mod psi_selection;
+pub use player_psi::selection as psi_selection;
+pub mod globals;
 mod record_state;
 mod records;
-pub mod retained;
 pub mod retreat;
 mod reward_mode;
 pub mod rewards;
 pub mod round_stories;
-pub mod round_work;
+pub use runtime::round_scripts;
 pub mod runtime;
 pub mod shooting;
-pub mod spell_conditions;
+pub use spells::conditions as spell_conditions;
 pub mod spells;
-pub mod tactical_work;
-pub mod target_work;
+pub use targeting::target_picks;
+pub mod battlefield;
 pub mod targeting;
-pub mod victory_work;
+pub use runtime::kill_counts;
 pub mod warrior_alias;
 mod warrior_attack;
-pub mod weapon_work;
+pub use firearm::weapon_traits;
 
+/// A battle in progress: the field, the squad's places, the monsters and their positions, the
+/// battle order, and the values the battle keeps while it runs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Combat {
     #[serde(default)]
-    pub victory_work: victory_work::VictoryWork,
+    #[serde(rename = "victory_work")]
+    pub kill_counts: kill_counts::KillCounts,
     #[serde(default)]
-    pub neighbor_work: neighbor_work::NeighborWork,
-    /// Live copy of signed WORD438760, retained to NativeWorkContext at teardown.
+    #[serde(rename = "neighbor_work")]
+    pub neighbors: neighbor_scan::Neighbors,
+    /// The battle's `in_spell`, copied back to the session when the battle ends.
     #[serde(default)]
-    pub ready: i16,
+    #[serde(rename = "ready")]
+    pub in_spell: i16,
     #[serde(default, skip_serializing_if = "crate::normal_difficulty")]
     pub difficulty: i16,
     pub battle: i16,
-    pub map: TacticalMap,
+    #[serde(rename = "map")]
+    pub field: CombatField,
     pub squad: SquadPlacement,
-    pub enemies: EnemySetup,
+    /// The monsters on the battle roster and their positions.
+    #[serde(rename = "enemies")]
+    pub roster: EnemySetup,
     #[serde(default)]
-    pub retained_npcs: retained::NpcBacking,
+    #[serde(rename = "retained_npcs")]
+    pub monsters: globals::Monsters,
     #[serde(default)]
     pub direct_deaths: bool,
-    /// A support spell's effect68 within this command; the command boundary stores it.
+    /// A support spell's fatigue reset (effect 68) within this command; the
+    /// command boundary stores it.
     #[serde(skip)]
     pub fatigue_reset: bool,
-    /// Effect26/64 warrior-indexed NPC writes awaiting their retained owners.
+    /// Writes by effects 26 and 64 that index monsters by warrior number, waiting to
+    /// be applied to the records they land in.
     #[serde(skip)]
     pub alias_writes: Vec<warrior_alias::AliasWrite>,
-    /// Scoped resolvespell caller input while an item uses the shared cast/ray
-    /// kernels; restored before any command or save boundary.
+    /// The caller resolvespell sees while an item uses the shared cast and ray
+    /// rules; restored before any command ends or the game is saved.
     #[serde(skip)]
     pub item_condition_caller: Option<i16>,
-    /// Transient notification of an actual MONSTER scratch copy/build.
+    /// Set when this command copied or built a monster record.
     #[serde(skip)]
-    pub monster_work_written: bool,
-    /// Known MONSTER work lent for the current command; never saved.
+    #[serde(rename = "monster_work_written")]
+    pub monster_pick_written: bool,
+    /// The monster record lent to the current command; never saved.
     #[serde(skip)]
     pub monster_template: Option<Vec<u8>>,
-    /// Actual attack writer, drained into shared WORD43877e before callbacks.
+    /// The attack's own `did_attack` write, applied to the shared value before
+    /// script callbacks.
     #[serde(skip)]
-    pub npc_inhibit_write: Option<i16>,
+    pub did_attack_write: Option<i16>,
     #[serde(default)]
     pub direct_death: Option<(i16, death_scripts::DeathEntry)>,
-    pub order: Vec<i16>,
-    pub cursor: usize,
-    pub round: i16,
-    /// Native WORD4427a6: rounds since attack/cast; ten wraps force retreat.
+    #[serde(rename = "order")]
+    pub battle_order: Vec<i16>,
+    #[serde(rename = "cursor")]
+    pub battle_order_index: usize,
+    #[serde(rename = "round")]
+    pub combat_round: i16,
+    /// Rounds since the last attack or cast (`blank_round`); ten such rounds
+    /// force a retreat.
     #[serde(default)]
-    pub inactive_rounds: i16,
+    #[serde(rename = "inactive_rounds")]
+    pub blank_round: i16,
     #[serde(default)]
     pub selection_pending: bool,
-    /// getup's retained WORD43800e; an NPC script death skips its reset.
+    /// The monster whose script getup last ran; a monster's script death does not
+    /// reset it.
     #[serde(default)]
-    pub script_enemy: usize,
-    /// WORD447196 is written by getup, independently of the retained script origin.
+    #[serde(rename = "script_enemy")]
+    pub macro_monster: usize,
+    /// The monster whose turn getup started, set apart from `macro_monster`.
     #[serde(default)]
-    pub selected_enemy: usize,
+    #[serde(rename = "selected_enemy")]
+    pub monster_up: usize,
     #[serde(default)]
-    pub round_scripts: round_stories::RoundScripts,
+    #[serde(rename = "round_scripts")]
+    pub round_macros: round_stories::RoundMacros,
     #[serde(default)]
-    pub death_queue: death_scripts::DeathQueue,
-    #[serde(default = "empty_spell_fields")]
-    pub spell_fields: Vec<u8>,
-    #[serde(default = "empty_field_used")]
-    pub field_used: Vec<u8>,
-    #[serde(default = "attack_packet_startup")]
-    pub attack_packet: Vec<u8>,
+    #[serde(rename = "death_queue")]
+    pub todo_queue: death_scripts::TodoQueue,
+    #[serde(default = "empty_spell_queue")]
+    #[serde(rename = "spell_fields")]
+    pub spell_queue: Vec<u8>,
+    #[serde(default = "empty_collide_check")]
+    #[serde(rename = "field_used")]
+    pub collide_check: Vec<u8>,
+    #[serde(default = "spell_info_startup")]
+    #[serde(rename = "attack_packet")]
+    pub spell_info: Vec<u8>,
     #[serde(default)]
-    pub attack_identity: [i16; 3],
+    #[serde(rename = "attack_identity")]
+    pub cast_identity: [i16; 3],
     #[serde(default)]
-    pub weapon_work: weapon_work::WeaponWork,
+    #[serde(rename = "weapon_work")]
+    pub weapon_traits: weapon_traits::WeaponTraits,
     #[serde(default)]
-    pub unavailable: i8,
-    /// killbody's retained body, consumed into the session before script dispatch.
+    #[serde(rename = "unavailable")]
+    pub kill_party: i8,
+    /// The last body killbody handled, passed to the session before its script
+    /// runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_last_defeated: Option<i16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,45 +161,72 @@ pub struct Combat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture_actor: Option<i16>,
     #[serde(default, skip_serializing_if = "automatic_off")]
-    pub automatic: [bool; 6],
+    #[serde(rename = "automatic")]
+    pub do_auto: [bool; 6],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_origin: Option<(i16, i16)>,
-    /// Target-mask WORDs 6..109 at 4434e0; words 0..5 stay in the session party mask.
-    #[serde(default = "target_tail_startup")]
-    pub target_tail: Vec<i16>,
-    /// WORDs 443722/443724, 4435c0 and 442bd4; schema 60.
-    #[serde(default, skip_serializing_if = "target_work::TargetWork::is_startup")]
-    pub target_work: target_work::TargetWork,
+    /// Entries 6..109 of the spell target list; entries 0..5 stay in the
+    /// session's `party_track`.
+    #[serde(default = "track_tail_startup")]
+    #[serde(rename = "target_tail")]
+    pub track_tail: Vec<i16>,
+    /// The battle's target selections (save schema 60).
+    #[serde(default, skip_serializing_if = "target_picks::TargetPicks::is_startup")]
+    #[serde(rename = "target_work")]
+    pub target_picks: target_picks::TargetPicks,
 }
 
-/// The 58-byte attack packet work is zero before the first prepared attack.
-pub(crate) fn attack_packet_startup() -> Vec<u8> {
-    vec![0; 58]
+/// Size of `spell_info`.
+pub(crate) const ATTACK_PACKET_BYTES: usize = 58;
+/// Combat body slots: warriors 0..5, enemies 10..109. The battle order and the
+/// target list hold one entry per slot.
+pub(crate) const BODY_SLOTS: usize = 110;
+/// Target list entries 6..109, after the party's six.
+pub(crate) const TARGET_TAIL_WORDS: usize = BODY_SLOTS - 6;
+/// Tactical map cells, 90 by 90.
+pub(crate) const MAP_CELLS: usize = 8100;
+/// Spell field bytes.
+pub(crate) const SPELL_FIELD_BYTES: usize = 1200;
+/// Spell field usage bytes.
+pub(crate) const FIELD_USED_BYTES: usize = 128;
+
+/// `spell_info` is empty before the first attack is prepared.
+pub(crate) fn spell_info_startup() -> Vec<u8> {
+    vec![0; ATTACK_PACKET_BYTES]
 }
 
-fn target_tail_startup() -> Vec<i16> {
-    vec![0; 104]
+/// The tail of the target list (entries 6 onward) starts all zero.
+fn track_tail_startup() -> Vec<i16> {
+    vec![0; TARGET_TAIL_WORDS]
 }
 impl Combat {
-    /// cleartarget13822a, and cast10e642's clear after each target.
-    pub(crate) fn clear_target_tail(&mut self) {
-        self.target_tail = vec![0; 104];
+    /// Clears target entries 6..109, as clearing targets does and as cast does
+    /// after each target.
+    ///
+    /// Original: cleartarget, cast
+    pub(crate) fn clear_track_tail(&mut self) {
+        self.track_tail = vec![0; TARGET_TAIL_WORDS];
     }
 }
+/// Whether no warrior is on automatic.
 fn automatic_off(flags: &[bool; 6]) -> bool {
     flags.iter().all(|flag| !flag)
 }
-fn empty_spell_fields() -> Vec<u8> {
-    vec![0; 1200]
+/// A battle's spell queue before anything is queued: blank.
+fn empty_spell_queue() -> Vec<u8> {
+    vec![0; SPELL_FIELD_BYTES]
 }
-fn empty_field_used() -> Vec<u8> {
-    vec![0; 128]
+/// A battle's record of occupied cells before any are marked: blank.
+fn empty_collide_check() -> Vec<u8> {
+    vec![0; FIELD_USED_BYTES]
 }
 impl Combat {
+    /// Checks the battle against the squad: list sizes, difficulty and round ranges, battle order
+    /// entries, the capture and firearm selections, and that every position lies on the map.
     pub fn validate(&self, warriors: &[Warrior]) -> Result<(), RuleError> {
-        self.neighbor_work.validate()?;
-        self.retained_npcs.validate()?;
-        self.weapon_work.validate()?;
+        self.neighbors.validate()?;
+        self.monsters.validate()?;
+        self.weapon_traits.validate()?;
         if self.capture_actor.is_some_and(|actor| {
             Some(actor) != self.active_body()
                 || !(0..warriors.len() as i16).contains(&actor)
@@ -178,73 +236,72 @@ impl Combat {
                 "invalid mechanical targeting state".into(),
             ));
         }
-        self.death_queue.validate()?;
+        self.todo_queue.validate()?;
         if let Some(selection) = &self.firearm_selection {
             selection.validate(self, warriors)?;
         }
         if !(1..=6).contains(&warriors.len())
             || !(-2..=2).contains(&self.difficulty)
-            || self.map.tiles.len() != 8100
-            || self.squad.positions.len() != warriors.len()
-            || self.squad.under_tiles.len() != warriors.len()
-            || self.enemies.records.len() > 100
-            || self.enemies.positions.len() != self.enemies.records.len()
-            || self.order.len() != 110
-            || self.cursor > 110
-            || self.script_enemy >= 100
-            || self.selected_enemy >= 100
+            || self.field.tiles.len() != MAP_CELLS
+            || self.squad.pos.len() != warriors.len()
+            || self.squad.char_under.len() != warriors.len()
+            || self.roster.records.len() > 100
+            || self.roster.mon_pos.len() != self.roster.records.len()
+            || self.battle_order.len() != BODY_SLOTS
+            || self.battle_order_index > BODY_SLOTS
+            || self.macro_monster >= 100
+            || self.monster_up >= 100
             || self.pending_last_defeated.is_some_and(|body| {
                 body < 0
                     || (body < 10 && body as usize >= warriors.len())
-                    || (body >= 10 && body as usize - 10 >= self.enemies.records.len())
+                    || (body >= 10 && body as usize - 10 >= self.roster.records.len())
             })
             || self.direct_death.as_ref().is_some_and(|(body, entry)| {
                 *body < 10
-                    || usize::from(body.unsigned_abs()) - 10 >= self.enemies.records.len()
+                    || usize::from(body.unsigned_abs()) - 10 >= self.roster.records.len()
                     || entry.script <= 0
             })
-            || self.automatic[warriors.len()..].iter().any(|flag| *flag)
+            || self.do_auto[warriors.len()..].iter().any(|flag| *flag)
             || self.turn_origin.is_some_and(|(x, y)| {
-                !(0..90).contains(&(i32::from(x) + i32::from(self.map.shift.0) + 5))
-                    || !(0..90).contains(&(i32::from(y) + i32::from(self.map.shift.1) + 5))
+                !(0..90).contains(&(i32::from(x) + i32::from(self.field.map_shift.0) + 5))
+                    || !(0..90).contains(&(i32::from(y) + i32::from(self.field.map_shift.1) + 5))
             })
             || self.turn_origin.is_some()
                 && self
                     .active_body()
                     .is_none_or(|body| !(0..warriors.len() as i16).contains(&body))
-            || self.target_tail.len() != 104
-            || self.round < 0
-            || !(0..=9).contains(&self.inactive_rounds)
+            || self.track_tail.len() != TARGET_TAIL_WORDS
+            || self.combat_round < 0
+            || !(0..=9).contains(&self.blank_round)
             || (self.selection_pending
-                && (self.cursor != 110 || self.round_scripts.pending.is_some()))
-            || self.spell_fields.len() != 1200
-            || self.field_used.len() != 128
-            || self.attack_packet.len() != 58
-            || self.enemies.records.iter().any(|m| m.bytes.len() != 288)
-            || self.order.iter().any(|id| {
+                && (self.battle_order_index != BODY_SLOTS || self.round_macros.pending.is_some()))
+            || self.spell_queue.len() != SPELL_FIELD_BYTES
+            || self.collide_check.len() != FIELD_USED_BYTES
+            || self.spell_info.len() != ATTACK_PACKET_BYTES
+            || self
+                .roster
+                .records
+                .iter()
+                .any(|m| m.bytes.len() != MONSTER_BYTES)
+            || self.battle_order.iter().any(|id| {
                 *id < -1
                     || (*id >= warriors.len() as i16 && *id < 10)
-                    || *id >= self.enemies.records.len() as i16 + 10
+                    || *id >= self.roster.records.len() as i16 + 10
             })
-            || self
-                .squad
-                .positions
-                .iter()
-                .enumerate()
-                .any(|(index, (x, y))| {
-                    if (*x, *y) == (-1, -1)
-                        && warriors[index].record().active_flag() == 0
-                        && warriors[index].record().defeated_marker().unwrap_or(0) == -1
-                    {
-                        return false;
-                    }
-                    let x = i32::from(*x) + i32::from(self.map.shift.0) + 5;
-                    let y = i32::from(*y) + i32::from(self.map.shift.1) + 5;
-                    !(0..90).contains(&x) || !(0..90).contains(&y)
-                })
-            || self.enemies.positions.iter().any(|(x, y)| {
-                let x = i32::from(*x) + i32::from(self.map.shift.0) + 5;
-                let y = i32::from(*y) + i32::from(self.map.shift.1) + 5;
+            || self.squad.pos.iter().enumerate().any(|(index, (x, y))| {
+                if (*x, *y) == (-1, -1)
+                    && warriors[index].record().in_battle() == 0
+                    && warriors[index].record().position().unwrap_or(0) == -1
+                {
+                    return false;
+                }
+                let x = i32::from(*x) + i32::from(self.field.map_shift.0) + 5;
+                let y = i32::from(*y) + i32::from(self.field.map_shift.1) + 5;
+                !(0..90).contains(&x) || !(0..90).contains(&y)
+            })
+            || self.roster.mon_pos.iter().any(|(x, y)| {
+                let x = i32::from(*x) + i32::from(self.field.map_shift.0) + 5;
+                let y = i32::from(*y) + i32::from(self.field.map_shift.1) + 5;
                 !(0..90).contains(&x) || !(0..90).contains(&y)
             })
         {
@@ -252,12 +309,19 @@ impl Combat {
         }
         Ok(())
     }
+    /// The body whose turn it is, if any: the current entry of the battle order.
     pub fn active_body(&self) -> Option<i16> {
-        self.order.get(self.cursor).copied().filter(|id| *id >= 0)
+        self.battle_order
+            .get(self.battle_order_index)
+            .copied()
+            .filter(|id| *id >= 0)
     }
 }
 
-/// Read-only combatchoice routing; see interaction for the native precedence.
+/// The command a click on the battle screen makes, without acting on it; see
+/// `interaction` for which control takes precedence.
+///
+/// Original: combatchoice
 pub fn click_command(state: &Session, x: i16, y: i16) -> Result<Option<Command>, RuleError> {
     interaction::click_command(state, x, y)
 }
@@ -276,15 +340,12 @@ pub(crate) use turn_setup::{initialize_enemy_record, initialize_warrior_record};
 mod battle_entry;
 pub(crate) use battle_entry::begin_selected_child;
 pub use battle_entry::{
-    EnemySetup, SquadPlacement, TacticalMap, begin, begin_battle, begin_group, begin_npc,
+    CombatField, EnemySetup, SquadPlacement, begin, begin_battle, begin_group, begin_npc,
     begin_selected_battle, encounter_battle,
 };
 mod placement;
 use placement::place_enemies_with_allies;
 pub use placement::{place_enemies, place_enemies_at_difficulty, place_squad};
 mod map;
+pub use globals::monster_pick::MonsterPick;
 pub use map::build_tactical_map;
-mod monster_work;
-pub(crate) mod reward_work;
-mod spell_summon;
-pub use monster_work::MonsterWork;

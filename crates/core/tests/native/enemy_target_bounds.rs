@@ -11,14 +11,14 @@ fn unknown_retained_target_scan_stops_without_extra_random_draws() {
     let records = support::monsters(&get("enemies"));
     let mut combat = support::battle();
     combat.battle = 3;
-    combat.map.tiles = words(&get("map"));
-    combat.map.shift = (-30, -36);
-    combat.squad.positions = positions(&get("squad"));
-    combat.enemies.records = records;
-    combat.enemies.positions = positions(&get("positions"));
-    combat.order = words(&get("order"));
+    combat.field.tiles = words(&get("map"));
+    combat.field.map_shift = (-30, -36);
+    combat.squad.pos = positions(&get("squad"));
+    combat.roster.records = records;
+    combat.roster.mon_pos = positions(&get("positions"));
+    combat.battle_order = words(&get("order"));
     let mission = OpeningMission {
-        tile_properties: get("properties")[64..12064].to_vec(),
+        map_stats: get("properties")[64..12064].to_vec(),
         shared: std::sync::Arc::new(centurions_content::mission::StoryTables {
             ..Default::default()
         }),

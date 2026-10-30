@@ -87,8 +87,8 @@ fn scenario_item_use_matches_original_complete_party_ordered_costs_and_returns()
                 .unwrap();
             state = support::checkpoint(&state, &installed, "worn-script-item");
         }
-        let selected_warrior = state.selected_warrior;
-        state.native_work.health_context.affected.fill(9);
+        let char_select_new = state.char_select_new;
+        state.globals.health_context.affected.fill(9);
         apply(
             Command::UseItem {
                 warrior: 5,
@@ -98,8 +98,8 @@ fn scenario_item_use_matches_original_complete_party_ordered_costs_and_returns()
             &installed,
         )
         .unwrap();
-        assert_eq!(state.selected_warrior, selected_warrior);
-        assert_eq!(state.native_work.health_context.affected, [0; 6]);
+        assert_eq!(state.char_select_new, char_select_new);
+        assert_eq!(state.globals.health_context.affected, [0; 6]);
         support::native_expect! {
             bytes &support::record_bytes(&state.warriors) => &case.bytes("after"), "original item caller before script216";
         };
@@ -151,7 +151,7 @@ fn scenario_item_use_matches_original_complete_party_ordered_costs_and_returns()
         assert!(
             matches!(error, centurions_core::RuleError::Refused { feedback }
             if feedback == case.n::<Vec<i16>>("warnings").into_iter()
-                .map(|index| centurions_core::feedback::NativeFeedback::Warning { index }).collect::<Vec<_>>())
+                .map(|index| centurions_core::feedback::GameFeedback::Warning { index }).collect::<Vec<_>>())
         );
         support::same_session(&state, &before);
         support::native_expect! {

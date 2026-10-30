@@ -1,6 +1,7 @@
 use crate::{Command, Event, RuleError, Session, combat, feedback, outdoor_psi, reference_views};
 use centurions_content::Content;
 
+/// Runs the commands that belong to a battle, handing each to the combat rules.
 pub(super) fn execute(
     command: Command,
     state: &mut Session,
@@ -8,7 +9,7 @@ pub(super) fn execute(
 ) -> Result<Vec<Event>, RuleError> {
     match command {
         Command::AnswerOccupiedChoice { exchange } => {
-            combat::runtime::answer_retained_walk(state, content, exchange)
+            combat::runtime::answer_out_of_combat_walk(state, content, exchange)
         }
         Command::SwapCombatants { body } => combat::interaction::exchange(state, body),
         Command::AutomaticBandage => {
@@ -19,7 +20,7 @@ pub(super) fn execute(
                 .filter(|n| (0..6).contains(n))
                 .ok_or(RuleError::Refused { feedback: vec![] })? as usize;
             let record = state.warriors[member].record();
-            if record.automatic_mode()? <= 0
+            if record.computer_control()? <= 0
                 || record.faction()? != 0
                 || record.fleeing_duration()? != 0
             {
@@ -28,11 +29,11 @@ pub(super) fn execute(
             let target = state
                 .warriors
                 .iter()
-                .position(|w| w.record().bleeding_flag() != 0)
+                .position(|w| w.record().bleeding() != 0)
                 .ok_or(RuleError::Refused { feedback: vec![] })?;
-            state.warriors[target].record_mut().set_bleeding_flag(0);
-            state.warriors[member].record_mut().set_action_points(0);
-            Ok(vec![Event::Feedback(feedback::NativeFeedback::Flash {
+            state.warriors[target].record_mut().set_bleeding(0);
+            state.warriors[member].record_mut().set_attacks(0);
+            Ok(vec![Event::Feedback(feedback::GameFeedback::Flash {
                 address: 0x403cd6,
                 x: 30,
                 y: 100,
@@ -58,16 +59,16 @@ pub(super) fn execute(
         Command::ViewCombatBody { body } => {
             let events = reference_views::combat_body(state, content, body)?;
             if body >= 10 {
-                state.invalidate_monster_work();
+                state.invalidate_monster_pick();
             }
             Ok(events)
         }
         Command::Guard => combat::runtime::player_guard(state, content),
         Command::SelectSurvivor { row } => {
             let records = if let Some(combat) = &state.combat {
-                combat.enemies.records.clone()
+                combat.roster.records.clone()
             } else {
-                state.native_work.npc_backing.active_records()?
+                state.globals.monsters.active_records()?
             };
             state
                 .survivors
@@ -122,25 +123,27 @@ pub(super) fn execute(
             combat::runtime::begin_learned_heal(state, content, power)
         }
         Command::BeginPsiSelection { spell, power } => {
-            combat::psi_selection::begin(state, content, spell, power)
+            combat::player_psi::selection::begin(state, content, spell, power)
         }
-        Command::SelectPsiTarget { x, y } => combat::psi_selection::select(state, content, (x, y)),
-        Command::FirePsiSelection => combat::psi_selection::fire(state, content),
+        Command::SelectPsiTarget { x, y } => {
+            combat::player_psi::selection::select(state, content, (x, y))
+        }
+        Command::FirePsiSelection => combat::player_psi::selection::fire(state, content),
         Command::BeginPsiTargeting { spell, power } => {
-            combat::psi_selection::begin_targeting(state, content, spell, power)
+            combat::player_psi::selection::begin_targeting(state, content, spell, power)
         }
         Command::FirePreparedPsi { x, y, rotation } => {
-            combat::psi_selection::fire_at(state, content, (x, y), rotation)
+            combat::player_psi::selection::fire_at(state, content, (x, y), rotation)
         }
         Command::FirePreparedPsiOnWarrior { warrior } => {
-            combat::psi_selection::fire_warrior(state, content, warrior)
+            combat::player_psi::selection::fire_warrior(state, content, warrior)
         }
         Command::BeginFireTargets => combat::targeting::begin_firearm(state, content),
         Command::AdjustTargetQuantity { increase } => {
             combat::targeting::adjust(state, content, increase)
         }
-        Command::ClearPsiTargets => combat::psi_selection::clear(state),
-        Command::CancelPsiSelection => combat::psi_selection::cancel(state, content),
+        Command::ClearPsiTargets => combat::player_psi::selection::clear(state),
+        Command::CancelPsiSelection => combat::player_psi::selection::cancel(state, content),
         Command::SelectOutdoorPsiTarget { warrior } => outdoor_psi::select(state, content, warrior),
         Command::FinishOutdoorPsi => outdoor_psi::finish(state, content),
         Command::CancelOutdoorPsi => outdoor_psi::cancel(state, content),

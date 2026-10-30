@@ -70,16 +70,16 @@ fn complete_collisions_match_original_all_bodies_fields_usage_and_randomness() {
         let mut warriors = support::warriors(&case["warriors_before"]);
         let mut combat = support::battle();
         combat.battle = 28;
-        combat.map.tiles = fixture.words("map");
-        combat.squad.positions = (0..6).map(|i| (20 + i, 20)).collect();
-        combat.enemies.records = support::monsters(&case["enemies_before"]);
-        combat.enemies.positions = vec![(20, 22), (22, 22)];
-        combat.order = vec![-1, 10];
-        combat.spell_fields = case.bytes("fields_before");
-        combat.field_used = case.bytes("used_before");
+        combat.field.tiles = fixture.words("map");
+        combat.squad.pos = (0..6).map(|i| (20 + i, 20)).collect();
+        combat.roster.records = support::monsters(&case["enemies_before"]);
+        combat.roster.mon_pos = vec![(20, 22), (22, 22)];
+        combat.battle_order = vec![-1, 10];
+        combat.spell_queue = case.bytes("fields_before");
+        combat.collide_check = case.bytes("used_before");
         if case.get("armor").and_then(Value::as_i64) == Some(1) {
             combat
-                .weapon_work
+                .weapon_traits
                 .load_weapon(&content().items[130])
                 .unwrap();
         }
@@ -96,11 +96,11 @@ fn complete_collisions_match_original_all_bodies_fields_usage_and_randomness() {
         .unwrap();
         support::native_expect! {
             records &warriors => &case["warriors_after"], "collision party";
-            records &combat.enemies.records => &case["enemies_after"], "collision enemies";
-            bytes combat.spell_fields => &case["fields_after"], "collision fields";
-            bytes combat.field_used => &case["used_after"], "collision usage";
+            records &combat.roster.records => &case["enemies_after"], "collision enemies";
+            bytes combat.spell_queue => &case["fields_after"], "collision fields";
+            bytes combat.collide_check => &case["used_after"], "collision usage";
             scalar count => &case["count_after"], "collision count";
-            scalar combat.attack_identity[1] => &case["level_after"], "collision level";
+            scalar combat.cast_identity[1] => &case["level_after"], "collision level";
             rng random => (&case["seed_after"], &case["rng_draws"]), "collision seed";
             scalar support::event_sounds(&events) => &case["sounds"], "collision ordered sounds";
         }

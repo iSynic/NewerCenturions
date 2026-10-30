@@ -1,13 +1,15 @@
-//! The local guard-loop result and shared-list reads in checkforenemy110e96.
+//! The guard loop's result and its reads of the shared neighbor list.
 use super::{attacks, refresh_body_item};
 use crate::combat::{
     Combat,
-    neighbor_work::{self, NativeNeighbors},
+    runtime::neighbor_scan::{self, NeighborScan},
 };
 use crate::{Event, RandomState, RuleError};
 use centurions_content::Warrior;
 use serde::{Deserialize, Serialize};
 
+/// What a reaction check produced: its events, whether the acting body was interrupted by a kill,
+/// and whether the battle ended.
 #[derive(Default)]
 pub(crate) struct ReactionResult {
     pub events: Vec<Event>,
@@ -15,50 +17,58 @@ pub(crate) struct ReactionResult {
     pub terminated: bool,
 }
 
+/// How a resumed reaction check ended: it finished, saying whether a kill interrupted the acting
+/// body, or the battle ended.
 pub(super) enum ReactionReturn {
     Returned(bool),
     Terminated,
 }
 
+/// What a reaction needs besides the battle itself: the item and attack tables, the buff table, the
+/// loaded item buffers, whether to refresh the shown weapon, and the neighbor scan when one runs.
 pub(super) struct ReactionContext<'a> {
     pub items: Option<&'a [Vec<u8>]>,
     pub attacks: Option<&'a [u8]>,
     pub buffs: &'a [u8],
-    pub buffers: &'a mut crate::ammunition::WorkBuffers,
+    pub buffers: &'a mut crate::ammunition::LoadedItems,
     pub display_writers: bool,
-    pub native: Option<NativeNeighbors<'a>>,
+    pub scan: Option<NeighborScan<'a>>,
 }
 
 impl ReactionContext<'_> {
+    /// The body whose turn it is: from the battle order while scanning, else `fallback`.
     pub fn actor(&self, combat: &Combat, fallback: i16) -> i16 {
-        if self.native.is_some() {
+        if self.scan.is_some() {
             combat
-                .order
-                .get(combat.cursor)
+                .battle_order
+                .get(combat.battle_order_index)
                 .copied()
-                .unwrap_or(combat.cursor as i16)
+                .unwrap_or(combat.battle_order_index as i16)
         } else {
             fallback
         }
     }
 
+    /// The body at `index` of the neighbor list, read from the shared scan when one runs.
     pub fn body(&self, combat: &Combat, list: &[i16], index: usize) -> Result<i16, RuleError> {
-        if let Some(native) = &self.native {
-            combat.neighbor_work.body(index, native.party_mask)
+        if let Some(scan) = &self.scan {
+            combat.neighbors.body(index, scan.party_track)
         } else {
             Ok(list[index])
         }
     }
 }
 
+/// One reaction attack: who strikes whom with which natural attack, during whose turn.
 #[derive(Clone, Copy)]
 pub(super) struct AttackCall {
     pub attacker: i16,
     pub recipient: i16,
     pub index: usize,
-    pub retained_actor: i16,
+    pub turn_actor: i16,
 }
 
+/// Resolves a reaction's attack without a death story.
 pub(super) fn attack(
     combat: &mut Combat,
     warriors: &mut [Warrior],
@@ -73,7 +83,7 @@ pub(super) fn attack(
         call.attacker,
         call.recipient,
         call.index,
-        context.actor(combat, call.retained_actor),
+        context.actor(combat, call.turn_actor),
         context.items,
         context.attacks,
         context.buffs,
@@ -82,6 +92,12 @@ pub(super) fn attack(
     )
 }
 
+/// Gives each neighbor that is guarding one free attack against the acting body; on a departure
+/// every neighbor in the list qualifies. A neighbor skipping its turns, a removed monster, or a
+/// monster facing a warrior of profession 4 or 5 does not react. A kill ends the loop and
+/// interrupts the acting body.
+///
+/// Original: checkforenemy
 #[allow(clippy::too_many_arguments)]
 pub(super) fn guards(
     combat: &mut Combat,
@@ -106,6 +122,7 @@ pub(super) fn guards(
     )
 }
 
+/// The guard loop with the strike supplied by the caller.
 #[allow(clippy::too_many_arguments)]
 fn guards_with(
     combat: &mut Combat,
@@ -149,7 +166,9 @@ fn guards_with(
     }
 }
 
-/// checkforenemy's caller locals; the neighbor list and actor globals stay shared.
+/// The reaction loop's own state; the neighbor list and actor globals stay shared.
+///
+/// Original: checkforenemy
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GuardFrame {
     actor: i16,
@@ -162,6 +181,8 @@ pub struct GuardFrame {
     result: Option<bool>,
 }
 
+/// Where a guard's reaction stands: choosing the next neighbor, readying it, waiting for its attack
+/// to return, or finished.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 enum GuardPhase {
     Select,
@@ -170,6 +191,8 @@ enum GuardPhase {
     Done,
 }
 
+/// What the guard loop asks of its caller next: refresh a neighbor's weapon, resolve an attack, or
+/// finish (interrupted or not).
 pub(super) enum GuardStep {
     Refresh(i16),
     Attack(AttackCall),
@@ -177,6 +200,7 @@ pub(super) enum GuardStep {
 }
 
 impl GuardFrame {
+    /// Starts a guard loop over `count` neighbors, at most 110.
     pub(super) fn new(
         actor: i16,
         departure: bool,
@@ -199,6 +223,7 @@ impl GuardFrame {
         })
     }
 
+    /// Refuses a saved guard loop whose counts, actor or phase disagree.
     pub(crate) fn validate(&self) -> Result<(), RuleError> {
         if !(0..=110).contains(&self.count)
             || !(0..=110).contains(&self.index)
@@ -211,18 +236,23 @@ impl GuardFrame {
         Ok(())
     }
 
+    /// How many neighbors the guard loop covers.
     pub(super) fn count(&self) -> i8 {
         self.count
     }
 
+    /// Whether a guard has reacted; a kill clears it again.
     pub(super) fn changed(&self) -> bool {
         self.changed
     }
 
+    /// Whether a guard's attack has returned and waits to be consumed.
     pub(crate) fn returned_attack(&self) -> bool {
         self.phase == GuardPhase::AwaitAttack && self.result.is_some()
     }
 
+    /// Records how the waiting guard attack returned: `true` when it killed and so ended the
+    /// exchange.
     pub(super) fn finish_attack(&mut self, returned: bool) -> Result<(), RuleError> {
         if self.phase != GuardPhase::AwaitAttack || self.result.is_some() {
             return Err("guard attack return has no waiting caller".into());
@@ -231,6 +261,8 @@ impl GuardFrame {
         Ok(())
     }
 
+    /// Passes on from the neighbor that just attacked; if its attack returned, the loop ends
+    /// interrupted.
     fn consume_return(&mut self) -> Result<(), RuleError> {
         let returned = self
             .result
@@ -248,7 +280,11 @@ impl GuardFrame {
         Ok(())
     }
 
-    pub(super) fn finish_retained(
+    /// Runs the guard loop on the party's globals after the battle has ended. A neighbor reacts
+    /// when it is guarding (or the body is departing) and is not skipping its turns; a monster must
+    /// also be present and does not react to a warrior of profession 4 or 5. The reacting neighbor
+    /// stops guarding and attacks the acting body.
+    pub(super) fn finish_out_of_combat(
         &mut self,
         state: &mut crate::Session,
         content: &centurions_content::Content,
@@ -265,12 +301,12 @@ impl GuardFrame {
                         continue;
                     }
                     let other = state
-                        .native_work
-                        .neighbor_work
-                        .body(self.index as usize, &state.native_work.party_mask)?;
-                    let actor = retained_actor(state)?;
-                    // Bodies 0..8 index the warrior table, the Upgrade records and the
-                    // editor backup 0x44ecb0.
+                        .globals
+                        .neighbors
+                        .body(self.index as usize, &state.globals.party_track)?;
+                    let actor = turn_actor(state)?;
+                    // Bodies 0..8 are the warrior table, the Upgrade records and the
+                    // editor backup.
                     let eligible = if let Some(warrior) = usize::try_from(other)
                         .ok()
                         .filter(|_| other < 9)
@@ -280,8 +316,8 @@ impl GuardFrame {
                             && warrior.record().turn_skip_duration()? == 0
                     } else if (10..110).contains(&other) {
                         let record = state
-                            .native_work
-                            .npc_backing
+                            .globals
+                            .monsters
                             .slot((other - 10) as usize)?
                             .record
                             .record();
@@ -290,21 +326,21 @@ impl GuardFrame {
                             && !record.removed()
                             && (actor > 6
                                 || !matches!(
-                                    state.warriors[state.selected_warrior]
+                                    state.warriors[state.char_select_new]
                                         .record()
                                         .profession()?,
                                     4 | 5
                                 ))
                     } else if other == 9 {
-                        return Err(retained_unavailable(
+                        return Err(out_of_combat_unavailable(
                             "retained guard body 9 before the NPC array",
                         ));
                     } else if other >= 110 {
-                        return Err(retained_unavailable(
+                        return Err(out_of_combat_unavailable(
                             "retained guard body past the NPC array",
                         ));
                     } else {
-                        return Err(retained_unavailable(
+                        return Err(out_of_combat_unavailable(
                             "retained guard body before the warrior table",
                         ));
                     };
@@ -316,12 +352,12 @@ impl GuardFrame {
                 }
                 GuardPhase::Arm => {
                     let other = state
-                        .native_work
-                        .neighbor_work
-                        .body(self.index as usize, &state.native_work.party_mask)?;
+                        .globals
+                        .neighbors
+                        .body(self.index as usize, &state.globals.party_track)?;
                     if other < 10 {
-                        super::detached_warrior::refresh_guard(state, content, other)?;
-                        // checkforenemy clears guarding WORD +0x16 in whichever record.
+                        super::out_of_combat_warrior::refresh_guard(state, content, other)?;
+                        // A reacting body stops guarding, whichever record it names.
                         let mut warrior = state
                             .table_record(other as usize)
                             .ok_or("retained guard outside the warrior table")?;
@@ -330,38 +366,38 @@ impl GuardFrame {
                     } else {
                         let slot = (other - 10) as usize;
                         let item = state
-                            .native_work
-                            .npc_backing
+                            .globals
+                            .monsters
                             .slot(slot)?
                             .record
                             .record()
-                            .selected_item()?;
+                            .weapon()?;
                         if item != 0 {
-                            state.load_item_work(content, item)?;
+                            state.load_item(content, item)?;
                         }
                         state
-                            .native_work
-                            .npc_backing
+                            .globals
+                            .monsters
                             .slot_mut(slot)?
                             .record
                             .record_mut()
                             .set_reaction_ready(false);
-                        state.native_work.weapon_work.natural_attack_index = 0;
+                        state.globals.weapon_traits.natural_attack_index = 0;
                     }
                     self.changed = true;
                     let run = if other < 10 {
-                        super::detached_warrior::run
+                        super::out_of_combat_warrior::run
                     } else {
-                        super::detached_attack::run
+                        super::out_of_combat_attack::run
                     };
                     let outcome = run(
                         state,
                         content,
                         AttackCall {
                             attacker: other,
-                            recipient: retained_actor(state)?,
+                            recipient: turn_actor(state)?,
                             index: 0,
-                            retained_actor: retained_actor(state)?,
+                            turn_actor: turn_actor(state)?,
                         },
                     )?;
                     events.extend(outcome.events);
@@ -375,6 +411,8 @@ impl GuardFrame {
         }
     }
 
+    /// Steps the guard loop inside a battle until it needs a weapon refresh or an attack from its
+    /// caller, or finishes. A reacting neighbor stops guarding.
     pub(super) fn advance(
         &mut self,
         combat: &mut Combat,
@@ -393,7 +431,7 @@ impl GuardFrame {
                     let other = context.body(combat, list, self.index as usize)?;
                     let actor = context.actor(combat, self.actor);
                     let eligible = if other < 10 {
-                        neighbor_work::require_roster_body(combat, warriors, other)?;
+                        neighbor_scan::require_roster_body(combat, warriors, other)?;
                         let record = warriors[other as usize].record();
                         (self.departure || record.guarding()? != 0)
                             && record.turn_skip_duration()? == 0
@@ -404,9 +442,9 @@ impl GuardFrame {
                             && !record.removed()
                             && (actor >= 10 || {
                                 let selected = context
-                                    .native
+                                    .scan
                                     .as_ref()
-                                    .map_or(actor as usize, |native| native.selected_warrior);
+                                    .map_or(actor as usize, |scan| scan.char_select_new);
                                 let warrior = warriors.get(selected).ok_or_else(|| {
                                     RuleError::from("selected warrior outside the squad")
                                 })?;
@@ -417,8 +455,8 @@ impl GuardFrame {
                         self.index = self.index.wrapping_add(1);
                         continue;
                     }
-                    neighbor_work::require_roster_body(combat, warriors, other)?;
-                    neighbor_work::require_roster_body(combat, warriors, actor)?;
+                    neighbor_scan::require_roster_body(combat, warriors, other)?;
+                    neighbor_scan::require_roster_body(combat, warriors, actor)?;
                     self.phase = GuardPhase::Arm;
                     if context.display_writers {
                         return Ok(GuardStep::Refresh(other));
@@ -427,23 +465,23 @@ impl GuardFrame {
                 GuardPhase::Arm => {
                     let other = context.body(combat, list, self.index as usize)?;
                     let actor = context.actor(combat, self.actor);
-                    neighbor_work::require_roster_body(combat, warriors, other)?;
-                    neighbor_work::require_roster_body(combat, warriors, actor)?;
+                    neighbor_scan::require_roster_body(combat, warriors, other)?;
+                    neighbor_scan::require_roster_body(combat, warriors, actor)?;
                     self.changed = true;
                     if other < 10 {
                         warriors[other as usize].record_mut().set_guarding(0);
                     } else {
-                        combat.enemies.records[(other - 10) as usize]
+                        combat.roster.records[(other - 10) as usize]
                             .record_mut()
                             .set_reaction_ready(false);
-                        combat.weapon_work.natural_attack_index = 0;
+                        combat.weapon_traits.natural_attack_index = 0;
                     }
                     self.phase = GuardPhase::AwaitAttack;
                     return Ok(GuardStep::Attack(AttackCall {
                         attacker: other,
                         recipient: actor,
                         index: 0,
-                        retained_actor: actor,
+                        turn_actor: actor,
                     }));
                 }
                 GuardPhase::AwaitAttack => {
@@ -455,14 +493,13 @@ impl GuardFrame {
     }
 }
 
-pub(super) fn retained_actor(state: &crate::Session) -> Result<i16, RuleError> {
-    state
-        .native_work
-        .initiative_work
-        .current(state.native_work.selected_enemy)
+/// The body whose turn it is, from the battle order.
+pub(super) fn turn_actor(state: &crate::Session) -> Result<i16, RuleError> {
+    state.globals.battle_order.current(state.globals.monster_up)
 }
 
-pub(super) fn retained_unavailable(dependency: &'static str) -> RuleError {
+/// The refusal for a guard reaction that depends on an unrecovered part of the game.
+pub(super) fn out_of_combat_unavailable(dependency: &'static str) -> RuleError {
     RuleError::Unsupported {
         action: "combat.retained_reaction",
         dependency,

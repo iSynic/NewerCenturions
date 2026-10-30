@@ -46,9 +46,9 @@ fn packed_map_records_match_original_stage_and_travel_io() {
             for key in ["map_before", "map_after", "saved_origin"] {
                 let expected = bytes(case[key].as_str().unwrap());
                 assert_eq!(
-                    MapState::from_native(&expected)
+                    MapState::from_bytes(&expected)
                         .unwrap()
-                        .native_bytes()
+                        .to_bytes()
                         .unwrap(),
                     expected,
                     "{family}/{key}"

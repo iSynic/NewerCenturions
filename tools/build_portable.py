@@ -9,8 +9,8 @@ import subprocess
 import sys
 import time
 
+from repository import ROOT
 
-ROOT = Path(__file__).resolve().parents[1]
 REPORT = ROOT / "target/platform-validation.json"
 METRICS = []
 

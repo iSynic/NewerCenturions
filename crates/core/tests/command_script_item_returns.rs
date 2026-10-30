@@ -11,8 +11,8 @@ fn scheduled_typed_script_item_returns_once_without_decoding_the_manual_return()
     support::pause_script(&mut state, record, 0);
     support::saved_command(Command::Continue, &mut state, &content);
     state
-        .native_work
-        .party_mask
+        .globals
+        .party_track
         .copy_from_slice(&case.words("mask_before"));
     let before = state.clone();
     let events = support::saved_command(
@@ -25,8 +25,8 @@ fn scheduled_typed_script_item_returns_once_without_decoding_the_manual_return()
     );
     assert_eq!(support::record_bytes(&state.warriors), case.bytes("after"));
     assert_eq!(state.random, before.random);
-    assert_eq!(state.native_work.party_mask.as_slice(), case.words("mask"));
-    assert_eq!(state.selected_warrior, before.selected_warrior);
+    assert_eq!(state.globals.party_track.as_slice(), case.words("mask"));
+    assert_eq!(state.char_select_new, before.char_select_new);
     assert_eq!(support::event_sounds(&events), case.n::<Vec<i16>>("sounds"));
     assert!(state.exploration.as_ref().unwrap().script.is_none());
     assert!(state.exploration.as_ref().unwrap().presentation.is_none());

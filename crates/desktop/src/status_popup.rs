@@ -1,4 +1,4 @@
-//! Read-only showcondition154a38 pop-ups (conditions and modifiers).
+//! Read-only condition and modifier pop-ups, as showcondition shows them.
 use crate::{
     assets::Assets,
     presentation::{Action, Control, Inspection, UiState},
@@ -7,9 +7,12 @@ use centurions_content::word;
 use centurions_core::Session;
 use macroquad::prelude::*;
 
+/// The rows shown at once.
 const VISIBLE_ROWS: usize = 30;
+/// The height of each row.
 const ROW_HEIGHT: f32 = 18.;
 
+/// Whether the conditions or modifiers list is open.
 pub fn active(ui: &UiState) -> bool {
     matches!(
         ui.inspection,
@@ -17,6 +20,7 @@ pub fn active(ui: &UiState) -> bool {
     )
 }
 
+/// Scrolls the list with the arrow keys and the mouse wheel.
 pub fn scroll(state: &Session, assets: &Assets, ui: &mut UiState) {
     let maximum = rows(state, assets, ui).len().saturating_sub(VISIBLE_ROWS);
     let direction = if is_key_pressed(KeyCode::Down) {
@@ -29,6 +33,7 @@ pub fn scroll(state: &Session, assets: &Assets, ui: &mut UiState) {
     ui.page = (ui.page as i32 + direction).clamp(0, maximum as i32) as usize;
 }
 
+/// Any click, Escape or Return closes the list.
 pub fn input() -> Option<Action> {
     (is_mouse_button_pressed(MouseButton::Left)
         || is_key_pressed(KeyCode::Escape)
@@ -36,6 +41,8 @@ pub fn input() -> Option<Action> {
     .then_some(Action::Close)
 }
 
+/// One line of the list: a warrior's name or a condition, with its portrait,
+/// check mark and timing.
 struct Row {
     text: String,
     portrait: Option<i16>,
@@ -43,6 +50,8 @@ struct Row {
     timed: bool,
 }
 
+/// The lines of the conditions or modifiers list for the squad, as showcondition
+/// lists them.
 fn rows(state: &Session, assets: &Assets, ui: &UiState) -> Vec<Row> {
     let mut rows = Vec::new();
     let modifiers = ui.inspection == Some(Inspection::Modifiers);
@@ -51,7 +60,10 @@ fn rows(state: &Session, assets: &Assets, ui: &UiState) -> Vec<Row> {
         .get(&132)
         .and_then(|bytes| centurions_content::ui::string_list(bytes).ok())
         .unwrap_or_default();
-    let duration = assets.native_text.text(0x40113c, false).unwrap_or_default();
+    let duration = assets
+        .game_text
+        .text(crate::game_strings::DURATION_LABEL, false)
+        .unwrap_or_default();
     for warrior in &state.warriors {
         rows.push(Row {
             text: warrior.name.clone(),
@@ -92,6 +104,7 @@ fn rows(state: &Session, assets: &Assets, ui: &UiState) -> Vec<Row> {
     rows
 }
 
+/// Draws the list in a pop-up, a page at a time, with a control that closes it.
 pub fn draw(state: &Session, assets: &Assets, ui: &UiState, controls: &mut Vec<Control>) {
     let rows = rows(state, assets, ui);
     let first = ui.page.min(rows.len().saturating_sub(VISIBLE_ROWS));
@@ -103,7 +116,7 @@ pub fn draw(state: &Session, assets: &Assets, ui: &UiState, controls: &mut Vec<C
         + 52.)
         .min(744.);
     let height = visible as f32 * ROW_HEIGHT + 8.;
-    // PopUpMenuSelect uses left50/top400; keep the list inside the game port.
+    // PopUpMenuSelect opens at left 50, top 400; keep the list inside the game port.
     let rect = Rect::new(50., 420_f32.min(598. - height), width, height);
     draw_rectangle(rect.x + 3., rect.y + 3., rect.w, rect.h, BLACK);
     draw_rectangle(
@@ -117,21 +130,12 @@ pub fn draw(state: &Session, assets: &Assets, ui: &UiState, controls: &mut Vec<C
     for (index, row) in rows.iter().skip(first).take(visible).enumerate() {
         let y = rect.y + 4. + index as f32 * ROW_HEIGHT;
         if let Some(image) = row.portrait.and_then(|id| assets.portraits.get(&id)) {
-            draw_texture_ex(
-                image,
-                rect.x + 17.,
-                y,
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(vec2(16., 16.)),
-                    ..Default::default()
-                },
-            );
+            crate::assets::texture_in(image, Rect::new(rect.x + 17., y, 16., 16.));
         }
         if row.checked {
             assets.menu_text("✓", rect.x + 5., y + 13., 12, BLACK);
         } else if row.timed {
-            // Native SetItemMark(-41), MacRoman215.
+            // SetItemMark(-41), MacRoman 215.
             assets.menu_text("◊", rect.x + 5., y + 13., 12, BLACK);
         }
         assets.menu_text(&row.text, rect.x + 38., y + 13., 12, BLACK);

@@ -166,7 +166,7 @@ def static_path(root, result, map_index, start, target, avoid_slots=(), floor_ch
 def story_dispatch_arms(project):
     sources = (
         ("exploration.rs", "shared story", "Continue / Choose / Move"),
-        ("story_combat.rs", "combat body operation", "Continue"),
+        ("story/combat.rs", "combat body operation", "Continue"),
         ("combat/runtime.rs", "queued combat story", "Continue / RunEnemyTurn / EndTurn"),
         ("combat/round_stories.rs", "round script", "Continue / RunEnemyTurn / EndTurn"),
         ("combat/final_turn_stories.rs", "enemy turn script", "RunEnemyTurn / EndTurn"),

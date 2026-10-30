@@ -7,12 +7,12 @@ use native_common::script_mission as mission;
 pub(crate) fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>, RandomState) {
     let mut combat = support::battle();
     combat.battle = 134;
-    combat.map.tiles = case.words("map_before");
-    combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
-    combat.enemies.records = support::monsters(&case["records_before"]);
-    combat.enemies.positions = support::positions(&case["positions_before"]);
-    combat.order[1] = 10 + case["active_index"].as_i64().unwrap_or(0) as i16;
-    combat.script_enemy = case["actor_before"].as_u64().unwrap_or(0) as usize;
+    combat.field.tiles = case.words("map_before");
+    combat.squad.pos = (0..6).map(|i| (40 + i, 40)).collect();
+    combat.roster.records = support::monsters(&case["records_before"]);
+    combat.roster.mon_pos = support::positions(&case["positions_before"]);
+    combat.battle_order[1] = 10 + case["active_index"].as_i64().unwrap_or(0) as i16;
+    combat.macro_monster = case["actor_before"].as_u64().unwrap_or(0) as usize;
     (
         combat,
         support::warriors(&case["warriors_before"]),
@@ -54,10 +54,10 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
         let mut state = support::mission_session(&content);
         let mut arena = support::battle();
         arena.difficulty = builder.n("difficulty");
-        arena.selected_enemy = selected;
-        arena.enemies.records = support::monsters(&case.bytes("before"));
-        arena.enemies.positions = vec![(10, 10); selected + 1];
-        arena.order[1] = 0;
+        arena.monster_up = selected;
+        arena.roster.records = support::monsters(&case.bytes("before"));
+        arena.roster.mon_pos = vec![(10, 10); selected + 1];
+        arena.battle_order[1] = 0;
         state.phase = Phase::Combat;
         state.combat = Some(arena);
         crate::native_common::source_victory_context(&mut state);
@@ -74,14 +74,14 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
         let mut resumed = support::checkpoint(&state, &content, "actor-before");
         support::replay_command(Command::Continue, &mut state, &mut resumed, &content);
         assert_eq!(
-            support::record_bytes(&current_combat(&state).enemies.records),
+            support::record_bytes(&current_combat(&state).roster.records),
             case.bytes("before")
         );
         state = support::checkpoint(&state, &content, "actor-introduction");
         resumed = state.clone();
         let events = support::replay_command(Command::Continue, &mut state, &mut resumed, &content);
         assert_eq!(
-            support::record_bytes(&current_combat(&state).enemies.records),
+            support::record_bytes(&current_combat(&state).roster.records),
             case.bytes("after")
         );
         support::assert_rng(&state.random, &builder["seed_after"], &builder["draws"]);
@@ -111,20 +111,20 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
             &mut random,
         )
         .unwrap_or_else(|error| panic!("case{index}: {error}"));
-        let records: Vec<u8> = support::record_bytes(&combat.enemies.records);
+        let records: Vec<u8> = support::record_bytes(&combat.roster.records);
         assert_eq!(records, case.bytes("records_after"), "records case{index}");
         assert_eq!(
-            combat.map.tiles,
+            combat.field.tiles,
             words(&case.bytes("map_after")),
             "map case{index}"
         );
         assert_eq!(
-            combat.order,
+            combat.battle_order,
             words(&case.bytes("order_after")),
             "order case{index}"
         );
         support::native_expect! {
-            positions combat.enemies.positions => &case["positions_after"], "positions case{index}";
+            positions combat.roster.mon_pos => &case["positions_after"], "positions case{index}";
         };
         let party: Vec<u8> = support::record_bytes(&warriors);
         assert_eq!(party, case.bytes("warriors_after"), "party case{index}");
@@ -133,7 +133,7 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
             scalar random.draws => &case["rng_draws"], "binary_final_turn_stories";
             scalar outcome.skipped_turn => &case["skipped_turn"], "binary_final_turn_stories";
             scalar i64::from(outcome.increment_kills) => &case["kills_after"], "binary_final_turn_stories";
-            scalar combat.script_enemy => &case["actor_after"], "binary_final_turn_stories";
+            scalar combat.macro_monster => &case["actor_after"], "binary_final_turn_stories";
         }
         let initial_hostile = case["hostile_count_before"]
             .as_i64()
@@ -164,16 +164,16 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
             let content = content();
             let mut state = support::mission_session(&content);
             let (mut arena, _, start_random) = input(case);
-            arena.cursor = 0;
-            let conditioned = arena.enemies.records[0].bytes[0xcf] != 0
-                || arena.enemies.records[0].bytes[0xc9] != 0;
+            arena.battle_order_index = 0;
+            let conditioned = arena.roster.records[0].bytes[0xcf] != 0
+                || arena.roster.records[0].bytes[0xc9] != 0;
             if conditioned {
                 // Keep combat active when the captured actor starts friendly or changes sides.
-                let mut sentinel = arena.enemies.records[0].clone();
+                let mut sentinel = arena.roster.records[0].clone();
                 sentinel.bytes[0xe..0x10].copy_from_slice(&1_i16.to_be_bytes());
-                arena.enemies.records.push(sentinel);
-                arena.enemies.positions.push((25, 25));
-                arena.order[2] = 0;
+                arena.roster.records.push(sentinel);
+                arena.roster.mon_pos.push((25, 25));
+                arena.battle_order[2] = 0;
             }
             state.warriors = support::warriors(&case.bytes("warriors_before"));
             state.phase = Phase::Combat;
@@ -190,7 +190,7 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
                 assert!(outcome.skipped_turn);
                 assert!(
                     combat
-                        .enemies
+                        .roster
                         .records
                         .iter()
                         .all(|record| record.stamina().unwrap() <= 0
@@ -200,19 +200,19 @@ fn original_final_turn_stories_match_all_body_map_order_party_and_rng_bytes() {
                 support::checkpoint(&state, &content, "final-story-victory");
                 continue;
             };
-            assert_eq!(arena.script_enemy, combat.script_enemy);
+            assert_eq!(arena.macro_monster, combat.macro_monster);
             if !outcome.skipped_turn || conditioned {
                 assert_eq!(
-                    support::record_bytes(&arena.enemies.records[..combat.enemies.records.len()]),
+                    support::record_bytes(&arena.roster.records[..combat.roster.records.len()]),
                     records
                 );
                 assert_eq!(state.random, random);
             } else {
                 let active = case["active_index"].as_u64().unwrap_or(0) as usize;
-                assert!(arena.enemies.records[active].stamina().unwrap() <= 0);
-                assert_eq!(arena.enemies.records.len(), combat.enemies.records.len());
+                assert!(arena.roster.records[active].stamina().unwrap() <= 0);
+                assert_eq!(arena.roster.records.len(), combat.roster.records.len());
             }
-            assert_eq!(arena.map.tiles, combat.map.tiles);
+            assert_eq!(arena.field.tiles, combat.field.tiles);
             assert!(matches!(
                 events.last(),
                 Some(Event::TurnStarted { body, .. }) if if conditioned && outcome.skipped_turn { *body == 0 } else { *body >= 10 }

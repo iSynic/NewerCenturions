@@ -1,15 +1,23 @@
 use crate::RandomState;
 use centurions_content::records::{DamageDefenses, DamageDefinition, DamageTargetKind};
 
+/// The psionic channel, which armor does not reduce.
 const PSIONIC: usize = 6;
+/// The electrical channel, doubled for warriors of race 3.
 const ELECTRICAL: usize = 5;
+/// The biological channel, nullified for warriors of race 3 and for monsters immune to it.
 const BIOLOGICAL: usize = 8;
 
+/// What a shield did to a hit: the charge it has left, if it could act, and whether it absorbed
+/// anything.
 pub(super) struct ShieldAbsorption {
     pub remaining_charge: Option<i16>,
     pub absorbed: bool,
 }
 
+/// Armor filter: each point of every channel survives only if a draw of 100 beats the armor.
+///
+/// Original: resolvedamage
 pub(super) fn filter_armor(components: &mut [i16; 9], armor: i16, random: &mut RandomState) {
     for damage in components {
         let mut kept = 0_i16;
@@ -22,6 +30,11 @@ pub(super) fn filter_armor(components: &mut [i16; 9], armor: i16, random: &mut R
     }
 }
 
+/// A shield takes a point off any channel with more than one point, by its chance, paying its cost
+/// from its charge. A monster's spent shield keeps drawing; a warrior's stops every remaining
+/// channel.
+///
+/// Original: resolvedamage
 pub(super) fn absorb_shield(
     components: &mut [i16; 9],
     defenses: &DamageDefenses,
@@ -41,8 +54,8 @@ pub(super) fn absorb_shield(
         };
     }
     let mut absorbed = false;
-    // NPC shields continue drawing after exhaustion; warrior shields terminate
-    // all remaining channels. Each channel retains at least one damage point.
+    // A monster's shields keep drawing after they are spent; a warrior's spent
+    // shields stop every remaining channel. Each channel keeps at least one point.
     'shield: for damage in components {
         let initial = *damage;
         for _ in 0..initial {
@@ -61,6 +74,10 @@ pub(super) fn absorb_shield(
     }
 }
 
+/// Armor takes a point off any channel with more than one point, by its rating. Psionic damage
+/// ignores it.
+///
+/// Original: resolvedamage
 pub(super) fn absorb_armor(components: &mut [i16; 9], armor: i16, random: &mut RandomState) {
     for (channel, damage) in components.iter_mut().enumerate() {
         let initial = if channel == PSIONIC { 0 } else { *damage };
@@ -72,6 +89,13 @@ pub(super) fn absorb_armor(components: &mut [i16; 9], armor: i16, random: &mut R
     }
 }
 
+/// Halves each elemental channel the target saves against (unless the attack allows no save) or is
+/// protected from. A monster's negative resistance replaces the channel with the earlier amount
+/// times 1 plus the resistance's size in hundredths, and a resistance over 100 cancels it. Then a
+/// monster immune to biological damage takes none of it, and a warrior of race 3 takes none of it
+/// and double electrical damage.
+///
+/// Original: resolvedamage
 pub(super) fn apply_resistances(
     components: &mut [i16; 9],
     definition: &DamageDefinition,
@@ -81,14 +105,14 @@ pub(super) fn apply_resistances(
     random: &mut RandomState,
 ) {
     let enemy = defenses.kind == DamageTargetKind::Enemy;
-    if definition.saving_throw_mode < 2 {
+    if definition.cannot < 2 {
         let bonus = i16::from(definition.saving_throw_bonus_per_attack)
             .wrapping_mul(attack_count)
             .wrapping_add(i16::from(definition.saving_throw_bonus));
         for (element, damage) in components[2..].iter_mut().enumerate() {
             if *damage != 0 {
                 let save = defenses.saves[element];
-                // Preserve the draw even when an NPC save over 99 guarantees it.
+                // The draw is taken even when a monster's save over 99 is certain.
                 if random.bound(100) <= save.wrapping_add(bonus) || enemy && save > 99 {
                     *damage /= 2;
                 }

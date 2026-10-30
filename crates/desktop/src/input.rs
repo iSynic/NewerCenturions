@@ -1,10 +1,12 @@
 use crate::{
-    layout,
-    presentation::{Action, Control, Inspection, UiState},
+    layout::{self, control},
+    presentation::{Action, Control, Inspection, UiState, topmost},
 };
 use centurions_core::{Command, Phase, Presentation, Session};
 use macroquad::prelude::*;
 
+/// The held direction keys and mouse button that walk the squad, with the delay
+/// before each repeated step.
 pub struct MovementInput {
     direction: (i8, i8),
     repeat_at: f64,
@@ -13,6 +15,7 @@ pub struct MovementInput {
     pub repeat_seconds: f64,
 }
 impl Default for MovementInput {
+    /// Not moving, repeating a step every tenth of a second.
     fn default() -> Self {
         Self {
             direction: (0, 0),
@@ -25,19 +28,25 @@ impl Default for MovementInput {
 }
 
 impl MovementInput {
+    /// Stops the held direction.
     pub fn reset(&mut self) {
         self.direction = (0, 0);
     }
+    /// Stops walking after a step was refused, until the keys are released.
     pub fn refuse(&mut self) {
         self.refused = true;
         self.stop_pointer();
     }
 
+    /// Ends a walk started with the mouse button.
     pub fn stop_pointer(&mut self) {
         self.pointer_held = false;
     }
 
-    /// buttonchoice109b44 returns to movement while StillDown is true.
+    /// While the mouse button stays down the squad keeps stepping toward the pointer's
+    /// `direction`; releasing the button, or pointing at no direction, ends the walk.
+    ///
+    /// Original: buttonchoice
     fn pointer_step(
         &mut self,
         direction: (i8, i8),
@@ -61,6 +70,8 @@ impl MovementInput {
         }
     }
 
+    /// The step command for the held `direction` once the repeat delay has passed;
+    /// releasing the keys clears a refused walk.
     fn step(&mut self, direction: (i8, i8), now: f64) -> Option<Command> {
         if direction == (0, 0) {
             self.reset();
@@ -84,6 +95,7 @@ impl MovementInput {
     }
 }
 
+/// The direction the held keys point: arrow keys and the number pad.
 fn movement_direction(down: impl Fn(KeyCode) -> bool) -> (i8, i8) {
     let right = [KeyCode::Right, KeyCode::Kp3, KeyCode::Kp6, KeyCode::Kp9]
         .into_iter()
@@ -103,6 +115,9 @@ fn movement_direction(down: impl Fn(KeyCode) -> bool) -> (i8, i8) {
     )
 }
 
+/// The action for the reload key: fit the warrior's equipped missile weapon with
+/// the compatible ammunition in stock in combat, the kind already loaded first and then the
+/// lowest numbered; with none to fit, or outside combat, reload.
 pub fn refill_action(
     state: &Session,
     content: &centurions_content::Content,
@@ -115,7 +130,7 @@ pub fn refill_action(
             .and_then(|actor| actor.inventory().ok())
             .and_then(|inventory| {
                 inventory.into_iter().enumerate().find(|(_, item)| {
-                    item.equipment_flag() != 0 && matches!(item.category_code(), 2 | 15)
+                    item.equipped() != 0 && matches!(item.category_code(), 2 | 15)
                 })
             })
     {
@@ -138,6 +153,10 @@ pub fn refill_action(
     Action::Command(Command::Reload { warrior })
 }
 
+/// The action this frame's input stands for. Reveal Friends, the booty screen,
+/// targeting and the Items and shop screens read their own input first;
+/// anything else goes to the field and combat controls, and an action that is
+/// not available now is dropped.
 pub fn action(
     state: &Session,
     content: &centurions_content::Content,
@@ -155,8 +174,8 @@ pub fn action(
         ui.movement.stop_pointer();
     }
     if ui.combat_view.reveal && state.combat.is_some() {
-        // showrange 0x158416: the mouseDown or keyDown that ends Reveal Friends
-        // is consumed; nothing else is handled while it waits.
+        // The mouseDown or keyDown that ends Reveal Friends is consumed;
+        // nothing else is handled while showrange waits.
         ui.movement.reset();
         let pressed = is_mouse_button_pressed(MouseButton::Left)
             || is_mouse_button_pressed(MouseButton::Right)
@@ -171,7 +190,7 @@ pub fn action(
         }
         if is_mouse_button_pressed(MouseButton::Left)
             && let Some(point) = pointer
-            && let Some(control) = controls.iter().rev().find(|c| c.rect.contains(point))
+            && let Some(control) = topmost(controls, point)
         {
             if let Action::Collection(crate::collection::CollectionAction::Item(slot)) =
                 control.action
@@ -205,7 +224,7 @@ pub fn action(
         if is_mouse_button_pressed(MouseButton::Left)
             && (is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt))
             && let Some(point) = pointer
-            && let Some(control) = controls.iter().rev().find(|c| c.rect.contains(point))
+            && let Some(control) = topmost(controls, point)
             && let Action::Inventory(crate::inventory::InventoryAction::Item { side, slot }) =
                 control.action
         {
@@ -233,46 +252,53 @@ pub fn action(
         .filter(|action| available(state, ui.selected, action))
 }
 
+/// Physical-action selection control that accepts the chosen actions (Enter): item 17.
+const ENCOUNTER_ACTIONS_ACCEPT: u16 = 17;
+/// Physical-action selection control that cancels the selection (Escape): item 18.
+const ENCOUNTER_ACTIONS_CANCEL: u16 = 18;
+
+/// The field buttons (Camp, Items, Search, Scan, Trade and the rest) with the
+/// action each carries out.
 pub fn field_buttons(state: &Session) -> Vec<(i16, Action)> {
     use centurions_core::field_controls::Action as Field;
     let mut controls = vec![
         (
-            154,
+            control::CAMP,
             Action::Command(Command::FieldControl {
                 action: Field::Camp,
             }),
         ),
-        (155, Action::Open(Inspection::Items)),
+        (control::ITEMS, Action::Open(Inspection::Items)),
         (
-            142,
+            control::SEARCH_TOGGLE,
             Action::Command(Command::FieldControl {
                 action: Field::SearchMode,
             }),
         ),
-        (300, Action::Open(Inspection::Psi)),
-        (305, Action::Open(Inspection::Items)),
-        (306, Action::Command(Command::Encounter)),
+        (control::SCAN, Action::Open(Inspection::Psi)),
+        (control::TRADE, Action::Open(Inspection::Items)),
+        (control::ENCOUNTER, Action::Command(Command::Encounter)),
         (
-            307,
+            control::SEARCH,
             Action::Command(Command::FieldControl {
                 action: Field::Search,
             }),
         ),
         (
-            308,
+            control::REST,
             Action::Command(Command::FieldControl {
                 action: Field::Rest,
             }),
         ),
         (
-            309,
+            control::HEAL,
             Action::Command(Command::FieldControl {
                 action: Field::Heal,
             }),
         ),
     ];
     if state.warriors.len() < 2 {
-        controls.retain(|(id, _)| *id != 305);
+        controls.retain(|(id, _)| *id != control::TRADE);
     }
     controls.push(
         if state
@@ -282,34 +308,31 @@ pub fn field_buttons(state: &Session) -> Vec<(i16, Action)> {
             .is_some()
         {
             (
-                302,
+                control::TEMPLE,
                 Action::Command(Command::FieldControl {
                     action: Field::Clinic,
                 }),
             )
         } else if state.shop_access.is_some() {
-            (304, Action::Command(Command::OpenShop))
+            (control::SHOP, Action::Command(Command::OpenShop))
         } else {
-            (303, Action::Open(Inspection::Crate))
+            (control::CRATE, Action::Open(Inspection::Crate))
         },
     );
     controls
 }
 
+/// Whether `action` can be chosen now for the acting warrior; during capture only
+/// the capture choices and moving can.
 pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
-    let active = state.combat.as_ref().and_then(|arena| arena.active_body());
-    let member = active
-        .filter(|body| (0..state.warriors.len() as i16).contains(body))
-        .map(|body| body as usize)
-        .unwrap_or(selected);
+    let member = crate::acting::acting_warrior(state, selected);
     let free = state
         .exploration
         .as_ref()
         .is_some_and(|position| position.presentation.is_none())
         && state.medical_continuation.is_none()
         && state.outdoor_psi.is_none()
-        && (state.phase == Phase::Exploration
-            || active.is_some_and(|body| (0..state.warriors.len() as i16).contains(&body)));
+        && (state.phase == Phase::Exploration || crate::acting::active_warrior(state).is_some());
     if state
         .combat
         .as_ref()
@@ -364,7 +387,7 @@ pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
             free && state
                 .warriors
                 .get(member)
-                .is_some_and(|warrior| warrior.bytes[0x9dd] != 0)
+                .is_some_and(|warrior| warrior.record().toggle())
         }
         Action::Command(Command::Guard) => {
             free && state.phase == Phase::Combat
@@ -373,9 +396,9 @@ pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
                     .as_ref()
                     .is_none_or(|story| story.waiting_child)
                 && state.warriors.get(member).is_some_and(|warrior| {
-                    warrior.record().active_flag() != 0
+                    warrior.record().in_battle() != 0
                         && warrior.stamina().unwrap_or(0) > 0
-                        && warrior.record().action_points().unwrap_or(0) >= 2
+                        && warrior.record().attacks().unwrap_or(0) >= 2
                 })
         }
         Action::Command(Command::FieldControl { .. }) => {
@@ -402,7 +425,7 @@ pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
     }
 }
 
-/// textbox15dc24 uses a negative scenario text ID without waiting for input.
+/// textbox continues past a negative scenario text ID without waiting for input.
 pub fn story_action(state: &Session, pressed: bool) -> Option<Action> {
     let id = match state.exploration.as_ref()?.presentation.as_ref()? {
         Presentation::Dialogue { id, .. } => *id,
@@ -412,6 +435,14 @@ pub fn story_action(state: &Session, pressed: bool) -> Option<Action> {
     (id <= 0 || pressed).then_some(Action::Command(Command::Continue))
 }
 
+/// Whether an input step consumed the frame or passes it to the next step.
+enum Flow {
+    Done(Option<Action>),
+    Next,
+}
+
+/// Runs the game-screen input steps in order. Each step may drain typed
+/// characters or poll keys, so the order is part of the behavior.
 fn action_inner(
     state: &Session,
     content: &centurions_content::Content,
@@ -419,72 +450,17 @@ fn action_inner(
     controls: &[Control],
     pointer: Option<Vec2>,
 ) -> Option<Action> {
-    if state
-        .exploration
-        .as_ref()
-        .is_some_and(|p| p.presentation == Some(Presentation::Shop))
-        && is_key_pressed(KeyCode::Escape)
-    {
-        return Some(Action::Command(Command::CloseShop));
+    if let Flow::Done(action) = shop_escape(state) {
+        return action;
     }
-    if let Some(progress) = &state.promotion {
-        if is_mouse_button_pressed(MouseButton::Left)
-            && let Some(p) = pointer
-            && let Some(c) = controls.iter().rev().find(|c| c.rect.contains(p))
-        {
-            return c.enabled.then(|| c.action.clone());
-        }
-        if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
-            return Some(Action::Command(if progress.question {
-                Command::PromotionAnswer { yes: true }
-            } else {
-                Command::PromotionControl {
-                    item: if progress.warning { 0 } else { 32 },
-                }
-            }));
-        }
-        if is_key_pressed(KeyCode::Escape) && progress.question {
-            return Some(Action::Command(Command::PromotionAnswer { yes: false }));
-        }
-        return None;
+    if let Flow::Done(action) = promotion_input(state, controls, pointer) {
+        return action;
     }
-    if state
-        .combat
-        .as_ref()
-        .is_some_and(|c| c.capture_actor.is_some())
-    {
-        if is_key_pressed(KeyCode::Escape) {
-            return Some(Action::Command(Command::CancelCapture));
-        }
-        if is_mouse_button_pressed(MouseButton::Left)
-            && let Some(p) = pointer
-            && layout::MAP.contains(p)
-            && let Some((x, y)) = crate::combat_controls::map_position(state, ui, p)
-        {
-            return Some(Action::Command(Command::CombatClick { x, y }));
-        }
-        return ui
-            .movement
-            .step(movement_direction(is_key_down), get_time())
-            .map(Action::Command);
+    if let Flow::Done(action) = capture_input(state, ui, pointer) {
+        return action;
     }
-    if ui.combat_view.move_target {
-        if is_key_pressed(KeyCode::Escape) {
-            return Some(Action::CombatView(
-                crate::combat_controls::ViewAction::Center,
-            ));
-        }
-        if is_mouse_button_pressed(MouseButton::Left)
-            && let Some(p) = pointer
-            && layout::MAP.contains(p)
-            && let Some((vx, vy)) = crate::combat_controls::origin(state, ui)
-        {
-            return Some(Action::PanCombat(
-                vx + ((p.x - layout::MAP.x) / 32.) as i16,
-                vy + ((p.y - layout::MAP.y) / 32.) as i16,
-            ));
-        }
-        return None;
+    if let Flow::Done(action) = move_target_input(state, ui, pointer) {
+        return action;
     }
     if !state
         .exploration
@@ -494,13 +470,138 @@ fn action_inner(
     {
         while get_char_pressed().is_some() {}
     }
+    if let Flow::Done(action) = field_repeat_input(ui, controls, pointer) {
+        return action;
+    }
+    if is_mouse_button_pressed(MouseButton::Left)
+        && let Some(p) = pointer
+        && let Some(c) = topmost(controls, p)
+    {
+        return c.enabled.then(|| c.action.clone());
+    }
+    if let Flow::Done(action) = encounter_actions_input(state) {
+        return action;
+    }
+    if let Flow::Done(action) = inspection_input(state, ui, controls) {
+        return action;
+    }
+    if crate::application::command_modifier() {
+        return None;
+    }
+    if let Flow::Done(action) = presentation_keys(state, content, ui) {
+        return action;
+    }
+    if state.phase == Phase::SquadSelection {
+        return None;
+    }
+    let active = state.combat.as_ref().and_then(|c| c.active_body());
+    if active.is_some_and(|b| !crate::acting::is_warrior_body(b)) {
+        return None;
+    }
+    let selected = active.map(|b| b as usize).unwrap_or(ui.selected);
+    if let Flow::Done(action) = shortcut_keys(state, content, selected) {
+        return action;
+    }
+    movement_input(state, ui, pointer)
+}
+
+/// Escape leaves a shop.
+fn shop_escape(state: &Session) -> Flow {
+    if state
+        .exploration
+        .as_ref()
+        .is_some_and(|p| p.presentation == Some(Presentation::Shop))
+        && is_key_pressed(KeyCode::Escape)
+    {
+        return Flow::Done(Some(Action::Command(Command::CloseShop)));
+    }
+    Flow::Next
+}
+
+/// Promotion takes clicks; Return answers yes to the promotion question, or accepts the message
+/// that follows, and Escape answers no to the question.
+fn promotion_input(state: &Session, controls: &[Control], pointer: Option<Vec2>) -> Flow {
+    let Some(progress) = &state.promotion else {
+        return Flow::Next;
+    };
+    if is_mouse_button_pressed(MouseButton::Left)
+        && let Some(p) = pointer
+        && let Some(c) = topmost(controls, p)
+    {
+        return Flow::Done(c.enabled.then(|| c.action.clone()));
+    }
+    if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
+        return Flow::Done(Some(Action::Command(if progress.question {
+            Command::PromotionAnswer { yes: true }
+        } else {
+            Command::PromotionControl {
+                item: if progress.warning { 0 } else { 32 },
+            }
+        })));
+    }
+    if is_key_pressed(KeyCode::Escape) && progress.question {
+        return Flow::Done(Some(Action::Command(Command::PromotionAnswer {
+            yes: false,
+        })));
+    }
+    Flow::Done(None)
+}
+
+/// Choosing a monster to capture: Escape cancels, a click on the map picks the
+/// cell, and the direction keys walk.
+fn capture_input(state: &Session, ui: &mut UiState, pointer: Option<Vec2>) -> Flow {
+    if !state
+        .combat
+        .as_ref()
+        .is_some_and(|c| c.capture_actor.is_some())
+    {
+        return Flow::Next;
+    }
+    if is_key_pressed(KeyCode::Escape) {
+        return Flow::Done(Some(Action::Command(Command::CancelCapture)));
+    }
+    if is_mouse_button_pressed(MouseButton::Left)
+        && let Some(p) = pointer
+        && layout::MAP.contains(p)
+        && let Some((x, y)) = crate::combat_controls::map_position(state, ui, p)
+    {
+        return Flow::Done(Some(Action::Command(Command::CombatClick { x, y })));
+    }
+    Flow::Done(
+        ui.movement
+            .step(movement_direction(is_key_down), get_time())
+            .map(Action::Command),
+    )
+}
+
+/// Moving the view: Escape returns it to the active body, and a click on the map
+/// centres it on that cell.
+fn move_target_input(state: &Session, ui: &UiState, pointer: Option<Vec2>) -> Flow {
+    if !ui.combat_view.move_target {
+        return Flow::Next;
+    }
+    if is_key_pressed(KeyCode::Escape) {
+        return Flow::Done(Some(Action::CombatView(
+            crate::combat_controls::ViewAction::Center,
+        )));
+    }
+    if is_mouse_button_pressed(MouseButton::Left)
+        && let Some(p) = pointer
+        && layout::MAP.contains(p)
+        && let Some((vx, vy)) = crate::combat_controls::origin(state, ui)
+    {
+        return Flow::Done(Some(Action::PanCombat(
+            vx + ((p.x - layout::MAP.x) / 32.) as i16,
+            vy + ((p.y - layout::MAP.y) / 32.) as i16,
+        )));
+    }
+    Flow::Done(None)
+}
+
+/// Holding Search, Rest or Heal repeats it; releasing clears the repeat.
+fn field_repeat_input(ui: &mut UiState, controls: &[Control], pointer: Option<Vec2>) -> Flow {
     let held = pointer
-        .and_then(|point| {
-            controls
-                .iter()
-                .rev()
-                .find(|control| control.rect.contains(point))
-        })
+        .and_then(|point| topmost(controls, point))
         .filter(|control| control.enabled && is_mouse_button_down(MouseButton::Left));
     if let Some(Control {
         action: Action::Command(Command::FieldControl { action }),
@@ -522,35 +623,46 @@ fn action_inner(
                 .field_repeat
                 .is_some_and(|(previous, _)| previous == *action);
             ui.field_repeat = Some((*action, now + ui.movement.repeat_seconds));
-            return Some(Action::Command(Command::FieldControl { action: *action }));
+            return Flow::Done(Some(Action::Command(Command::FieldControl {
+                action: *action,
+            })));
         }
-        return None;
+        return Flow::Done(None);
     }
     ui.field_repeat = None;
     ui.field_repeating = false;
-    if is_mouse_button_pressed(MouseButton::Left)
-        && let Some(p) = pointer
-        && let Some(c) = controls.iter().rev().find(|c| c.rect.contains(p))
-    {
-        return c.enabled.then(|| c.action.clone());
+    Flow::Next
+}
+
+/// The physical actions choice: Return accepts the chosen actions and Escape
+/// cancels.
+fn encounter_actions_input(state: &Session) -> Flow {
+    if state.encounter_actions.is_none() {
+        return Flow::Next;
     }
-    if state.encounter_actions.is_some() {
-        while get_char_pressed().is_some() {}
-        return if is_key_pressed(KeyCode::Escape) {
-            Some(Action::Command(Command::EncounterActionControl {
-                item: 18,
-            }))
-        } else if is_key_pressed(KeyCode::Enter) {
-            Some(Action::Command(Command::EncounterActionControl {
-                item: 17,
-            }))
-        } else {
-            None
-        };
+    while get_char_pressed().is_some() {}
+    Flow::Done(if is_key_pressed(KeyCode::Escape) {
+        Some(Action::Command(Command::EncounterActionControl {
+            item: ENCOUNTER_ACTIONS_CANCEL,
+        }))
+    } else if is_key_pressed(KeyCode::Enter) {
+        Some(Action::Command(Command::EncounterActionControl {
+            item: ENCOUNTER_ACTIONS_ACCEPT,
+        }))
+    } else {
+        None
+    })
+}
+
+/// The keys of the open inspection list: Return chooses the first available
+/// psi, and the weapon list closes on a click and moves with Up and Down.
+fn inspection_input(state: &Session, ui: &mut UiState, controls: &[Control]) -> Flow {
+    if ui.inspection.is_none() {
+        return Flow::Next;
     }
-    if ui.inspection.is_some() {
-        if ui.inspection == Some(Inspection::Psi) && is_key_pressed(KeyCode::Enter) {
-            return controls
+    if ui.inspection == Some(Inspection::Psi) && is_key_pressed(KeyCode::Enter) {
+        return Flow::Done(
+            controls
                 .iter()
                 .find(|control| {
                     control.enabled
@@ -566,127 +678,115 @@ fn action_inner(
                                 )
                         )
                 })
-                .map(|control| control.action.clone());
-        }
-        if ui.inspection == Some(Inspection::Weapons) {
-            if is_mouse_button_pressed(MouseButton::Left) {
-                return Some(Action::Close);
-            }
-            let count =
-                centurions_core::combat::controls::weapons(state).map_or(0, |slots| slots.len());
-            let direction = if is_key_pressed(KeyCode::Down) {
-                1
-            } else if is_key_pressed(KeyCode::Up) {
-                -1
-            } else {
-                -mouse_wheel().1.signum() as i32
-            };
-            ui.page =
-                (ui.page as i32 + direction).clamp(0, count.saturating_sub(12) as i32) as usize;
-        }
-        if ui.inspection == Some(Inspection::FireTargets)
-            && state
-                .combat
-                .as_ref()
-                .is_some_and(|c| c.firearm_selection.is_some())
-            && is_key_pressed(KeyCode::Enter)
-        {
-            return Some(Action::Command(Command::FireSelectedTargets));
-        }
-        return is_key_pressed(KeyCode::Escape).then_some(
-            if ui.inspection == Some(Inspection::Bandage) {
-                Action::Command(Command::StopBleeding { warrior: None })
-            } else {
-                Action::Close
-            },
+                .map(|control| control.action.clone()),
         );
     }
-    if crate::application::command_modifier() {
-        return None;
+    if ui.inspection == Some(Inspection::Weapons) {
+        if is_mouse_button_pressed(MouseButton::Left) {
+            return Flow::Done(Some(Action::Close));
+        }
+        let count =
+            centurions_core::combat::controls::weapons(state).map_or(0, |slots| slots.len());
+        let direction = if is_key_pressed(KeyCode::Down) {
+            1
+        } else if is_key_pressed(KeyCode::Up) {
+            -1
+        } else {
+            -mouse_wheel().1.signum() as i32
+        };
+        ui.page = (ui.page as i32 + direction).clamp(0, count.saturating_sub(12) as i32) as usize;
     }
-    if let Some(p) = state
+    if ui.inspection == Some(Inspection::FireTargets)
+        && state
+            .combat
+            .as_ref()
+            .is_some_and(|c| c.firearm_selection.is_some())
+        && is_key_pressed(KeyCode::Enter)
+    {
+        return Flow::Done(Some(Action::Command(Command::FireSelectedTargets)));
+    }
+    Flow::Done(is_key_pressed(KeyCode::Escape).then_some(
+        if ui.inspection == Some(Inspection::Bandage) {
+            Action::Command(Command::StopBleeding { warrior: None })
+        } else {
+            Action::Close
+        },
+    ))
+}
+
+/// Keys for an open scenario presentation; any presentation consumes the frame.
+fn presentation_keys(
+    state: &Session,
+    content: &centurions_content::Content,
+    ui: &mut UiState,
+) -> Flow {
+    let Some(p) = state
         .exploration
         .as_ref()
         .and_then(|p| p.presentation.as_ref())
-    {
-        if matches!(p, Presentation::Clinic { .. }) {
-            return (is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Enter))
-                .then_some(Action::Command(Command::ClinicControl { item: 11 }));
+    else {
+        return Flow::Next;
+    };
+    if matches!(p, Presentation::Clinic { .. }) {
+        return Flow::Done(
+            (is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Enter))
+                .then_some(Action::Command(Command::ClinicControl { item: 11 })),
+        );
+    }
+    if matches!(
+        p,
+        Presentation::WarriorChoice { .. } | Presentation::PartyPick { .. }
+    ) {
+        for (index, key) in [
+            KeyCode::Key1,
+            KeyCode::Key2,
+            KeyCode::Key3,
+            KeyCode::Key4,
+            KeyCode::Key5,
+            KeyCode::Key6,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if is_key_pressed(key) {
+                return Flow::Done(Some(Action::Command(Command::ChooseWarrior { index })));
+            }
         }
-        if matches!(
-            p,
-            Presentation::WarriorChoice { .. } | Presentation::PartyPick { .. }
-        ) {
-            for (index, key) in [
-                KeyCode::Key1,
-                KeyCode::Key2,
-                KeyCode::Key3,
-                KeyCode::Key4,
-                KeyCode::Key5,
-                KeyCode::Key6,
-            ]
+        return Flow::Done(None);
+    }
+    if matches!(
+        p,
+        Presentation::Question { .. }
+            | Presentation::BoatQuestion { .. }
+            | Presentation::Avoidance { .. }
+            | Presentation::StageChange { .. }
+    ) {
+        return Flow::Done(if is_key_pressed(KeyCode::Y) {
+            Some(Action::Command(Command::Choose { answer: true }))
+        } else if is_key_pressed(KeyCode::N) {
+            Some(Action::Command(Command::Choose { answer: false }))
+        } else {
+            None
+        });
+    }
+    if let Presentation::Menu { labels, .. } = p {
+        for (index, key) in [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4]
             .into_iter()
             .enumerate()
-            {
-                if is_key_pressed(key) {
-                    return Some(Action::Command(Command::ChooseWarrior { index }));
-                }
+        {
+            if index < labels.len() && is_key_pressed(key) {
+                return Flow::Done(Some(Action::Command(Command::SelectMenuEntry { index })));
             }
-            return None;
         }
-        if matches!(
-            p,
-            Presentation::Question { .. }
-                | Presentation::BoatQuestion { .. }
-                | Presentation::Avoidance { .. }
-                | Presentation::StageChange { .. }
-        ) {
-            return if is_key_pressed(KeyCode::Y) {
-                Some(Action::Command(Command::Choose { answer: true }))
-            } else if is_key_pressed(KeyCode::N) {
-                Some(Action::Command(Command::Choose { answer: false }))
-            } else {
-                None
-            };
-        }
-        if let Presentation::Menu { labels, .. } = p {
-            for (index, key) in [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4]
-                .into_iter()
-                .enumerate()
-            {
-                if index < labels.len() && is_key_pressed(key) {
-                    return Some(Action::Command(Command::SelectMenuEntry { index }));
-                }
-            }
-            return is_key_pressed(KeyCode::Escape).then_some(Action::Command(Command::CancelMenu));
-        }
-        if matches!(p, Presentation::Typed { .. }) {
-            if !ui.typed_entry || !crate::story_dialogs::text_entry_available(state, content) {
-                while get_char_pressed().is_some() {}
-                return is_key_pressed(KeyCode::Escape)
-                    .then_some(Action::Command(Command::CancelMenu));
-            }
-            while let Some(character) = get_char_pressed() {
-                if ui.typed_text.chars().count() < 40
-                    && centurions_content::native_text::NativeText::encode(&character.to_string())
-                        .is_ok()
-                {
-                    ui.typed_text.push(character);
-                }
-            }
-            if is_key_pressed(KeyCode::Backspace) {
-                ui.typed_text.pop();
-            }
-            if is_key_pressed(KeyCode::Escape) {
-                return Some(Action::TextEntry(false));
-            }
-            return is_key_pressed(KeyCode::Enter).then(|| {
-                Action::Command(Command::SubmitText {
-                    text: std::mem::take(&mut ui.typed_text),
-                })
-            });
-        }
-        return (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space)).then_some(
+        return Flow::Done(
+            is_key_pressed(KeyCode::Escape).then_some(Action::Command(Command::CancelMenu)),
+        );
+    }
+    if matches!(p, Presentation::Typed { .. }) {
+        return Flow::Done(typed_entry_input(state, content, ui));
+    }
+    Flow::Done(
+        (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space)).then_some(
             Action::Command(
                 if matches!(p, Presentation::Loot)
                     && centurions_core::needs_spell_confirmation(state)
@@ -696,47 +796,68 @@ fn action_inner(
                     Command::Continue
                 },
             ),
-        );
+        ),
+    )
+}
+
+/// Typing into a scenario text-entry prompt.
+fn typed_entry_input(
+    state: &Session,
+    content: &centurions_content::Content,
+    ui: &mut UiState,
+) -> Option<Action> {
+    if !ui.typed_entry || !crate::story_dialogs::text_entry_available(state, content) {
+        while get_char_pressed().is_some() {}
+        return is_key_pressed(KeyCode::Escape).then_some(Action::Command(Command::CancelMenu));
     }
-    if state.phase == Phase::SquadSelection {
-        return None;
-    }
-    let active = state.combat.as_ref().and_then(|c| c.active_body());
-    if active.is_some_and(|b| b >= 10) {
-        return None;
-    }
-    let selected = active.map(|b| b as usize).unwrap_or(ui.selected);
-    if state.phase == Phase::Exploration {
-        for (key, id) in [
-            (KeyCode::C, 154),
-            (KeyCode::I, 155),
-            (KeyCode::S, 300),
-            (KeyCode::T, 305),
-            (KeyCode::E, 306),
-            (KeyCode::A, 307),
-            (KeyCode::R, 308),
-            (KeyCode::H, 309),
-        ] {
-            if is_key_pressed(key) {
-                return field_buttons(state)
-                    .into_iter()
-                    .find(|(control, _)| *control == id)
-                    .map(|(_, action)| action);
-            }
+    while let Some(character) = get_char_pressed() {
+        if ui.typed_text.chars().count() < 40
+            && centurions_content::game_text::GameText::encode(&character.to_string()).is_ok()
+        {
+            ui.typed_text.push(character);
         }
     }
+    if is_key_pressed(KeyCode::Backspace) {
+        ui.typed_text.pop();
+    }
+    if is_key_pressed(KeyCode::Escape) {
+        return Some(Action::TextEntry(false));
+    }
+    is_key_pressed(KeyCode::Enter).then(|| {
+        Action::Command(Command::SubmitText {
+            text: std::mem::take(&mut ui.typed_text),
+        })
+    })
+}
+
+/// Field-control letters outdoors, refill, combat shortcuts and the Psi key.
+fn shortcut_keys(state: &Session, content: &centurions_content::Content, selected: usize) -> Flow {
     if state.phase == Phase::Exploration {
-        for (key, id) in [(KeyCode::X, 303), (KeyCode::G, 304), (KeyCode::L, 302)] {
+        for (key, id) in [
+            (KeyCode::C, control::CAMP),
+            (KeyCode::I, control::ITEMS),
+            (KeyCode::S, control::SCAN),
+            (KeyCode::T, control::TRADE),
+            (KeyCode::E, control::ENCOUNTER),
+            (KeyCode::A, control::SEARCH),
+            (KeyCode::R, control::REST),
+            (KeyCode::H, control::HEAL),
+            (KeyCode::X, control::CRATE),
+            (KeyCode::G, control::SHOP),
+            (KeyCode::L, control::TEMPLE),
+        ] {
             if is_key_pressed(key) {
-                return field_buttons(state)
-                    .into_iter()
-                    .find(|(control, _)| *control == id)
-                    .map(|(_, action)| action);
+                return Flow::Done(
+                    field_buttons(state)
+                        .into_iter()
+                        .find(|(control, _)| *control == id)
+                        .map(|(_, action)| action),
+                );
             }
         }
     }
     if state.phase != Phase::Combat && is_key_pressed(KeyCode::R) {
-        return Some(refill_action(state, content, selected));
+        return Flow::Done(Some(refill_action(state, content, selected)));
     }
     if state.phase == Phase::Combat {
         for key in [
@@ -760,12 +881,19 @@ fn action_inner(
             KeyCode::Space,
         ] {
             if is_key_pressed(key) {
-                return crate::combat_controls::shortcut(key, state, content, selected);
+                return Flow::Done(crate::combat_controls::shortcut(
+                    key, state, content, selected,
+                ));
             }
         }
     } else if is_key_pressed(KeyCode::P) {
-        return Some(Action::Open(Inspection::Psi));
+        return Flow::Done(Some(Action::Open(Inspection::Psi)));
     }
+    Flow::Next
+}
+
+/// Keyboard and held-pointer movement, then a map click.
+fn movement_input(state: &Session, ui: &mut UiState, pointer: Option<Vec2>) -> Option<Action> {
     let direction = movement_direction(is_key_down);
     if direction != (0, 0) {
         ui.movement.stop_pointer();
@@ -809,6 +937,7 @@ fn action_inner(
     }
     None
 }
+/// The step toward the clicked outdoor cell, if it is not the party's own.
 fn outdoor_move(state: &Session, x: i32, y: i32) -> Option<Action> {
     let position = state.exploration.as_ref()?;
     let (vx, vy) = crate::layout::outdoor_origin(position.x, position.y);

@@ -1,6 +1,7 @@
 use crate::RuleError;
 use centurions_content::word;
 
+/// Checks that the party's effect durations have their fixed size.
 pub(crate) fn validate(buffs: &[u8]) -> Result<(), RuleError> {
     if buffs.len() != 20 {
         return Err(RuleError::Invalid("party buff size".into()));
@@ -8,15 +9,20 @@ pub(crate) fn validate(buffs: &[u8]) -> Result<(), RuleError> {
     Ok(())
 }
 
+/// Whether the party's mind shield is up.
 pub(crate) fn mind_shield(buffs: &[u8]) -> Result<bool, RuleError> {
     Ok(word(buffs, 14)? != 0)
 }
 
+/// Extends the party's inertial protection to at least the duration.
 pub fn extend_inertial(buffs: &mut [u8], duration: i16) -> Result<(), RuleError> {
     extend(buffs, 2, duration)
 }
 
-/// resolvespell15130e writes beyond the directory NUL for short scenario names.
+/// Some party durations run past the end of a short scenario name (see
+/// docs/source-notes/combat.md).
+///
+/// Original: resolvespell
 pub(crate) fn extend_scenario_tail(
     state: &mut crate::Session,
     duration: i16,
@@ -29,7 +35,7 @@ pub(crate) fn extend_scenario_tail(
     Ok(())
 }
 
-/// The tail WORD44263e, or None when it overlaps the scenario-directory text.
+/// The last party duration, or None when the scenario name still covers it.
 pub(crate) fn scenario_tail(state: &crate::Session) -> Result<Option<i16>, RuleError> {
     if state
         .mission
@@ -41,7 +47,7 @@ pub(crate) fn scenario_tail(state: &crate::Session) -> Result<Option<i16>, RuleE
     Ok(Some(match state.scenario_duration_tail {
         Some(value) => value,
         None => state
-            .native_import
+            .imported
             .as_ref()
             .map(|records| records.scenario_duration_tail())
             .transpose()?
@@ -49,7 +55,9 @@ pub(crate) fn scenario_tail(state: &crate::Session) -> Result<Option<i16>, RuleE
     }))
 }
 
-/// resolvespell15133c retains the greater signed duration in the selected party slot.
+/// A party spell keeps the longer of its current and new duration.
+///
+/// Original: resolvespell
 pub fn extend(buffs: &mut [u8], effect: i16, duration: i16) -> Result<(), RuleError> {
     validate(buffs)?;
     let offset = usize::try_from(effect)
@@ -62,7 +70,9 @@ pub fn extend(buffs: &mut [u8], effect: i16, duration: i16) -> Result<(), RuleEr
     Ok(())
 }
 
-/// Effect50 compares the scaled WORD before subtracting one at151236.
+/// Effect 50 compares the scaled count before taking one off.
+///
+/// Original: resolvespell
 pub(crate) fn extend_from_count(buffs: &mut [u8], count: i16) -> Result<(), RuleError> {
     validate(buffs)?;
     let scaled = count.wrapping_mul(30);
@@ -72,6 +82,7 @@ pub(crate) fn extend_from_count(buffs: &mut [u8], count: i16) -> Result<(), Rule
     Ok(())
 }
 
+/// Counts every running party duration down by one each round; the first counts down a second time.
 pub fn reduce(buffs: &mut [u8]) -> Result<(), RuleError> {
     validate(buffs)?;
     for offset in (0..20).step_by(2) {
@@ -87,6 +98,8 @@ pub fn reduce(buffs: &mut [u8]) -> Result<(), RuleError> {
     Ok(())
 }
 
+/// While the party's inertial protection lasts, a hit of more than one point on a warrior is
+/// reduced by five, to at least one.
 pub fn attack2_damage(buffs: &[u8], target: i16, amount: i16) -> Result<Option<i16>, RuleError> {
     validate(buffs)?;
     Ok(
@@ -95,8 +108,10 @@ pub fn attack2_damage(buffs: &[u8], target: i16, amount: i16) -> Result<Option<i
     )
 }
 
-/// resolvespell15133c's max-write of WORD 442562+2*effect beyond the party durations,
-/// through the represented Information owners; false when that WORD is unowned.
+/// A party effect number past the duration table extends whatever value lies
+/// there; false where the session does not hold it.
+///
+/// Original: resolvespell
 pub(crate) fn extend_indexed(
     state: &mut crate::Session,
     effect: i16,
@@ -109,9 +124,10 @@ pub(crate) fn extend_indexed(
     Ok(state.set_information_word(address, current.max(duration)))
 }
 
-/// `extend_indexed` over an NPC work copy's owners; the live combat holds difficulty.
+/// `extend_indexed` for a monster's copy of the battle; the live battle holds the
+/// difficulty.
 pub(crate) fn extend_indexed_owners(
-    party_buffs: &mut [u8],
+    party_condition: &mut [u8],
     difficulty: &mut i16,
     flags: &mut [u8],
     effect: i16,
@@ -119,9 +135,9 @@ pub(crate) fn extend_indexed_owners(
 ) -> bool {
     use crate::state::information::{read_word, write_word};
     let address = indexed_address(effect);
-    read_word(party_buffs, *difficulty, flags, address).is_some_and(|current| {
+    read_word(party_condition, *difficulty, flags, address).is_some_and(|current| {
         write_word(
-            party_buffs,
+            party_condition,
             difficulty,
             flags,
             address,
@@ -130,6 +146,7 @@ pub(crate) fn extend_indexed_owners(
     })
 }
 
+/// Where a party effect number past the duration table lands.
 fn indexed_address(effect: i16) -> i64 {
     0x442562 + 2 * i64::from(effect)
 }

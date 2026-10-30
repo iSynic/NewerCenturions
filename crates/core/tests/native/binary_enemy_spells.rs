@@ -57,8 +57,8 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
             let tiles = support::words(&case.bytes("map"));
             let mut combat = support::battle();
             combat.battle = 28;
-            combat.map.tiles = tiles;
-            combat.squad.positions = (0..6)
+            combat.field.tiles = tiles;
+            combat.squad.pos = (0..6)
                 .map(|i| {
                     (
                         20 + distance + i * if case["weapon_id"].is_null() { 1 } else { 4 },
@@ -66,11 +66,11 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
                     )
                 })
                 .collect();
-            combat.enemies.records = vec![MonsterRecord {
+            combat.roster.records = vec![MonsterRecord {
                 bytes: case.bytes("caster_before"),
             }];
-            combat.enemies.positions = vec![(20, 20)];
-            combat.order = vec![-1, 10];
+            combat.roster.mon_pos = vec![(20, 20)];
+            combat.battle_order = vec![-1, 10];
             let mut random = RandomState::new(case.n::<u32>("seed_before"));
             let packet = case.bytes("packet");
             let rotated = packet[7] != 0;
@@ -169,11 +169,11 @@ fn spell_target_masks_reflection_and_fields_match_original_complete_buffers() {
         let monsters = support::monsters(&case["records"]);
         let mut combat = support::battle();
         combat.battle = 28;
-        combat.map.tiles = tiles.clone();
-        combat.squad.positions = (0..6).map(|i| (20 + i, 20)).collect();
-        combat.enemies.records = monsters;
-        combat.enemies.positions = vec![(20, 22), (22, 22)];
-        combat.order = vec![-1, 10];
+        combat.field.tiles = tiles.clone();
+        combat.squad.pos = (0..6).map(|i| (20 + i, 20)).collect();
+        combat.roster.records = monsters;
+        combat.roster.mon_pos = vec![(20, 22), (22, 22)];
+        combat.battle_order = vec![-1, 10];
         let mut fields = vec![0; 1200];
         if variant == 2 {
             for slot in fields.as_chunks_mut::<20>().0 {
@@ -223,7 +223,7 @@ fn reached_retained_packets_match_original_resolution_and_random_order() {
         let (warriors, enemies, sounds) = if word(&packet, 40).unwrap() == 36 {
             let result = spells::resolve_support_for_caster(
                 &state.warriors,
-                &combat.enemies.records,
+                &combat.roster.records,
                 &mask,
                 1703,
                 &DirectSpell {
@@ -251,7 +251,7 @@ fn reached_retained_packets_match_original_resolution_and_random_order() {
         } else {
             let result = resolve_bodies(
                 &state.warriors,
-                &combat.enemies.records,
+                &combat.roster.records,
                 &mask,
                 &DirectSpell {
                     packet: &packet,
@@ -301,8 +301,8 @@ fn reached_retained_packets_match_original_resolution_and_random_order() {
             .unwrap();
         let point = words(&case["native"].bytes("point_alias"));
         let target = spells::SpellTarget {
-            first: point[0] + combat.map.shift.0 + 5,
-            second: point[1] + combat.map.shift.1 + 5,
+            first: point[0] + combat.field.map_shift.0 + 5,
+            second: point[1] + combat.field.map_shift.1 + 5,
             kind: 3,
         };
         let origin = spells::SpellTarget {
@@ -328,10 +328,10 @@ fn reached_retained_packets_match_original_resolution_and_random_order() {
                 id: 2606,
                 count: 2,
                 caster: state.combat_story.as_ref().unwrap().actor,
-                initiative: combat.cursor as i16,
+                initiative: combat.battle_order_index as i16,
                 collision: false,
             },
-            &combat.spell_fields,
+            &combat.spell_queue,
             &mut random,
             aliases,
         )
@@ -372,7 +372,7 @@ fn recovered_campaign_boundaries_resume_without_interventions() {
         }
         if index == 6 {
             let mut unknown = state.clone();
-            unknown.combat.as_mut().unwrap().map.shift.0 = -9;
+            unknown.combat.as_mut().unwrap().field.map_shift.0 = -9;
             let before = unknown.clone();
             let error = apply(Command::Continue, &mut unknown, &content).unwrap_err();
             assert!(matches!(error.root(), RuleError::Unsupported { .. }));
@@ -441,7 +441,7 @@ fn campaign_boundary_context(case: &Value, content: &Content) -> (Session, Conte
         } as i32;
     }
     // VerifyCampaignSpells loads the cold A5 zero pair before its declared entry.
-    let selected = state.combat.as_ref().unwrap().selected_enemy;
-    crate::native_common::npc_command_input(&mut state, selected, [0, 0]);
+    let selected = state.combat.as_ref().unwrap().monster_up;
+    crate::native_common::monster_command_input(&mut state, selected, [0, 0]);
     (state, content)
 }

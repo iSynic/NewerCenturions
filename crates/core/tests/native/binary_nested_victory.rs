@@ -12,18 +12,18 @@ fn controlled_battle(
     let mission = content.map(0).unwrap();
     let tables = mission.combat.as_ref().unwrap();
     let arena = state.combat.as_mut().unwrap();
-    arena.map = TacticalMap {
+    arena.field = CombatField {
         tiles: vec![1155; 8100],
-        shift: (0, 0),
+        map_shift: (0, 0),
         edge_word: 0,
     };
     arena.squad = SquadPlacement {
-        positions: (20..26).map(|x| (x, 20)).collect(),
-        under_tiles: vec![1155; 6],
+        pos: (20..26).map(|x| (x, 20)).collect(),
+        char_under: vec![1155; 6],
     };
-    arena.order.fill(-1);
-    arena.order[1..7].copy_from_slice(&[0, 1, 2, 3, 4, 5]);
-    arena.cursor = 1;
+    arena.battle_order.fill(-1);
+    arena.battle_order[1..7].copy_from_slice(&[0, 1, 2, 3, 4, 5]);
+    arena.battle_order_index = 1;
     state.warriors = warriors;
     if arena.battle == 14 {
         let mut record = MonsterRecord::read(&tables.monsters, 66).unwrap();
@@ -31,21 +31,21 @@ fn controlled_battle(
         for offset in [0x118, 0x11a, 0x11c, 0x11e] {
             record.bytes[offset..offset + 2].copy_from_slice(&1155_i16.to_be_bytes());
         }
-        arena.enemies = EnemySetup {
+        arena.roster = EnemySetup {
             records: vec![record],
-            positions: vec![(20, 20)],
+            mon_pos: vec![(20, 20)],
         };
         for x in 24..=25 {
             for y in 24..=25 {
-                arena.map.tiles[x * 90 + y] = 10;
+                arena.field.tiles[x * 90 + y] = 10;
             }
         }
         combat::lifecycle::kill_body(arena, &mut state.warriors, 10).unwrap();
     } else {
         assert_eq!(arena.battle, 15);
         let battle = centurions_content::combat::BattleRecord::read(&tables.battles, 15).unwrap();
-        arena.enemies = combat::place_enemies(
-            &mut arena.map,
+        arena.roster = combat::place_enemies(
+            &mut arena.field,
             mission,
             &battle,
             &tables.monsters,
@@ -54,11 +54,11 @@ fn controlled_battle(
         )
         .unwrap();
     }
-    let generated = record_bytes(&arena.enemies.records);
+    let generated = record_bytes(&arena.roster.records);
     // This outer command control acknowledges the skipped child combat as won;
     // native booty itself is entered directly by the independent receipt.
-    arena.victory_work.defeated = arena.victory_work.total;
-    for record in &mut arena.enemies.records {
+    arena.kill_counts.kill_mon = arena.kill_counts.num_enemy;
+    for record in &mut arena.roster.records {
         record.bytes[0x110..0x112].fill(0);
     }
     state.random = random;
@@ -67,8 +67,8 @@ fn controlled_battle(
 
 fn backing(state: &Session) -> Vec<u8> {
     state
-        .native_work
-        .npc_backing
+        .globals
+        .monsters
         .slots
         .iter()
         .flat_map(|slot| slot.as_ref().unwrap().record.bytes.iter().copied())
@@ -98,8 +98,8 @@ fn nested_battle_rewards_consume_count_once_and_preserve_backing_records() {
         assert_eq!(case["seed"], original["seed"]);
         let mut state = support::mission_session(&content);
         state.warriors = support::warriors(&original["calls"][0]["party_before"]);
-        state.allies.fill(0);
-        state.ally_count = 0;
+        state.holdover.fill(0);
+        state.held_over = 0;
         state.random = RandomState::new(case.n("seed"));
         let position = state.exploration.as_mut().unwrap();
         position.restore_map(
@@ -175,7 +175,7 @@ fn nested_battle_rewards_consume_count_once_and_preserve_backing_records() {
                             old.n("rng_draws")
                         ),
                     );
-                    let loot: Vec<_> = state.booty_items.iter().flat_map(|item| item.0).collect();
+                    let loot: Vec<_> = state.booty_list.iter().flat_map(|item| item.0).collect();
                     assert_eq!(loot, old.bytes("loot_after"));
                 }
                 rewards += 1;
@@ -194,11 +194,11 @@ fn nested_battle_rewards_consume_count_once_and_preserve_backing_records() {
         let count = state
             .combat
             .as_ref()
-            .map_or(0, |arena| arena.enemies.records.len());
+            .map_or(0, |arena| arena.roster.records.len());
         assert_eq!(count, case.n::<usize>("enemy_count_after"));
         assert_eq!(body(&state, &content), case.bytes("body_after"));
         assert_eq!(backing(&state), case.bytes("records_after"));
-        let queue = state.native_work.retained_death_queue.as_ref().unwrap();
+        let queue = state.globals.outer_todo_queue.as_ref().unwrap();
         assert_eq!(queue.count, case.n::<usize>("queue_count_after"));
         let bytes: Vec<_> = queue
             .entries

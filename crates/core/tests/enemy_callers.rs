@@ -21,38 +21,38 @@ pub fn compare(cases: &[Value], caller: Caller) {
         }
         let mut combat = Combat {
             battle: 129,
-            map: TacticalMap {
+            field: CombatField {
                 tiles: case.words("map_before"),
-                shift: (0, 0),
+                map_shift: (0, 0),
                 edge_word: 0,
             },
             squad: SquadPlacement {
-                positions: positions(&case["warrior_positions"]),
-                under_tiles: vec![1155; 6],
+                pos: positions(&case["warrior_positions"]),
+                char_under: vec![1155; 6],
             },
-            enemies: EnemySetup {
+            roster: EnemySetup {
                 records: monsters(&before_records),
-                positions: enemy_positions,
+                mon_pos: enemy_positions,
             },
-            order: case.words("order_before"),
+            battle_order: case.words("order_before"),
             ..crate::support::battle()
         };
         if caller != Caller::Firearm {
-            combat.spell_fields = case.bytes("fields_before");
-            combat.field_used = case.bytes("used_before");
+            combat.spell_queue = case.bytes("fields_before");
+            combat.collide_check = case.bytes("used_before");
         }
         let mut random = RandomState::new(case.n("seed_before"));
-        let mut work = EnemyWork {
+        let mut work = EnemyGlobals {
             item_context: case.n("item_context_before"),
             attack_count: case.n("attack_count_before"),
-            ..EnemyWork::default()
+            ..EnemyGlobals::default()
         };
         if caller == Caller::RetainedSpell {
             let spell: i16 = case.n("retained_spell");
             work.packet = case.bytes("packet_before");
             work.identity = [spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1];
         }
-        let result = enemy_action_with_work(
+        let result = enemy_action_with_globals(
             &mut combat,
             &mut party,
             mission,
@@ -65,7 +65,7 @@ pub fn compare(cases: &[Value], caller: Caller) {
                 let mut hits = events
                     .iter()
                     .filter(|event| matches!(event, Event::SpellResolved { .. }));
-                for expected in expected_hits(case, combat.enemies.records.len(), caller) {
+                for expected in expected_hits(case, combat.roster.records.len(), caller) {
                     assert_eq!(hits.next(), Some(&expected));
                 }
                 assert!(event_sounds(&events).starts_with(&case.n::<Vec<i16>>("sounds")));
@@ -77,18 +77,15 @@ pub fn compare(cases: &[Value], caller: Caller) {
         let events = result.unwrap_or_else(|error| panic!("case {index}: {error:?}"));
         crate::support::native_expect! {
             bytes record_bytes(&party) => &case["warriors_after"], format!("case {index} party");
-            bytes record_bytes(&combat.enemies.records) => &case["records_after"], format!("case {index} enemies");
-            words combat.map.tiles => &case["map_after"], format!("case {index} map");
-            words combat.order => &case["order_after"], format!("case {index} order");
+            bytes record_bytes(&combat.roster.records) => &case["records_after"], format!("case {index} enemies");
+            words combat.field.tiles => &case["map_after"], format!("case {index} map");
+            words combat.battle_order => &case["order_after"], format!("case {index} order");
             scalar work.attack_count => &case["attack_count_after"], format!("case {index} count");
             scalar random.seed => &case["seed_after"], format!("case {index} seed");
             scalar random.draws => &case["rng_draws"], format!("case {index} draws");
             scalar event_sounds(&events) => &case["sounds"], format!("case {index} sounds");
         }
-        assert_eq!(
-            combat.enemies.positions,
-            positions(&case["positions_after"])
-        );
+        assert_eq!(combat.roster.mon_pos, positions(&case["positions_after"]));
         let mut item_context = case.n::<i16>("item_context_after");
         let selected_item = raw_word(&before_records, 0x4e);
         if caller == Caller::Spell
@@ -104,8 +101,8 @@ pub fn compare(cases: &[Value], caller: Caller) {
         assert_eq!(work.item_context, item_context);
         if caller != Caller::Firearm {
             crate::support::native_expect! {
-                bytes combat.spell_fields => &case["fields_after"], format!("case {index} fields");
-                bytes combat.field_used => &case["used_after"], format!("case {index} usage");
+                bytes combat.spell_queue => &case["fields_after"], format!("case {index} fields");
+                bytes combat.collide_check => &case["used_after"], format!("case {index} usage");
             }
         }
         if caller == Caller::RetainedSpell {
@@ -114,7 +111,7 @@ pub fn compare(cases: &[Value], caller: Caller) {
                 words work.identity => &case["spell_registers_after"], format!("case {index} identity");
             }
         }
-        let expected = expected_hits(case, combat.enemies.records.len(), caller);
+        let expected = expected_hits(case, combat.roster.records.len(), caller);
         let actual: Vec<_> = events
             .into_iter()
             .filter(|event| match caller {

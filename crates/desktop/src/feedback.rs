@@ -1,23 +1,35 @@
 use crate::{assets::Assets, presentation::UiState};
-use centurions_core::{Event, feedback::NativeFeedback};
+use centurions_core::{Event, feedback::GameFeedback};
 use macroquad::prelude::*;
 
+/// The messages waiting to be shown, the one that stays on screen, and how long the current one
+/// lasts.
+#[derive(Default)]
+pub struct Feedback {
+    pub queue: std::collections::VecDeque<GameFeedback>,
+    pub persistent: Option<GameFeedback>,
+    pub started: Option<f64>,
+    pub until: f64,
+}
+
 impl UiState {
+    /// Keeps the capture targeting prompt up while a warrior chooses a monster to
+    /// capture, without repeating its entry sound or help.
     pub fn prepare_capture_prompt(&mut self, state: &centurions_core::Session) {
         let capturing = state
             .combat
             .as_ref()
             .is_some_and(|c| c.capture_actor.is_some());
         let own_prompt = matches!(
-            self.persistent_feedback,
-            Some(NativeFeedback::Flash {
+            self.feedback.persistent,
+            Some(GameFeedback::Flash {
                 address: 0x4024de,
                 ..
             })
         );
-        if capturing && self.persistent_feedback.is_none() {
+        if capturing && self.feedback.persistent.is_none() {
             // Restored targeting redraws its prompt without repeating entry sound or help.
-            self.persistent_feedback = Some(NativeFeedback::Flash {
+            self.feedback.persistent = Some(GameFeedback::Flash {
                 address: 0x4024de,
                 x: 30,
                 y: 300,
@@ -25,7 +37,7 @@ impl UiState {
                 sound: 0,
             });
         } else if !capturing && own_prompt {
-            self.persistent_feedback = None;
+            self.feedback.persistent = None;
         }
     }
 
@@ -40,40 +52,43 @@ impl UiState {
             return false;
         }
         let pause = centurions_core::feedback::script_pause();
-        if self.feedback.is_empty() {
-            self.feedback.push_back(pause.clone());
-            self.feedback_started = None;
+        if self.feedback.queue.is_empty() {
+            self.feedback.queue.push_back(pause.clone());
+            self.feedback.started = None;
         }
-        self.feedback.front() == Some(&pause)
+        self.feedback.queue.front() == Some(&pause)
     }
 
+    /// Starts the message at the head of the queue and returns the sound that goes
+    /// with it, if any.
     pub fn feedback_sound(&mut self, now: f64) -> Option<Event> {
-        let feedback = self.feedback.front()?;
-        if self.feedback_started.is_some() {
+        let feedback = self.feedback.queue.front()?;
+        if self.feedback.started.is_some() {
             return None;
         }
-        self.feedback_started = Some(now);
+        self.feedback.started = Some(now);
         let resource_id = match feedback {
-            NativeFeedback::Flash { sound, .. } | NativeFeedback::ResourceFlash { sound, .. } => {
-                *sound
-            }
-            NativeFeedback::Combat { .. } => -143,
-            NativeFeedback::CombatResult { code, audible, .. } => {
+            GameFeedback::Flash { sound, .. } | GameFeedback::ResourceFlash { sound, .. } => *sound,
+            GameFeedback::Combat { .. } => -143,
+            GameFeedback::CombatResult { code, audible, .. } => {
                 centurions_core::feedback::combat_result(*code)
                     .filter(|_| *audible)
                     .map_or(0, |(_, sound)| sound)
             }
-            NativeFeedback::Sound { resource_id } => *resource_id,
-            NativeFeedback::Warning { .. } | NativeFeedback::EquipmentLevel { .. } => 6000,
-            NativeFeedback::Silent
-            | NativeFeedback::CombatResourceResult { .. }
-            | NativeFeedback::Tutorial { .. }
-            | NativeFeedback::DialogText { .. }
-            | NativeFeedback::OutdoorBodyStatus { .. } => 0,
+            GameFeedback::Sound { resource_id } => *resource_id,
+            GameFeedback::Warning { .. } | GameFeedback::EquipmentLevel { .. } => 6000,
+            GameFeedback::Silent
+            | GameFeedback::CombatResourceResult { .. }
+            | GameFeedback::Tutorial { .. }
+            | GameFeedback::DialogText { .. }
+            | GameFeedback::OutdoorBodyStatus { .. } => 0,
         };
         (resource_id != 0).then_some(Event::Sound { resource_id })
     }
 
+    /// Answers a click or key on the message showing: an error clears, and a message
+    /// waiting to be dismissed moves on to the next. Returns whether the input was
+    /// taken.
     pub fn feedback_input(&mut self, now: f64, pressed: bool) -> bool {
         if self.technical_error.is_some() {
             if pressed {
@@ -81,39 +96,39 @@ impl UiState {
             }
             return true;
         }
-        let Some(feedback) = self.feedback.front() else {
+        let Some(feedback) = self.feedback.queue.front() else {
             return false;
         };
-        if matches!(feedback, NativeFeedback::Flash { wait, .. } | NativeFeedback::ResourceFlash { wait, .. } if *wait < 0)
+        if matches!(feedback, GameFeedback::Flash { wait, .. } | GameFeedback::ResourceFlash { wait, .. } if *wait < 0)
         {
-            if matches!(feedback, NativeFeedback::Flash { sound, .. } | NativeFeedback::ResourceFlash { sound, .. } if *sound < 0)
-                && now < self.feedback_until
+            if matches!(feedback, GameFeedback::Flash { sound, .. } | GameFeedback::ResourceFlash { sound, .. } if *sound < 0)
+                && now < self.feedback.until
             {
                 return true;
             }
-            self.persistent_feedback = self.feedback.pop_front().filter(|feedback| {
+            self.feedback.persistent = self.feedback.queue.pop_front().filter(|feedback| {
                 !matches!(
                     feedback,
-                    NativeFeedback::Flash {
+                    GameFeedback::Flash {
                         address: 0x40250d | 0x4036f1,
                         ..
                     }
                 )
             });
-            self.feedback_started = None;
-            return !self.feedback.is_empty();
+            self.feedback.started = None;
+            return !self.feedback.queue.is_empty();
         }
-        if let NativeFeedback::Tutorial { first, last } = feedback {
+        if let GameFeedback::Tutorial { first, last } = feedback {
             self.help_request = Some((*first, *last));
-            self.feedback.pop_front();
-            self.feedback_started = None;
+            self.feedback.queue.pop_front();
+            self.feedback.started = None;
             return true;
         }
-        if matches!(feedback, NativeFeedback::Combat { .. }) {
-            if now < self.feedback_until {
+        if matches!(feedback, GameFeedback::Combat { .. }) {
+            if now < self.feedback.until {
                 return true;
             }
-            if let Some(NativeFeedback::Combat { kind }) = self.feedback.pop_front() {
+            if let Some(GameFeedback::Combat { kind }) = self.feedback.queue.pop_front() {
                 use centurions_core::feedback::CombatRefusal::*;
                 let page = match kind {
                     NeedTarget => 90,
@@ -125,39 +140,39 @@ impl UiState {
                 };
                 self.help_request = Some((page, page));
             }
-            self.feedback_started = None;
+            self.feedback.started = None;
             return false;
         }
-        let started = self.feedback_started.unwrap_or(now);
+        let started = self.feedback.started.unwrap_or(now);
         let done = match feedback {
-            NativeFeedback::CombatResult { .. } | NativeFeedback::CombatResourceResult { .. } => {
+            GameFeedback::CombatResult { .. } | GameFeedback::CombatResourceResult { .. } => {
                 now - started >= 20. / 60.
             }
-            NativeFeedback::OutdoorBodyStatus { wait, .. } => {
-                now - started > f64::from(*wait) / 60.
-            }
-            NativeFeedback::DialogText { wait, .. } => now - started >= f64::from(*wait) / 60.,
-            NativeFeedback::Flash { wait, .. } | NativeFeedback::ResourceFlash { wait, .. }
+            GameFeedback::OutdoorBodyStatus { wait, .. } => now - started > f64::from(*wait) / 60.,
+            GameFeedback::DialogText { wait, .. } => now - started >= f64::from(*wait) / 60.,
+            GameFeedback::Flash { wait, .. } | GameFeedback::ResourceFlash { wait, .. }
                 if *wait > 0 =>
             {
                 now - started >= f64::from(*wait) / 60.
             }
-            NativeFeedback::Flash { .. }
-            | NativeFeedback::ResourceFlash { .. }
-            | NativeFeedback::EquipmentLevel { .. } => pressed && now - started >= 15. / 60.,
-            NativeFeedback::Sound { .. } => now >= self.feedback_until,
-            NativeFeedback::Silent => true,
-            NativeFeedback::Tutorial { .. } => unreachable!(),
-            NativeFeedback::Warning { .. } => pressed && now - started >= 10. / 60.,
-            NativeFeedback::Combat { .. } => unreachable!(),
+            GameFeedback::Flash { .. }
+            | GameFeedback::ResourceFlash { .. }
+            | GameFeedback::EquipmentLevel { .. } => pressed && now - started >= 15. / 60.,
+            GameFeedback::Sound { .. } => now >= self.feedback.until,
+            GameFeedback::Silent => true,
+            GameFeedback::Tutorial { .. } => unreachable!(),
+            GameFeedback::Warning { .. } => pressed && now - started >= 10. / 60.,
+            GameFeedback::Combat { .. } => unreachable!(),
         };
         if done {
-            self.feedback.pop_front();
-            self.feedback_started = None;
+            self.feedback.queue.pop_front();
+            self.feedback.started = None;
         }
         true
     }
 
+    /// Draws the technical error, or else the message at the head of the queue (or
+    /// the one that stays up), at `warning_origin`.
     pub fn draw_feedback(&self, assets: &Assets, warning_origin: Vec2) {
         if let Some(error) = &self.technical_error {
             draw_rectangle(40., 180., 720., 240., Color::from_rgba(25, 25, 25, 255));
@@ -167,38 +182,33 @@ impl UiState {
         }
         let Some(feedback) = self
             .feedback
+            .queue
             .front()
-            .filter(|f| !matches!(f, NativeFeedback::Sound { .. } | NativeFeedback::Silent))
-            .or(self.persistent_feedback.as_ref())
+            .filter(|f| !matches!(f, GameFeedback::Sound { .. } | GameFeedback::Silent))
+            .or(self.feedback.persistent.as_ref())
         else {
             return;
         };
         let (text, rect, picture) = match feedback {
-            NativeFeedback::OutdoorBodyStatus { permanent, .. } => {
+            GameFeedback::OutdoorBodyStatus { permanent, .. } => {
                 let address = if *permanent { 0x403294 } else { 0x403286 };
-                if let Ok(text) = assets.native_text.text(address, true) {
+                if let Ok(text) = assets.game_text.text(address, true) {
                     assets.text(&text, 400., 30., 12, BLACK);
                 }
                 return;
             }
-            NativeFeedback::DialogText {
+            GameFeedback::DialogText {
                 dialog,
                 item,
                 address,
                 ..
             } => {
-                if let Ok(text) = assets.native_text.text(*address, true) {
-                    assets.wrapped_color(
-                        &text,
-                        assets.dialog_rect(*dialog, usize::from(*item)),
-                        12,
-                        14.,
-                        YELLOW,
-                    );
+                if let Ok(text) = assets.game_text.text(*address, true) {
+                    assets.dialog_text(&text, assets.dialog_rect(*dialog, usize::from(*item)));
                 }
                 return;
             }
-            NativeFeedback::ResourceFlash {
+            GameFeedback::ResourceFlash {
                 resource_id,
                 index,
                 x,
@@ -224,25 +234,25 @@ impl UiState {
                 Rect::new(f32::from(*x), f32::from(*y) + 20., 260., 62.),
                 156,
             ),
-            NativeFeedback::Flash { address, x, y, .. } => (
-                assets.native_text.text(*address, false),
+            GameFeedback::Flash { address, x, y, .. } => (
+                assets.game_text.text(*address, false),
                 Rect::new(f32::from(*x), f32::from(*y) + 20., 260., 62.),
                 156,
             ),
-            NativeFeedback::EquipmentLevel { level } => (
+            GameFeedback::EquipmentLevel { level } => (
                 assets
-                    .native_text
-                    .text(0x400548, false)
+                    .game_text
+                    .text(crate::game_strings::MINIMUM_SKILL_LEVEL, false)
                     .map(|prefix| format!("{prefix}{level}")),
                 Rect::new(50., 70., 260., 62.),
                 156,
             ),
-            NativeFeedback::Combat { kind } => (
-                assets.native_text.text(kind.address(), true),
+            GameFeedback::Combat { kind } => (
+                assets.game_text.text(kind.address(), true),
                 Rect::new(580., 536., 208., 62.),
                 156,
             ),
-            NativeFeedback::CombatResourceResult { resource_id, index } => (
+            GameFeedback::CombatResourceResult { resource_id, index } => (
                 assets
                     .reference_strings
                     .get(resource_id)
@@ -262,10 +272,10 @@ impl UiState {
                 Rect::new(580., 536., 208., 62.),
                 156,
             ),
-            NativeFeedback::CombatResult { code, amount, .. } => {
-                // showresults 0x158704..0x1588a4: string(abs(damage)) in red, then
-                // yellowColor and 0x400ec2 above one or 0x400eb4 for one; 0x15903a:
-                // -1 draws 0x400c4c.
+            GameFeedback::CombatResult { code, amount, .. } => {
+                // showresults prints string(abs(damage)) in red, then the plural
+                // label above one or the singular for one in yellowColor; -1
+                // draws the miss label.
                 let hit = match code {
                     0 => Some(if *amount > 1 { 0x400ec2 } else { 0x400eb4 }),
                     -1 => Some(0x400c4c),
@@ -277,15 +287,15 @@ impl UiState {
                 else {
                     return;
                 };
-                let Ok(label) = assets.native_text.text(address, true) else {
+                let Ok(label) = assets.game_text.text(address, true) else {
                     return;
                 };
-                // showresults 0x1585ee..0x158648: TextMode srcOr, TextSize 20 and
+                // showresults uses TextMode srcOr, TextSize 20 and
                 // ForeColor(redColor) for the amount; the amount codes then switch
-                // to yellowColor for their label (0x158b76..0x158cf8). In combat
-                // it draws PICT 156 over rect 0x44370a (0x15849e..0x1584ae) and moves
-                // to WORD40856c + 420, WORD40856e + 443 - 32 in window 128, whose
-                // controls sit 20 pixels lower here (scene's combat panels).
+                // to yellowColor for their label. In combat it draws PICT 156 over
+                // the message rectangle and moves to (420, 443 - 32) from the panel
+                // origin; the controls sit 20 pixels lower here than in the game's
+                // window (scene's combat panels).
                 let rect = Rect::new(568., 538., 232., 50.);
                 assets.panel(156, rect);
                 let red = Color::from_rgba(0xdd, 0x08, 0x06, 255);
@@ -301,7 +311,7 @@ impl UiState {
                 }
                 return;
             }
-            NativeFeedback::Warning { index } => (
+            GameFeedback::Warning { index } => (
                 assets
                     .warnings
                     .get(index.saturating_sub(1) as usize)
@@ -312,19 +322,19 @@ impl UiState {
                 Rect::new(warning_origin.x + 31., warning_origin.y + 41., 259., 60.),
                 182,
             ),
-            NativeFeedback::Sound { .. }
-            | NativeFeedback::Silent
-            | NativeFeedback::Tutorial { .. } => return,
+            GameFeedback::Sound { .. } | GameFeedback::Silent | GameFeedback::Tutorial { .. } => {
+                return;
+            }
         };
         assets.panel(picture, rect);
-        if matches!(feedback, NativeFeedback::Warning { .. }) {
+        if matches!(feedback, GameFeedback::Warning { .. }) {
             assets.panel(144, Rect::new(rect.x + 4., rect.y + 4., 45., 50.));
         }
         if matches!(
             feedback,
-            NativeFeedback::Flash { .. }
-                | NativeFeedback::ResourceFlash { .. }
-                | NativeFeedback::EquipmentLevel { .. }
+            GameFeedback::Flash { .. }
+                | GameFeedback::ResourceFlash { .. }
+                | GameFeedback::EquipmentLevel { .. }
         ) {
             draw_rectangle_lines(
                 rect.x - 1.,
@@ -338,7 +348,7 @@ impl UiState {
         if let Ok(text) = text {
             assets.wrapped_color(
                 &text,
-                if matches!(feedback, NativeFeedback::Warning { .. }) {
+                if matches!(feedback, GameFeedback::Warning { .. }) {
                     Rect::new(rect.x + 50., rect.y + 5., 204., 50.)
                 } else {
                     Rect::new(rect.x + 10., rect.y + 8., rect.w - 20., rect.h - 10.)

@@ -1,9 +1,14 @@
-//! The two booty calls and saved ACTION in newland48 (0x14551c..0x1456f0).
-use super::{battle_return::finish_selected_battle_wrapper, retained_rewards, reward_context};
+//! A story battle with selected treasure: two booty calls and the saved action.
+use super::{battle_return::finish_selected_battle_wrapper, out_of_combat_rewards, reward_context};
 use crate::{Event, Phase, Presentation, RuleError, Session};
 use centurions_content::{Content, records::TreasureTable, word};
 use serde::{Deserialize, Serialize};
 
+/// Where a story battle with selected treasure stands: fighting (`Battle`), showing the battle's
+/// loot or the selected treasure (`BattleLoot`, `Treasure`), dealing the battle's reward
+/// (`FirstReward`, or `FinalReward` when no warrior is left), dealing the selected treasure
+/// (`SecondReward`), in the getup that grants rewards once the monsters are gone, or cleaning up
+/// under a script callback or a move (`Callback`, `Movement`, `MovementCallback`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum Stage {
     Battle,
@@ -18,9 +23,11 @@ enum Stage {
     MovementCallback,
 }
 
+/// A story battle with selected treasure in progress: its stage, the script action to return to,
+/// and whether the party retreated.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SelectedBattleTreasure {
-    // Kept in old saves; the second call reads shared EXTRA after the first returns.
+    // Kept for old saves; the second call rereads the extra record after the first.
     treasure: i16,
     stage: Stage,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -30,6 +37,8 @@ pub struct SelectedBattleTreasure {
 }
 
 impl SelectedBattleTreasure {
+    /// Starts a selected-treasure battle for the story's treasure, noting the script action to
+    /// return to.
     pub(crate) fn new(state: &Session, treasure: i16) -> Result<Self, RuleError> {
         Ok(Self {
             treasure,
@@ -43,6 +52,8 @@ impl SelectedBattleTreasure {
         })
     }
 
+    /// Refuses a saved selected-treasure battle that is suspended under a combat return but has
+    /// an unknown action or is in a reward stage.
     pub(crate) fn validate_suspended(&self) -> Result<(), RuleError> {
         if self.action.is_some_and(|action| action > 8) {
             return Err("invalid selected-battle action return".into());
@@ -56,6 +67,8 @@ impl SelectedBattleTreasure {
         Ok(())
     }
 
+    /// Refuses a saved selected-treasure battle whose stage does not fit the windows and cleanup
+    /// the game shows.
     pub(crate) fn validate(&self, state: &Session) -> Result<(), RuleError> {
         if self.action.is_some_and(|action| action > 8) || state.battle_treasure != 0 {
             return Err("invalid selected-battle treasure continuation".into());
@@ -74,11 +87,11 @@ impl SelectedBattleTreasure {
                     && (matches!(
                         state.scripted_cleanup,
                         Some(
-                            crate::story_cleanup::Stage::Survivors
-                                | crate::story_cleanup::Stage::RewardSurvivors(_)
-                                | crate::story_cleanup::Stage::Rewards
-                                | crate::story_cleanup::Stage::Complete
-                                | crate::story_cleanup::Stage::RetainedSurvivors { .. }
+                            crate::story::cleanup::Stage::Survivors
+                                | crate::story::cleanup::Stage::RewardSurvivors(_)
+                                | crate::story::cleanup::Stage::Rewards
+                                | crate::story::cleanup::Stage::Complete
+                                | crate::story::cleanup::Stage::OutOfCombatSurvivors { .. }
                         )
                     ) || state.recovery_return
                         == Some(crate::loot_recovery::RecoveryReturn::Scripted))
@@ -95,7 +108,7 @@ impl SelectedBattleTreasure {
                     && state.survivors.is_some()
                     && matches!(
                         state.scripted_cleanup,
-                        Some(crate::story_cleanup::Stage::RetainedSelectedSurvivors { .. })
+                        Some(crate::story::cleanup::Stage::OutOfCombatSelectedSurvivors { .. })
                     )
                     && matches!(page, Some(Presentation::Survivors))
             }
@@ -106,7 +119,9 @@ impl SelectedBattleTreasure {
                         || state.survivors.is_some()
                             && matches!(
                                 state.scripted_cleanup,
-                                Some(crate::story_cleanup::Stage::RetainedGetupSurvivors { .. })
+                                Some(
+                                    crate::story::cleanup::Stage::OutOfCombatGetupSurvivors { .. }
+                                )
                             )
                             && matches!(page, Some(Presentation::Survivors)))
             }
@@ -123,10 +138,10 @@ pub(super) fn after_battle(
     state: &mut Session,
     content: &Content,
 ) -> Result<Vec<Event>, RuleError> {
-    // The live combat loop reloads land on its victory return. A callback that
-    // already cleared COMBAT returns before that load (combat114378).
+    // A victorious battle reloads the land, unless a death story already ended the
+    // battle.
     if state.combat.is_some() {
-        reward_context::detach(state)?;
+        reward_context::leave_battle(state)?;
         state.reload_battle_land()?;
     }
     let action = state
@@ -145,7 +160,7 @@ pub(super) fn after_battle(
     let active = state
         .warriors
         .iter()
-        .any(|warrior| warrior.record().active_flag() != 0);
+        .any(|warrior| warrior.record().in_battle() != 0);
     state.handled_deaths.clear();
     state.phase = Phase::Exploration;
     state
@@ -159,7 +174,7 @@ pub(super) fn after_battle(
         0
     } else {
         state.selected_battle_treasure.as_mut().unwrap().stage = Stage::FinalReward;
-        events.push(Event::Feedback(crate::feedback::NativeFeedback::Flash {
+        events.push(Event::Feedback(crate::feedback::GameFeedback::Flash {
             address: 0x401b7e,
             x: 100,
             y: 100,
@@ -168,10 +183,11 @@ pub(super) fn after_battle(
         }));
         2
     };
-    events.extend(retained_rewards::begin_selected(state, content, mode)?);
+    events.extend(out_of_combat_rewards::begin_selected(state, content, mode)?);
     Ok(events)
 }
 
+/// Whether the story waits for its battle to return.
 pub(super) fn awaiting_battle(state: &Session) -> bool {
     state
         .selected_battle_treasure
@@ -179,6 +195,7 @@ pub(super) fn awaiting_battle(state: &Session) -> bool {
         .is_some_and(|pending| matches!(pending.stage, Stage::Battle | Stage::Callback))
 }
 
+/// Whether the turn, round or death script that called the battle still owns the story.
 fn callback_owns(state: &Session) -> bool {
     if state
         .turn_dispatch
@@ -197,6 +214,7 @@ fn callback_owns(state: &Session) -> bool {
             .is_some_and(|story| story.shared_dispatch && !story.waiting_child)
 }
 
+/// Notes that the battle's cleanup runs under a script callback; refused when no script owns it.
 pub(crate) fn begin_cleanup(state: &mut Session) -> Result<(), RuleError> {
     if state.selected_battle_treasure.is_none() {
         return Ok(());
@@ -220,9 +238,11 @@ pub(crate) fn begin_cleanup(state: &mut Session) -> Result<(), RuleError> {
     Ok(())
 }
 
+/// Whether a move is still unfinished: a monster's return, a walk question, a death story or a
+/// returning script.
 pub(super) fn movement_pending(state: &Session) -> bool {
-    super::npc_return::owns_pending_return(state)
-        || state.retained_walk_choice.is_some()
+    super::monster_return::owns_pending_return(state)
+        || state.out_of_combat_walk_choice.is_some()
         || state.combat_story.as_ref().is_some_and(|story| {
             story.return_to.is_some() || story.shared_dispatch && !story.waiting_child
         })
@@ -237,15 +257,17 @@ pub(super) fn movement_pending(state: &Session) -> bool {
         || state
             .scripted_cleanup
             .as_ref()
-            .is_some_and(crate::story_cleanup::Stage::pauses)
+            .is_some_and(crate::story::cleanup::Stage::pauses)
 }
 
+/// Marks the battle as in a move.
 pub(super) fn begin_movement(state: &mut Session) {
     if let Some(pending) = state.selected_battle_treasure.as_mut() {
         pending.stage = Stage::Movement;
     }
 }
 
+/// Returns to the battle's tally after a move; when no monsters remain the battle's rewards begin.
 pub(crate) fn after_movement(
     state: &mut Session,
     content: &Content,
@@ -259,15 +281,16 @@ pub(crate) fn after_movement(
         return Ok(vec![]);
     }
     state.selected_battle_treasure.as_mut().unwrap().stage = Stage::Battle;
-    // combat114378 tests COMBAT first; only a live loop then reads victory work.
+    // Victory counts matter only while the battle is still running.
     if let Some(combat) = &state.combat
-        && combat.victory_work.has_remaining()
+        && combat.kill_counts.has_remaining()
     {
         return Ok(vec![]);
     }
     after_battle(state, content)
 }
 
+/// Whether the battle is in a move.
 pub(super) fn moving(state: &Session) -> bool {
     state
         .selected_battle_treasure
@@ -275,6 +298,8 @@ pub(super) fn moving(state: &Session) -> bool {
         .is_some_and(|pending| matches!(pending.stage, Stage::Movement | Stage::MovementCallback))
 }
 
+/// The party retreats from a selected-treasure battle; the rewards granted when the monsters are
+/// gone follow.
 pub(crate) fn retreat(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     state
         .selected_battle_treasure
@@ -284,21 +309,24 @@ pub(crate) fn retreat(state: &mut Session, content: &Content) -> Result<Vec<Even
     begin_getup(state, content)
 }
 
+/// Leaves the battle if it is still running and grants the rewards, as getup does when the monsters
+/// are gone.
 pub(super) fn begin_getup(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     if state.combat.is_some() {
-        reward_context::detach(state)?;
+        reward_context::leave_battle(state)?;
     }
     state
         .selected_battle_treasure
         .as_mut()
         .ok_or("selected Getup caller missing")?
         .stage = Stage::Getup;
-    retained_rewards::begin_getup(state, content)
+    out_of_combat_rewards::begin_getup(state, content)
 }
 
+/// Continues after the getup rewards: the turn story returns, then the battle's own rewards follow.
 pub(super) fn after_getup(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let mut events = super::turn_stories::finish_returning(state, content)?;
-    if !super::npc_return::owns_pending_return(state)
+    if !super::monster_return::owns_pending_return(state)
         && state
             .selected_battle_treasure
             .as_ref()
@@ -310,6 +338,7 @@ pub(super) fn after_getup(state: &mut Session, content: &Content) -> Result<Vec<
     Ok(events)
 }
 
+/// Puts the battle in the stage of the reward window that has just opened.
 pub(super) fn defer(state: &mut Session) -> Result<(), RuleError> {
     let pending = state
         .selected_battle_treasure
@@ -332,14 +361,14 @@ pub(super) fn returned(state: &mut Session, content: &Content) -> Result<Vec<Eve
         .stage;
     match stage {
         Stage::FirstReward | Stage::BattleLoot => {
-            // Native1455f6 returns before rereading WORD443312. A death or round
-            // story may have replaced EXTRA, including an entry value of zero.
-            let treasure = word(&state.native_work.extra_record, 8)?;
+            // The treasure comes from the extra record as it stands now; a death or
+            // round story may have replaced it, even with zero.
+            let treasure = word(&state.globals.extra_record, 8)?;
             if treasure == 0 {
                 return finish(state, content);
             }
             let map = state.land(content).ok_or("selected treasure map missing")?;
-            // The seek uses the native unsigned WORD index into current DataTD.
+            // The treasure index is unsigned.
             let record = TreasureTable(&map.treasure)
                 .record(treasure as u16 as usize)
                 .map_err(|_| RuleError::Unsupported {
@@ -347,12 +376,12 @@ pub(super) fn returned(state: &mut Session, content: &Content) -> Result<Vec<Eve
                     dependency: "additional treasure outside the native file",
                 })?
                 .to_vec();
-            state.native_work.treasure_record = record;
-            state.native_work.npc_backing.active_count = 0;
+            state.globals.treasure = record;
+            state.globals.monsters.num_mon = 0;
             let pending = state.selected_battle_treasure.as_mut().unwrap();
             pending.treasure = treasure;
             pending.stage = Stage::SecondReward;
-            retained_rewards::begin_selected(state, content, 1)
+            out_of_combat_rewards::begin_selected(state, content, 1)
         }
         Stage::FinalReward | Stage::SecondReward | Stage::Treasure => finish(state, content),
         Stage::Battle | Stage::Callback | Stage::Movement | Stage::MovementCallback => {
@@ -362,6 +391,8 @@ pub(super) fn returned(state: &mut Session, content: &Content) -> Result<Vec<Eve
     }
 }
 
+/// Ends the story's battle: the warriors are put back in the battle, the land is reloaded and the
+/// story continues, resuming the movement that was waiting.
 fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let pending = state
         .selected_battle_treasure
@@ -373,7 +404,7 @@ fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleErro
         .ok_or("selected return map missing")?
         .presentation = None;
     for warrior in &mut state.warriors {
-        warrior.record_mut().set_active_flag(1);
+        warrior.record_mut().set_in_battle(1);
     }
     state.reload_battle_land()?;
     let mut events = finish_selected_battle_wrapper(state, content, pending.retreated)?;
@@ -385,8 +416,8 @@ fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleErro
         && state.combat_story.is_none()
         && state.round_dispatch.is_none()
         && state.turn_dispatch.is_none()
-        && !super::npc_return::owns_pending_return(state)
-        && state.retained_walk_choice.is_none()
+        && !super::monster_return::owns_pending_return(state)
+        && state.out_of_combat_walk_choice.is_none()
         && (state.zero_time.is_some() || state.time_continuation.is_some())
         && state
             .exploration
@@ -398,6 +429,7 @@ fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleErro
     Ok(events)
 }
 
+/// Continues after the reward window closed, once the booty is collected or stored.
 pub(crate) fn after_close(
     state: &mut Session,
     content: &Content,
@@ -405,7 +437,7 @@ pub(crate) fn after_close(
     if state.selected_battle_treasure.is_none() {
         return Ok(None);
     }
-    if state.booty_items.iter().any(|item| item.id() != 0) {
+    if state.booty_list.iter().any(|item| item.id() != 0) {
         return Err("collect or store the equipment before continuing".into());
     }
     returned(state, content).map(Some)

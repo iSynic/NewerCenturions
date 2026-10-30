@@ -2,6 +2,9 @@ use centurions_content::{Content, audio, digest, graphics, read_resource};
 use serde_json::{Value, json};
 use std::path::Path;
 
+/// Decodes the pictures, icons, cursors and sounds among the content's resources and returns a
+/// JSON report listing every resource with its source, type, id, hash, size and status:
+/// inventoried, decoded, rejected, or without a decoder.
 pub(crate) fn run(content: &Content, root: &Path) -> Value {
     let resources: Vec<Value> = content
         .resources

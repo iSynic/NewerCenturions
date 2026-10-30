@@ -1,9 +1,13 @@
-//! Player psi in the original combat execution order.
+//! Psi cast by a warrior in combat.
 use super::{begin_learned_heal, finish_player_action, select_medical_target};
 use crate::combat::Combat;
+use crate::combat::player_psi::CastContext;
+use crate::combat::player_psi::CastRequest;
+use crate::combat::spells::spell_level;
 use crate::{Event, RuleError, Session};
 use centurions_content::Content;
 
+/// The active warrior casts a psi power at a chosen cell.
 pub fn player_psi(
     state: &mut Session,
     content: &Content,
@@ -15,6 +19,8 @@ pub fn player_psi(
     player_psi_target(state, content, spell, power, target, rotation, None)
 }
 
+/// The active warrior casts a psi power on a warrior of the party. A heal on a fallen warrior is
+/// carried out as a learned heal.
 pub fn player_psi_warrior(
     state: &mut Session,
     content: &Content,
@@ -41,7 +47,7 @@ pub fn player_psi_warrior(
         .as_ref()
         .ok_or("Psi combat missing")?
         .squad
-        .positions
+        .pos
         .get(warrior)
         .ok_or("Psi warrior target missing")?;
     player_psi_target(
@@ -55,6 +61,10 @@ pub fn player_psi_warrior(
     )
 }
 
+/// The active warrior casts a psi power: the cast is resolved with the party buffs, the choice is
+/// remembered in the psi menu and the action ends.
+///
+/// Original: castspell
 pub(super) fn player_psi_target(
     state: &mut Session,
     content: &Content,
@@ -73,64 +83,54 @@ pub(super) fn player_psi_target(
     let mission = state
         .land(content)
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
-    crate::combat::player_psi::select_native_caster(state);
-    // cast's loop over castspell's single triple.
+    crate::combat::player_psi::select_combat_caster(state);
     if let Some(combat) = state.combat.as_mut() {
-        combat.target_work.enter(0, 1);
+        combat.target_picks.enter(0, 1);
     }
     let mut events = crate::combat::player_psi::cast_with_buffs(
         state.combat.as_mut().unwrap(),
         &mut state.warriors,
         mission,
         &mut state.random,
-        &mut state.native_work.psi_memory,
-        &mut state.party_buffs,
+        &mut state.globals.define_spells,
+        &mut state.party_condition,
         state.psi_disabled,
-        crate::combat::player_psi::CastRequest {
+        CastRequest {
             rotation,
             spell,
             power,
             target,
         },
-        crate::combat::player_psi::CastContext {
+        CastContext {
             movement_gate: state.bandage_ready,
             body,
             animation_delay: state.command_preferences.animation_delay,
-            item_work_alias: crate::combat::spells::retained_item_alias(
-                &state.native_work.ammunition_work,
+            item_restriction: crate::combat::spells::loaded_item_restriction(
+                &state.globals.loaded_items,
             )?,
-            owners: crate::combat::warrior_alias::Owners::new(
-                None,
-                &state.native_work.shop_work,
-                state
-                    .exploration
-                    .as_ref()
-                    .map(|position| position.event_headers.as_slice()),
-            )
-            .with_backup(&state.native_work.warrior_table),
+            owners: crate::combat::warrior_alias::backup_owners!(state),
             land: crate::combat::map_alias::session_map_aliases!(state),
-            refresh: Some((&content.items, &mut state.native_work.ammunition_work)),
+            refresh: Some((&content.items, &mut state.globals.loaded_items)),
         },
     )?;
     state.commit_alias_writes()?;
-    // castspell clears the mask at entry; cast and the global arm clear it afterwards.
+    // The target marks clear when the cast starts and again when it ends.
     if let Some(combat) = state.combat.as_mut() {
-        combat.clear_target_tail();
-        // cast's last increment and closing cleartarget (10e658..10e678).
-        combat.target_work.leave();
+        combat.clear_track_tail();
+        combat.target_picks.leave();
     }
     if matches!(
-        centurions_content::records::AttackPacket(&state.combat.as_ref().unwrap().attack_packet)
+        centurions_content::records::SpellInfoRecord(&state.combat.as_ref().unwrap().spell_info)
             .effect()?,
         55 | 56
     ) {
         state.bandage_ready = 0;
     }
-    state.native_work.attack_count = power;
-    // castspell 0x10d328 stores the cast power in WORD 0x437a7a + 2 * member.
-    state.native_work.psi_powers[actor as usize] = None;
+    state.globals.attack_count = power;
+    // The warrior's remembered spell power is forgotten.
+    state.globals.old_power_level[actor as usize] = None;
     state.psi_menu_choices[actor as usize] = Some(crate::PsiMenuChoice {
-        row: (spell % 1000 / 100 - 1) as u8,
+        row: spell_level(spell) as u8,
         column: (spell % 100 - 1) as u8,
         power,
     });

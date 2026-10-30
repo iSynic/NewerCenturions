@@ -8,9 +8,9 @@ fn all_footprint_placement_and_restore_match_original() {
     let fixture: serde_json::Value = support::fixture("large-placement.json");
     let mission = support::terrain_mission(&fixture);
     for (index, case) in fixture.array("cases").iter().enumerate() {
-        let map = TacticalMap {
+        let map = CombatField {
             tiles: support::words(&case.bytes("map")),
-            shift: (0, 0),
+            map_shift: (0, 0),
             edge_word: 0,
         };
         let monster = MonsterRecord {

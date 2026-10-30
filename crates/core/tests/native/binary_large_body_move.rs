@@ -12,23 +12,23 @@ fn large_body_movement_matches_original_routine() {
         let tiles = support::words(&case.bytes("before_tiles"));
         let mut combat = support::battle();
         combat.battle = 2;
-        combat.map.tiles = tiles;
-        combat.squad.positions = vec![(20 + dx * 4, 20 + dy * 4); 6];
-        combat.enemies.records = vec![MonsterRecord {
+        combat.field.tiles = tiles;
+        combat.squad.pos = vec![(20 + dx * 4, 20 + dy * 4); 6];
+        combat.roster.records = vec![MonsterRecord {
             bytes: case.bytes("input"),
         }];
-        combat.enemies.positions = vec![(20, 20)];
-        combat.order = vec![-1, 10];
+        combat.roster.mon_pos = vec![(20, 20)];
+        combat.battle_order = vec![-1, 10];
         let mut random = RandomState::new(case.n::<u32>("initial_seed"));
         let result = move_enemy(&combat, &mission, 0, &mut random).unwrap();
         let combat = &result.combat;
         support::native_expect! {
-            bytes combat.enemies.records[0].bytes => &case["after"], "enemy case {index}";
+            bytes combat.roster.records[0].bytes => &case["after"], "enemy case {index}";
             bytes support::word_bytes(&combat
-                        .map.tiles) => &case["tiles"], "map case {index}";
+                        .field.tiles) => &case["tiles"], "map case {index}";
         }
         assert_eq!(
-            combat.enemies.positions[0],
+            combat.roster.mon_pos[0],
             (case.n::<i16>("x"), case.n::<i16>("y")),
             "position case {index}"
         );

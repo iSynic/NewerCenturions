@@ -5,6 +5,8 @@ use centurions_core::{Event, Session};
 use macroquad::prelude::*;
 
 impl UiState {
+    /// Resolves a booty or Items screen action against the screen's own state;
+    /// choosing a category plays the click sound.
     pub fn resolve_inventory(
         &mut self,
         action: Option<Action>,
@@ -21,7 +23,8 @@ impl UiState {
                 let result = self.inventory.handle(command, state, content, now)?;
                 if category {
                     self.feedback
-                        .push_back(centurions_core::feedback::NativeFeedback::Sound {
+                        .queue
+                        .push_back(centurions_core::feedback::GameFeedback::Sound {
                             resource_id: 141,
                         });
                 }
@@ -30,6 +33,8 @@ impl UiState {
             other => Ok(other),
         }
     }
+    /// Shows a technical error in the window and adds it to the diagnostic file,
+    /// which is emptied when it grows past a megabyte.
     pub fn error(&mut self, text: String) {
         self.movement.refuse();
         if self.technical_error.as_ref() != Some(&text) {
@@ -53,6 +58,8 @@ impl UiState {
             self.technical_error = Some(text);
         }
     }
+    /// Shows why a command was refused: the rule's own message, or a technical
+    /// error for any other failure.
     pub fn failure(&mut self, error: centurions_core::RuleError) {
         if matches!(
             &error,
@@ -67,12 +74,14 @@ impl UiState {
         if let centurions_core::RuleError::Refused { feedback }
         | centurions_core::RuleError::RefusedAfterEffects { feedback } = error
         {
-            self.feedback.extend(feedback);
+            self.feedback.queue.extend(feedback);
             self.movement.refuse();
         } else {
             self.error(error.to_string());
         }
     }
+    /// Closes the target lists after a medical item or heal and clears the scan
+    /// choice pending.
     pub fn medical_result(&mut self, state: &Session, events: &[Event]) {
         if events
             .iter()
@@ -81,13 +90,15 @@ impl UiState {
             return;
         }
         if state.medical_continuation.is_some() || state.outdoor_psi.is_some() {
-            self.selected = state.selected_warrior;
+            self.selected = state.char_select_new;
         }
         self.inspection = None;
-        self.psi_pending = None;
-        self.medical_cancel = false;
+        self.psi.pending = None;
+        self.targeting.medical_cancel = false;
     }
 
+    /// Takes in the events of a command: messages and sounds to show, delays, and
+    /// outdoor effects to play.
     pub fn events(&mut self, events: &[Event]) {
         for event in events {
             if matches!(event, Event::ItemUpgraded { .. }) {
@@ -95,7 +106,7 @@ impl UiState {
             }
             if let Event::Feedback(feedback) = event {
                 self.movement.refuse();
-                self.feedback.push_back(feedback.clone());
+                self.feedback.queue.push_back(feedback.clone());
             }
             if let Event::Delay { ticks } = event {
                 self.delay_until =
@@ -132,7 +143,8 @@ impl UiState {
             }
             if let Event::CollectionRejected { warning } = event {
                 self.feedback
-                    .push_back(centurions_core::feedback::NativeFeedback::Warning {
+                    .queue
+                    .push_back(centurions_core::feedback::GameFeedback::Warning {
                         index: *warning,
                     });
             }

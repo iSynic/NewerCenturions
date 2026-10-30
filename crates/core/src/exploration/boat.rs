@@ -1,14 +1,17 @@
-//! buttonchoice1098de..109aee: boarding, shore attempts and movement returns.
+//! Boarding a boat, landing attempts at the shore and moving afloat.
 use super::{Regional, active_map, apply_region, regional_selection};
 use crate::{
     BoatMovement, BoatPhase, Event, MovementContinuation, Phase, Presentation, RuleError, Session,
 };
 use centurions_content::{Content, mission::OpeningMission};
 
+/// Whether the party is aboard a boat.
 pub(crate) fn aboard(state: &Session) -> bool {
-    state.native_work.boat != 0
+    state.globals.boat != 0
 }
 
+/// Begins a step of the party while it is in a boat or at the shore: the step's sound plays and the
+/// land ahead decides whether the party boards, is blocked, or moves.
 pub(super) fn start(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let map = active_map(state, content)?;
     let position = state.exploration.as_ref().unwrap();
@@ -64,10 +67,10 @@ pub(super) fn start(state: &mut Session, content: &Content) -> Result<Vec<Event>
             if map.tile_word(property, 6)? != 0 {
                 effects.push(Event::Sound { resource_id: -148 });
                 state.exploration.as_mut().unwrap().last_move = [0; 2];
-                let attempts = state.native_work.shore_attempts.wrapping_add(1);
-                state.native_work.shore_attempts = attempts;
+                let attempts = state.globals.shore_attempts.wrapping_add(1);
+                state.globals.shore_attempts = attempts;
                 if attempts > 2 {
-                    state.native_work.shore_attempts = 0;
+                    state.globals.shore_attempts = 0;
                     effects.extend(question(state, pending, false));
                     return Ok(effects);
                 }
@@ -78,6 +81,7 @@ pub(super) fn start(state: &mut Session, content: &Content) -> Result<Vec<Event>
     Ok(effects)
 }
 
+/// Asks the player whether to board the boat or leave it, and waits for the answer.
 fn question(state: &mut Session, mut pending: BoatMovement, boarding: bool) -> Vec<Event> {
     pending.phase = if boarding {
         BoatPhase::Board
@@ -90,6 +94,7 @@ fn question(state: &mut Session, mut pending: BoatMovement, boarding: bool) -> V
     vec![Event::Sound { resource_id: 20005 }]
 }
 
+/// Takes the player's answer to the boarding or leaving question and finishes the step.
 pub(super) fn answer(state: &mut Session, answer: bool) -> Result<Vec<Event>, RuleError> {
     let Some(MovementContinuation::Boating(mut pending)) = state.movement_continuation.take()
     else {
@@ -109,10 +114,10 @@ pub(super) fn answer(state: &mut Session, answer: bool) -> Result<Vec<Event>, Ru
     let mut effects = vec![];
     if answer {
         if !boarding {
-            // 109978 clears the same WORD used by the player Psi movement gate.
+            // This also clears the Psi movement gate.
             state.bandage_ready = 0;
         }
-        state.native_work.boat = u8::from(boarding);
+        state.globals.boat = u8::from(boarding);
         if boarding {
             effects.extend(move_party(state)?);
         }
@@ -125,6 +130,7 @@ pub(super) fn answer(state: &mut Session, answer: bool) -> Result<Vec<Event>, Ru
     Ok(effects)
 }
 
+/// Moves the party one square in the direction of its last step and breaks camp.
 fn move_party(state: &mut Session) -> Result<Vec<Event>, RuleError> {
     let position = state.exploration.as_mut().unwrap();
     let [dx, dy] = position.last_move;
@@ -141,6 +147,9 @@ fn move_party(state: &mut Session) -> Result<Vec<Event>, RuleError> {
     Ok(vec![Event::Moved { x, y }])
 }
 
+/// Finishes a boat step: the party moves if the land allows it, the sound and time of the step
+/// follow, and the region check comes next. A step that is not cancelled resets the count of
+/// failed landing attempts.
 fn finish(
     state: &mut Session,
     content: &Content,
@@ -148,7 +157,7 @@ fn finish(
 ) -> Result<Vec<Event>, RuleError> {
     let map = active_map(state, content)?;
     if state.exploration.as_ref().unwrap().last_move != [0; 2] {
-        state.native_work.shore_attempts = 0;
+        state.globals.shore_attempts = 0;
     }
     let boat = aboard(state);
     let boarding = map.boarding_field(pending.property)?;
@@ -186,6 +195,8 @@ fn finish(
     Ok(effects)
 }
 
+/// Carries a boat step through its later stages, by phase: the region check, the walking header,
+/// then the boarding question or the search for secrets.
 pub(super) fn resume(
     state: &mut Session,
     content: &Content,
@@ -235,6 +246,7 @@ pub(super) fn resume(
     Ok(vec![])
 }
 
+/// Checks that a saved boat question is consistent with the movement waiting on it.
 pub(crate) fn validate(state: &Session) -> Result<(), RuleError> {
     let mut page = state
         .exploration

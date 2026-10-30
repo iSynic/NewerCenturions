@@ -1,5 +1,5 @@
 use crate::{prelude::*, support};
-use centurions_core::feedback::NativeFeedback;
+use centurions_core::feedback::GameFeedback;
 
 #[test]
 fn experience_reset_matches_native_preparation_and_resumes_once_after_saved_close() {
@@ -11,20 +11,20 @@ fn experience_reset_matches_native_preparation_and_resumes_once_after_saved_clos
     {
         let mut state = support::mission_session(&content);
         state.warriors = support::warriors(&case.bytes("before"));
-        state.native_work.party_mask.fill(0);
+        state.globals.party_track.fill(0);
         for (slot, value) in case.n::<Vec<i16>>("mask").into_iter().enumerate() {
-            state.native_work.party_mask[slot] = value;
+            state.globals.party_track[slot] = value;
         }
         if index == 1 {
             state.phase = Phase::Combat;
             let mut arena = support::battle();
-            arena.squad.positions.truncate(state.warriors.len());
-            arena.squad.under_tiles.truncate(state.warriors.len());
+            arena.squad.pos.truncate(state.warriors.len());
+            arena.squad.char_under.truncate(state.warriors.len());
             // The opcode clears the roster count before rewards, even for a living NPC.
-            let mut enemy = vec![0; MONSTER_BYTES];
-            enemy[0x110..0x112].copy_from_slice(&100_i16.to_be_bytes());
-            arena.enemies.records.push(MonsterRecord { bytes: enemy });
-            arena.enemies.positions.push((10, 10));
+            let mut monster = vec![0; MONSTER_BYTES];
+            monster[0x110..0x112].copy_from_slice(&100_i16.to_be_bytes());
+            arena.roster.records.push(MonsterRecord { bytes: monster });
+            arena.roster.mon_pos.push((10, 10));
             state.combat = Some(arena);
             state.handled_deaths.push(0);
             state.combat_story = Some(runtime::DeathStory {
@@ -53,14 +53,14 @@ fn experience_reset_matches_native_preparation_and_resumes_once_after_saved_clos
         assert!(state.combat.is_none());
         assert_eq!(
             state
-                .native_work
+                .globals
                 .health_context
-                .unavailable,
+                .kill_party,
             case.n::<i8>("unavailable")
         );
         assert_eq!(state.random, before.random);
         assert_eq!(state.party_currency, before.party_currency);
-        assert!(state.booty_items.iter().all(|item| item.id() == 0));
+        assert!(state.booty_list.iter().all(|item| item.id() == 0));
         let position = state.exploration.as_ref().unwrap();
         assert_eq!(position.presentation, Some(Presentation::Loot));
         assert_eq!(position.script.as_ref().unwrap().cursor, 1);
@@ -172,19 +172,19 @@ fn random_battles_monster_test_and_unarmed_opcodes_match_original_newland() {
         .enumerate()
     {
         let mut state = support::mission_session(&content);
-        state.native_work.random_battles = case.n("random_battles_before");
+        state.globals.random_battles = case.n("random_battles_before");
         if case.n::<i16>("opcode") == 127 {
             let mut combat = support::battle();
             let (ids, stamina) = (case.n::<Vec<i16>>("ids"), case.n::<Vec<i16>>("stamina"));
-            combat.enemies.records = (0..case.n::<usize>("enemies"))
-                .map(|enemy| {
+            combat.roster.records = (0..case.n::<usize>("enemies"))
+                .map(|monster| {
                     let mut bytes = vec![0; 288];
-                    bytes[0x103] = ids[enemy] as u8;
-                    bytes[0x110..0x112].copy_from_slice(&stamina[enemy].to_be_bytes());
+                    bytes[0x103] = ids[monster] as u8;
+                    bytes[0x110..0x112].copy_from_slice(&stamina[monster].to_be_bytes());
                     MonsterRecord { bytes }
                 })
                 .collect();
-            combat.enemies.positions = vec![(0, 0); combat.enemies.records.len()];
+            combat.roster.mon_pos = vec![(0, 0); combat.roster.records.len()];
             state.combat = Some(combat);
             state.phase = centurions_core::Phase::Combat;
         }
@@ -202,7 +202,7 @@ fn random_battles_monster_test_and_unarmed_opcodes_match_original_newland() {
             "case {index} sounds"
         );
         assert_eq!(
-            state.native_work.random_battles,
+            state.globals.random_battles,
             case.n::<u8>("random_battles"),
             "case {index} BYTE402f42"
         );
@@ -235,7 +235,7 @@ fn random_string_picked_psi_and_registered_check_match_original_newland() {
             .iter()
             .map(|warrior| Warrior::read(&support::bytes(warrior)).unwrap())
             .collect();
-        state.native_work.party_mask = [1, 1, 1, 0, 0, 0];
+        state.globals.party_track = [1, 1, 1, 0, 0, 0];
         state.random = RandomState::new(case.n("initial_seed"));
         let position = state.exploration.as_mut().unwrap();
         position.script = Some(ScriptState::scheduled(case.bytes("record"), 0));
@@ -277,13 +277,13 @@ fn exhausted_movement_and_camping_flag_match_original() {
         let mut state = support::mission_session(&content);
         if case["kind"] == "move" {
             state.exploration.as_mut().unwrap().fatigue = case.n("fatigue");
-            state.native_work.camp_disabled = case.n::<u8>("camp_disabled") != 0;
+            state.globals.camp_disabled = case.n::<u8>("camp_disabled") != 0;
             state.field_controls.get_or_insert_default().camping = case.n::<u8>("camping") != 0;
             let refused = matches!(
                 apply(Command::Move { dx: 1, dy: 0 }, &mut state, &content),
                 Err(RuleError::Refused { feedback }) if feedback == [
-                    NativeFeedback::Warning { index: 54 },
-                    NativeFeedback::Tutorial { first: 80, last: 80 },
+                    GameFeedback::Warning { index: 54 },
+                    GameFeedback::Tutorial { first: 80, last: 80 },
                 ]
             );
             let calls = case["calls"].as_str().unwrap();
@@ -294,7 +294,7 @@ fn exhausted_movement_and_camping_flag_match_original() {
             );
             continue;
         }
-        state.native_work.camp_disabled = case.n::<u8>("old") != 0;
+        state.globals.camp_disabled = case.n::<u8>("old") != 0;
         let mut record = vec![0; 42];
         record[8..10].copy_from_slice(&66_i16.to_be_bytes());
         record[24..26].copy_from_slice(&case.n::<i16>("parameter").to_be_bytes());
@@ -308,7 +308,7 @@ fn exhausted_movement_and_camping_flag_match_original() {
         let flashes: Vec<String> = events
             .iter()
             .filter_map(|event| match event {
-                Event::Feedback(NativeFeedback::Flash {
+                Event::Feedback(GameFeedback::Flash {
                     address,
                     x,
                     y,
@@ -324,7 +324,7 @@ fn exhausted_movement_and_camping_flag_match_original() {
             "case {index}"
         );
         assert_eq!(
-            i16::from(state.native_work.camp_disabled),
+            i16::from(state.globals.camp_disabled),
             case.n::<i16>("after")
         );
     }
@@ -484,7 +484,7 @@ fn land_light_saved_position_and_rectangle_edits_match_original_newland() {
                 "{context} tile set"
             );
             support::assert_bytes(
-                &live.tile_properties,
+                &live.map_stats,
                 &case.bytes("tile_properties"),
                 &context,
             );
@@ -530,9 +530,9 @@ fn branch_opcodes_take_the_original_extra_action_point() {
             .map(|warrior| Warrior::read(&support::bytes(warrior)).unwrap())
             .collect();
         let mask = case.n::<i16>("mask");
-        state.native_work.party_mask = std::array::from_fn(|m| mask >> m & 1);
+        state.globals.party_track = std::array::from_fn(|m| mask >> m & 1);
         state.flags[10..13].fill(1);
-        state.party_buffs[8..10].copy_from_slice(&case.n::<i16>("buff4").to_be_bytes());
+        state.party_condition[8..10].copy_from_slice(&case.n::<i16>("buff4").to_be_bytes());
         let position = state.exploration.as_mut().unwrap();
         (position.day, position.hour) = (2, 10);
         position.script = Some(ScriptState::scheduled(case.bytes("record"), 0));
@@ -573,7 +573,7 @@ fn chaining_opcodes_match_original_newland() {
             .map(|warrior| Warrior::read(&support::bytes(warrior)).unwrap())
             .collect();
         let mask = case.n::<i16>("mask");
-        state.native_work.party_mask = std::array::from_fn(|m| mask >> m & 1);
+        state.globals.party_track = std::array::from_fn(|m| mask >> m & 1);
         state.field_controls.get_or_insert_default().camping = case.n::<u8>("camping") != 0;
         let mut other = centurions_core::MapState::authored(content.map(1).unwrap());
         let position = state.exploration.as_mut().unwrap();
@@ -655,26 +655,26 @@ fn party_shop_treasure_and_battle_opcodes_match_original_newland() {
             .map(|warrior| Warrior::read(&support::bytes(warrior)).unwrap())
             .collect();
         let mask = case.n::<i16>("mask");
-        state.native_work.party_mask = std::array::from_fn(|m| mask >> m & 1);
+        state.globals.party_track = std::array::from_fn(|m| mask >> m & 1);
         let mut shops = content.map(0).unwrap().shops.clone();
         shops[3002..6004].copy_from_slice(&fixture.bytes("shop"));
         state.shops.insert(state.scenario_level, shops);
         // VerifyStoryEffects starts from initialized DATA, without resetgamefiles.
-        state.native_work.shop_work = serde_json::from_value(serde_json::json!({
+        state.globals.the_shop = serde_json::from_value(serde_json::json!({
             "bytes": vec![0u8; 3002]
         })).unwrap();
         if case.n::<i16>("battle") != 0 {
             let mut combat = support::battle();
-            combat.enemies.records = case
+            combat.roster.records = case
                 .array("npcs")
                 .iter()
                 .map(|npc| MonsterRecord {
                     bytes: support::bytes(npc),
                 })
                 .collect();
-            combat.enemies.positions = vec![(0, 0); combat.enemies.records.len()];
-            combat.squad.positions.truncate(state.warriors.len());
-            combat.squad.under_tiles.truncate(state.warriors.len());
+            combat.roster.mon_pos = vec![(0, 0); combat.roster.records.len()];
+            combat.squad.pos.truncate(state.warriors.len());
+            combat.squad.char_under.truncate(state.warriors.len());
             state.combat = Some(combat);
             state.phase = centurions_core::Phase::Combat;
         }
@@ -697,7 +697,7 @@ fn party_shop_treasure_and_battle_opcodes_match_original_newland() {
                 .filter(|&id| id > 0)
                 .collect();
             let mut shown: Vec<i16> = state
-                .booty_items
+                .booty_list
                 .iter()
                 .map(|item| item.id())
                 .filter(|&id| id != 0)
@@ -727,7 +727,7 @@ fn party_shop_treasure_and_battle_opcodes_match_original_newland() {
         let calls: Vec<String> = events
             .iter()
             .filter_map(|event| match event {
-                Event::Feedback(NativeFeedback::CombatResult { body, code, .. }) => {
+                Event::Feedback(GameFeedback::CombatResult { body, code, .. }) => {
                     Some(format!("result {body} {code}"))
                 }
                 Event::CombatantRemoved { body } => Some(format!("destroy {}", body - 10)),
@@ -760,7 +760,7 @@ fn party_shop_treasure_and_battle_opcodes_match_original_newland() {
             );
         }
         assert_eq!(
-            state.native_work.coordinates_hidden,
+            state.globals.coordinates_hidden,
             case.n::<i16>("coordinates_hidden"),
             "case {index}"
         );
@@ -790,7 +790,7 @@ fn selection_difficulty_time_and_points_opcodes_match_original_newland() {
             .map(|warrior| Warrior::read(&support::bytes(warrior)).unwrap())
             .collect();
         let mask = case.n::<i16>("mask");
-        state.native_work.party_mask = std::array::from_fn(|m| mask >> m & 1);
+        state.globals.party_track = std::array::from_fn(|m| mask >> m & 1);
         state.difficulty = case.n("difficulty");
         let position = state.exploration.as_mut().unwrap();
         (position.x, position.y) = (40, 40);
@@ -831,7 +831,7 @@ fn selection_difficulty_time_and_points_opcodes_match_original_newland() {
             "case {index} sounds"
         );
         assert_eq!(
-            state.native_work.party_mask.to_vec(),
+            state.globals.party_track.to_vec(),
             case.n::<Vec<i16>>("mask_after"),
             "case {index} mask"
         );
@@ -921,16 +921,16 @@ fn party_picks_and_complex_branch_elimination_match_original_newland() {
             .map(|warrior| Warrior::read(&support::bytes(warrior)).unwrap())
             .collect();
         // VerifyStoryPicks seeds BYTE442739 from the controlled party before newland.
-        let unavailable = centurions_core::story_health::context(&state.warriors, 0, None).unavailable;
-        state.native_work.health_context.unavailable = unavailable;
-        state.native_work.party_mask = [1; 6];
+        let kill_party = centurions_core::story_health::context(&state.warriors, 0, None).kill_party;
+        state.globals.health_context.kill_party = kill_party;
+        state.globals.party_track = [1; 6];
         let typed = case.n::<i16>("opcode") == 44;
         if typed {
             // The capture enters newland inside an already loaded encounter.
             // Compose that caller's header from its fixture before running opcode44.
             state
-                .native_work
-                .encounter_work
+                .globals
+                .encounter_headers
                 .load(
                     &content.scenario.as_ref().unwrap().maps[0].typed_encounters,
                     0,
@@ -965,7 +965,7 @@ fn party_picks_and_complex_branch_elimination_match_original_newland() {
                 Ok(events) => sounds.extend(support::event_sounds(&events)),
                 Err(RuleError::Refused { feedback }) => {
                     sounds.extend(feedback.iter().filter_map(|f| match f {
-                        NativeFeedback::Sound { resource_id } => Some(*resource_id),
+                        GameFeedback::Sound { resource_id } => Some(*resource_id),
                         _ => None,
                     }))
                 }
@@ -984,12 +984,12 @@ fn party_picks_and_complex_branch_elimination_match_original_newland() {
             continue;
         }
         assert_eq!(
-            state.native_work.party_mask.to_vec(),
+            state.globals.party_track.to_vec(),
             case.n::<Vec<i16>>("mask_after"),
             "case {index} mask"
         );
         assert_eq!(
-            state.selected_warrior,
+            state.char_select_new,
             case.n::<usize>("selected"),
             "case {index} selected"
         );

@@ -5,6 +5,8 @@ use centurions_content::{Content, ContentError, installation::Installation};
 use centurions_core::{Command, Event, Session, apply, load};
 use std::path::{Path, PathBuf};
 
+/// Everything the game needs to start playing: the loaded content, assets,
+/// sound, session, screens and the save paths.
 pub(crate) struct Ready {
     pub capture: Option<String>,
     pub audit_log: Option<String>,
@@ -20,6 +22,8 @@ pub(crate) struct Ready {
     pub window_mode: window::WindowMode,
 }
 
+/// Finds the installation, loads the content, assets and sound, and opens the
+/// first screen.
 pub(crate) async fn prepare() -> Ready {
     let root = std::env::args()
         .nth(1)
@@ -94,7 +98,7 @@ pub(crate) async fn prepare() -> Ready {
     let window_mode = window::WindowMode::default();
     application.window_mode(false);
     if let Ok(audio) = &audio {
-        audio.set_volumes(application.volume, application.music_volume);
+        audio.set_volumes(application.audio.volume, application.audio.music_volume);
     }
     if screen == application::Screen::Squad
         && loaded.is_ok()
@@ -111,10 +115,10 @@ pub(crate) async fn prepare() -> Ready {
         application.squad = (0..6).collect();
     }
     if let Some(menu) = option("--menu").and_then(|id| id.parse().ok()) {
-        application.menu = Some(menu);
+        application.menu_bar.menu = Some(menu);
     }
     if screen == application::Screen::Logo
-        && application.sound
+        && application.audio.sound
         && let Ok(audio) = &audio
     {
         audio.play(&[Event::Sound { resource_id: 20003 }]);

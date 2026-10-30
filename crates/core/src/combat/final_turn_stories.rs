@@ -1,5 +1,7 @@
 use crate::combat::{Combat, death_scripts, footprint};
 use crate::{RandomState, RuleError};
+use centurions_content::WARRIOR_BYTES;
+use centurions_content::combat::MONSTER_BYTES;
 use centurions_content::{
     Warrior,
     combat::MonsterRecord,
@@ -8,6 +10,8 @@ use centurions_content::{
     span, word,
 };
 
+/// What a monster's turn script did, in order: a sound or text, a monster summoned, or the monster
+/// removing itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TurnEffect {
     Sound(i16),
@@ -16,6 +20,8 @@ pub enum TurnEffect {
     SelfRemoval { body: i16 },
 }
 
+/// The result of a monster's turn script: the extra record it ended on, its effects, the hostile
+/// monsters it added, any kill to count and whether the monster's turn was skipped.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FinalTurn {
     pub extra_record: Option<Vec<u8>>,
@@ -25,6 +31,7 @@ pub struct FinalTurn {
     pub skipped_turn: bool,
 }
 
+/// Reports a turn-script operation this build cannot yet run, without changing anything.
 fn unsupported(dependency: &'static str) -> RuleError {
     RuleError::Unsupported {
         action: "combat.turn_story",
@@ -32,7 +39,9 @@ fn unsupported(dependency: &'static str) -> RuleError {
     }
 }
 
-/// Preserve the authored summon-ID boundary before invoking buildmonster.
+/// Builds a scripted monster, refusing summon IDs outside the authored range.
+///
+/// Original: buildmonster
 fn build_monster(
     definitions: &[u8],
     id: i16,
@@ -41,16 +50,19 @@ fn build_monster(
     random: &mut RandomState,
 ) -> Result<MonsterRecord, RuleError> {
     let mut monster = MonsterRecord::read(definitions, id)?;
-    monster.record_mut().set_target_body(-1);
+    monster.record_mut().set_target(-1);
     let mut monster = super::monster::summon(monster, faction, difficulty, random)?;
-    let chance = monster.record().turn_script_chance()?;
+    let chance = monster.record().turn_macro_chance()?;
     monster
         .record_mut()
-        .set_turn_script_chance(chance.wrapping_neg());
+        .set_turn_macro_chance(chance.wrapping_neg());
     Ok(monster)
 }
 
-/// Opcode120 preserves buildmonster's chance/context fields and its partial size refusal.
+/// Replaces a body with a new monster. A replacement of a different size is refused (returns true)
+/// after its record is built, and the old monster's turn-script chance is already negated.
+///
+/// Original: newland
 pub fn replace_body(
     combat: &mut Combat,
     definitions: &[u8],
@@ -59,23 +71,23 @@ pub fn replace_body(
     random: &mut RandomState,
 ) -> Result<bool, RuleError> {
     let faction = combat
-        .enemies
+        .roster
         .records
         .get(active)
         .ok_or("replacement actor missing")?
         .record()
         .faction()?;
-    // The loaded work remains changed even when the later size test refuses copy-out.
-    combat.monster_work_written = true;
+    // The monster template stays changed even when the size test refuses it.
+    combat.monster_pick_written = true;
     let mut transformed = super::monster::summon(
         MonsterRecord::read(definitions, replacement)?,
         faction,
         combat.difficulty,
         random,
     )?;
-    let old = &mut combat.enemies.records[active].bytes;
-    let chance = EnemyRecord::from_bytes(old).turn_script_chance()?;
-    EnemyRecordMut::from_bytes(old).set_turn_script_chance(chance.wrapping_neg());
+    let old = &mut combat.roster.records[active].bytes;
+    let chance = EnemyRecord::from_bytes(old).turn_macro_chance()?;
+    EnemyRecordMut::from_bytes(old).set_turn_macro_chance(chance.wrapping_neg());
     for cell in [
         FootprintCell::Northwest,
         FootprintCell::West,
@@ -89,10 +101,13 @@ pub fn replace_body(
     if transformed.record().size()? != EnemyRecord::from_bytes(old).size()? {
         return Ok(true);
     }
-    combat.enemies.records[active] = transformed;
+    combat.roster.records[active] = transformed;
     Ok(false)
 }
 
+/// Whether the new monster's whole body stands on open ground. Its anchor cell is blocked by
+/// obstruction 2, or by any obstruction when its size is zero. Each other cell of its footprint is
+/// blocked by obstruction of two or more, and a tile below 1000 is never open.
 fn passable(body: &footprint::PlacedBody, mission: &OpeningMission) -> Result<bool, RuleError> {
     let signed_size = body.monster.record().size()?;
     let size = signed_size.wrapping_abs();
@@ -121,7 +136,8 @@ fn passable(body: &footprint::PlacedBody, mission: &OpeningMission) -> Result<bo
     Ok(true)
 }
 
-/// Opcode124 searches full expanding squares without combatsetup's size-zero jitter.
+/// Finds a place for a spawned monster in widening squares, without the random
+/// nudge battle setup gives size-zero monsters.
 fn place_spawn(
     combat: &Combat,
     mission: &OpeningMission,
@@ -129,23 +145,20 @@ fn place_spawn(
     active: usize,
     body: i16,
 ) -> Result<footprint::PlacedBody, RuleError> {
-    let center = combat.enemies.positions[active];
-    let mut map = combat.map.clone();
-    // The original widens the square without limit. Past this ring every
-    // in-window cell has been tried, so finding none means it never ends.
+    let center = combat.roster.mon_pos[active];
+    let mut map = combat.field.clone();
+    // The search widens without limit; past this ring every cell has been tried,
+    // so finding none means the game never returns.
     let reach = |axis: i16, shift: i16| {
         let absolute = i32::from(axis) + i32::from(shift) + 5;
         (absolute - 7).max(83 - absolute).max(1)
     };
-    let last = reach(center.0, map.shift.0).max(reach(center.1, map.shift.1));
+    let last = reach(center.0, map.map_shift.0).max(reach(center.1, map.map_shift.1));
     for ring in 1..=last.min(i32::from(i16::MAX)) as i16 {
         for dy in -ring..ring {
             for dx in -ring..ring {
                 let position = (center.0.wrapping_add(dx), center.1.wrapping_add(dy));
-                let absolute = (
-                    position.0.wrapping_add(map.shift.0).wrapping_add(5),
-                    position.1.wrapping_add(map.shift.1).wrapping_add(5),
-                );
+                let absolute = crate::combat::records::wrapping_grid_point(position, map.map_shift);
                 if !(7..83).contains(&absolute.0) || !(7..83).contains(&absolute.1) {
                     continue;
                 }
@@ -162,6 +175,9 @@ fn place_spawn(
     ))
 }
 
+/// Summons the monsters an extra record names around the acting monster, on its side. A negative
+/// count in the record is a random count up to its size. A full roster summons none, and a count
+/// that would overflow it is refused whole.
 fn spawn(
     combat: &mut Combat,
     mission: &OpeningMission,
@@ -171,8 +187,8 @@ fn spawn(
     random: &mut RandomState,
     result: &mut FinalTurn,
 ) -> Result<(), RuleError> {
-    // The original checks capacity before it draws a negative count.
-    if combat.enemies.records.len() >= 100 {
+    // A full roster refuses before a negative count is drawn.
+    if combat.roster.records.len() >= 100 {
         return Ok(());
     }
     let id = word(extra, 2)?;
@@ -182,27 +198,31 @@ fn spawn(
     } else {
         count
     };
-    if count < 0 || combat.enemies.records.len() + count as usize > 100 {
-        // Native 99 + 2 creates body110, aliasing warrior0's position. Keep
-        // this unrepresented corruption atomic rather than clamping its count.
+    if count < 0 || combat.roster.records.len() + count as usize > 100 {
+        // A 101st monster would overwrite the first warrior's position; refuse it
+        // whole rather than clamp the count.
         return Err(unsupported(
             "summon count exceeds the native roster capacity",
         ));
     }
-    let faction = combat.enemies.records[active].record().faction()?;
+    let faction = combat.roster.records[active].record().faction()?;
     for _ in 0..count {
-        combat.monster_work_written = true;
+        combat.monster_pick_written = true;
         let monster = build_monster(definitions, id, faction, combat.difficulty, random)?;
-        let body = combat.enemies.records.len() as i16 + 10;
+        let body = combat.roster.records.len() as i16 + 10;
         let placed = place_spawn(combat, mission, &monster, active, body)?;
-        combat.map = placed.map;
+        combat.field = placed.map;
         if placed.monster.record().faction()? != 0 {
             result.hostile_additions = result.hostile_additions.wrapping_add(1);
-            combat.victory_work.add_total(1);
+            combat.kill_counts.add_num_enemy(1);
         }
-        combat.enemies.records.push(placed.monster);
-        combat.enemies.positions.push(placed.position);
-        if let Some(slot) = combat.order[1..].iter_mut().rev().find(|id| **id == -1) {
+        combat.roster.records.push(placed.monster);
+        combat.roster.mon_pos.push(placed.position);
+        if let Some(slot) = combat.battle_order[1..]
+            .iter_mut()
+            .rev()
+            .find(|id| **id == -1)
+        {
             *slot = body;
         }
         let sound = word(extra, 6)?;
@@ -214,12 +234,15 @@ fn spawn(
     Ok(())
 }
 
+/// A turn script handed to the session to run, and the instruction it resumes at.
 pub(crate) struct TurnProgram {
     pub script: i16,
     pub cursor: u8,
 }
 
-/// Original final encounter getup126938..126c3e; errors preserve all state and RNG.
+/// Sets up a turn in the final encounter. An error changes nothing.
+///
+/// Original: getup
 pub fn initialize(
     combat: &mut Combat,
     warriors: &mut [Warrior],
@@ -240,6 +263,7 @@ pub fn initialize(
     .map(|(result, _)| result)
 }
 
+/// Sets up a monster's turn, handing back any script the session must run.
 pub(crate) fn initialize_for_session(
     combat: &mut Combat,
     warriors: &mut [Warrior],
@@ -251,6 +275,8 @@ pub(crate) fn initialize_for_session(
     initialize_impl(combat, warriors, mission, definitions, extras, random, true)
 }
 
+/// Sets up a monster's turn: its turn script runs by chance, and with `dispatch` an operation this
+/// module does not carry out is handed back instead of failing.
 fn initialize_impl(
     combat: &mut Combat,
     warriors: &mut [Warrior],
@@ -260,39 +286,43 @@ fn initialize_impl(
     random: &mut RandomState,
     dispatch: bool,
 ) -> Result<(FinalTurn, Option<TurnProgram>), RuleError> {
-    if combat.enemies.records.len() > 100
-        || combat.enemies.positions.len() != combat.enemies.records.len()
-        || combat.enemies.records.iter().any(|m| m.bytes.len() != 288)
+    if combat.roster.records.len() > 100
+        || combat.roster.mon_pos.len() != combat.roster.records.len()
+        || combat
+            .roster
+            .records
+            .iter()
+            .any(|m| m.bytes.len() != MONSTER_BYTES)
         || !(1..=6).contains(&warriors.len())
-        || warriors.iter().any(|w| w.bytes.len() != 3138)
-        || combat.order.len() != 110
-        || combat.cursor >= 110
-        || combat.map.tiles.len() != 8100
+        || warriors.iter().any(|w| w.bytes.len() != WARRIOR_BYTES)
+        || combat.battle_order.len() != 110
+        || combat.battle_order_index >= 110
+        || combat.field.tiles.len() != 8100
     {
         return Err(RuleError::Invalid("invalid enemy turn story input".into()));
     }
-    let body = combat.order[combat.cursor];
+    let body = combat.battle_order[combat.battle_order_index];
     let active = usize::try_from(body - 10)
         .ok()
-        .filter(|i| *i < combat.enemies.records.len())
+        .filter(|i| *i < combat.roster.records.len())
         .ok_or_else(|| RuleError::Invalid("turn story body outside roster".into()))?;
-    let bytes = &combat.enemies.records[active].bytes;
-    let script_id = EnemyRecord::from_bytes(bytes).final_turn_mode()?;
+    let bytes = &combat.roster.records[active].bytes;
+    let script_id = EnemyRecord::from_bytes(bytes).turn_macro()?;
     if EnemyRecord::from_bytes(bytes).turn_skip_duration() != 0
         || EnemyRecord::from_bytes(bytes).stamina()? <= 0
     {
         return Err(unsupported("inactive enemy turn"));
     }
     let mut next = combat.clone();
-    next.selected_enemy = active;
+    next.monster_up = active;
     let mut next_warriors = warriors.to_vec();
     let mut next_random = random.clone();
     let mut result = FinalTurn::default();
     let mut program = None;
-    let chance = EnemyRecord::from_bytes(bytes).turn_script_chance()?;
-    // getup125a3a's NPC turn entry runs the turn macro without testing 438584/438585.
+    let chance = EnemyRecord::from_bytes(bytes).turn_macro_chance()?;
+    // A monster's turn script runs even while death scripts are running.
     if next_random.bound(100) <= chance {
-        next.script_enemy = active;
+        next.macro_monster = active;
         let script = span(&mission.door_scripts, script_id as usize * 42, 42)?;
         for i in 0..8 {
             let (opcode, value) = StoryRecord(script).instruction(i)?;
@@ -320,9 +350,9 @@ fn initialize_impl(
                         }
                         let replacement = word(extra, 0)?;
                         if replacement == -1 {
-                            let bytes = &mut next.enemies.records[active].bytes;
+                            let bytes = &mut next.roster.records[active].bytes;
                             EnemyRecordMut::from_bytes(bytes).set_stamina(0);
-                            EnemyRecordMut::from_bytes(bytes).set_death_script(0);
+                            EnemyRecordMut::from_bytes(bytes).set_todo_on_death(0);
                             let cleanup =
                                 death_scripts::cleanup_enemy(&mut next, &mut next_warriors, body)?;
                             result.increment_kills = cleanup.increment_kills;
@@ -360,15 +390,15 @@ fn initialize_impl(
             }
         }
         if !result.skipped_turn && program.is_none() {
-            next.script_enemy = 0;
+            next.macro_monster = 0;
         }
     }
     if !result.skipped_turn && program.is_none() {
-        let bytes = &mut next.enemies.records[active].bytes;
+        let bytes = &mut next.roster.records[active].bytes;
         let (skipped, hostile_change) = super::initialize_enemy_record(bytes, &mut next_random)?;
         result.skipped_turn = skipped;
         result.hostile_additions = result.hostile_additions.wrapping_add(hostile_change);
-        next.victory_work.add_total(hostile_change);
+        next.kill_counts.add_num_enemy(hostile_change);
     }
     *combat = next;
     warriors.clone_from_slice(&next_warriors);

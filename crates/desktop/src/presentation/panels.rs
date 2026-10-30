@@ -5,6 +5,7 @@ use centurions_content::{Content, Warrior};
 use centurions_core::{Command, Session};
 use macroquad::prelude::*;
 
+/// Draws the clinic dialog (DLOG 159) for `member`, with its controls.
 pub(super) fn draw_clinic(
     state: &Session,
     assets: &Assets,
@@ -39,9 +40,7 @@ pub(super) fn draw_clinic(
             action,
         });
     }
-    let field = |item, text: String| {
-        assets.wrapped_color(&text, assets.dialog_rect(159, item), 12, 14., YELLOW)
-    };
+    let field = |item, text: String| assets.dialog_text(&text, assets.dialog_rect(159, item));
     for (index, price) in centurions_core::clinic::prices(percent).iter().enumerate() {
         if matches!(index, 0..=3 | 5..=7) {
             field(46 + index, price.to_string());
@@ -51,10 +50,7 @@ pub(super) fn draw_clinic(
     field(55, state.party_currency.to_string());
     field(65, warrior.name.clone());
     field(66, warrior.record().stamina().unwrap_or(0).to_string());
-    field(
-        67,
-        warrior.record().maximum_stamina().unwrap_or(0).to_string(),
-    );
+    field(67, warrior.record().stamina_max().unwrap_or(0).to_string());
     for (row, index) in (0..40)
         .filter(|i| warrior.record().condition_duration(*i).unwrap_or(0) != 0)
         .take(5)
@@ -70,36 +66,19 @@ pub(super) fn draw_clinic(
         .portraits
         .get(&warrior.record().portrait().unwrap_or(0))
     {
-        draw_texture_ex(
-            portrait,
-            rect.x,
-            rect.y,
-            WHITE,
-            DrawTextureParams {
-                dest_size: Some(rect.size()),
-                ..Default::default()
-            },
-        );
+        crate::assets::texture_in(portrait, rect);
     }
     let health = warrior.record().stamina().unwrap_or(0);
     if health < 1 {
         for id in [2019, if health < -9 { 2015 } else { 177 }] {
             if let Some(icon) = assets.icons.get(&id) {
-                draw_texture_ex(
-                    icon,
-                    rect.x,
-                    rect.y,
-                    WHITE,
-                    DrawTextureParams {
-                        dest_size: Some(rect.size()),
-                        ..Default::default()
-                    },
-                );
+                crate::assets::texture_in(icon, rect);
             }
         }
     }
 }
 
+/// Draws the survivors dialog (DLOG 173) and its Continue control.
 pub(super) fn draw_survivors(state: &Session, assets: &Assets, controls: &mut Vec<Control>) {
     assets.draw_dialog(173);
     controls.push(Control {
@@ -129,22 +108,21 @@ pub(super) fn draw_survivors(state: &Session, assets: &Assets, controls: &mut Ve
         {
             draw_texture(icon, rect.x + 3., rect.y + 3., WHITE);
         }
-        if let Some(icon) = assets.icons.get(&record.tactical_icon().unwrap_or(0)) {
+        if let Some(icon) = assets.icons.get(&record.icon().unwrap_or(0)) {
             let (horizontal, vertical) = match record.size().unwrap_or(0) {
                 0 => (19., 19.),
                 1 => (19., 3.),
                 2 => (3., 19.),
                 _ => (3., 3.),
             };
-            draw_texture_ex(
+            crate::assets::texture_in(
                 icon,
-                rect.x + horizontal,
-                rect.y + vertical,
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(vec2(rect.w - horizontal * 2., rect.h - vertical * 2.)),
-                    ..Default::default()
-                },
+                Rect::new(
+                    rect.x + horizontal,
+                    rect.y + vertical,
+                    rect.w - horizontal * 2.,
+                    rect.h - vertical * 2.,
+                ),
             );
         }
         let (light, dark) = if selection.selected[row] {
@@ -172,9 +150,9 @@ pub(super) fn draw_survivors(state: &Session, assets: &Assets, controls: &mut Ve
         );
         for (value, x, y) in [
             (record.stamina(), 5., 14.),
-            (record.maximum_stamina(), 40., 14.),
+            (record.stamina_max(), 40., 14.),
             (record.psi_points(), 5., 29.),
-            (record.maximum_psi(), 40., 29.),
+            (record.psi_points_max(), 40., 29.),
         ] {
             assets.text(
                 &value.unwrap_or(0).to_string(),
@@ -201,6 +179,8 @@ pub(super) fn draw_survivors(state: &Session, assets: &Assets, controls: &mut Ve
     );
 }
 
+/// Draws the information panels under the map (PICT 166 and 228) for the body in
+/// view: a monster's stamina, psi points and shield, or a warrior's.
 pub(super) fn draw_combat_information(
     content: &Content,
     state: &Session,
@@ -209,42 +189,30 @@ pub(super) fn draw_combat_information(
 ) {
     assets.panel(166, Rect::new(0., 449., 308., 139.));
     assets.panel(228, Rect::new(310., 449., 160., 140.));
-    if body >= 10 {
-        let Some(enemy) = state
+    if !crate::acting::is_warrior_body(body) {
+        let Some(monster) = state
             .combat
             .as_ref()
-            .and_then(|c| c.enemies.records.get((body - 10) as usize))
+            .and_then(|c| c.roster.records.get((body - 10) as usize))
         else {
             return;
         };
-        let record = enemy.record();
+        let record = monster.record();
         for (value, x, y) in [
             (record.stamina(), 115., 470.),
             (record.psi_points(), 115., 493.),
             (record.shield_points(), 223., 470.),
-            (record.armor(), 274., 470.),
+            (record.ac(), 274., 470.),
         ] {
             assets.text(&value.unwrap_or(0).to_string(), x, y, 12, WHITE);
         }
-        for (value, x) in [
-            (record.movement_points(), 115.),
-            (record.action_points(), 211.),
-        ] {
+        for (value, x) in [(record.movement(), 115.), (record.action_points(), 211.)] {
             assets.text(&value.max(0).to_string(), x, 516., 12, WHITE);
         }
-        if let Ok(icon) = record.tactical_icon()
+        if let Ok(icon) = record.icon()
             && let Some(texture) = assets.icons.get(&icon)
         {
-            draw_texture_ex(
-                texture,
-                8.,
-                456.,
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(vec2(64., 64.)),
-                    ..Default::default()
-                },
-            );
+            crate::assets::texture_in(texture, Rect::new(8., 456., 64., 64.));
         }
         assets.text(&record.name().unwrap_or_default(), 126., 536., 12, WHITE);
         return;
@@ -255,15 +223,15 @@ pub(super) fn draw_combat_information(
     for (value, x, y) in [
         (w.record().stamina(), 115., 470.),
         (w.record().psi_points(), 115., 493.),
-        (w.record().movement_points(), 115., 516.),
-        (w.record().action_points(), 211., 516.),
+        (w.record().movement(), 115., 516.),
+        (w.record().attacks(), 211., 516.),
         (w.record().shield_chance(), 181., 470.),
         (w.record().shield_points(), 223., 470.),
-        (w.record().armor(), 274., 470.),
+        (w.record().ac(), 274., 470.),
     ] {
         assets.text(&field(value), x, y, 12, WHITE);
     }
-    if let Ok(id) = w.record().tactical_icon()
+    if let Ok(id) = w.record().icon()
         && let Some(texture) = assets.icons.get(&id)
     {
         draw_texture(texture, 22., 472., WHITE);
@@ -281,10 +249,10 @@ pub(super) fn draw_combat_information(
         .inventory()
         .unwrap_or_default()
         .iter()
-        .find(|i| i.id() == id && i.equipment_flag() == 1)
+        .find(|i| i.id() == id && i.equipped() == 1)
     {
         assets.text(
-            &item.quantity().unwrap_or(0).to_string(),
+            &item.charge().unwrap_or(0).to_string(),
             72.,
             580.,
             12,
@@ -299,13 +267,14 @@ pub(super) fn draw_combat_information(
         WHITE,
     );
 }
+/// The reserve ammunition in the pack for the warrior's equipped weapon.
 pub(super) fn equipped_ammunition_reserve(state: &Session, warrior: &Warrior) -> i32 {
     let weapon = warrior.record().equipped_weapon().unwrap_or(0);
     warrior
         .inventory()
         .unwrap_or_default()
         .iter()
-        .find(|item| item.id() == weapon && item.equipment_flag() == 1)
+        .find(|item| item.id() == weapon && item.equipped() == 1)
         .and_then(|item| item.ammunition_id().ok())
         .filter(|ammunition| (200..400).contains(ammunition))
         .map(|ammunition| (ammunition - 200) as usize)
@@ -313,15 +282,17 @@ pub(super) fn equipped_ammunition_reserve(state: &Session, warrior: &Warrior) ->
         .copied()
         .unwrap_or(0)
 }
+/// DLOG 160: one 32-pixel header and one row per named ability.
+///
+/// Original: showspecial
 pub fn draw_specials(state: &Session, assets: &Assets, ui: &UiState, controls: &mut Vec<Control>) {
-    // showspecial15743e: DLOG160, one32-pixel header and one row per named ability.
     let warrior = &state.warriors[ui.selected];
     let rows: Vec<_> = assets.reference_strings[&1201]
         .iter()
         .take(14)
         .enumerate()
         .filter_map(|(index, label)| {
-            let base = warrior.record().special_skill(index).unwrap_or(0);
+            let base = warrior.record().spec(index).unwrap_or(0);
             (base > 0 && !label.is_empty()).then(|| {
                 let value =
                     base.wrapping_add(warrior.record().special_skill_bonus(index).unwrap_or(0));
@@ -339,7 +310,7 @@ pub fn draw_specials(state: &Session, assets: &Assets, ui: &UiState, controls: &
     }
     let text = |item: usize, value: &str| {
         let [top, left, bottom, right] = assets.dialogs[&160][item - 1].rect;
-        assets.wrapped_color(
+        assets.dialog_text(
             value,
             Rect::new(
                 origin.x + left as f32,
@@ -347,9 +318,6 @@ pub fn draw_specials(state: &Session, assets: &Assets, ui: &UiState, controls: &
                 (right - left) as f32,
                 (bottom - top) as f32,
             ),
-            12,
-            14.,
-            YELLOW,
         );
     };
     for item in [16, 43] {

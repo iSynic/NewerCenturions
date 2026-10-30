@@ -7,11 +7,11 @@ use native_common::script_mission as mission;
 fn input(case: &serde_json::Value) -> (Combat, Vec<Warrior>, i8) {
     let mut combat = support::battle();
     combat.battle = 146;
-    combat.map.tiles = case.words("map_before");
-    combat.squad.positions = vec![(40, 40); 6];
-    combat.enemies.records = support::monsters(&case["records_before"]);
-    combat.enemies.positions = vec![(20, 20); 100];
-    combat.order = case.words("order_before");
+    combat.field.tiles = case.words("map_before");
+    combat.squad.pos = vec![(40, 40); 6];
+    combat.roster.records = support::monsters(&case["records_before"]);
+    combat.roster.mon_pos = vec![(20, 20); 100];
+    combat.battle_order = case.words("order_before");
     (
         combat,
         support::warriors(&case["warriors_before"]),
@@ -38,23 +38,23 @@ fn original_direct_and_queued_death_story_phases_match_complete_native_state() {
     let mission = mission(&fixture);
     let extras = fixture.bytes("extras");
     for (index, case) in fixture.array("cases").iter().enumerate() {
-        let (mut combat, mut warriors, mut unavailable) = input(case);
+        let (mut combat, mut warriors, mut kill_party) = input(case);
         let result = mission_deaths::apply(
             &mut combat,
             &mut warriors,
             &mission,
             &extras,
             context(case),
-            &mut unavailable,
+            &mut kill_party,
         )
         .unwrap();
         let label = format!("mission death case{index}");
         support::native_expect! {
-            records &combat.enemies.records => &case["records_after"], &label;
+            records &combat.roster.records => &case["records_after"], &label;
             records &warriors => &case["warriors_after"], &label;
-            words combat.map.tiles => &case["map_after"], &label;
-            words combat.order => &case["order_after"], &label;
-            scalar unavailable => &case["unavailable_after"], &label;
+            words combat.field.tiles => &case["map_after"], &label;
+            words combat.battle_order => &case["order_after"], &label;
+            scalar kill_party => &case["unavailable_after"], &label;
             scalar result.ended_early => &(case.n::<i64>("return_value") == -1).into(), &label;
         }
         assert_eq!(
@@ -79,14 +79,14 @@ fn altered_death_script_and_invalid_actor_are_transactional_diagnostics() {
     let extras = fixture.bytes("extras");
     let case = &fixture["cases"][0];
     for variant in 0..3 {
-        let (mut combat, mut warriors, mut unavailable) = input(case);
+        let (mut combat, mut warriors, mut kill_party) = input(case);
         let mut context = context(case);
         match variant {
             0 => context.script = 999,
             1 => context.actor = 100,
             _ => warriors[0].bytes.clear(),
         }
-        let before = (combat.clone(), warriors.clone(), unavailable);
+        let before = (combat.clone(), warriors.clone(), kill_party);
         assert!(
             mission_deaths::apply(
                 &mut combat,
@@ -94,11 +94,11 @@ fn altered_death_script_and_invalid_actor_are_transactional_diagnostics() {
                 &mission,
                 &extras,
                 context,
-                &mut unavailable
+                &mut kill_party
             )
             .is_err()
         );
-        assert_eq!((combat, warriors, unavailable), before);
+        assert_eq!((combat, warriors, kill_party), before);
     }
 }
 
@@ -118,13 +118,13 @@ fn child_roster_retains_native_story_actor_and_saved_inactive_record() {
         .unwrap();
     let mut state = support::mission_session(&content);
     let mut parent = support::battle();
-    parent.enemies.records = support::monsters(&case.bytes("records_before"))[..4].to_vec();
-    parent.enemies.positions = vec![(20, 20); 4];
+    parent.roster.records = support::monsters(&case.bytes("records_before"))[..4].to_vec();
+    parent.roster.mon_pos = vec![(20, 20); 4];
     state.combat = Some(parent);
     centurions_core::combat::begin_battle(&mut state, &content, 14, 0).unwrap();
-    let active = current_combat(&state).enemies.records.clone();
+    let active = current_combat(&state).roster.records.clone();
     assert_eq!(active.len(), 1);
-    state.combat.as_mut().unwrap().script_enemy = 3;
+    state.combat.as_mut().unwrap().macro_monster = 3;
     let position = state.exploration.as_mut().unwrap();
     position.script = Some(centurions_core::ScriptState::scheduled(
         content.map(0).unwrap().script(337).unwrap().to_vec(),
@@ -137,9 +137,9 @@ fn child_roster_retains_native_story_actor_and_saved_inactive_record() {
     });
     support::saved_command(Command::Continue, &mut state, &content);
     let arena = current_combat(&state);
-    assert_eq!(arena.enemies.records, active);
+    assert_eq!(arena.roster.records, active);
     assert_eq!(
-        arena.retained_npcs.slots[3].as_ref().unwrap().record.bytes,
+        arena.monsters.slots[3].as_ref().unwrap().record.bytes,
         case.bytes("records_after")[3 * MONSTER_BYTES..4 * MONSTER_BYTES]
     );
     support::checkpoint(&state, &content, "inactive-npc-after");

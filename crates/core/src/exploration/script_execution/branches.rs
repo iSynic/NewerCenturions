@@ -1,19 +1,19 @@
-//! newland "Branch on" operations that jump to an extra action point or encounter.
-use super::super::{finish_script, present_menu, present_typed, unsupported};
-use super::{Operation, ScriptStep};
+//! "Branch on" script operations that jump to another action or encounter.
+use super::super::{active_table, finish_script, present_menu, present_typed, unsupported};
+use super::{ENCOUNTER_SOUND, ExtraIndex, Operation, ScriptStep, load_extra};
 use crate::{Event, RuleError, Session};
 use centurions_content::mission::OpeningMission;
 use centurions_content::records::{
-    Condition, ExtraTable, ProfessionEquipment, RaceEquipment, WarriorRecord,
+    Condition, ProfessionEquipment, ProfileTable, RaceEquipment, WarriorRecord,
 };
-use centurions_content::{Content, span, word};
+use centurions_content::{Content, word};
 
 /// Where a passed test sends the script.
 enum Jump {
-    /// loaddoor2 and a restart at the first action.
+    /// Load another script and restart at its first action.
     Script(i16),
-    /// The simple or complex encounter body entered past its record save
-    /// (0x142b3e, 0x142d96), so the encounter returns to the record saved earlier.
+    /// Enter a simple or complex encounter without saving the current record, so
+    /// the encounter returns to the record saved earlier.
     Simple(i16),
     Complex(i16),
     /// The complex encounter case itself, which saves the current record.
@@ -22,6 +22,9 @@ enum Jump {
     End,
 }
 
+/// Runs the script's branch operations on the party's and members' conditions, game time, psi
+/// points, item charges, the member picked, quest ranges and miscellaneous tests, jumping to
+/// another action or encounter when the test holds.
 pub(super) fn execute(
     operation: Operation,
     parameter: i16,
@@ -30,14 +33,12 @@ pub(super) fn execute(
     map: &OpeningMission,
     effects: &mut Vec<Event>,
 ) -> Result<ScriptStep, RuleError> {
-    let extra = ExtraTable(
-        &map.combat
-            .as_ref()
-            .ok_or("story extras unavailable")?
-            .encounters,
-    )
-    .record(parameter as usize)?;
-    state.native_work.extra_record = extra.to_vec();
+    let extra = load_extra(
+        &mut state.globals,
+        map,
+        ExtraIndex::Signed(parameter),
+        Some("story extras unavailable"),
+    )?;
     let e = |offset: usize| word(extra, offset);
     let encounter = |mode: i16, id: i16| match mode {
         0 => Some(Jump::Script(id)),
@@ -46,11 +47,11 @@ pub(super) fn execute(
         _ => None,
     };
     let jump = match operation {
-        // newland40 tests one party-protection word for set (1) or clear (2).
+        // Tests one party protection for set (1) or clear (2).
         Operation::PartyConditionBranch => {
             let buff = usize::try_from(e(6)?)
                 .ok()
-                .and_then(|index| word(&state.party_buffs, index * 2).ok())
+                .and_then(|index| word(&state.party_condition, index * 2).ok())
                 .ok_or_else(|| {
                     unsupported(
                         "story.opcode",
@@ -68,7 +69,7 @@ pub(super) fn execute(
                 None
             }
         }
-        // newland64 compares the hour twice and has no skip value.
+        // Compares the hour twice and has no skip value.
         Operation::GameTimeBranch => {
             let position = state.exploration.as_ref().unwrap();
             let (day, hour) = (position.day, position.hour);
@@ -90,13 +91,13 @@ pub(super) fn execute(
             }
             if all { encounter(e(6)?, e(8)?) } else { None }
         }
-        // newland75: picked members (1) or living, uncontrolled members (2).
+        // Tests picked members (1) or living, uncontrolled members (2).
         Operation::PsiPointsBranch => {
             let required = e(2)?;
             let found = state.warriors.iter().enumerate().any(|(member, warrior)| {
                 let record = warrior.record();
                 let eligible = match e(0) {
-                    Ok(1) => state.native_work.party_mask[member] != 0,
+                    Ok(1) => state.globals.party_track[member] != 0,
                     Ok(2) => {
                         record.stamina().is_ok_and(|s| s > 0)
                             && record
@@ -110,15 +111,15 @@ pub(super) fn execute(
             if found {
                 encounter(e(6)?, e(8)?)
             } else if e(4)? == 1 {
-                // The failed test exits like opcode 24 and keeps the codes.
+                // A failed test ends the script like End Script and keeps the codes.
                 effects.extend(finish_script(state, content, false)?);
                 return Ok(ScriptStep::Pause);
             } else {
                 None
             }
         }
-        // newland81: every picked member (-1), the whole party (0) or member e2,
-        // indexed from zero.
+        // Tests every picked member (-1), the whole party (0) or member e2,
+        // counted from zero.
         Operation::CharacterConditionBranch => {
             let slot = usize::try_from(e(0)?)
                 .ok()
@@ -131,7 +132,7 @@ pub(super) fn execute(
             };
             let all = match e(2)? {
                 -1 => (0..state.warriors.len())
-                    .filter(|&m| state.native_work.party_mask[m] != 0)
+                    .filter(|&m| state.globals.party_track[m] != 0)
                     .all(|m| has(&state.warriors[m])),
                 0 => state.warriors.iter().all(has),
                 member => has(usize::try_from(member)
@@ -143,10 +144,10 @@ pub(super) fn execute(
             };
             Some(Jump::Script(if all { e(6)? } else { e(8)? }))
         }
-        // newland55: modes 1-6 all test the first member's pick word, and other
-        // modes need exactly |mode| picked members.
+        // Modes 1-6 all test the first member's pick; other modes need exactly
+        // |mode| picked members.
         Operation::PickedBranch => {
-            let mask = &state.native_work.party_mask;
+            let mask = &state.globals.party_track;
             let picked = (0..state.warriors.len()).filter(|&m| mask[m] != 0).count();
             let passed = match e(0)? {
                 0 => picked > 0,
@@ -161,12 +162,12 @@ pub(super) fn execute(
                 Jump::End
             })
         }
-        // newland86: a negative code tests only picked members for its magnitude.
+        // A negative code tests only picked members, for its magnitude.
         // Caste and race classes come from each member's profession and race record.
         Operation::MiscellaneousBranch => {
             let code = e(2)?;
             let wanted = if code < 0 { code.wrapping_abs() } else { code };
-            let mask = &state.native_work.party_mask;
+            let mask = &state.globals.party_track;
             let passed = match e(0)? {
                 test @ (0..=2 | 5 | 6) => {
                     let mut found = false;
@@ -211,29 +212,38 @@ pub(super) fn execute(
     }
 }
 
-fn profile(table: &[u8], id: i16, bytes: usize) -> Result<&[u8], RuleError> {
+/// The profile row of a race or profession number.
+fn profile(table: ProfileTable<'_>, id: i16) -> Result<&[u8], RuleError> {
     usize::try_from(id)
         .ok()
         .filter(|&id| id > 0)
-        .and_then(|id| span(table, (id - 1) * bytes, bytes).ok())
+        .and_then(|id| table.row(id - 1).ok())
         .ok_or_else(|| unsupported("story.opcode", "member outside the profiles"))
 }
 
-/// loadprofile(0, caste), then the Data MOS record's caste class (WORD 254). A zero
-/// caste keeps the previously loaded record, which is not held.
+/// The class of a profession. A zero caste keeps the previously loaded profile,
+/// which is not held.
+///
+/// Original: loadprofile
 pub(super) fn caste_class(map: &OpeningMission, caste: i16) -> Result<i16, RuleError> {
-    Ok(ProfessionEquipment(profile(&map.profiles, caste, 576)?).psi_school()?)
+    Ok(
+        ProfessionEquipment(profile(ProfileTable::professions(&map.profiles), caste)?)
+            .psi_school()?,
+    )
 }
 
-/// loadprofile(race, 0), then BitTst of race class `code - 1` from byte 344.
+/// Whether a race belongs to race class `code - 1`.
+///
+/// Original: loadprofile
 pub(super) fn race_class(map: &OpeningMission, race: i16, code: i16) -> Result<bool, RuleError> {
     let class = usize::try_from(code.wrapping_sub(1))
         .ok()
         .filter(|&bit| bit < 512)
         .ok_or_else(|| unsupported("story.opcode", "race class outside the record"))?;
-    Ok(RaceEquipment(profile(&map.races, race, 408)?).has_trait(class)?)
+    Ok(RaceEquipment(profile(ProfileTable::races(&map.races), race)?).has_trait(class)?)
 }
 
+/// Jumps the script to another action or runs another encounter, as the branch asked.
 fn take(
     jump: Jump,
     state: &mut Session,
@@ -244,7 +254,8 @@ fn take(
     let script = position.script.as_mut().unwrap();
     let saved =
         |script: &crate::ScriptState| {
-            // Without an earlier encounter the original restores an unwritten frame record.
+            // Without an earlier encounter the game would restore a record it never
+            // wrote, so this is refused.
             script.menu.is_some().then_some(()).ok_or_else(|| {
                 unsupported("story.opcode", "encounter branch without a saved record")
             })
@@ -260,18 +271,16 @@ fn take(
         }
         Jump::Simple(id) => {
             saved(script)?;
-            effects.push(Event::Sound { resource_id: 20005 });
-            let table = if state.menus.is_empty() {
-                &map.menus
-            } else {
-                &state.menus
-            };
+            effects.push(Event::Sound {
+                resource_id: ENCOUNTER_SOUND,
+            });
+            let table = active_table(&state.menus, &map.menus);
             position.presentation = present_menu(
                 map,
                 table,
                 script,
                 id,
-                &mut state.native_work.encounter_work,
+                &mut state.globals.encounter_headers,
                 true,
             )?;
             if position.presentation.is_none() {
@@ -286,20 +295,18 @@ fn take(
             } else {
                 saved(script)?;
             }
-            let table = if state.typed_encounters.is_empty() {
-                &map.typed_encounters
-            } else {
-                &state.typed_encounters
-            };
+            let table = active_table(&state.typed_encounters, &map.typed_encounters);
             position.presentation = Some(present_typed(
                 map,
                 table,
                 script,
                 id,
-                &mut state.native_work.encounter_work,
+                &mut state.globals.encounter_headers,
                 true,
             )?);
-            effects.push(Event::Sound { resource_id: 20005 });
+            effects.push(Event::Sound {
+                resource_id: ENCOUNTER_SOUND,
+            });
             effects.push(Event::StoryPresented);
             Ok(ScriptStep::Pause)
         }

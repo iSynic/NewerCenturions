@@ -12,11 +12,11 @@ fn slow_duration_reduction_matches_original_signed_counter_records() {
     let mut warriors = support::warriors(&fixture.bytes("before"));
     let mut combat = support::battle();
     combat.battle = 8;
-    combat.map.tiles.clear();
-    combat.squad.positions.clear();
-    combat.squad.under_tiles.clear();
-    combat.order.clear();
-    combat.cursor = 0;
+    combat.field.tiles.clear();
+    combat.squad.pos.clear();
+    combat.squad.char_under.clear();
+    combat.battle_order.clear();
+    combat.battle_order_index = 0;
     let mut random = RandomState::new(12);
     let events = reduce_round(&mut combat, &mut warriors, &mut random).unwrap();
     assert!(events.is_empty());

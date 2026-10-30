@@ -1,10 +1,13 @@
-//! Transactions for shop.
-use super::access::current_work;
+//! Buying and selling.
+use super::access::current_shop;
 use super::{active, enhanced_stock, preview, price, refused};
 use crate::{Event, Presentation, RuleError, Session, equipment};
 use centurions_content::Content;
 use centurions_content::records::{ItemDefinition, SHOP_SLOTS};
 
+/// Buys the stock item in a slot for a warrior. Refused when the shop's allowance is used up, the
+/// warrior's pack or load is full, or the party cannot pay; ammunition goes into the party's
+/// reserve. A limited shop counts the purchase against its allowance.
 pub(crate) fn buy(
     state: &mut Session,
     content: &Content,
@@ -16,11 +19,11 @@ pub(crate) fn buy(
     if access.enhancement != 0 && access.remaining == 0 {
         return Err(refused(159));
     }
-    let work = current_work(state)?;
-    if slot >= SHOP_SLOTS || work.quantity(slot)? == 0 {
+    let shop = current_shop(state)?;
+    if slot >= SHOP_SLOTS || shop.quantity(slot)? == 0 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
-    let id = work.item(slot)?;
+    let id = shop.item(slot)?;
     let cost = price(state, content, id, false)?;
     let item = preview(content, id)?;
     let recipient = state
@@ -28,21 +31,21 @@ pub(crate) fn buy(
         .get(warrior)
         .ok_or("shop recipient unavailable")?;
     let definition = &content.items[id.unsigned_abs() as usize];
-    let weight = ItemDefinition(definition).base_weight()?.wrapping_add(
+    let weight = ItemDefinition(definition).weight()?.wrapping_add(
         ItemDefinition(definition)
-            .unit_weight()?
-            .wrapping_mul(item.quantity()?),
+            .charge_weight()?
+            .wrapping_mul(item.charge()?),
     );
     if recipient.inventory()?.len() >= 30
-        || recipient.record().carried_weight()?.wrapping_add(weight) as u16
-            > recipient.record().weight_capacity()? as u16
+        || recipient.record().load()?.wrapping_add(weight) as u16
+            > recipient.record().load_max()? as u16
     {
         return Err(refused(19));
     }
     if cost > state.party_currency {
         return Err(refused(37));
     }
-    state.load_item_work(content, id)?;
+    state.load_item(content, id)?;
     let mut events = vec![Event::Sound { resource_id: 83 }];
     if ItemDefinition(definition).reserve_ammunition_kind()? != 0 {
         let reserve = id
@@ -51,8 +54,8 @@ pub(crate) fn buy(
             .ok_or("shop ammunition identifier outside reserves")? as usize;
         state.ammunition[reserve] = state.ammunition[reserve]
             .wrapping_add(i32::from(ItemDefinition(definition).supplied_quantity()?));
-        let sound = if ItemDefinition(definition).pickup_sound()? != 0 {
-            ItemDefinition(definition).pickup_sound()?
+        let sound = if ItemDefinition(definition).sound()? != 0 {
+            ItemDefinition(definition).sound()?
         } else {
             state
                 .random
@@ -60,7 +63,7 @@ pub(crate) fn buy(
                 .wrapping_add(crate::feedback::CLIP_SOUND_BASE)
         };
         events.push(Event::Sound { resource_id: sound });
-        events.push(Event::Feedback(crate::feedback::NativeFeedback::Flash {
+        events.push(Event::Feedback(crate::feedback::GameFeedback::Flash {
             address: 0x401d9e,
             x: 50,
             y: 50,
@@ -68,11 +71,11 @@ pub(crate) fn buy(
             sound: 0,
         }));
     } else {
-        // moveicon calculates movement before installitem updates the load field.
+        // Movement is calculated before the load includes the new item.
         calculate_movement(state, content, warrior)?;
         let inventory = state.warriors[warrior].inventory()?;
         let count = inventory.len();
-        let merged = if ItemDefinition(definition).unit_weight()? != 0 {
+        let merged = if ItemDefinition(definition).charge_weight()? != 0 {
             inventory.iter().position(|i| i.id() == id)
         } else {
             None
@@ -100,10 +103,11 @@ pub(crate) fn buy(
     {
         access.remaining = access.remaining.wrapping_sub(1);
     }
-    state.native_work.shop_work.buy_one(slot)?;
+    state.globals.the_shop.buy_one(slot)?;
     Ok(events)
 }
 
+/// Recalculates a warrior's movement from the race's allowance.
 pub(super) fn calculate_movement(
     state: &mut Session,
     content: &Content,
@@ -120,6 +124,8 @@ pub(super) fn calculate_movement(
     crate::combat::calculate_movement(record, movement)
 }
 
+/// Sells an item a warrior carries to the shop and pays the party its price. A shop of enhanced or
+/// limited stock does not buy.
 pub(crate) fn sell(
     state: &mut Session,
     content: &Content,
@@ -143,11 +149,12 @@ pub(crate) fn sell(
     let mission = content.map(0).ok_or("shop scenario unavailable")?;
     let globals = equipment::drop(&mut state.warriors[warrior], slot, content, mission)?;
     state.apply_equipment_globals(&globals)?;
-    state.native_work.shop_work.accept_sale(item.id())?;
+    state.globals.the_shop.accept_sale(item.id())?;
     state.party_currency = state.party_currency.wrapping_add(cost);
     Ok(vec![Event::Sound { resource_id: 83 }])
 }
 
+/// Reloads a warrior's firearm while the shop is open.
 pub(crate) fn reload(
     state: &mut Session,
     content: &Content,

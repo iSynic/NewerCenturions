@@ -4,7 +4,7 @@ mod fitting;
 mod refill;
 mod selection;
 
-pub use context::WorkBuffers;
+pub use context::LoadedItems;
 pub use context::definition;
 pub use fitting::fit;
 pub use refill::refit;
@@ -14,6 +14,8 @@ pub use selection::compatible_ammunition;
 use crate::{RandomState, RuleError};
 use centurions_content::{InventoryRecord, Warrior, word};
 
+/// How a refit is run: in a battle or not, forced, without sounds, and with or without the warning
+/// when it cannot complete.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RefitFlags {
     pub in_combat: bool,
@@ -22,6 +24,8 @@ pub struct RefitFlags {
     pub warnings: bool,
 }
 
+/// A request to load a reserve of ammunition into the weapon in a slot. When present, the
+/// loot-quality bytes stand for the stock of reserve 200.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FitRequest {
     pub slot: usize,
@@ -30,23 +34,26 @@ pub struct FitRequest {
     pub loot_quality: Option<[u8; 4]>,
 }
 
+/// What fitting or refitting ammunition did: the warrior and reserves afterward, the items loaded,
+/// the sounds and warnings, and whether the ammunition changed.
 #[derive(Debug, PartialEq, Eq)]
 pub struct AmmunitionResult {
     pub warrior: Warrior,
     pub reserves: Vec<i32>,
-    pub work: WorkBuffers,
-    /// Compatibility return for preserved primitive callers and native receipts.
-    pub native_return: i16,
+    pub loaded: LoadedItems,
+    /// The value refit returns, kept for callers that compare it.
+    pub return_code: i16,
     outcome: AmmunitionOutcome,
     pub sounds: Vec<i16>,
     pub warnings: Vec<i16>,
     pub changed_ammo: bool,
-    pub(crate) retained_record: Option<InventoryRecord>,
+    pub(crate) inventory_record: Option<InventoryRecord>,
     feedback: Vec<(usize, crate::Event)>,
     /// Party-wide writes from battery removal and re-wear, applied on commit.
     global_writes: Vec<crate::equipment::GlobalWrite>,
 }
 
+/// How a refit ended: not complete, complete, or one reserve was fitted.
 #[derive(Debug, PartialEq, Eq)]
 enum AmmunitionOutcome {
     RefitIncomplete,
@@ -55,12 +62,15 @@ enum AmmunitionOutcome {
 }
 
 impl AmmunitionResult {
+    /// Whether the refit filled every weapon it set out to.
     pub(crate) fn completed_refit(&self) -> bool {
         self.outcome == AmmunitionOutcome::RefitCompleted
     }
 
+    /// Settles the result: the return value follows the outcome and the random numbers drawn are
+    /// kept.
     fn finish(mut self, random: &mut RandomState, next_random: RandomState) -> Self {
-        self.native_return = match self.outcome {
+        self.return_code = match self.outcome {
             AmmunitionOutcome::RefitIncomplete => 0,
             AmmunitionOutcome::RefitCompleted => 1,
             AmmunitionOutcome::Fitted { reserve_index } => reserve_index as i16,
@@ -70,6 +80,7 @@ impl AmmunitionResult {
     }
 }
 
+/// The refusal given when ammunition handling needs something the reconstruction does not carry.
 fn unsupported(dependency: &'static str) -> RuleError {
     RuleError::Unsupported {
         action: "ammunition",
@@ -77,10 +88,12 @@ fn unsupported(dependency: &'static str) -> RuleError {
     }
 }
 
+/// Starts a result for a warrior with the reserves and loaded items as they stand; the reserves
+/// must number 200.
 fn initial(
     warrior: &Warrior,
     reserves: &[i32],
-    work: &WorkBuffers,
+    loaded: &LoadedItems,
 ) -> Result<AmmunitionResult, RuleError> {
     if reserves.len() != 200 {
         return Err(RuleError::Invalid(
@@ -88,22 +101,24 @@ fn initial(
         ));
     }
     warrior.inventory()?;
-    work.validate()?;
+    loaded.validate()?;
     Ok(AmmunitionResult {
         warrior: warrior.clone(),
         reserves: reserves.to_vec(),
-        work: work.clone(),
-        native_return: 0,
+        loaded: loaded.clone(),
+        return_code: 0,
         outcome: AmmunitionOutcome::RefitIncomplete,
         sounds: vec![],
         warnings: vec![],
         changed_ammo: false,
-        retained_record: None,
+        inventory_record: None,
         feedback: vec![],
         global_writes: vec![],
     })
 }
 
+/// Applies a finished result to the session: the party's reserves, the warrior, and the sounds and
+/// warnings.
 pub(crate) fn commit_result(
     state: &mut crate::Session,
     member: usize,
@@ -111,26 +126,26 @@ pub(crate) fn commit_result(
 ) -> Result<Vec<crate::Event>, RuleError> {
     state.apply_equipment_globals(&result.global_writes)?;
     let show_level_refusals =
-        state.combat.is_none() || result.warrior.record().automatic_mode()? == 0;
-    if let Some(item) = result.work.item.as_deref() {
-        state.native_work.loaded_item_field32 = word(item, 32)?;
+        state.combat.is_none() || result.warrior.record().computer_control()? == 0;
+    if let Some(item) = result.loaded.item.as_deref() {
+        state.globals.loaded_item_field32 = word(item, 32)?;
     }
     let projected = if let Some(combat) = state.combat.as_mut() {
-        &mut combat.weapon_work
+        &mut combat.weapon_traits
     } else {
-        &mut state.native_work.weapon_work
+        &mut state.globals.weapon_traits
     };
-    if let Some(weapon) = result.work.weapon.as_deref() {
+    if let Some(weapon) = result.loaded.weapon.as_deref() {
         projected.load_weapon(weapon)?;
     }
-    if let Some(ammo) = result.work.ammo.as_deref() {
+    if let Some(ammo) = result.loaded.ammo.as_deref() {
         projected.load_ammunition(ammo)?;
     }
     state.warriors[member] = result.warrior;
     state.ammunition = result.reserves;
-    state.native_work.ammunition_work = result.work;
-    if let Some(record) = result.retained_record {
-        state.native_work.inventory_record = record;
+    state.globals.loaded_items = result.loaded;
+    if let Some(record) = result.inventory_record {
+        state.globals.inventory_record = record;
     }
     let mut feedback = result.feedback.into_iter().peekable();
     let mut events = Vec::new();
@@ -140,7 +155,7 @@ pub(crate) fn commit_result(
             if show_level_refusals
                 || !matches!(
                     event,
-                    crate::Event::Feedback(crate::feedback::NativeFeedback::EquipmentLevel { .. })
+                    crate::Event::Feedback(crate::feedback::GameFeedback::EquipmentLevel { .. })
                 )
             {
                 events.push(event);
@@ -155,4 +170,4 @@ pub(crate) fn commit_result(
 
 #[cfg(all(test, feature = "original-fixtures"))]
 #[path = "../tests/native/ammunition_work_reference.rs"]
-mod work_tests;
+mod reference_tests;

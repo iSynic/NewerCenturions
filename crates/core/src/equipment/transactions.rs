@@ -1,12 +1,13 @@
-//! Transactions for equipment.
+//! Moving items between warriors and the shop.
 use super::{
-    collect_item, drop, item_definition, race_movement, remove_retained, unsupported, wear_retained,
+    collect_item, drop, item_definition, race_movement, remove_silently, unsupported, wear_silently,
 };
 use crate::{Event, Phase, RuleError, Session, combat, items};
 use centurions_content::mission::OpeningMission;
 use centurions_content::records::ItemDefinition;
 use centurions_content::{Content, InventoryRecord};
 
+/// The scenario land the party is playing in.
 pub(super) fn mission<'a>(
     state: &Session,
     content: &'a Content,
@@ -16,6 +17,9 @@ pub(super) fn mission<'a>(
         .ok_or_else(|| RuleError::Invalid("equipment mission missing".into()))
 }
 
+/// Checks that an item action is allowed: the warrior must be in the squad, no message may be
+/// showing and, in battle, the warrior must be the one acting, with an action point left when the
+/// action costs one.
 pub(super) fn admission(state: &Session, warrior: usize, needs_ap: bool) -> Result<(), RuleError> {
     if warrior >= state.warriors.len() {
         return Err("inventory warrior outside squad".into());
@@ -32,18 +36,16 @@ pub(super) fn admission(state: &Session, warrior: usize, needs_ap: bool) -> Resu
         && state.combat.as_ref().and_then(combat::Combat::active_body) != Some(warrior as i16)
     {
         return Err(RuleError::Refused {
-            feedback: vec![crate::feedback::NativeFeedback::Warning { index: 10 }],
+            feedback: vec![crate::feedback::GameFeedback::Warning { index: 10 }],
         });
     }
-    if state.phase == Phase::Combat
-        && needs_ap
-        && state.warriors[warrior].record().action_points()? < 1
-    {
+    if state.phase == Phase::Combat && needs_ap && state.warriors[warrior].record().attacks()? < 1 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
     Ok(())
 }
 
+/// Turns the sounds and warnings of an item action into events.
 pub(super) fn events(sounds: Vec<i16>, warnings: Vec<i16>) -> Vec<Event> {
     sounds
         .into_iter()
@@ -56,7 +58,9 @@ pub(super) fn events(sounds: Vec<i16>, warnings: Vec<i16>) -> Vec<Event> {
         .collect()
 }
 
-/// moveicon's owned-item route collects into the destination before dropping the source.
+/// Moves an owned item: the destination collects it before the source drops it.
+///
+/// Original: moveicon
 pub fn transfer(
     state: &mut Session,
     content: &Content,
@@ -79,15 +83,15 @@ pub fn transfer(
         .get(slot)
         .cloned()
         .ok_or("transfer slot missing")?;
-    state.native_work.inventory_record = item.clone();
-    state.load_item_work(content, item.id())?;
+    state.globals.inventory_record = item.clone();
+    state.load_item(content, item.id())?;
     if state.warriors[to].inventory()?.len() >= 30 {
         return Ok(vec![Event::Feedback(
-            crate::feedback::NativeFeedback::Warning { index: 19 },
+            crate::feedback::GameFeedback::Warning { index: 19 },
         )]);
     }
-    let collected = if ItemDefinition(item_definition(content, item.id())?).category()? == 23 {
-        crate::story_collection::collect_story_item(
+    let collected = if ItemDefinition(item_definition(content, item.id())?).item_type()? == 23 {
+        crate::story::collection::collect_story_item(
             &state.warriors[to],
             &item,
             content,
@@ -109,6 +113,7 @@ pub fn transfer(
     Ok(effects)
 }
 
+/// Moves an item from the crate to a warrior's pack. The crate closes up over the gap.
 pub fn take_crate(
     state: &mut Session,
     content: &Content,
@@ -124,7 +129,7 @@ pub fn take_crate(
         .get(slot)
         .ok_or_else(|| RuleError::Invalid("crate slot missing".into()))?;
     let item_id = item.id();
-    let retained = item.clone();
+    let inventory_record = item.clone();
     let prior_count = state.warriors[warrior].inventory()?.len();
     let result = collect_item(
         &state.warriors[warrior],
@@ -135,7 +140,7 @@ pub fn take_crate(
     state.warriors[warrior] = result.warrior;
     if result.collected {
         if state.warriors[warrior].inventory()?.len() > prior_count {
-            state.native_work.inventory_record = retained;
+            state.globals.inventory_record = inventory_record;
         }
         state.crate_items[slot] = result.item;
     }
@@ -147,10 +152,11 @@ pub fn take_crate(
         .collect();
     occupied.resize(state.crate_items.len(), InventoryRecord([0; 22]));
     state.crate_items = occupied;
-    state.load_item_work(content, item_id)?;
+    state.load_item(content, item_id)?;
     Ok(events(result.sounds, result.warnings))
 }
 
+/// Wears the item in one of the warrior's slots.
 pub fn equip(
     state: &mut Session,
     content: &Content,
@@ -164,35 +170,36 @@ pub fn equip(
         .cloned()
         .ok_or_else(|| RuleError::Invalid("equipment slot missing".into()))?;
     let item_id = item.id();
-    state.native_work.inventory_record = item.clone();
-    let mut result = wear_retained(
+    state.globals.inventory_record = item.clone();
+    let mut result = wear_silently(
         &state.warriors[warrior],
         content,
         mission(state, content)?,
         slot,
         state.phase == Phase::Combat,
-        Some(&state.native_work.inventory_record),
+        Some(&state.globals.inventory_record),
     )?;
     state.apply_equipment_globals(&result.global_writes)?;
     if let Some(record) = result.record.take() {
-        state.native_work.inventory_record = record;
+        state.globals.inventory_record = record;
     }
     if !result.changed {
         state.warriors[warrior] = result.warrior;
-        state.load_item_work(content, item_id)?;
+        state.load_item(content, item_id)?;
         return Ok(events(result.sounds, result.warnings));
     }
     items::compact(&mut result.warrior)?;
     state.warriors[warrior] = result.warrior;
-    state.load_item_work(content, item_id)?;
-    let selected = state.native_work.health_context.selected_warrior;
+    state.load_item(content, item_id)?;
+    let selected = state.globals.health_context.char_select_new;
     let mut health =
-        crate::story_health::retained_context(selected, &state.native_work.health_context);
+        crate::story::health::reselected_context(selected, &state.globals.health_context);
     health.affected[warrior] = 1;
-    state.native_work.health_context = health;
+    state.globals.health_context = health;
     Ok(events(result.sounds, result.warnings))
 }
 
+/// Takes the item in one of the warrior's slots off.
 pub fn unequip(
     state: &mut Session,
     content: &Content,
@@ -206,27 +213,27 @@ pub fn unequip(
         .cloned()
         .ok_or_else(|| RuleError::Invalid("equipment slot missing".into()))?;
     let item_id = item.id();
-    state.native_work.inventory_record = item.clone();
-    let mut result = remove_retained(
+    state.globals.inventory_record = item.clone();
+    let mut result = remove_silently(
         &state.warriors[warrior],
         content,
         mission(state, content)?,
         slot,
-        Some(&state.native_work.inventory_record),
+        Some(&state.globals.inventory_record),
     )?;
     state.apply_equipment_globals(&result.global_writes)?;
     if let Some(record) = result.record.take() {
-        state.native_work.inventory_record = record;
+        state.globals.inventory_record = record;
     }
     if !result.changed {
         state.warriors[warrior] = result.warrior;
-        state.load_item_work(content, item_id)?;
+        state.load_item(content, item_id)?;
         return Ok(events(result.sounds, result.warnings));
     }
     items::compact(&mut result.warrior)?;
     state.warriors[warrior] = result.warrior;
-    state.load_item_work(content, item_id)?;
-    let health = &mut state.native_work.health_context;
+    state.load_item(content, item_id)?;
+    let health = &mut state.globals.health_context;
     health.affected[warrior] = 1;
     Ok(events(result.sounds, result.warnings))
 }

@@ -1,21 +1,30 @@
-//! timeclick(0)'s calendar scan and newland(mode 1) return.
+//! The calendar scan that runs scheduled scripts when time passes, and the
+//! return from each scheduled script.
 use super::scan_schedule;
+use crate::combat::round_stories::RoundDispatch;
 use crate::{Event, Phase, RuleError, ScriptState, Session};
 use centurions_content::Content;
 use centurions_content::records::{ScheduleEntry, ScheduledScripts, StoryRecordMut};
 use serde::{Deserialize, Serialize};
 
+/// Where a calendar scan stands while one of its scripts runs: the schedule cursor, the script it
+/// interrupted and the shared script record, with an outer scan when a script crosses midnight
+/// again.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZeroTimeReturn {
+    /// The calendar entry the scan has reached.
     pub schedule_cursor: usize,
+    /// The script the scan interrupted, to resume afterward.
     pub suspended_script: Option<ScriptState>,
-    /// Shared DOOR479eaa; the caller's cursor survives, its old body does not.
-    pub work: Vec<u8>,
-    /// A calendar script that crosses midnight again enters timeclick(0) recursively.
+    /// The shared script record; the caller's cursor survives, its old body
+    /// does not.
+    #[serde(rename = "work")]
+    pub script_record: Vec<u8>,
+    /// A calendar script that crosses midnight again starts a nested scan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<Box<ZeroTimeReturn>>,
-    /// Caller owners open when newland63 entered timeclick(0) (schema 56); absent
-    /// for an exploration caller.
+    /// The callers open when the alter-game-time operation started the scan
+    /// (save schema 56); absent for an exploration caller.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owners: Option<ZeroOwners>,
 }
@@ -29,6 +38,7 @@ pub struct ZeroOwners {
 }
 
 impl ZeroOwners {
+    /// The depths of turn, round and death scripts running beneath the calendar.
     fn current(state: &Session) -> Self {
         Self {
             turn: std::iter::successors(state.turn_dispatch.as_ref(), |f| f.parent.as_deref())
@@ -37,7 +47,7 @@ impl ZeroOwners {
             round: std::iter::successors(state.round_dispatch.as_ref(), |f| f.parent.as_deref())
                 .take(33)
                 .count(),
-            death: crate::combat::round_stories::RoundDispatch::death_depth(state),
+            death: RoundDispatch::death_depth(state),
         }
     }
 }
@@ -53,6 +63,8 @@ impl ZeroTimeReturn {
     }
 }
 
+/// Checks that the stack of calendar scans is at most 32 deep, with cursors inside the schedule,
+/// full script records and suspended scripts that are valid.
 pub(crate) fn validate_zero(state: &Session, content: &Content) -> Result<(), RuleError> {
     let frames = std::iter::successors(state.zero_time.as_ref(), |f| f.parent.as_deref());
     for (depth, frame) in frames.enumerate() {
@@ -65,7 +77,7 @@ pub(crate) fn validate_zero(state: &Session, content: &Content) -> Result<(), Ru
             || frame
                 .owners
                 .is_some_and(|owners| owners.turn > 32 || owners.round > 32 || owners.death > 32)
-            || frame.work.len() != 42
+            || frame.script_record.len() != 42
             || frame.parent.is_some() && frame.suspended_script.is_none()
             || frame
                 .suspended_script
@@ -79,6 +91,8 @@ pub(crate) fn validate_zero(state: &Session, content: &Content) -> Result<(), Ru
 }
 
 /// No hourly reduction, food recovery or regional rolls, even at midnight.
+///
+/// Original: timeclick
 pub(crate) fn zero_tick(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let Some(position) = state.exploration.as_mut() else {
         return Ok(vec![]);
@@ -91,24 +105,24 @@ pub(crate) fn zero_tick(state: &mut Session, content: &Content) -> Result<Vec<Ev
     let mut events = vec![];
     let mut cursor = 0;
     if let Some(id) = scan_schedule(state, &mut cursor, &mut events)? {
-        // timeclick runs the scheduled children synchronously under any newland63
-        // caller; the caller's owner resumes after the scan. A menu caller keeps its
-        // encounter continuation in the suspended script, as newland keeps it on the
-        // stack. Every battle script is entered under a turn, round or death owner.
+        // Scheduled scripts run to completion under any alter-game-time caller,
+        // which resumes after the scan. A menu caller keeps its encounter
+        // continuation in the suspended script. Every battle script runs under a
+        // turn, round or death owner.
         let current = ZeroOwners::current(state);
         let owned = current != ZeroOwners::default();
         if state.combat.is_some() && !owned {
             return Err("calendar child under a battle script without a story owner".into());
         }
         let suspended_script = state.exploration.as_mut().unwrap().script.take();
-        let work = suspended_script
+        let script_record = suspended_script
             .as_ref()
             .map_or_else(|| vec![0; 42], |s| s.record.clone());
         let parent = state.zero_time.take().map(Box::new);
         state.zero_time = Some(ZeroTimeReturn {
             schedule_cursor: cursor,
             suspended_script,
-            work,
+            script_record,
             parent,
             owners: (owned || state.time_continuation.is_some()).then_some(current),
         });
@@ -117,6 +131,7 @@ pub(crate) fn zero_tick(state: &mut Session, content: &Content) -> Result<Vec<Ev
     Ok(events)
 }
 
+/// Starts the calendar's scheduled script with the given number.
 fn dispatch(state: &mut Session, content: &Content, id: i16) -> Result<Vec<Event>, RuleError> {
     let position = state
         .exploration
@@ -128,21 +143,22 @@ fn dispatch(state: &mut Session, content: &Content, id: i16) -> Result<Vec<Event
     let body = ScheduledScripts(&map.scheduled_scripts).record(id.unsigned_abs())?;
     let position = state.exploration.as_mut().unwrap();
     let frame = state.zero_time.as_mut().unwrap();
-    // Each child is a fresh newland call with its own locals and registers.
-    let work = &mut frame.work;
-    // newland140142..140172 sets the current destination before loaddoor2,
-    // which retains the eight-byte header and replaces bytes8..41.
-    let mut record = StoryRecordMut(work);
+    // Each scheduled script starts fresh.
+    let script_record = &mut frame.script_record;
+    // The destination is set before loaddoor2, which keeps the eight-byte
+    // header and replaces bytes 8..41.
+    let mut record = StoryRecordMut(script_record);
     record.relocate(position.map, position.x, position.y);
     record.replace_body(body);
-    // loaddoor2 includes byte40 in the loaded body, after the caller's write.
-    position.script = Some(ScriptState::scheduled(work.clone(), 0));
+    // loaddoor2 loads byte 40 too, after the caller's write.
+    position.script = Some(ScriptState::scheduled(script_record.clone(), 0));
     crate::exploration::run_script(state, content)
 }
 
-pub(crate) fn retain_zero_work(state: &mut Session, record: &[u8]) {
+/// Keeps the record the calendar's running script is using.
+pub(crate) fn store_zero_record(state: &mut Session, record: &[u8]) {
     if let Some(frame) = state.zero_time.as_mut() {
-        frame.work = record.to_vec();
+        frame.script_record = record.to_vec();
     }
 }
 
@@ -163,6 +179,7 @@ pub(crate) fn resume_owned(
     }
 }
 
+/// Carries the calendar scan on after a scheduled script returns.
 pub(super) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let mut events = vec![];
     loop {
@@ -189,13 +206,13 @@ pub(super) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event
             }
         } else {
             let frame = state.zero_time.take().unwrap();
-            // The outer scan keeps the single DOOR the inner calendar left behind.
+            // The outer scan keeps the script record the inner scan left behind.
             state.zero_time = frame.parent.map(|mut parent| {
-                parent.work = frame.work.clone();
+                parent.script_record = frame.script_record.clone();
                 *parent
             });
             if let Some(mut caller) = frame.suspended_script {
-                caller.record = frame.work;
+                caller.record = frame.script_record;
                 state.exploration.as_mut().unwrap().script = Some(caller);
                 events.extend(crate::exploration::run_script(state, content)?);
             }

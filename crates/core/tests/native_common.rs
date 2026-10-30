@@ -10,7 +10,7 @@ pub fn earned_receipt(name: &str, index: usize) -> Value {
 /// changing the frozen receipt bytes; no recorded event carries fatigue.
 pub fn earned_start(receipt: &Value) -> Session {
     let mut state: Session = serde_json::from_value(receipt["starting_session"].clone()).unwrap();
-    assert!(state.native_import.is_none());
+    assert!(state.imported.is_none());
     state.exploration.as_mut().unwrap().fatigue = 4;
     state
 }
@@ -37,7 +37,7 @@ pub fn shield_result_events(events: Vec<Event>) -> Vec<Event> {
         } = &event
         {
             result.push(Event::Feedback(
-                centurions_core::feedback::NativeFeedback::CombatResult {
+                centurions_core::feedback::GameFeedback::CombatResult {
                     body: *target,
                     code: 13,
                     amount: 0,
@@ -65,7 +65,7 @@ pub fn prefix_result_events(
         Command::ShootEnemy { .. } | Command::ShootAt { .. }
     ) {
         result.push(Event::Feedback(
-            centurions_core::feedback::NativeFeedback::Tutorial {
+            centurions_core::feedback::GameFeedback::Tutorial {
                 first: 76,
                 last: 77,
             },
@@ -87,7 +87,7 @@ pub fn prefix_result_events(
                 .unwrap()
                 != 165
         {
-            let sound = state.combat.as_ref().unwrap().enemies.records[(*target - 10) as usize]
+            let sound = state.combat.as_ref().unwrap().roster.records[(*target - 10) as usize]
                 .record()
                 .death_sound()
                 .unwrap();
@@ -102,7 +102,7 @@ pub fn prefix_result_events(
             after.warriors[body as usize].record().guarding().unwrap() != 0
         } else {
             after.combat.as_ref().is_some_and(|combat| {
-                combat.enemies.records[(body - 10) as usize]
+                combat.roster.records[(body - 10) as usize]
                     .record()
                     .guarding()
                     != 0
@@ -116,7 +116,7 @@ pub fn prefix_result_events(
 }
 
 pub fn guard_result(body: i16) -> Event {
-    Event::Feedback(centurions_core::feedback::NativeFeedback::CombatResult {
+    Event::Feedback(centurions_core::feedback::GameFeedback::CombatResult {
         body,
         code: -5,
         amount: 0,
@@ -161,8 +161,8 @@ pub fn spell_sequence(
         serde_json::from_value(fixture["foundation"]["session"].clone()).unwrap();
     let mut warriors = snapshot_party(before);
     let mut combat = state.combat.take().unwrap();
-    combat.enemies.records = crate::support::monsters(&before["records"]);
-    combat.unavailable = before.n::<i8>("unavailable");
+    combat.roster.records = crate::support::monsters(&before["records"]);
+    combat.kill_party = before.n::<i8>("unavailable");
     let cache = before.bytes("first_item_cache");
     let mut random = random_state(before);
     let mut receipts = case.array("rng").iter();
@@ -174,13 +174,13 @@ pub fn spell_sequence(
         // The boundary supplies either one charged actor or the caller's retained roster.
         let captured = crate::support::monsters(&resolution["records_after"]);
         if let Some(caster) = caster {
-            combat.enemies.records[caster] = captured[caster].clone();
+            combat.roster.records[caster] = captured[caster].clone();
         } else {
-            combat.enemies.records = captured;
+            combat.roster.records = captured;
         }
         let result = resolve_bodies_with_item_cache(
             &warriors,
-            &combat.enemies.records,
+            &combat.roster.records,
             &resolution.words("mask"),
             &DirectSpell {
                 packet: &resolution.bytes("packet"),
@@ -216,7 +216,7 @@ pub fn spell_sequence(
             .filter_map(|(body, outcome)| outcome.killed.then_some(*body as i16))
             .collect();
         warriors = result.warriors;
-        combat.enemies.records = result.enemies;
+        combat.roster.records = result.enemies;
         for body in defeated {
             party_deaths += usize::from(body < 10);
             centurions_core::combat::lifecycle::kill_body(&mut combat, &mut warriors, body)
@@ -224,7 +224,7 @@ pub fn spell_sequence(
         }
         assert_body_records(
             &warriors,
-            &combat.enemies.records,
+            &combat.roster.records,
             &resolution["party_after"],
             &resolution["records_after"],
         );
@@ -242,7 +242,7 @@ pub fn script_mission(fixture: &Value) -> OpeningMission {
     OpeningMission {
         name: "native fixture".into(),
         start: (0, 0),
-        tile_properties: fixture
+        map_stats: fixture
             .get("properties")
             .map(crate::support::bytes)
             .unwrap_or_default(),
@@ -299,30 +299,30 @@ pub fn compare_health_round(input: &str) {
         let mut random = RandomState::new(1);
         let mut combat = centurions_core::combat::Combat {
             battle: 2,
-            map: centurions_core::combat::TacticalMap {
+            field: centurions_core::combat::CombatField {
                 tiles: case
                     .get("before_map")
                     .map(crate::support::words)
                     .unwrap_or_else(|| vec![1155; 8100]),
-                shift: (0, 0),
+                map_shift: (0, 0),
                 edge_word: 0,
             },
             squad: centurions_core::combat::SquadPlacement {
-                positions: (0..6)
+                pos: (0..6)
                     .map(|i| (20 + if detailed { i } else { 0 }, 20))
                     .collect(),
-                under_tiles: vec![1155; 6],
+                char_under: vec![1155; 6],
             },
-            enemies: centurions_core::combat::EnemySetup {
+            roster: centurions_core::combat::EnemySetup {
                 records: enemies.clone(),
-                positions: vec![if detailed { (30, 30) } else { (20, 20) }],
+                mon_pos: vec![if detailed { (30, 30) } else { (20, 20) }],
             },
-            order: case
+            battle_order: case
                 .get("before_order")
                 .map(crate::support::words)
                 .unwrap_or_else(|| vec![-1; 110]),
-            cursor: 0,
-            round: 1,
+            battle_order_index: 0,
+            combat_round: 1,
             ..crate::support::battle()
         };
         let events =
@@ -344,7 +344,10 @@ pub fn compare_health_round(input: &str) {
                     .collect::<Vec<_>>()
             );
         }
-        for (actual, key) in [(&combat.map.tiles, "map"), (&combat.order, "order")] {
+        for (actual, key) in [
+            (&combat.field.tiles, "map"),
+            (&combat.battle_order, "order"),
+        ] {
             if let Some(expected) = case.get(key) {
                 assert_eq!(
                     crate::support::word_bytes(actual),
@@ -353,7 +356,7 @@ pub fn compare_health_round(input: &str) {
                 );
             }
         }
-        enemies = combat.enemies.records;
+        enemies = combat.roster.records;
         initialize_turn(
             case.n::<i16>("body"),
             &mut warriors,
@@ -384,25 +387,25 @@ pub fn buffer_words(fixture: &Value, value: &Value) -> Vec<i16> {
 pub fn melee_combat(records: &[u8]) -> Combat {
     let mut combat = crate::support::battle();
     combat.battle = 117;
-    combat.map.tiles.fill(1155);
-    combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
-    combat.enemies.records = crate::support::monsters(records);
-    combat.enemies.positions = vec![(20, 20), (21, 20), (40, 40)];
-    combat.attack_identity = [2, 4, 6];
+    combat.field.tiles.fill(1155);
+    combat.squad.pos = (0..6).map(|i| (40 + i, 40)).collect();
+    combat.roster.records = crate::support::monsters(records);
+    combat.roster.mon_pos = vec![(20, 20), (21, 20), (40, 40)];
+    combat.cast_identity = [2, 4, 6];
     combat
 }
 
 pub fn neighbor_combat(case: &Value, member: i16) -> Combat {
     let mut combat = crate::support::battle();
     combat.battle = 117;
-    combat.map.tiles = case.words("map_before");
-    combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
-    combat.squad.positions[member as usize] = (21, 20);
-    combat.enemies.records = vec![MonsterRecord {
+    combat.field.tiles = case.words("map_before");
+    combat.squad.pos = (0..6).map(|i| (40 + i, 40)).collect();
+    combat.squad.pos[member as usize] = (21, 20);
+    combat.roster.records = vec![MonsterRecord {
         bytes: case.bytes("enemy_before"),
     }];
-    combat.enemies.positions = vec![(20, 20)];
-    combat.order = case.words("order_before");
+    combat.roster.mon_pos = vec![(20, 20)];
+    combat.battle_order = case.words("order_before");
     combat
 }
 pub fn raw_word(raw: &[u8], offset: usize) -> i16 {
@@ -438,13 +441,13 @@ pub fn snapshot_word(snapshot: &Value, key: &str) -> i16 {
 }
 /// Declared probe/source inputs only: selected447196, attempts438780, inhibit43877e.
 /// Call before execution, never to fill unknown runtime/migration or expected-state history.
-pub fn npc_command_input(state: &mut Session, selected: usize, words: [i16; 2]) {
+pub fn monster_command_input(state: &mut Session, selected: usize, words: [i16; 2]) {
     source_victory_context(state);
-    state.combat.as_mut().unwrap().selected_enemy = selected;
-    state.native_work.selected_enemy = selected;
-    state.native_work.script_enemy = state.combat.as_ref().unwrap().script_enemy;
-    state.native_work.npc_work.attempts = words[0];
-    state.native_work.npc_work.inhibit = words[1];
+    state.combat.as_mut().unwrap().monster_up = selected;
+    state.globals.monster_up = selected;
+    state.globals.macro_monster = state.combat.as_ref().unwrap().macro_monster;
+    state.globals.monster_turn_flags.no_spell = words[0];
+    state.globals.monster_turn_flags.did_attack = words[1];
 }
 
 pub fn foundation_session(fixture: &Value, case: &Value) -> Session {
@@ -453,7 +456,7 @@ pub fn foundation_session(fixture: &Value, case: &Value) -> Session {
     );
     // Only the current-terrain receipt declares this NPC entry; loaded-shot foundations do not.
     if let Some(selected) = case["before"].get("current_npc_index") {
-        npc_command_input(&mut state, selected.as_u64().unwrap() as usize, [0, 0]);
+        monster_command_input(&mut state, selected.as_u64().unwrap() as usize, [0, 0]);
     }
     state
 }
@@ -513,7 +516,7 @@ pub fn refresh_item_work(state: &mut Session, content: &Content) {
     let body = state.combat.as_ref().unwrap().active_body().unwrap();
     let id = if body >= 10 {
         word(
-            &state.combat.as_ref().unwrap().enemies.records[(body - 10) as usize].bytes,
+            &state.combat.as_ref().unwrap().roster.records[(body - 10) as usize].bytes,
             0x4e,
         )
         .unwrap()
@@ -527,8 +530,8 @@ pub fn refresh_item_work(state: &mut Session, content: &Content) {
     let mut record = content.items[usize::from(id.unsigned_abs())].clone();
     let class = word(&record, 26).unwrap().wrapping_abs();
     record[26..28].copy_from_slice(&class.to_be_bytes());
-    state.native_work.loaded_item_field32 = word(&record, 32).unwrap();
-    state.native_work.ammunition_work.item = Some(record);
+    state.globals.loaded_item_field32 = word(&record, 32).unwrap();
+    state.globals.loaded_items.item = Some(record);
 }
 
 // Shared controlled geometry for independent movement and complete actor-decision receipts.
@@ -551,43 +554,43 @@ pub fn enemy_movement_case(case: &Value) -> Combat {
     tiles[((25 + dx * 4) * 90 + 25 + dy * 4) as usize] = 0;
     Combat {
         battle: 2,
-        map: TacticalMap {
+        field: CombatField {
             tiles,
-            shift: (0, 0),
+            map_shift: (0, 0),
             edge_word: 0,
         },
         squad: SquadPlacement {
-            positions: vec![(20 + dx * 4, 20 + dy * 4); 6],
-            under_tiles: vec![1155; 6],
+            pos: vec![(20 + dx * 4, 20 + dy * 4); 6],
+            char_under: vec![1155; 6],
         },
-        enemies: EnemySetup {
+        roster: EnemySetup {
             records: vec![MonsterRecord {
                 bytes: case.bytes("input"),
             }],
-            positions: vec![(20, 20)],
+            mon_pos: vec![(20, 20)],
         },
-        order: vec![-1, 10],
+        battle_order: vec![-1, 10],
         ..crate::support::battle()
     }
 }
 
 /// Shared controlled Psi caller state; captures retain their separate round ownership.
-pub fn psi_work(snapshot: &Value) -> WeaponWork {
-    crate::snapshots::weapon_work(&|key| snapshot.bytes(key))
+pub fn psi_work(snapshot: &Value) -> WeaponTraits {
+    crate::snapshots::weapon_traits(&|key| snapshot.bytes(key))
 }
 pub fn psi_snapshot(content: &Content, snapshot: &Value) -> Session {
     let mut state = crate::support::mission_session(content);
     state.warriors = snapshot_party(snapshot);
-    state.native_work.psi_memory = snapshot.bytes("memory");
-    state.party_buffs = snapshot.bytes("party_buffs");
-    state.native_work.loaded_item_field32 = snapshot.n("item_context");
-    state.native_work.attack_count = snapshot.n("count");
-    state.native_work.weapon_work = psi_work(snapshot);
-    state.native_work.attack_packet = snapshot.bytes("packet");
-    state.native_work.attack_identity = snapshot.words("identity").try_into().unwrap();
+    state.globals.define_spells = snapshot.bytes("memory");
+    state.party_condition = snapshot.bytes("party_buffs");
+    state.globals.loaded_item_field32 = snapshot.n("item_context");
+    state.globals.attack_count = snapshot.n("count");
+    state.globals.weapon_traits = psi_work(snapshot);
+    state.globals.spell_info = snapshot.bytes("packet");
+    state.globals.cast_identity = snapshot.words("identity").try_into().unwrap();
     state.random = random_state(snapshot);
     let mut combat = crate::support::psi_frame::combat(snapshot);
-    combat.weapon_work = state.native_work.weapon_work;
+    combat.weapon_traits = state.globals.weapon_traits;
     state.combat = Some(combat);
     state.phase = Phase::Combat;
     source_victory_context(&mut state);

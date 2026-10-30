@@ -2,16 +2,18 @@ use crate::feedback;
 use centurions_content::ContentError;
 use thiserror::Error;
 
+/// Why a command did not run: the game's own refusal, a scenario or content feature the
+/// reconstruction does not carry, or a session that is not valid.
 #[derive(Debug, Error)]
 pub enum RuleError {
     #[error("action refused by the original rules")]
     Refused {
-        feedback: Vec<feedback::NativeFeedback>,
+        feedback: Vec<feedback::GameFeedback>,
     },
-    /// A native refusal reached after deliberate rule-state effects.
+    /// The game refuses the action after it has already applied some effects.
     #[error("action refused by the original rules")]
     RefusedAfterEffects {
-        feedback: Vec<feedback::NativeFeedback>,
+        feedback: Vec<feedback::GameFeedback>,
     },
     #[error("unsupported action {action}: {dependency}")]
     Unsupported {
@@ -35,7 +37,7 @@ pub enum RuleError {
 }
 
 impl RuleError {
-    /// Attaches runtime detail to an unsupported-rule diagnostic. Native
+    /// Attaches runtime detail to an unsupported-rule diagnostic. Game
     /// refusals and other errors pass through unchanged so callers that
     /// distinguish them keep matching the same variant.
     pub fn with_context(self, context: impl FnOnce() -> String) -> Self {
@@ -58,11 +60,13 @@ impl RuleError {
 }
 
 impl From<String> for RuleError {
+    /// Builds an invalid-session error from a message.
     fn from(message: String) -> Self {
         Self::Invalid(message)
     }
 }
 impl From<&str> for RuleError {
+    /// Builds an invalid-session error from a message.
     fn from(message: &str) -> Self {
         Self::Invalid(message.into())
     }

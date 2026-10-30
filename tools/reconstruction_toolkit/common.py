@@ -1,7 +1,6 @@
 """File identities, bounded subprocesses and private report storage."""
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,17 +9,11 @@ import subprocess
 import tempfile
 from datetime import datetime, timezone
 
-
-ROOT = Path(__file__).resolve().parents[2]
+from repository import ROOT, digest  # noqa: F401 - re-exported for toolkit modules
 
 
 def now():
     return datetime.now(timezone.utc).isoformat()
-
-
-def digest(path):
-    with Path(path).open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
 def read_json(path):

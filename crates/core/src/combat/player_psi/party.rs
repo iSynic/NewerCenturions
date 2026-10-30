@@ -1,12 +1,15 @@
-//! Party for combat/player_psi.
+//! Psi powers cast on the party from the menu.
 use super::{Event, RandomState, RuleError, cost, mode_allowed, packet};
 use super::{OUTDOOR_PARTY_SPELLS, OUTDOOR_TARGET_SPELLS, PARTY_SPELLS};
+use crate::combat::spells::spell_identity;
+use centurions_content::WARRIOR_BYTES;
 use centurions_content::mission::OpeningMission;
 use centurions_content::{
     Warrior,
-    records::{AttackPacket, Condition, PsiSelectionMemoryMut},
+    records::{Condition, PsiSelectionMemoryMut, SpellInfoRecord},
 };
 
+/// A psi power cast on the party from the menu: who casts, which power, and its level.
 #[derive(Clone, Copy, Debug)]
 pub struct PartyCastRequest {
     pub warrior: usize,
@@ -14,6 +17,8 @@ pub struct PartyCastRequest {
     pub power: i16,
 }
 
+/// What casting on the party left: the warriors, the psi memory, the party's buffs, the packet and
+/// its identity, the count, any scenario duration, and the events.
 pub struct PartyCastResult {
     pub warriors: Vec<Warrior>,
     pub memory: Vec<u8>,
@@ -25,6 +30,9 @@ pub struct PartyCastResult {
     pub events: Vec<Event>,
 }
 
+/// Casts a psi power from the menu on the party. A power that lasts on the party draws its
+/// duration, the base plus a draw for each power level, and adds it to the buffs or to the scenario
+/// duration (effect 110).
 pub fn cast_party(
     warriors: &[Warrior],
     memory: &[u8],
@@ -36,19 +44,19 @@ pub fn cast_party(
 ) -> Result<PartyCastResult, RuleError> {
     let mut result = prepare_party(warriors, memory, buffs, mission, disabled, request)?;
     let packet = result.packet.clone();
-    if AttackPacket(&packet).targeting_mode() != 7 {
+    if !SpellInfoRecord(&packet).is_party_duration() {
         return Ok(result);
     }
     let mut next_random = random.clone();
-    let (minimum, maximum) = AttackPacket(&packet).duration_bounds();
+    let (minimum, maximum) = SpellInfoRecord(&packet).duration_range();
     let mut duration = next_random.range(minimum, maximum);
-    let (minimum, maximum) = AttackPacket(&packet).additional_duration_bounds();
+    let (minimum, maximum) = SpellInfoRecord(&packet).power_duration_range();
     if minimum != 0 {
         for _ in 0..request.power {
             duration = duration.wrapping_add(next_random.range(minimum, maximum));
         }
     }
-    let effect = AttackPacket(&packet).effect()?;
+    let effect = SpellInfoRecord(&packet).effect()?;
     if effect == 110 {
         result.scenario_duration = Some(duration);
     } else {
@@ -58,7 +66,9 @@ pub fn cast_party(
     Ok(result)
 }
 
-/// Charges the menu selection; buttonchoice owns the later resolution and ally copies.
+/// Charges the power chosen from the menu; buttonchoice resolves it later.
+///
+/// Original: buttonchoice
 pub(crate) fn prepare_party(
     warriors: &[Warrior],
     memory: &[u8],
@@ -73,11 +83,7 @@ pub(crate) fn prepare_party(
     let packet = validate_party(warriors, mission, disabled, request)?;
     let actor = &warriors[request.warrior];
     let charge = cost(&packet, request.power)?;
-    let identity = [
-        request.spell / 1000 - 1,
-        request.spell % 1000 / 100 - 1,
-        request.spell % 100 - 1,
-    ];
+    let identity = spell_identity(request.spell);
     let mut result = PartyCastResult {
         warriors: warriors.to_vec(),
         memory: memory.to_vec(),
@@ -87,7 +93,7 @@ pub(crate) fn prepare_party(
         count: request.power,
         scenario_duration: None,
         events: vec![Event::Sound {
-            resource_id: AttackPacket(&packet).launch_sound()?.wrapping_neg(),
+            resource_id: SpellInfoRecord(&packet).launch_sound()?.wrapping_neg(),
         }],
     };
     let remaining = actor.psi_points()?.wrapping_sub(charge);
@@ -102,6 +108,10 @@ pub(crate) fn prepare_party(
     Ok(result)
 }
 
+/// Checks that a warrior can cast this power from the menu: a known spell the menu offers, a power
+/// level from 1 to 7, and a caster who is not helpless, scan-blocked, confused or under computer
+/// control and has stamina and enough psi points, for a spell that may be cast out of combat.
+/// Returns the spell's packet.
 pub fn validate_party(
     warriors: &[Warrior],
     mission: &OpeningMission,
@@ -125,13 +135,13 @@ pub fn validate_party(
         .get(request.warrior)
         .ok_or_else(|| RuleError::Invalid("outdoor psi warrior".into()))?;
     for warrior in warriors {
-        centurions_content::span(&warrior.bytes, 0, 3138)?;
+        centurions_content::span(&warrior.bytes, 0, WARRIOR_BYTES)?;
     }
     if disabled != 0
         || [
             actor.record().condition(Condition::Helpless),
             actor.record().condition(Condition::ScanBlocked),
-            actor.record().automatic_mode(),
+            actor.record().computer_control(),
             actor.record().condition(Condition::Confused),
             actor.record().condition(Condition::UnlabelledScanBlock),
         ]
@@ -150,15 +160,15 @@ pub fn validate_party(
     let packet = packet(mission, request.spell)?;
     if !mode_allowed(&packet, false)? {
         return Err(RuleError::Refused {
-            feedback: vec![crate::feedback::NativeFeedback::Warning { index: 22 }],
+            feedback: vec![crate::feedback::GameFeedback::Warning { index: 22 }],
         });
     }
-    if !((AttackPacket(&packet).targeting_mode() == 7
-        && matches!(AttackPacket(&packet).effect()?, 0..=9 | 110))
-        || (AttackPacket(&packet).targeting_mode() == 11
-            && matches!(AttackPacket(&packet).effect()?, 0 | 70))
-        || (matches!(AttackPacket(&packet).targeting_mode(), 0 | 1 | 3 | 4 | 9)
-            && (matches!(AttackPacket(&packet).effect()?, 1..=40 | 57 | 64))))
+    if !((SpellInfoRecord(&packet).is_party_duration()
+        && matches!(SpellInfoRecord(&packet).effect()?, 0..=9 | 110))
+        || (SpellInfoRecord(&packet).target_type() == 11
+            && matches!(SpellInfoRecord(&packet).effect()?, 0 | 70))
+        || (matches!(SpellInfoRecord(&packet).target_type(), 0 | 1 | 3 | 4 | 9)
+            && (matches!(SpellInfoRecord(&packet).effect()?, 1..=40 | 57 | 64))))
     {
         return Err(RuleError::Invalid("psi unavailable outdoors".into()));
     }

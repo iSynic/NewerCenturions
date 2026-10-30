@@ -1,69 +1,93 @@
-//! Friendly enemy-record firearm caller. Its range gate considers the furthest
-//! living opponent, even when another visible opponent is in range. Keep this
-//! distinct from player shooting and the hostile enemy caller.
-use super::{alive, faction, position, result_audio};
+//! A friendly monster fires. Its range test looks at the farthest living
+//! opponent, even when another visible opponent is in range; this differs from
+//! both the warriors' shooting and a hostile monster's.
+use super::{alive, result_audio};
+use crate::combat::attack::AttackResult;
 use crate::combat::{
-    Combat, damage, enemy_weapons, firearm, lifecycle, runtime, weapon_work::WeaponWork,
+    Combat, damage, enemy_weapons, firearm, firearm::weapon_traits::WeaponTraits, lifecycle,
+    runtime,
 };
 use crate::{Event, RandomState, RuleError};
 use centurions_content::{
     Warrior,
     combat::MonsterRecord,
-    records::{AttackPacket, ItemDefinition},
+    records::{ItemDefinition, SpellInfoRecord},
 };
 use damage::{DamageFlags, DamagePacket, resolve_damage};
 
-/// The records and work this caller reads and writes, live or retained after teardown.
-/// The duel's resolution over a warrior record, the firing NPC and the draws.
-pub(crate) type Duel<'a> =
-    &'a mut dyn FnMut(
-        &mut Warrior,
-        &mut MonsterRecord,
-        &mut RandomState,
-    ) -> Result<crate::combat::attack::AttackResult, RuleError>;
+/// A shot's resolution against a warrior record, the firing monster and the draws.
+pub(crate) type Duel<'a> = &'a mut dyn FnMut(
+    &mut Warrior,
+    &mut MonsterRecord,
+    &mut RandomState,
+) -> Result<AttackResult, RuleError>;
 
+/// What a friendly firearm monster's shot needs of the battle: the monsters and their draws, who
+/// can be aimed at and seen, the weapon and ammunition in hand, and the effects of a kill.
 pub(crate) trait ScientistWorld {
+    /// The battle's random stream.
     fn random(&mut self) -> &mut RandomState;
-    fn npc_count(&self) -> Result<usize, RuleError>;
-    fn npc(&self, index: usize) -> Result<&MonsterRecord, RuleError>;
-    fn npc_mut(&mut self, index: usize) -> Result<&mut MonsterRecord, RuleError>;
-    fn npc_and_random(
+    /// How many monsters are in the battle.
+    fn monster_count(&self) -> Result<usize, RuleError>;
+    /// The monster at `index`.
+    fn monster(&self, index: usize) -> Result<&MonsterRecord, RuleError>;
+    /// The monster at `index`, for changing.
+    fn monster_mut(&mut self, index: usize) -> Result<&mut MonsterRecord, RuleError>;
+    /// A monster and the random stream together, so a roll can change the monster.
+    fn monster_and_random(
         &mut self,
         index: usize,
     ) -> Result<(&mut MonsterRecord, &mut RandomState), RuleError>;
-    /// Resolves the duration roll against a warrior table record and the firing NPC.
+    /// Resolves the shot against a warrior record and the firing monster.
     fn duel(
         &mut self,
         warrior: usize,
-        npc: usize,
+        monster: usize,
         resolve: Duel<'_>,
-    ) -> Result<crate::combat::attack::AttackResult, RuleError>;
-    fn alive(&self, body: i16) -> Result<bool, RuleError>;
+    ) -> Result<AttackResult, RuleError>;
+    /// Whether the range scan counts a body: a warrior in battle with stamina
+    /// left, or a monster with stamina that is not disabled.
+    fn targetable(&self, body: i16) -> Result<bool, RuleError>;
+    /// Which side a warrior or monster fights for.
     fn faction(&self, body: i16) -> Result<i16, RuleError>;
+    /// Where a body stands on the battlefield.
     fn position(&self, body: i16) -> Result<(i16, i16), RuleError>;
+    /// Whether the line between two cells is clear.
     fn visible(
         &self,
         mission: &centurions_content::mission::OpeningMission,
         from: (i16, i16),
         to: (i16, i16),
     ) -> Result<bool, RuleError>;
+    /// The body whose turn it is, if any.
     fn active_body(&self) -> Result<Option<i16>, RuleError>;
+    /// The battle's difficulty setting.
     fn difficulty(&self) -> i16;
-    fn weapon_work(&mut self) -> &mut WeaponWork;
-    fn buffers(&mut self) -> &mut crate::ammunition::WorkBuffers;
+    /// The traits of the weapon and ammunition currently in hand.
+    fn weapon_traits(&mut self) -> &mut WeaponTraits;
+    /// The loaded weapon and ammunition records.
+    fn buffers(&mut self) -> &mut crate::ammunition::LoadedItems;
+    /// Makes the shot's attack packet the spell being resolved, with its attack count.
     fn publish(&mut self, packet: Vec<u8>, count: i16);
+    /// Reloads the item shown in hand for `body`.
     fn refresh_item(&mut self, items: &[Vec<u8>], body: i16) -> Result<(), RuleError>;
-    /// killbody; true when party loss leaves the caller.
+    /// Kills the body; true when losing the party ends the battle.
     fn kill(&mut self, body: i16, events: &mut Vec<Event>) -> Result<bool, RuleError>;
 }
 
+/// How a rifle shot ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Shot {
+    /// The monster held its fire.
     Withheld,
+    /// The shot was taken, hit or miss.
     Fired,
+    /// The shot killed a warrior and the party was lost, ending the battle.
     Ended,
 }
 
+/// The attack packet for the rifle: the base attack for firearm shots with the weapon's and
+/// ammunition's modifiers added.
 fn packet(weapon: &[u8], ammo: &[u8], attacks: &[u8]) -> Result<Vec<u8>, RuleError> {
     use centurions_content::records::{WeaponAttackModifiers, WeaponAttackParameters};
     let mut packet = centurions_content::span(attacks, 3 * 2842, 58)?.to_vec();
@@ -78,54 +102,73 @@ fn packet(weapon: &[u8], ammo: &[u8], attacks: &[u8]) -> Result<Vec<u8>, RuleErr
     Ok(packet)
 }
 
+/// The live battle, seen as a `ScientistWorld`.
 struct Live<'a> {
     c: &'a mut Combat,
     w: &'a mut [Warrior],
     random: &'a mut RandomState,
-    buffers: &'a mut crate::ammunition::WorkBuffers,
+    buffers: &'a mut crate::ammunition::LoadedItems,
     attack_count: &'a mut i16,
 }
 
 impl ScientistWorld for Live<'_> {
+    /// The battle's random stream.
     fn random(&mut self) -> &mut RandomState {
         self.random
     }
-    fn npc_count(&self) -> Result<usize, RuleError> {
-        Ok(self.c.enemies.records.len())
+    /// The battle's monster count.
+    fn monster_count(&self) -> Result<usize, RuleError> {
+        Ok(self.c.roster.records.len())
     }
-    fn npc(&self, index: usize) -> Result<&MonsterRecord, RuleError> {
-        Ok(&self.c.enemies.records[index])
+    /// The monster at `index`.
+    fn monster(&self, index: usize) -> Result<&MonsterRecord, RuleError> {
+        Ok(&self.c.roster.records[index])
     }
-    fn npc_mut(&mut self, index: usize) -> Result<&mut MonsterRecord, RuleError> {
-        Ok(&mut self.c.enemies.records[index])
+    /// The monster at `index`, for changing.
+    fn monster_mut(&mut self, index: usize) -> Result<&mut MonsterRecord, RuleError> {
+        Ok(&mut self.c.roster.records[index])
     }
-    fn npc_and_random(
+    /// A monster and the battle's random stream together.
+    fn monster_and_random(
         &mut self,
         index: usize,
     ) -> Result<(&mut MonsterRecord, &mut RandomState), RuleError> {
-        Ok((&mut self.c.enemies.records[index], self.random))
+        Ok((&mut self.c.roster.records[index], self.random))
     }
+    /// Resolves the shot against a warrior with the live records and draws.
     fn duel(
         &mut self,
         warrior: usize,
-        npc: usize,
+        monster: usize,
         resolve: Duel<'_>,
-    ) -> Result<crate::combat::attack::AttackResult, RuleError> {
+    ) -> Result<AttackResult, RuleError> {
         resolve(
             &mut self.w[warrior],
-            &mut self.c.enemies.records[npc],
+            &mut self.c.roster.records[monster],
             self.random,
         )
     }
-    fn alive(&self, body: i16) -> Result<bool, RuleError> {
+    /// A warrior in battle with stamina left, or a monster that is standing and not disabled.
+    fn targetable(&self, body: i16) -> Result<bool, RuleError> {
+        if (0..6).contains(&body) {
+            return match self.w.get(body as usize) {
+                Some(warrior) => {
+                    Ok(warrior.record().in_battle() != 0 && warrior.record().stamina()? > 0)
+                }
+                None => Ok(false),
+            };
+        }
         Ok(alive(self.c, self.w, body))
     }
+    /// The side the body fights for.
     fn faction(&self, body: i16) -> Result<i16, RuleError> {
-        faction(self.c, self.w, body)
+        self.c.body_faction(self.w, body)
     }
+    /// Where the body stands.
     fn position(&self, body: i16) -> Result<(i16, i16), RuleError> {
-        Ok(position(self.c, body))
+        Ok(self.c.body_position(body))
     }
+    /// Whether the line between the cells is clear on the battlefield.
     fn visible(
         &self,
         mission: &centurions_content::mission::OpeningMission,
@@ -134,48 +177,57 @@ impl ScientistWorld for Live<'_> {
     ) -> Result<bool, RuleError> {
         lifecycle::can_see(self.c, mission, from, to, 0)
     }
+    /// The body whose turn it is.
     fn active_body(&self) -> Result<Option<i16>, RuleError> {
         Ok(self.c.active_body())
     }
+    /// The battle's difficulty.
     fn difficulty(&self) -> i16 {
         self.c.difficulty
     }
-    fn weapon_work(&mut self) -> &mut WeaponWork {
-        &mut self.c.weapon_work
+    /// The battle's weapon traits.
+    fn weapon_traits(&mut self) -> &mut WeaponTraits {
+        &mut self.c.weapon_traits
     }
-    fn buffers(&mut self) -> &mut crate::ammunition::WorkBuffers {
+    /// The weapon and ammunition records in hand.
+    fn buffers(&mut self) -> &mut crate::ammunition::LoadedItems {
         self.buffers
     }
+    /// Makes the packet the battle's spell, sets the attack count and gives the cast the identity
+    /// of a firearm shot.
     fn publish(&mut self, packet: Vec<u8>, count: i16) {
         *self.attack_count = count;
-        self.c.attack_packet = packet;
-        self.c.attack_identity = [3, 0, 0];
+        self.c.spell_info = packet;
+        self.c.cast_identity = [3, 0, 0];
     }
+    /// Reloads the item shown in hand for `body`.
     fn refresh_item(&mut self, items: &[Vec<u8>], body: i16) -> Result<(), RuleError> {
         runtime::refresh_body_item(self.c, self.w, items, body, self.buffers)
     }
+    /// Kills the body; the battle goes on.
     fn kill(&mut self, body: i16, _events: &mut Vec<Event>) -> Result<bool, RuleError> {
         lifecycle::kill_body(self.c, self.w, body)?;
         Ok(false)
     }
 }
 
+/// A friendly rifle monster shoots in the live battle; true when it fired. See `fire_in`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fire(
-    c: &mut Combat,
-    w: &mut [Warrior],
+    combat: &mut Combat,
+    warriors: &mut [Warrior],
     mission: &centurions_content::mission::OpeningMission,
     random: &mut RandomState,
     items: &[Vec<u8>],
     events: &mut Vec<Event>,
     actor: (i16, i16),
-    buffers: &mut crate::ammunition::WorkBuffers,
+    buffers: &mut crate::ammunition::LoadedItems,
     display_writers: bool,
     attack_count: &mut i16,
 ) -> Result<bool, RuleError> {
     let mut world = Live {
-        c,
-        w,
+        c: combat,
+        w: warriors,
         random,
         buffers,
         attack_count,
@@ -183,7 +235,12 @@ pub(crate) fn fire(
     Ok(fire_in(&mut world, mission, items, events, actor, display_writers)? == Shot::Fired)
 }
 
-/// The caller over either world; a retained world's killbody may end the party.
+/// A friendly rifle monster takes a shot: it holds fire when no opponent is both in range and in
+/// sight, or when any opponent is out of range. Otherwise it picks a random target in range, spends
+/// 2 action points and 3 movement, and resolves the hit against a warrior or a monster; killing a
+/// warrior may end the battle.
+///
+/// Original: combat
 pub(crate) fn fire_in(
     world: &mut impl ScientistWorld,
     mission: &centurions_content::mission::OpeningMission,
@@ -194,7 +251,7 @@ pub(crate) fn fire_in(
 ) -> Result<Shot, RuleError> {
     let (item_context, body) = actor;
     let a = (body - 10) as usize;
-    let source = world.npc(a)?.clone();
+    let source = world.monster(a)?.clone();
     let weapon_id = source.record().primary_weapon()?;
     if weapon_id != 1 {
         return Err(RuleError::Unsupported {
@@ -214,25 +271,30 @@ pub(crate) fn fire_in(
         .as_ref()
         .ok_or_else(|| RuleError::Invalid("combat content missing".into()))?
         .attacks;
-    world.npc_mut(a)?.record_mut().set_selected_item(1);
+    world.monster_mut(a)?.record_mut().set_weapon(1);
     let p = packet(weapon, ammo, attacks)?;
-    world.weapon_work().prepare(weapon, ammo)?;
+    world.weapon_traits().prepare(weapon, ammo)?;
     world.buffers().prepare_pair(weapon, ammo)?;
-    world.publish(p.clone(), AttackPacket(&p).attack_count());
+    world.publish(p.clone(), SpellInfoRecord(&p).attack_count());
     world.random().bound(7);
     let shots = i16::from(ItemDefinition(weapon).selected_attack_count());
-    let range = AttackPacket(&p)
+    let range = SpellInfoRecord(&p)
         .attack_count()
         .wrapping_mul(shots)
-        .wrapping_add(AttackPacket(&p).range_modifier())
+        .wrapping_add(SpellInfoRecord(&p).range_modifier())
         .wrapping_abs();
     let start = world.position(body)?;
     let mut distances = [127_i16; 110];
     let mut count = 0;
     let mut maximum = 0;
-    let bound = world.npc_count()? as i16 + 10;
+    let bound = world.monster_count()? as i16 + 10;
     for target in 0..bound {
-        if !world.alive(target)? || world.faction(body)? == world.faction(target)? {
+        // Packets with the cannot byte at 4 aim at the shooter's own side; all others at the
+        // other side.
+        if !world.targetable(target)?
+            || (world.faction(body)? == world.faction(target)?)
+                != (SpellInfoRecord(&p).cannot() == 4)
+        {
             continue;
         }
         let end = world.position(target)?;
@@ -259,29 +321,29 @@ pub(crate) fn fire_in(
     let Some(target) = selected else {
         return Ok(Shot::Withheld);
     };
-    let actor = world.npc_mut(a)?;
+    let actor = world.monster_mut(a)?;
     let action_points = actor.record().action_points().wrapping_sub(2);
-    let movement_points = actor.record().movement_points().wrapping_sub(3);
+    let movement_points = actor.record().movement().wrapping_sub(3);
     actor.record_mut().set_action_points(action_points);
-    actor.record_mut().set_movement_points(movement_points);
+    actor.record_mut().set_movement(movement_points);
     actor.record_mut().set_reaction_ready(action_points >= 1);
     if display_writers {
         world.refresh_item(items, body)?;
     }
     events.push(Event::Sound {
-        resource_id: AttackPacket(&p).launch_sound()?,
+        resource_id: SpellInfoRecord(&p).launch_sound()?,
     });
-    let (minimum_duration, maximum_duration) = AttackPacket(&p).duration_bounds();
+    let (minimum_duration, maximum_duration) = SpellInfoRecord(&p).duration_range();
     world.random().range(minimum_duration, maximum_duration);
     if target < 6 {
         let prepared = firearm::PreparedFirearm {
-            sound: AttackPacket(&p).impact_sound()?,
+            sound: SpellInfoRecord(&p).impact_sound()?,
             packet: p,
             slot: 0,
             shots: 1,
             rounds: ItemDefinition(weapon).rounds_per_shot()?,
             weight: 0,
-            armor_filter: world.weapon_work().armor_filter(),
+            armor_filter: world.weapon_traits().armor_filter(),
         };
         let difficulty = world.difficulty();
         let result = world.duel(target, a, &mut |warrior, shooter, random| {
@@ -299,7 +361,7 @@ pub(crate) fn fire_in(
         if result.damage != 0 {
             if !result.killed {
                 events.push(Event::Sound {
-                    resource_id: result_audio(world.npc(a)?, 0, result.damage, prepared.sound)?,
+                    resource_id: result_audio(world.monster(a)?, 0, result.damage, prepared.sound)?,
                 });
             }
             events.push(Event::AttackResolved {
@@ -313,22 +375,22 @@ pub(crate) fn fire_in(
         }
         return Ok(Shot::Fired);
     }
-    let t = target - 10;
+    let target_index = target - 10;
     let mut hit = 33_i16;
     if world.active_body()?.is_some_and(|actor| actor > 9) {
         hit = hit
-            .wrapping_add(source.record().level()?.wrapping_mul(5))
+            .wrapping_add(source.record().hit_dice()?.wrapping_mul(5))
             .wrapping_add(source.record().missile_accuracy_bonus()?);
     }
     let difficulty = world.difficulty();
-    let (victim, random) = world.npc_and_random(t)?;
+    let (victim, random) = world.monster_and_random(target_index)?;
     let victim = victim.record();
     if victim.turn_skip_duration() == 0 {
         hit = hit
             .wrapping_sub(victim.missile_dodge_bonus()?)
-            .wrapping_sub(random.bound(victim.speed()? / 3))
-            .wrapping_sub(victim.level()?.wrapping_mul(3))
-            .wrapping_sub(i16::from(victim.guarding()).wrapping_mul(victim.level()?));
+            .wrapping_sub(random.bound(victim.agility()? / 3))
+            .wrapping_sub(victim.hit_dice()?.wrapping_mul(3))
+            .wrapping_sub(i16::from(victim.guarding()).wrapping_mul(victim.hit_dice()?));
         hit = hit.wrapping_add(match victim.size()?.wrapping_abs() {
             0 => -5,
             1 | 2 => 5,
@@ -344,7 +406,7 @@ pub(crate) fn fire_in(
             return Ok(Shot::Fired);
         }
     }
-    let (victim, random) = world.npc_and_random(t)?;
+    let (victim, random) = world.monster_and_random(target_index)?;
     let result = resolve_damage(
         &mut victim.bytes,
         true,
@@ -364,22 +426,29 @@ pub(crate) fn fire_in(
         events.push(Event::Sound { resource_id: 206 });
     }
     if result.total != 0 {
-        let hp = world.npc(t)?.record().stamina()?.wrapping_sub(result.total);
-        world.npc_mut(t)?.record_mut().set_stamina(hp);
+        let hp = world
+            .monster(target_index)?
+            .record()
+            .stamina()?
+            .wrapping_sub(result.total);
+        world
+            .monster_mut(target_index)?
+            .record_mut()
+            .set_stamina(hp);
         if hp < 1 {
             if world.kill(target as i16, events)? {
                 return Ok(Shot::Ended);
             }
         } else {
             events.push(Event::Sound {
-                resource_id: AttackPacket(&p).impact_sound()?,
+                resource_id: SpellInfoRecord(&p).impact_sound()?,
             });
             events.push(Event::Sound {
                 resource_id: result_audio(
-                    world.npc(a)?,
+                    world.monster(a)?,
                     0,
                     result.total,
-                    AttackPacket(&p).impact_sound()?,
+                    SpellInfoRecord(&p).impact_sound()?,
                 )?,
             });
         }

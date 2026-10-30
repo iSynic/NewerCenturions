@@ -33,13 +33,13 @@ fn verify(ranged: bool) {
         let bytes = case.bytes("warriors");
         let mut warriors: Vec<centurions_content::Warrior> = support::warriors(&bytes);
         for i in 1..6 {
-            combat.squad.positions[i] = if ranged {
+            combat.squad.pos[i] = if ranged {
                 (20 + dx * 4 + i as i16, 20 + dy * 4)
             } else {
                 (40 + i as i16, 40)
             };
             if ranged {
-                combat.map.tiles[((25 + dx * 4 + i as i16) * 90 + 25 + dy * 4) as usize] = i as i16;
+                combat.field.tiles[((25 + dx * 4 + i as i16) * 90 + 25 + dy * 4) as usize] = i as i16;
             }
         }
         let _result = enemy_action(
@@ -52,12 +52,12 @@ fn verify(ranged: bool) {
         .unwrap();
         support::native_expect! {
             bytes &support::record_bytes(&warriors) => &case.bytes("after_warriors"), &format!("enemy turn case{index}");
-            bytes combat.enemies.records[0].bytes => &case["after"], "enemy case {index}";
+            bytes combat.roster.records[0].bytes => &case["after"], "enemy case {index}";
             bytes support::word_bytes(&combat
-                        .map.tiles) => &case["tiles"], "map case {index}";
+                        .field.tiles) => &case["tiles"], "map case {index}";
         }
         assert_eq!(
-            combat.enemies.positions[0],
+            combat.roster.mon_pos[0],
             (case.n::<i16>("x"), case.n::<i16>("y")),
             "position case {index}"
         );

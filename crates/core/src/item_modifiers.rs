@@ -1,10 +1,12 @@
-use crate::{Event, Phase, RuleError, Session, feedback::NativeFeedback};
+use crate::{Event, Phase, RuleError, Session, feedback::GameFeedback};
 use centurions_content::records::{
     EquipmentStat as Stat, InventoryModifier as Modifier, ItemUpgrade,
 };
 use centurions_content::{Content, InventoryRecord, Warrior, word};
 
-/// Items12aae4..12ac10: class27 upgrades the first matching equipped record.
+/// Using an upgrade item (class 27) upgrades the first matching equipped item.
+///
+/// Original: items
 pub(crate) fn use_item(
     state: &mut Session,
     content: &Content,
@@ -31,18 +33,18 @@ pub(crate) fn use_item(
     if word(&definition, 26)? != 27 {
         return Err("selected item is not a modifier".into());
     }
-    state.load_item_work(content, item)?;
+    state.load_item(content, item)?;
     let refusal = |feedback| Err(RuleError::RefusedAfterEffects { feedback });
     if state.phase == Phase::Combat {
-        return refusal(vec![NativeFeedback::Warning { index: 24 }]);
+        return refusal(vec![GameFeedback::Warning { index: 24 }]);
     }
     let Some(target) = records
         .iter()
         .position(|record| record.0[9] != 0 && record.0[10] == definition[87])
     else {
         return refusal(vec![
-            NativeFeedback::Warning { index: 138 },
-            NativeFeedback::Warning { index: 139 },
+            GameFeedback::Warning { index: 138 },
+            GameFeedback::Warning { index: 139 },
         ]);
     };
     let sound = word(&definition, 12)?.wrapping_neg();
@@ -54,16 +56,16 @@ pub(crate) fn use_item(
         &upgrade_definition,
         content,
     )?;
-    state.load_item_work(content, upgrade)?;
+    state.load_item(content, upgrade)?;
     if !complete {
-        let mut feedback = vec![NativeFeedback::Sound { resource_id: sound }];
-        feedback.push(NativeFeedback::Warning { index: 148 });
+        let mut feedback = vec![GameFeedback::Sound { resource_id: sound }];
+        feedback.push(GameFeedback::Warning { index: 148 });
         return refusal(feedback);
     }
     let map = crate::exploration::active_map(state, content)?;
     let globals = crate::equipment::drop(&mut state.warriors[warrior], slot, content, map)?;
     state.apply_equipment_globals(&globals)?;
-    state.load_item_work(content, item)?;
+    state.load_item(content, item)?;
     Ok(vec![
         Event::Sound { resource_id: sound },
         Event::Sound { resource_id: -217 },
@@ -74,7 +76,9 @@ pub(crate) fn use_item(
     ])
 }
 
-// upgrade 0x12ad86: each stage commits before the shield-efficiency refusal.
+/// Each stage of the upgrade takes effect before the shield-efficiency refusal.
+///
+/// Original: upgrade
 fn upgrade_record(
     warrior: &mut Warrior,
     slot: usize,
@@ -88,14 +92,14 @@ fn upgrade_record(
         let factor = (f64::from((f64::from(increase) + 100.0) as f32) / 100.0) as f32;
         let previous = item.capacity()?;
         let value = ((f64::from(previous) * f64::from(factor)) as f32).trunc();
-        // Signed-WORD inputs bound this product well inside LONG range.
         let value = (value as i32) as i16;
         item.set_capacity(if value == previous {
             previous.wrapping_add(1)
         } else {
             value
         });
-        // The battery cache gets the calculated value, before the same-value +1.
+        // The battery's shield capacity gets the calculated value, before the
+        // same-value +1.
         if item.category_code() == 20 {
             Stat::ShieldCapacity.write(warrior, value)?;
         }
@@ -154,6 +158,7 @@ fn upgrade_record(
     Ok(true)
 }
 
+/// Adds a modifier to the item record and applies the same amount to the warrior.
 fn add_modifier(
     warrior: &mut Warrior,
     item: &mut InventoryRecord,

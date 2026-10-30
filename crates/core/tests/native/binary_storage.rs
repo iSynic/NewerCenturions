@@ -16,7 +16,7 @@ fn storage_matches_independent_68k_execution() {
         let records = if case.n::<bool>("crate") {
             &mut state.crate_items
         } else {
-            &mut state.booty_items
+            &mut state.booty_list
         };
         records.fill(occupied);
         if case.n::<i32>("hole") >= 0 {
@@ -46,7 +46,7 @@ fn storage_matches_independent_68k_execution() {
         let records = if case.n::<bool>("crate") {
             &state.crate_items
         } else {
-            &state.booty_items
+            &state.booty_list
         };
         let bytes: Vec<u8> = records.iter().flat_map(|record| record.0).collect();
         assert_eq!(digest(&bytes), case.text("sha256"));

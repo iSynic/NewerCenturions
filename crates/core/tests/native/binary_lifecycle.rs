@@ -19,20 +19,20 @@ fn defeat_cleanup_matches_original_routine() {
         order[7] = 10;
         let mut combat = support::battle();
         combat.battle = 2;
-        combat.map.tiles = tiles;
-        combat.squad.positions = (0..6).map(|i| (20 + i, 20)).collect();
-        combat.enemies.records = vec![MonsterRecord {
+        combat.field.tiles = tiles;
+        combat.squad.pos = (0..6).map(|i| (20 + i, 20)).collect();
+        combat.roster.records = vec![MonsterRecord {
             bytes: case.bytes("enemy"),
         }];
-        combat.enemies.positions = vec![(30, 30)];
-        combat.order = order;
+        combat.roster.mon_pos = vec![(30, 30)];
+        combat.battle_order = order;
         kill_body(&mut combat, &mut warriors, case.n::<i16>("body")).unwrap();
         support::native_expect! {
             records &warriors => &case["after_warriors"], format!("warriors body {}",case["body"]);
-            bytes combat.enemies.records[0].bytes => &case["after_enemy"], "binary_lifecycle";
-            bytes support::word_bytes(&combat.order) => &case["order"], "binary_lifecycle";
+            bytes combat.roster.records[0].bytes => &case["after_enemy"], "binary_lifecycle";
+            bytes support::word_bytes(&combat.battle_order) => &case["order"], "binary_lifecycle";
             bytes support::word_bytes(&combat
-                        .map.tiles) => &case["map"], "binary_lifecycle";
+                        .field.tiles) => &case["map"], "binary_lifecycle";
         }
     }
 }

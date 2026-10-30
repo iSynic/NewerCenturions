@@ -223,10 +223,10 @@ RAW_OFFSET = re.compile(r"bytes\[0x|word\(&[^,]*bytes, 0x|put_word\(&mut [^,]*by
 
 
 def raw_offsets(root):
-    """Hex record offsets belong in content::records views, persistence or native_save."""
+    """Hex record offsets belong in content::records views, persistence or original_save."""
     return [f"{path.relative_to(root).as_posix()}:{number}"
             for path in sorted((root / "crates/core/src").rglob("*.rs"))
-            if not {"persistence", "native_save.rs"} & set(path.parts)
+            if not {"persistence", "original_save.rs"} & set(path.parts)
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
             if RAW_OFFSET.search(line)]
 

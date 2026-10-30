@@ -13,18 +13,18 @@ fn install(state: &mut Session, snapshot: &Value) {
     let combat = state.combat.as_mut().unwrap();
     snapshots::records(combat, &|key| snapshot.bytes(key));
     snapshots::geometry(combat, &|key| snapshot.bytes(key), (0, 0));
-    combat.cursor = snapshot.n::<usize>("cursor");
-    combat.round = snapshot.n::<i16>("round");
+    combat.battle_order_index = snapshot.n::<usize>("cursor");
+    combat.combat_round = snapshot.n::<i16>("round");
     if let Some(counter) = snapshot.get("round_counter") {
-        combat.round_scripts.counter = counter.as_i64().unwrap() as i8;
-        combat.inactive_rounds = snapshot.n("inactive_rounds");
+        combat.round_macros.counter = counter.as_i64().unwrap() as i8;
+        combat.blank_round = snapshot.n("inactive_rounds");
     }
-    combat.round_scripts.slots = snapshot.words("round_slots").try_into().unwrap();
-    combat.unavailable = snapshot.n::<i8>("unavailable");
+    combat.round_macros.slots = snapshot.words("round_slots").try_into().unwrap();
+    combat.kill_party = snapshot.n::<i8>("unavailable");
     snapshots::spell_work(combat, &|key| snapshot.bytes(key));
 
     combat
-        .weapon_work
+        .weapon_traits
         .load_pair(&snapshot.bytes("weapon_work"), &snapshot.bytes("ammo_work"))
         .unwrap();
 }
@@ -79,30 +79,30 @@ fn native_owned_needle_preparations_match_complete_party_records() {
         let combat = current_combat(&state);
         assert_party(warriors, &party(&case["prepared"]["party"]));
         assert_eq!(
-            combat.attack_packet,
+            combat.spell_info,
             case["prepared"].bytes("packet")
         );
         assert_eq!(
-            combat.attack_identity,
+            combat.cast_identity,
             case["prepared"].words("identity")[..3]
         );
-        support::expect(state.native_work.attack_count, &case["prepared"]["count"]);
+        support::expect(state.globals.attack_count, &case["prepared"]["count"]);
         assert_eq!(
-            state.native_work.loaded_item_field32,
+            state.globals.loaded_item_field32,
             word(&case["prepared"].bytes("item_work"), 32).unwrap()
         );
-        let mut expected_work = current_combat(&state).weapon_work;
+        let mut expected_work = current_combat(&state).weapon_traits;
         expected_work
             .load_pair(
                 &case["prepared"].bytes("weapon_work"),
                 &case["prepared"].bytes("ammo_work"),
             )
             .unwrap();
-        assert_eq!(combat.weapon_work, expected_work);
+        assert_eq!(combat.weapon_traits, expected_work);
         assert_eq!(sounds(&events), if index == 0 { vec![] } else { vec![655] });
         if case["low_ap"] == true {
             let mut resumed = support::checkpoint(&state, &content, "one-ap-medical");
-            let point = current_combat(&state).squad.positions[0];
+            let point = current_combat(&state).squad.pos[0];
             let events = apply(
                 Command::SelectMedicalTarget {
                     selection: MedicalTarget::LivingPoint {
@@ -117,7 +117,7 @@ fn native_owned_needle_preparations_match_complete_party_records() {
             let mut expected = state.clone();
             crate::command_learned_portrait_heal::project(&mut expected, &case["after"]);
             expected.medical_continuation = None;
-            expected.native_work.ammunition_work = centurions_core::ammunition::WorkBuffers {
+            expected.globals.loaded_items = centurions_core::ammunition::LoadedItems {
                 item: Some(case["after"].bytes("item_work")),
                 weapon: Some(case["after"].bytes("weapon_work")),
                 ammo: Some(case["after"].bytes("ammo_work")),
@@ -144,7 +144,7 @@ fn native_living_heals_and_cancel_match_complete_medical_rule_state() {
             MedicalTarget::ConfirmedCancel
         } else {
             let member = case.n::<usize>("target");
-            let position = current_combat(&state).squad.positions[member];
+            let position = current_combat(&state).squad.pos[member];
             MedicalTarget::LivingPoint {
                 x: position.0,
                 y: position.1,
@@ -208,10 +208,10 @@ fn medical_selection_survives_pane_compaction_and_natural_required_levels() {
             let mut needle = ItemDefinition(&content.items[id]).fresh_stock().unwrap();
             assert_eq!(needle.0[13], if id == 701 { 3 } else { 1 });
             if duplicate {
-                needle.set_quantity(2);
+                needle.set_charge(2);
             }
             let mut shield = ItemDefinition(&content.items[637]).fresh_stock().unwrap();
-            shield.set_equipment_flag(1);
+            shield.set_equipped(1);
             let second = if duplicate {
                 needle.clone()
             } else {
@@ -226,13 +226,13 @@ fn medical_selection_survives_pane_compaction_and_natural_required_levels() {
             for (kind, item) in [(15, 0), (2, 0), (20, 637)] {
                 EquipmentStat::Equipment(kind).write(actor, item).unwrap();
             }
-            actor.record_mut().set_firing_mode(false);
+            actor.record_mut().set_toggle(false);
             let random = state.random.clone();
             apply(Command::UseItem { warrior: 4, slot }, &mut state, &content).unwrap();
             let items = state.warriors[4].inventory().unwrap();
             let actual: Vec<_> = items
                 .iter()
-                .map(|item| (item.id(), item.quantity().unwrap()))
+                .map(|item| (item.id(), item.charge().unwrap()))
                 .collect();
             if duplicate {
                 // The selected Items action consumes its literal row.
@@ -281,7 +281,7 @@ fn native_range_and_admission_failures_are_atomic() {
     let case = &fixture["cases"][5];
     let mut state = state(&fixture, case, "prepared");
     let before = state.clone();
-    let position = current_combat(&state).squad.positions[case.n::<usize>("target")];
+    let position = current_combat(&state).squad.pos[case.n::<usize>("target")];
     assert!(matches!(
         medical::resolve(
             state.combat.as_mut().unwrap(),
@@ -296,7 +296,7 @@ fn native_range_and_admission_failures_are_atomic() {
                 y: position.1
             }
         ),
-        Err(RuleError::Refused { feedback }) if feedback == vec![centurions_core::feedback::NativeFeedback::Combat {
+        Err(RuleError::Refused { feedback }) if feedback == vec![centurions_core::feedback::GameFeedback::Combat {
             kind: centurions_core::feedback::CombatRefusal::OutOfRange,
         }]
     ));

@@ -1,7 +1,9 @@
-//! Battle entry for maintained exploration.
+//! Starting a battle while exploring.
 use crate::{Event, RuleError, Session, combat};
 use centurions_content::Content;
 
+/// How a scenario script starts a battle: an ordinary encounter, a group, a selected monster set or
+/// an NPC fight.
 #[derive(Clone, Copy)]
 pub(crate) enum StoryBattle {
     Ordinary,
@@ -10,6 +12,7 @@ pub(crate) enum StoryBattle {
     Npc,
 }
 
+/// Starts the battle a script asks for, with the parameter the script gave the encounter.
 pub(crate) fn begin_story_battle(
     state: &mut Session,
     content: &Content,
@@ -36,7 +39,7 @@ pub(crate) fn begin_story_battle(
     }
     let outer = (round_owns
         && ((state.combat.is_some()
-            && prior_cleanup != Some(crate::story_cleanup::Stage::Complete))
+            && prior_cleanup != Some(crate::story::cleanup::Stage::Complete))
             || prior_selected.is_some()))
     .then(|| combat::round_stories::RoundBattleReturn {
         after_message: state.battle_after_message,
@@ -59,7 +62,7 @@ pub(crate) fn begin_story_battle(
     if turn_owns {
         combat::runtime::begin_turn_child(state)?;
     }
-    if prior_cleanup == Some(crate::story_cleanup::Stage::Complete) {
+    if prior_cleanup == Some(crate::story::cleanup::Stage::Complete) {
         state.scripted_cleanup = None;
     }
     let mut continuation = state.combat_story.take();
@@ -78,8 +81,8 @@ pub(crate) fn begin_story_battle(
         StoryBattle::Selected => combat::begin_selected_battle(state, content, parameter),
         StoryBattle::Npc => combat::begin_npc(state, content, parameter),
     }?;
-    // A terminal battle can discard the mission before entry returns. Its
-    // former caller belongs to that discarded context and must not be restored.
+    // A battle that ends the game can discard the mission before entry returns;
+    // its former caller belonged to that mission and is not restored.
     if state.exploration.is_none() {
         return Ok(events);
     }
@@ -95,6 +98,6 @@ pub(crate) fn begin_story_battle(
             story.waiting_child = prior_wait.unwrap();
         }
     }
-    combat::runtime::retain_death_parent(state, continuation);
+    combat::runtime::store_death_parent(state, continuation);
     Ok(events)
 }

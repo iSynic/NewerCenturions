@@ -1,6 +1,7 @@
 use super::{
-    AmmunitionOutcome, AmmunitionResult, RefitFlags, WorkBuffers, definition, initial, unsupported,
+    AmmunitionOutcome, AmmunitionResult, LoadedItems, RefitFlags, definition, initial, unsupported,
 };
+use crate::editor_items::{Fit, Force};
 use crate::feedback::{CLIP_SOUND_BASE, ERROR_SOUND};
 use crate::{RandomState, RuleError};
 use centurions_content::records::{ItemDefinition, item_class};
@@ -9,12 +10,14 @@ use centurions_content::{Content, InventoryRecord, Warrior};
 /// Cargo Pod `STR#` 3 "Warnings", entry 49: the refit ran out of ammunition.
 const REFIT_INCOMPLETE_WARNING: i16 = 49;
 
+/// Plays one of the two reload sounds unless the refit is silent.
 fn refill_sound(result: &mut AmmunitionResult, random: &mut RandomState, silent: bool) {
     if !silent {
         result.sounds.push(CLIP_SOUND_BASE + random.bound(2));
     }
 }
 
+/// Warns that the refit could not be completed, with the error sound.
 fn partial_warning(result: &mut AmmunitionResult, enabled: bool) {
     if enabled {
         result.warnings.push(REFIT_INCOMPLETE_WARNING);
@@ -28,6 +31,9 @@ fn partial_warning(result: &mut AmmunitionResult, enabled: bool) {
     }
 }
 
+/// Refills a shield battery slot. A battery that still holds charge is taken off (when asked) and
+/// worn again, and its sound plays if it ends up worn; an empty one adds the energy straight to
+/// the warrior's shield points. A slot that is not a shield battery is left alone.
 fn refill_energy(
     result: &mut AmmunitionResult,
     content: &Content,
@@ -42,25 +48,19 @@ fn refill_energy(
     }
     if result.warrior.record().inventory_quantity(slot)? > 0 {
         if remove_first {
-            refit_equipment(result, content, slot, false)?;
+            refit_equipment(result, content, slot, Fit::Remove)?;
         }
         result.warrior.record_mut().clear_equipped_battery();
         result
             .warrior
             .record_mut()
             .set_inventory_equipment_flag(slot, 0);
-        refit_equipment(result, content, slot, true)?;
-        if result
-            .warrior
-            .record()
-            .inventory_slot(slot)
-            .equipment_flag()
-            != 0
-        {
+        refit_equipment(result, content, slot, Fit::Wear)?;
+        if result.warrior.record().inventory_slot(slot).equipped() != 0 {
             let id = result.warrior.record().inventory_slot(slot).id();
             result
                 .sounds
-                .push(ItemDefinition(&definition(content, id)?).pickup_sound()?);
+                .push(ItemDefinition(&definition(content, id)?).sound()?);
         }
     } else {
         let energy = result
@@ -73,29 +73,29 @@ fn refill_energy(
     Ok(())
 }
 
+/// Takes a battery off or puts it back on to match a refill.
 fn refit_equipment(
     result: &mut AmmunitionResult,
     content: &Content,
     slot: usize,
-    wearing: bool,
+    fit: Fit,
 ) -> Result<(), RuleError> {
-    // Sessions always hold the retained row; refit's helper selects the battery row.
-    let retained = result
-        .retained_record
+    let inventory_record = result
+        .inventory_record
         .as_ref()
         .ok_or("battery re-wear without a retained inventory record")?;
-    let equipped = crate::editor_items::retained_equipment(
+    let equipped = crate::editor_items::silent_fit(
         &result.warrior,
         content,
         slot,
-        wearing,
-        false,
-        retained,
+        fit,
+        Force::Checked,
+        inventory_record,
     )?;
     result.warrior = equipped.warrior;
-    result.retained_record = Some(equipped.record);
+    result.inventory_record = Some(equipped.record);
     result.global_writes.extend(equipped.global_writes);
-    result.work.item = Some(equipped.definition);
+    result.loaded.item = Some(equipped.definition);
     for warning in equipped.warnings {
         result.warnings.push(warning);
         result.feedback.push((
@@ -106,46 +106,51 @@ fn refit_equipment(
     if let Some(level) = equipped.level_refusal {
         result.feedback.push((
             result.sounds.len(),
-            crate::Event::Feedback(crate::feedback::NativeFeedback::EquipmentLevel { level }),
+            crate::Event::Feedback(crate::feedback::GameFeedback::EquipmentLevel { level }),
         ));
     }
     Ok(())
 }
 
-fn admits_retained_item(
+/// Whether a weapon may be refilled now: when forced or in a battle, it must be a melee or missile
+/// weapon.
+fn admits_loaded_item(
     result: &mut AmmunitionResult,
     id: i16,
     content: &Content,
     flags: RefitFlags,
 ) -> Result<bool, RuleError> {
     if flags.force || flags.in_combat {
-        result.work.ammo = Some(definition(content, id)?);
+        result.loaded.ammo = Some(definition(content, id)?);
         return Ok(matches!(
             ItemDefinition(
                 result
-                    .work
+                    .loaded
                     .item
                     .as_deref()
                     .ok_or_else(|| RuleError::from("ITEM work missing"))?
             )
-            .category()?,
+            .item_type()?,
             item_class::MELEE_WEAPON | item_class::MISSILE_WEAPON
         ));
     }
     Ok(true)
 }
 
+/// Refits the warrior's weapons and batteries from the party's reserves: worn weapons that hold
+/// ammunition are topped up first, and if that does not complete the refit, one worn empty weapon
+/// is given ammunition. Used where no session carries the warrior's battery record.
 pub fn refit(
     warrior: &Warrior,
     reserves: &[i32],
     content: &Content,
     flags: RefitFlags,
-    work: &WorkBuffers,
+    loaded: &LoadedItems,
     random: &mut RandomState,
 ) -> Result<AmmunitionResult, RuleError> {
-    // The historical primitive API supplies its selected battery row. Session
-    // callers supply the actual retained record through refit_with_record.
-    let retained = warrior
+    // Without a session, the warrior's battery row stands in for the inventory
+    // record; session callers pass the real one through refit_with_record.
+    let inventory_record = warrior
         .inventory()?
         .into_iter()
         .find(|row| i16::from(row.category_code()) == item_class::SHIELD_BATTERY);
@@ -154,24 +159,25 @@ pub fn refit(
         reserves,
         content,
         flags,
-        work,
+        loaded,
         random,
-        retained.as_ref(),
+        inventory_record.as_ref(),
     )
 }
 
+/// Refits as refit does, with the session's battery record.
 pub(crate) fn refit_with_record(
     warrior: &Warrior,
     reserves: &[i32],
     content: &Content,
     flags: RefitFlags,
-    work: &WorkBuffers,
+    loaded: &LoadedItems,
     random: &mut RandomState,
-    retained: Option<&InventoryRecord>,
+    inventory_record: Option<&InventoryRecord>,
 ) -> Result<AmmunitionResult, RuleError> {
     let inventory = warrior.inventory()?;
-    let mut result = initial(warrior, reserves, work)?;
-    result.retained_record = retained.cloned();
+    let mut result = initial(warrior, reserves, loaded)?;
+    result.inventory_record = inventory_record.cloned();
     let mut next_random = random.clone();
     if !refill_existing_magazines(&mut result, &inventory, content, flags, &mut next_random)? {
         select_ammunition_for_empty_magazine(
@@ -185,8 +191,10 @@ pub(crate) fn refit_with_record(
     Ok(result.finish(random, next_random))
 }
 
-/// Refill selected ammunition before considering a different supply. The native
-/// partial branch does not debit stock; exact stock completes this first pass.
+/// Refills from the loaded ammunition before trying another supply. A partial
+/// refill does not take from stock; exact stock completes this first pass.
+///
+/// Original: refit
 fn refill_existing_magazines(
     result: &mut AmmunitionResult,
     inventory: &[InventoryRecord],
@@ -198,10 +206,10 @@ fn refill_existing_magazines(
         let loaded = result.warrior.record().inventory_quantity(slot)?;
         let capacity = record.capacity()?;
         let ammo = record.ammunition_id()?;
-        if record.equipment_flag() == 0 || loaded >= capacity || ammo == 0 {
+        if record.equipped() == 0 || loaded >= capacity || ammo == 0 {
             continue;
         }
-        if !admits_retained_item(result, record.id(), content, flags)? {
+        if !admits_loaded_item(result, record.id(), content, flags)? {
             continue;
         }
         if !(200..400).contains(&ammo) {
@@ -209,7 +217,7 @@ fn refill_existing_magazines(
                 "selected ammunition outside represented reserves",
             ));
         }
-        result.work.ammo = Some(definition(content, ammo)?);
+        result.loaded.ammo = Some(definition(content, ammo)?);
         let index = (ammo - 200) as usize;
         let stock = result.reserves[index];
         if stock == 0 {
@@ -241,9 +249,11 @@ fn refill_existing_magazines(
     Ok(false)
 }
 
-/// Empty-magazine selection stops at the first compatible nonzero reserve.
-/// Unlike the first pass, exact stock follows the partial branch and records
-/// 200 + inventory slot, not the selected reserve. Preserve refit14e5e4's writes.
+/// An empty magazine takes the first compatible reserve with rounds. Unlike the
+/// first pass, exact stock follows the partial branch and records 200 +
+/// inventory slot, not the chosen reserve; the game does this, so keep it.
+///
+/// Original: refit
 fn select_ammunition_for_empty_magazine(
     result: &mut AmmunitionResult,
     inventory: &[InventoryRecord],
@@ -254,22 +264,23 @@ fn select_ammunition_for_empty_magazine(
     for (slot, record) in inventory.iter().enumerate() {
         let loaded = result.warrior.record().inventory_quantity(slot)?;
         let capacity = record.capacity()?;
-        if record.equipment_flag() == 0 || loaded > 0 || capacity <= 0 {
+        if record.equipped() == 0 || loaded > 0 || capacity <= 0 {
             continue;
         }
-        if !admits_retained_item(result, record.id(), content, flags)? {
+        if !admits_loaded_item(result, record.id(), content, flags)? {
             continue;
         }
-        result.work.item = Some(definition(content, record.id())?);
-        let caliber = ItemDefinition(result.work.item.as_deref().unwrap()).ammunition_caliber()?;
+        result.loaded.item = Some(definition(content, record.id())?);
+        let caliber =
+            ItemDefinition(result.loaded.item.as_deref().unwrap()).ammunition_caliber()?;
         for index in 0..200 {
             let stock = result.reserves[index];
             if stock == 0 {
                 continue;
             }
             let ammo = (index + 200) as i16;
-            result.work.ammo = Some(definition(content, ammo)?);
-            if ItemDefinition(result.work.ammo.as_deref().unwrap()).reserve_ammunition_kind()?
+            result.loaded.ammo = Some(definition(content, ammo)?);
+            if ItemDefinition(result.loaded.ammo.as_deref().unwrap()).reserve_ammunition_kind()?
                 != caliber
             {
                 continue;

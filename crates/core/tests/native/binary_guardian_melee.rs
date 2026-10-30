@@ -44,7 +44,7 @@ fn verify(target_kind: i64) {
         }
         .unwrap_or_else(|error| panic!("{context}: {error:?}"));
         support::native_expect! {
-            records &combat.enemies.records => &case["records_after"], &format!("{context} records");
+            records &combat.roster.records => &case["records_after"], &format!("{context} records");
             records &warriors => &case["warriors_after"], &format!("{context} warriors");
             bytes packet => &case["packet_after"], &format!("{context} packet");
             rng random => (&case["seed_after"], &case["rng_draws"]), "binary_guardian_melee";
@@ -52,7 +52,7 @@ fn verify(target_kind: i64) {
         let mut sounds = result.sounds;
         sounds.push(
             ally_turns::result_audio(
-                &combat.enemies.records[(source - 10) as usize],
+                &combat.roster.records[(source - 10) as usize],
                 index,
                 result.damage,
                 word(weapon, 14).unwrap(),
@@ -62,9 +62,9 @@ fn verify(target_kind: i64) {
         assert_eq!(serde_json::json!(sounds), case["sounds"], "{context}");
         assert!(!result.killed, "{context}");
 
-        assert_eq!(combat.map.tiles, case.words("map_after"), "{context} map");
+        assert_eq!(combat.field.tiles, case.words("map_after"), "{context} map");
         support::native_expect! {
-            positions combat.enemies.positions => &case["positions_after"], "{context} positions";
+            positions combat.roster.mon_pos => &case["positions_after"], "{context} positions";
         };
     }
 }
@@ -82,12 +82,12 @@ fn guardian_melee_matches_native_monster_poison_packet_audio_and_retained_actor(
 fn combat(case: &Value, actor: i16, party_position: (i16, i16)) -> Combat {
     let mut combat = support::battle();
     combat.battle = 85;
-    combat.map.tiles = case.words("map_before");
-    combat.squad.positions.fill(party_position);
-    combat.enemies.records = support::monsters(&case["records_before"]);
-    combat.enemies.positions = support::positions(&case["positions_before"]);
-    combat.order[1] = actor;
-    combat.attack_identity = [2, 4, 6];
+    combat.field.tiles = case.words("map_before");
+    combat.squad.pos.fill(party_position);
+    combat.roster.records = support::monsters(&case["records_before"]);
+    combat.roster.mon_pos = support::positions(&case["positions_before"]);
+    combat.battle_order[1] = actor;
+    combat.cast_identity = [2, 4, 6];
     combat
 }
 
@@ -115,17 +115,17 @@ fn guardian_reaction_caller_matches_native_retained_actor_reload_and_natural_att
         .unwrap_or_else(|error| panic!("{context}: {error:?}"));
         native_common::assert_body_records(
             &warriors,
-            &combat.enemies.records,
+            &combat.roster.records,
             &case["warriors_after"],
             &case["records_after"],
         );
         support::native_expect! {
-            bytes combat.attack_packet => &case["packet_after"], &context;
+            bytes combat.spell_info => &case["packet_after"], &context;
         }
-        assert_eq!(combat.map.tiles, case.words("map_after"), "{context}");
-        assert_eq!(combat.order, case.words("order_after"), "{context}");
+        assert_eq!(combat.field.tiles, case.words("map_after"), "{context}");
+        assert_eq!(combat.battle_order, case.words("order_after"), "{context}");
         support::native_expect! {
-            positions combat.enemies.positions => &case["positions_after"], "{context} positions";
+            positions combat.roster.mon_pos => &case["positions_after"], "{context} positions";
         };
         support::assert_rng(&random, &case["seed_after"], &case["rng_draws"]);
         let sounds: Vec<_> = support::event_sounds(&events);

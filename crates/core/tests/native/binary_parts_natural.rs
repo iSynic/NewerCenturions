@@ -11,13 +11,13 @@ fn required_parts_ranged_to_natural_fallback_matches_original_full_records_and_r
         let mut party = case.bytes("warriors_before");
         let member = case.n::<usize>("member");
         let mut warrior = crate::support::warrior_at(&party, member);
-        let mut enemy = MonsterRecord {
+        let mut monster = MonsterRecord {
             bytes: case.bytes("enemy_before"),
         };
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let (result, packet) = natural_attack_with_packet(
             &mut warrior,
-            &mut enemy,
+            &mut monster,
             case.n::<usize>("attack"),
             &mut random,
             &support::data("Data S"),
@@ -29,7 +29,7 @@ fn required_parts_ranged_to_natural_fallback_matches_original_full_records_and_r
         crate::support::put_warrior(&mut party, member, &warrior);
         support::native_expect! {
             bytes party => &case["warriors_after"], "case{index} party";
-            bytes enemy.bytes => &case["enemy_after"], "case{index} enemy";
+            bytes monster.bytes => &case["enemy_after"], "case{index} enemy";
             rng random => (&case["seed_after"], &case["rng_draws"]), "binary_parts_natural";
             scalar (result.sounds) => &case["sounds"], "binary_parts_natural";
         }

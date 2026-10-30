@@ -1,35 +1,39 @@
-//! Linear indexes into the 90 × 90 WORD tactical map at 0x4085b8 and the memory beside it.
+//! Map reads and writes past the edge of the 90 × 90 battle map.
 //!
-//! Native readers form column × 90 + row without clipping. Before the map lie the tutorial
-//! rectangles 0x4046ec..0x40856c, display and round globals 0x40856c..0x4085b6 and the edge
-//! WORD 0x4085b6. After it lie the land's objects 0x40c500 (8100 WORDs) and events 0x410448
-//! (8100 LONGs), then unmodelled globals up to Data Mission at 0x41d1c4.
-use super::TacticalMap;
+//! The game indexes the map as column × 90 + row without clipping, so a cell off
+//! the map lands in what lies beside it: the tutorial rectangles and round values
+//! before it, and the land's objects and events after it (see
+//! docs/source-notes/combat.md).
+use super::CombatField;
 use crate::RuleError;
 use centurions_content::mission::{MissionStage, OpeningMission};
 use centurions_content::records::{SpellMapAliases, TutorialRectangles};
 
+/// The number of cells on the battle map.
 const CELLS: i32 = 8100;
+/// The end of the land's objects, which follow the map.
 const OBJECTS_END: i32 = 2 * CELLS;
+/// The end of the land's events, which follow the objects.
 const EVENTS_END: i32 = 4 * CELLS;
 
 /// The owner of one linear map index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Cell {
     Tile(usize),
-    /// WORD 0x4085b6, index -1.
+    /// The word just before the map, index -1.
     Edge,
-    /// A WORD the session holds read-only, or not at all.
+    /// A word the session holds read-only, or not at all.
     Other,
-    /// objects40c500, indexes 8100..16200.
+    /// The land's objects, indexes 8100..16200.
     Object(usize),
-    /// events410448, indexes 16200..32400: the high or low WORD of a LONG.
+    /// The land's events, indexes 16200..32400: the high or low half of one.
     Event {
         cell: usize,
         high: bool,
     },
 }
 
+/// Finds what a map index lands on, inside the map or beside it.
 pub(crate) fn locate(index: i32) -> Cell {
     match index {
         0..CELLS => Cell::Tile(index as usize),
@@ -73,6 +77,7 @@ impl<'a> MapAliases<'a> {
         }
     }
 
+    /// The aliases with the tutorial rectangles of the mission.
     pub fn with_tutorial(self, mission: &'a OpeningMission) -> Self {
         Self {
             tutorial: mission.tutorial_rectangles.as_deref(),
@@ -80,12 +85,13 @@ impl<'a> MapAliases<'a> {
         }
     }
 
+    /// The aliases with the stages of the mission.
     pub fn with_stages(self, stages: &'a [MissionStage]) -> Self {
         Self { stages, ..self }
     }
 
-    /// The WORD at `index`, or None where the session does not hold that memory.
-    pub fn read(self, map: &TacticalMap, index: i32) -> Result<Option<i16>, RuleError> {
+    /// The value at `index`, or None where the session does not hold it.
+    pub fn read(self, map: &CombatField, index: i32) -> Result<Option<i16>, RuleError> {
         match locate(index) {
             Cell::Tile(cell) => return Ok(map.tiles.get(cell).copied()),
             Cell::Edge => return Ok(Some(map.edge_word)),
@@ -119,10 +125,10 @@ pub(crate) fn land_aliases<'a>(
     }
 }
 
-/// Writes `value` at `index` through the map, its edge WORD or the land arrays.
-/// Returns false, writing nothing, for memory the session does not hold mutably.
+/// Writes `value` at `index` into the map, the word before it or the land arrays.
+/// Returns false, writing nothing, where the session cannot write.
 pub(crate) fn write(
-    map: &mut TacticalMap,
+    map: &mut CombatField,
     land: Option<(&mut [i16], &mut [i32])>,
     index: i32,
     value: i16,

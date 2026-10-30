@@ -1,8 +1,8 @@
 //! Source callback/save joins around independently executed native Getup.
 use crate::{prelude::*, support};
-use centurions_core::combat::retained::{InitiativeWork, NpcBacking, NpcSlot};
+use centurions_core::combat::globals::{BattleOrder, Monsters, MonsterSlot};
 use centurions_core::combat::runtime::{CombatReturn, DeathStory};
-use centurions_core::combat::tactical_work::TacticalWork;
+use centurions_core::combat::battlefield::Battlefield;
 
 #[test]
 fn detached_getup_matches_native_records_work_and_saved_script_return() {
@@ -21,17 +21,17 @@ fn detached_getup_matches_native_records_work_and_saved_script_return() {
         let mut state = input(case, &mut content);
         if case.text("kind") == "field-npc" {
             let mut lost = state.clone();
-            let mut slot = lost.native_work.npc_backing.slots[0]
+            let mut slot = lost.globals.monsters.slots[0]
                 .as_ref()
                 .unwrap()
                 .clone();
             slot.record.record_mut().set_stamina(1);
             let point = slot.position.unwrap();
-            lost.native_work.npc_backing.slots[55] = Some(slot);
-            lost.native_work.selected_enemy = 55;
-            lost.native_work.initiative_work.order[0] = 65;
-            lost.native_work
-                .tactical_work.map
+            lost.globals.monsters.slots[55] = Some(slot);
+            lost.globals.monster_up = 55;
+            lost.globals.battle_order.order[0] = 65;
+            lost.globals
+                .battlefield.field
                 .tiles[(point.0 * 90 + point.1) as usize] = 65;
             let before = lost.clone();
             assert!(matches!(
@@ -45,9 +45,9 @@ fn detached_getup_matches_native_records_work_and_saved_script_return() {
         }
         if case.text("kind") == "queue-mixed" {
             let mut lost = state.clone();
-            lost.native_work
+            lost.globals
                 .health_context
-                .unavailable = 4;
+                .kill_party = 4;
             let events = support::saved_command(Command::Continue, &mut lost, &content);
             assert!(lost.warriors.is_empty() && lost.exploration.is_none());
             assert_eq!(
@@ -61,9 +61,9 @@ fn detached_getup_matches_native_records_work_and_saved_script_return() {
         if case.text("kind") == "round-reduce" {
             let mut collision = support::checkpoint(&state, &content, "retained-field-refusal");
             let field = &mut collision
-                .native_work
-                .tactical_work
-                .spell_fields[..8];
+                .globals
+                .battlefield
+                .spell_queue[..8];
             field.copy_from_slice(&[0, 34, 0, 34, 0, 36, 0, 36]);
             let before = collision.clone();
             assert!(matches!(
@@ -101,21 +101,21 @@ fn detached_getup_matches_native_records_work_and_saved_script_return() {
                     && state
                         .round_dispatch
                         .as_ref()
-                        .is_some_and(|frame| frame.retained)
+                        .is_some_and(|frame| frame.out_of_combat)
             );
-            assert_eq!(state.native_work.round_work.processing, Some(1));
+            assert_eq!(state.globals.round_scripts.processing, Some(1));
             if case.text("kind") == "round-script" {
                 let mut replaced = state.clone();
                 replaced.round_dispatch.as_mut().unwrap().child_battle = true;
-                replaced.native_work.round_work.counter = Some(23);
-                replaced.native_work.round_work.slots = Some([7, 8, 9, 10, 11]);
-                replaced.native_work.round_work.slot = Some(5);
-                let expected = replaced.native_work.round_work.clone();
+                replaced.globals.round_scripts.counter = Some(23);
+                replaced.globals.round_scripts.slots = Some([7, 8, 9, 10, 11]);
+                replaced.globals.round_scripts.slot = Some(5);
+                let expected = replaced.globals.round_scripts.clone();
                 support::saved_command(Command::Continue, &mut replaced, &content);
-                assert_eq!(replaced.native_work.round_work.counter, expected.counter);
-                assert_eq!(replaced.native_work.round_work.slots, expected.slots);
-                assert_eq!(replaced.native_work.round_work.slot, expected.slot);
-                assert_eq!(replaced.native_work.round_work.processing, Some(0));
+                assert_eq!(replaced.globals.round_scripts.counter, expected.counter);
+                assert_eq!(replaced.globals.round_scripts.slots, expected.slots);
+                assert_eq!(replaced.globals.round_scripts.slot, expected.slot);
+                assert_eq!(replaced.globals.round_scripts.processing, Some(0));
                 assert!(replaced.round_dispatch.is_none());
             }
             events.extend(support::saved_command(
@@ -130,8 +130,8 @@ fn detached_getup_matches_native_records_work_and_saved_script_return() {
             "warriors",
         );
         let npcs: Vec<_> = state
-            .native_work
-            .npc_backing
+            .globals
+            .monsters
             .slots
             .iter()
             .flat_map(|slot| slot.as_ref().unwrap().record.bytes.iter().copied())
@@ -139,10 +139,10 @@ fn detached_getup_matches_native_records_work_and_saved_script_return() {
         same(&npcs, &case.bytes("npcs_after"), "NPCs");
         if case.get("rounds_after").is_some() {
             assert_eq!(
-                state.native_work.health_context.effect,
+                state.globals.health_context.effect,
                 case.n::<i8>("health_effect")
             );
-            let round = &state.native_work.round_work;
+            let round = &state.globals.round_scripts;
             assert_eq!(round.counter, Some(case.n("counter")));
             assert_eq!(
                 round.slots,
@@ -150,40 +150,40 @@ fn detached_getup_matches_native_records_work_and_saved_script_return() {
             );
             assert_eq!(round.slot, Some(case.n("round_slot")));
             assert_eq!(round.processing, Some(case.n("round_flag")));
-            assert_eq!(round.inactive_rounds, Some(case.n("inactive")));
-            same(&state.allies, &case.bytes("allies_after"), "allies");
-            same(&state.party_buffs, &case.bytes("buffs_after"), "buffs");
+            assert_eq!(round.blank_round, Some(case.n("inactive")));
+            same(&state.holdover, &case.bytes("allies_after"), "allies");
+            same(&state.party_condition, &case.bytes("buffs_after"), "buffs");
             same(
-                &state.native_work.attack_packet,
+                &state.globals.spell_info,
                 &case.bytes("packet_after"),
                 "packet",
             );
         }
         if case.get("attack").is_some() {
             assert_eq!(
-                state.native_work.attack_identity,
+                state.globals.cast_identity,
                 <[i16; 3]>::try_from(support::words(&case["identity"])).unwrap()
             );
             assert_eq!(
-                state.native_work.attack_count,
+                state.globals.attack_count,
                 case.n::<i16>("attack_count")
             );
             assert_eq!(
-                state.native_work.party_mask,
+                state.globals.party_track,
                 support::words(&case["mask"]).as_slice()
             );
             assert_eq!(
-                state.native_work.health_context.affected,
+                state.globals.health_context.affected,
                 support::words(&case["affected"]).as_slice()
             );
             assert_eq!(
-                state.native_work.health_context.last_body,
+                state.globals.health_context.last_body,
                 case.n::<i16>("last_body")
             );
         }
-        let work = &state.native_work.tactical_work;
+        let work = &state.globals.battlefield;
         if case.get("queue_after").is_some() {
-            let queue = state.native_work.retained_death_queue.as_ref().unwrap();
+            let queue = state.globals.outer_todo_queue.as_ref().unwrap();
             let bytes: Vec<_> = queue
                 .entries
                 .iter()
@@ -192,54 +192,54 @@ fn detached_getup_matches_native_records_work_and_saved_script_return() {
             same(&bytes, &case.bytes("queue_after"), "queue");
             assert_eq!(queue.count, case.n::<usize>("queue_count"));
             assert_eq!(
-                state.native_work.health_context.last_body,
+                state.globals.health_context.last_body,
                 case.n::<i16>("last_body")
             );
         }
         same(
-            &support::word_bytes(&work.map.tiles),
+            &support::word_bytes(&work.field.tiles),
             &case.bytes("map_after"),
             "map",
         );
-        same(&work.spell_fields, &case.bytes("fields_after"), "fields");
-        same(&work.field_used, &case.bytes("used_after"), "usage");
+        same(&work.spell_queue, &case.bytes("fields_after"), "fields");
+        same(&work.collide_check, &case.bytes("used_after"), "usage");
         assert_eq!(
-            state.native_work.initiative_work.cursor,
+            state.globals.battle_order.index,
             case.n::<usize>("cursor")
         );
-        assert_eq!(state.selected_warrior, case.n::<usize>("selected_warrior"));
+        assert_eq!(state.char_select_new, case.n::<usize>("selected_warrior"));
         assert_eq!(
-            state.native_work.selected_enemy,
+            state.globals.monster_up,
             case.n::<usize>("selected_enemy")
         );
         assert_eq!(
-            state.native_work.script_enemy,
+            state.globals.macro_monster,
             case.n::<usize>("script_enemy")
         );
         assert_eq!(
             state
-                .native_work
+                .globals
                 .health_context
-                .unavailable,
+                .kill_party,
             case.n::<i8>("unavailable")
         );
         assert_eq!(
             state
-                .native_work
-                .retained_death_queue
+                .globals
+                .outer_todo_queue
                 .as_ref()
                 .unwrap()
                 .pointer,
             case.n::<i32>("queue_pointer")
         );
         assert_eq!(
-            state.native_work.death_processing.queue,
+            state.globals.death_processing.doing_queue,
             case.n::<u8>("queue_flag")
         );
-        assert_eq!(state.native_work.ready, case.n::<i16>("ready"));
-        assert_eq!(state.native_work.victory_work.total, case.n::<i16>("total"));
+        assert_eq!(state.globals.in_spell, case.n::<i16>("ready"));
+        assert_eq!(state.globals.kill_counts.num_enemy, case.n::<i16>("total"));
         assert_eq!(
-            state.native_work.victory_work.defeated,
+            state.globals.kill_counts.kill_mon,
             case.n::<i16>("defeated")
         );
         assert_eq!(state.flags[..100], case.bytes("flags"));
@@ -254,19 +254,19 @@ fn detached_getup_matches_native_records_work_and_saved_script_return() {
             .iter()
             .filter_map(|event| match event {
                 Event::Sound { resource_id } => Some(format!("sound:{resource_id}")),
-                Event::Feedback(centurions_core::feedback::NativeFeedback::CombatResult {
+                Event::Feedback(centurions_core::feedback::GameFeedback::CombatResult {
                     body,
                     code,
                     ..
                 }) => Some(format!("result:{body}:{code}")),
-                Event::Feedback(centurions_core::feedback::NativeFeedback::OutdoorBodyStatus {
+                Event::Feedback(centurions_core::feedback::GameFeedback::OutdoorBodyStatus {
                     permanent,
                     wait,
                 }) => {
                     assert_eq!(*wait, 25);
                     Some(format!("status:{permanent}"))
                 }
-                Event::Feedback(centurions_core::feedback::NativeFeedback::Flash {
+                Event::Feedback(centurions_core::feedback::GameFeedback::Flash {
                     address,
                     x,
                     y,
@@ -313,14 +313,14 @@ fn input(case: &Value, content: &mut Content) -> Session {
     let mut state = support::mission_session(content);
     state.warriors = support::warriors(&case["warriors_before"]);
     let coordinates = support::words(&case["positions"]);
-    state.native_work.npc_backing = NpcBacking {
-        active_count: 4,
+    state.globals.monsters = Monsters {
+        num_mon: 4,
         origin: (5, 5),
         slots: support::monsters(&case["npcs_before"])
             .into_iter()
             .enumerate()
             .map(|(index, record)| {
-                Some(NpcSlot {
+                Some(MonsterSlot {
                     record,
                     position: Some((
                         i32::from(coordinates[index * 2]) + 5,
@@ -330,33 +330,33 @@ fn input(case: &Value, content: &mut Content) -> Session {
             })
             .collect(),
     };
-    state.native_work.tactical_work = TacticalWork {
-        map: TacticalMap {
+    state.globals.battlefield = Battlefield {
+        field: CombatField {
             tiles: support::words(&case["map_before"]),
-            shift: (0, 0),
+            map_shift: (0, 0),
             edge_word: 0,
         },
         saved_land: None,
-        positions: [(30, 30); 6],
-        under_tiles: [1155; 6],
-        spell_fields: case.bytes("fields_before"),
-        field_used: case.bytes("used_before"),
+        pos: [(30, 30); 6],
+        char_under: [1155; 6],
+        spell_queue: case.bytes("fields_before"),
+        collide_check: case.bytes("used_before"),
         battle: None,
     };
-    state.native_work.initiative_work = InitiativeWork {
+    state.globals.battle_order = BattleOrder {
         order: support::words(&case["order"]),
-        cursor: 0,
+        index: 0,
     };
-    state.native_work.turn_round = Some(0);
-    state.native_work.ready = 7;
-    state.native_work.victory_work.total = 5;
-    state.native_work.victory_work.defeated = 0;
-    state.native_work.retained_death_queue = Some(DeathQueue {
+    state.globals.turn_round = Some(0);
+    state.globals.in_spell = 7;
+    state.globals.kill_counts.num_enemy = 5;
+    state.globals.kill_counts.kill_mon = 0;
+    state.globals.outer_todo_queue = Some(TodoQueue {
         pointer: 0x12340044,
         ..Default::default()
     });
     if case.get("queue_before").is_some() {
-        let queue = state.native_work.retained_death_queue.as_mut().unwrap();
+        let queue = state.globals.outer_todo_queue.as_mut().unwrap();
         queue.count = case.n("queue_count_before");
         queue.entries = case
             .bytes("queue_before")
@@ -371,38 +371,38 @@ fn input(case: &Value, content: &mut Content) -> Session {
                 y: i32::from_be_bytes(entry[10..14].try_into().unwrap()),
             })
             .collect();
-        state.native_work.health_context.last_body = case.n("last_body_before");
+        state.globals.health_context.last_body = case.n("last_body_before");
     }
     state.random = RandomState::new(case.n("seed_before"));
     if case.get("rounds_before").is_some() {
-        state.native_work.round_work = centurions_core::combat::round_work::RoundWork {
+        state.globals.round_scripts = centurions_core::combat::round_scripts::RoundScripts {
             counter: Some(case.n("counter_before")),
             slots: Some(support::words(&case["rounds_before"]).try_into().unwrap()),
             slot: Some(4),
             processing: Some(0),
-            inactive_rounds: Some(case.n("inactive_before")),
+            blank_round: Some(case.n("inactive_before")),
         };
-        state.native_work.initiative_work.cursor = 109;
+        state.globals.battle_order.index = 109;
         state
-            .native_work
+            .globals
             .health_context
-            .unavailable = case.n("unavailable_before");
-        state.allies = case.bytes("allies_before");
-        state.party_buffs = case.bytes("buffs_before");
-        state.native_work.attack_packet = case.bytes("packet_before");
+            .kill_party = case.n("unavailable_before");
+        state.holdover = case.bytes("allies_before");
+        state.party_condition = case.bytes("buffs_before");
+        state.globals.spell_info = case.bytes("packet_before");
     }
     if case.get("attack").is_some() {
-        state.selected_warrior = case.n("selected_before");
+        state.char_select_new = case.n("selected_before");
         state
-            .native_work
+            .globals
             .health_context
-            .selected_warrior = state.selected_warrior;
-        state.native_work.weapon_work = WeaponWork {
+            .char_select_new = state.char_select_new;
+        state.globals.weapon_traits = WeaponTraits {
             sound: case.n("weapon_sound"),
-            ..WeaponWork::zero()
+            ..WeaponTraits::zero()
         };
         let positions = support::words(&case["party_positions"]);
-        state.native_work.tactical_work.positions =
+        state.globals.battlefield.pos =
             std::array::from_fn(|i| (positions[i * 2], positions[i * 2 + 1]));
     }
     let returned: CombatReturn = serde_json::from_value(serde_json::json!({ "WarriorMove": {

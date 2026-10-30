@@ -1,4 +1,6 @@
-//! Enemy weapon melee against a warrior; preserves natural fallback and partial effects.
+//! A monster's armed melee against a warrior, with its natural fallback and the
+//! effects that stand when it stops partway.
+use crate::combat::attack::melee_accuracy;
 use crate::{
     RandomState, RuleError,
     combat::{
@@ -8,15 +10,21 @@ use crate::{
     },
 };
 use attack::AttackResult;
+use centurions_content::combat::MONSTER_BYTES;
 use centurions_content::records::{
-    AttackPacketMut, Condition, DamageTargetKind, EnemyRecord, EnemyRecordMut, WarriorRecord,
+    Condition, DamageTargetKind, EnemyRecord, EnemyRecordMut, SpellInfoRecordMut, WarriorRecord,
     WarriorRecordMut,
 };
+use centurions_content::{ITEM_BYTES, WARRIOR_BYTES};
 use centurions_content::{Warrior, combat::MonsterRecord, records::ItemDefinition};
+/// Resolves a monster's blow at a warrior, committed only if the whole blow succeeds: the hit roll,
+/// then damage through the warrior's armor and saves and the party's buffs. A monster with no
+/// weapon loaded uses its natural attack's damage and effect. Returns the result, the packet, and
+/// whether the blow was reflected.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve(
     warrior: &mut Warrior,
-    enemy: &mut MonsterRecord,
+    monster: &mut MonsterRecord,
     weapon: &[u8],
     random: &mut RandomState,
     difficulty: i16,
@@ -27,25 +35,28 @@ pub(crate) fn resolve(
     buffs: &[u8],
 ) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
     crate::combat::party_buffs::validate(buffs)?;
-    if warrior.bytes.len() != 3138 || enemy.bytes.len() != 288 || weapon.len() != 150 || index >= 35
+    if warrior.bytes.len() != WARRIOR_BYTES
+        || monster.bytes.len() != MONSTER_BYTES
+        || weapon.len() != ITEM_BYTES
+        || index >= 35
     {
         return Err(RuleError::Invalid("enemy melee record size".into()));
     }
-    let id = enemy.record().melee_weapon()?;
-    let loaded = enemy.record().selected_item()? != 0;
-    if ItemDefinition(weapon).category()? != 2 {
+    let id = monster.record().melee_weapon()?;
+    let loaded = monster.record().weapon()? != 0;
+    if ItemDefinition(weapon).item_type()? != 2 {
         return Err(RuleError::Unsupported {
             action: "combat.enemy_melee",
             dependency: "other enemy melee weapon or reflection/unconscious target",
         });
     }
     let mut victim = warrior.clone();
-    let mut attacker = enemy.clone();
+    let mut attacker = monster.clone();
     let mut next = random.clone();
     let defender_bytes = &mut victim.bytes;
     let attacker_bytes = &mut attacker.bytes;
     if loaded {
-        EnemyRecordMut::from_bytes(attacker_bytes).set_selected_item(id);
+        EnemyRecordMut::from_bytes(attacker_bytes).set_weapon(id);
     }
     let weapon_condition = if loaded {
         natural_conditions::admit_weapon_condition(
@@ -59,7 +70,7 @@ pub(crate) fn resolve(
         None
     };
     EnemyRecordMut::from_bytes(attacker_bytes).face_towards(attacker_x, target_x);
-    let hit = crate::combat::attack::melee_accuracy::enemy_against_warrior(
+    let hit = melee_accuracy::enemy_against_warrior(
         &EnemyRecord::from_bytes(attacker_bytes),
         &WarriorRecord::from_bytes(defender_bytes),
         if loaded {
@@ -80,7 +91,7 @@ pub(crate) fn resolve(
             WarriorRecordMut::from_bytes(defender_bytes).count_avoided_attack();
         }
         *warrior = victim;
-        *enemy = attacker;
+        *monster = attacker;
         *random = next;
         return Ok((
             AttackResult {
@@ -95,21 +106,21 @@ pub(crate) fn resolve(
         ));
     }
     let bonus = EnemyRecord::from_bytes(attacker_bytes)
-        .melee_bonus()?
+        .damage_plus()?
         .wrapping_add(EnemyRecord::from_bytes(attacker_bytes).condition(Condition::BonusDamage));
     if id == 0 {
         let natural = EnemyRecord::from_bytes(attacker_bytes).natural_attack(index);
-        AttackPacketMut(&mut packet).set_damage_bounds(
+        SpellInfoRecordMut(&mut packet).set_damage_bounds(
             bonus.wrapping_add(natural.minimum),
             bonus.wrapping_add(natural.maximum),
         );
-        AttackPacketMut(&mut packet).set_impact_sound(if natural.impact_sound == 0 {
+        SpellInfoRecordMut(&mut packet).set_impact_sound(if natural.impact_sound == 0 {
             100
         } else {
             natural.impact_sound
         });
     } else {
-        AttackPacketMut(&mut packet).set_damage_bounds(
+        SpellInfoRecordMut(&mut packet).set_damage_bounds(
             bonus.wrapping_add(1),
             bonus.wrapping_add(if loaded {
                 ItemDefinition(weapon).melee_damage()?
@@ -124,7 +135,7 @@ pub(crate) fn resolve(
                 0
             };
             if amount != 0 {
-                AttackPacketMut(&mut packet).set_elemental_damage(element, amount);
+                SpellInfoRecordMut(&mut packet).set_elemental_damage(element, amount);
             }
         }
     }
@@ -138,7 +149,7 @@ pub(crate) fn resolve(
             &mut next,
         )?;
         *warrior = victim;
-        *enemy = attacker;
+        *monster = attacker;
         *random = next;
         return Ok((result, packet, true));
     }
@@ -204,9 +215,9 @@ pub(crate) fn resolve(
             .wrapping_sub(damage);
         WarriorRecordMut::from_bytes(defender_bytes).set_stamina(hp);
         if hp < 1 && hp > -10 {
-            WarriorRecordMut::from_bytes(defender_bytes).set_bleeding_flag(1);
+            WarriorRecordMut::from_bytes(defender_bytes).set_bleeding(1);
         }
-        WarriorRecordMut::from_bytes(defender_bytes).mark_damaged();
+        WarriorRecordMut::from_bytes(defender_bytes).mark_been_attacked();
     }
     let result = AttackResult {
         icon: result.sound,
@@ -216,7 +227,7 @@ pub(crate) fn resolve(
         sounds,
     };
     *warrior = victim;
-    *enemy = attacker;
+    *monster = attacker;
     *random = next;
     Ok((result, packet, false))
 }

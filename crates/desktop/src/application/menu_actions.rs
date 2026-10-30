@@ -1,4 +1,4 @@
-//! Menu actions workflow ownership.
+//! What each menu item does when chosen.
 use super::{Application, ApplicationAction, HandleOutcome, Screen};
 use crate::presentation::Action;
 use centurions_content::Content;
@@ -6,6 +6,7 @@ use centurions_core::{Command, Event, Session, apply};
 use macroquad::prelude::*;
 
 impl Application {
+    /// Carries out a chosen menu item, refusing items that are not available now.
     pub(super) fn handle_menu_actions(
         &mut self,
         action: ApplicationAction,
@@ -19,10 +20,14 @@ impl Application {
                 if !self.supported(id, item, state) {
                     return Err(centurions_core::RuleError::Refused { feedback: vec![] });
                 }
-                self.menu = None;
-                self.submenu = None;
+                self.menu_bar.menu = None;
+                self.menu_bar.submenu = None;
+                use super::menus::menu::{
+                    self, apple, character, game, game_speed, maps_notes, mission, music,
+                    preferences, volume,
+                };
                 match (id, item) {
-                    (128, 1) => {
+                    (menu::APPLE, apple::ABOUT) => {
                         self.about = true;
                         events.extend([
                             Event::Sound { resource_id: 10107 },
@@ -31,11 +36,17 @@ impl Application {
                             Event::Sound { resource_id: 10141 },
                         ]);
                     }
-                    (200, 4..=22) => {
-                        events = apply(Command::ViewNote { index: item - 4 }, state, content)?
+                    (menu::MAPS_NOTES, maps_notes::FIRST_NOTE..=maps_notes::LAST_NOTE) => {
+                        events = apply(
+                            Command::ViewNote {
+                                index: item - maps_notes::FIRST_NOTE,
+                            },
+                            state,
+                            content,
+                        )?
                     }
-                    (132 | 146, _) => {
-                        let index = if id == 146 {
+                    (menu::ARCHIVES | menu::ALLIES, _) => {
+                        let index = if id == menu::ALLIES {
                             item - 1
                         } else {
                             self.archives
@@ -46,7 +57,7 @@ impl Application {
                         events = apply(
                             Command::ViewCreature {
                                 index,
-                                ally: id == 146,
+                                ally: id == menu::ALLIES,
                             },
                             state,
                             content,
@@ -71,30 +82,30 @@ impl Application {
                         });
                         events.push(Event::Sound { resource_id: 201 });
                     }
-                    (136, 5) => {
+                    (menu::CHARACTER, character::GENERATE_WARRIOR) => {
                         self.characters.creation =
                             Some(crate::creation::Creation::new(state, content));
                         events = apply(Command::CreationDialog, state, content)?;
                         events.push(Event::Feedback(
-                            centurions_core::feedback::NativeFeedback::Tutorial {
+                            centurions_core::feedback::GameFeedback::Tutorial {
                                 first: 125,
                                 last: 125,
                             },
                         ));
                     }
-                    (136, 1) => {
+                    (menu::CHARACTER, character::SQUAD_ORDER) => {
                         self.selection.order = Some(Vec::new());
                         events.push(Event::Feedback(
-                            centurions_core::feedback::NativeFeedback::Warning { index: 33 },
+                            centurions_core::feedback::GameFeedback::Warning { index: 33 },
                         ));
                         events.push(Event::Feedback(
-                            centurions_core::feedback::NativeFeedback::Tutorial {
+                            centurions_core::feedback::GameFeedback::Tutorial {
                                 first: 105,
                                 last: 105,
                             },
                         ));
                     }
-                    (136, 7) => {
+                    (menu::CHARACTER, character::MODIFY_SQUAD) => {
                         self.roster
                             .as_mut()
                             .unwrap()
@@ -114,22 +125,32 @@ impl Application {
                         self.selection.selected = None;
                         self.selection.member = None;
                     }
-                    (130, 3) => self.selection.end_question = true,
-                    (136, 2 | 3) => {
-                        self.characters.appearance =
-                            Some(crate::appearance::Appearance::new(state, item == 2));
+                    (menu::MISSION, mission::END) => self.selection.end_question = true,
+                    (menu::CHARACTER, character::CHANGE_PORTRAIT | character::CHANGE_ICON) => {
+                        self.characters.appearance = Some(crate::appearance::Appearance::new(
+                            state,
+                            item == character::CHANGE_PORTRAIT,
+                        ));
                         events.push(Event::Feedback(
-                            centurions_core::feedback::NativeFeedback::Tutorial {
-                                first: if item == 2 { 129 } else { 130 },
-                                last: if item == 2 { 129 } else { 130 },
+                            centurions_core::feedback::GameFeedback::Tutorial {
+                                first: if item == character::CHANGE_PORTRAIT {
+                                    129
+                                } else {
+                                    130
+                                },
+                                last: if item == character::CHANGE_PORTRAIT {
+                                    129
+                                } else {
+                                    130
+                                },
                             },
                         ));
                     }
-                    (136, 8) => {
+                    (menu::CHARACTER, character::WARRIOR_EDIT) => {
                         if self.editing {
                             self.editing = false;
                             events.push(Event::Feedback(
-                                centurions_core::feedback::NativeFeedback::Flash {
+                                centurions_core::feedback::GameFeedback::Flash {
                                     address: 0x403686,
                                     x: 50,
                                     y: 50,
@@ -141,20 +162,20 @@ impl Application {
                             self.characters.editor_question = true;
                         }
                     }
-                    (129, 1 | 2) => {
+                    (menu::GAME, game::LOAD | game::REVERT) => {
                         next = Some(Action::Load);
                     }
-                    (129, 3) => next = Some(Action::Save),
-                    (129, 4) => next = Some(Action::FastSave),
-                    (129, 6) => {
+                    (menu::GAME, game::SAVE) => next = Some(Action::Save),
+                    (menu::GAME, game::FAST_SAVE) => next = Some(Action::FastSave),
+                    (menu::GAME, game::QUIT) => {
                         if self.screen == Screen::Title {
                             self.quit = true;
                         } else {
-                            self.quit_question = true;
+                            self.questions.quit = true;
                             events.push(Event::Sound { resource_id: 20005 });
                         }
                     }
-                    (130, 1) => {
+                    (menu::MISSION, mission::BEGIN) => {
                         self.selection.modify_squad = false;
                         self.selection.roster_top = 0;
                         self.selection.difficulty = state.difficulty;
@@ -165,44 +186,53 @@ impl Application {
                         self.help.open(121, 124)?;
                         events.push(Event::Sound { resource_id: 10004 });
                     }
-                    (130, 2) | (200, 1) => self.open_intro(self.screen, None),
-                    (130, 5..=254) => {
+                    (menu::MISSION, mission::BRIEFING)
+                    | (menu::MAPS_NOTES, maps_notes::BRIEFING) => {
+                        self.open_intro(self.screen, None)
+                    }
+                    (menu::MISSION, mission::FIRST_SCENARIO..=mission::LAST_SCENARIO) => {
                         self.selected_scenario = Some(
                             self.scenario_names
-                                .get(item - 5)
+                                .get(item - mission::FIRST_SCENARIO)
                                 .ok_or("scenario menu entry missing")?
                                 .clone(),
                         );
                     }
-                    (137, 3) => {
+                    (menu::PREFERENCES, preferences::SET_PREFERENCES) => {
                         self.preferences_dialog =
-                            Some(crate::preferences::Dialog::new(&self.native_preferences))
+                            Some(crate::preferences::Dialog::new(&self.preferences))
                     }
-                    (137, 4) => {}
-                    (137, 5) => {
+                    (menu::PREFERENCES, preferences::REFRESH_SCREEN) => {}
+                    (menu::PREFERENCES, preferences::START_POPUP_HELP) => {
                         self.help.resume()?;
-                        self.help_reset_question = true;
+                        self.questions.help_reset = true;
                     }
-                    (145, 1) => self.music_enabled = !self.music_enabled,
-                    (145, 10..=22) => {
-                        if self.playlist.iter().any(|enabled| *enabled) {
-                            self.music_enabled = true;
-                            self.music_request = Some(20128 + item as i16 - 10);
+                    (menu::MUSIC, music::STOP) => {
+                        self.audio.music_enabled = !self.audio.music_enabled
+                    }
+                    (menu::MUSIC, music::FIRST_TITLE..=music::LAST_TITLE) => {
+                        if self.audio.playlist.iter().any(|enabled| *enabled) {
+                            self.audio.music_enabled = true;
+                            self.audio.music_request = Some(20128 + item as i16 - 10);
                         } else {
-                            self.music_enabled = false;
-                            self.music_request = None;
+                            self.audio.music_enabled = false;
+                            self.audio.music_request = None;
                             events.push(Event::Feedback(
-                                centurions_core::feedback::NativeFeedback::Warning { index: 155 },
+                                centurions_core::feedback::GameFeedback::Warning { index: 155 },
                             ));
                         }
                     }
-                    (134, 1..=11) => self.speed = item,
-                    (135, 2..=12) => {
-                        self.volume = item - 2;
-                        self.sound = self.volume != 0;
+                    (menu::GAME_SPEED, game_speed::FASTEST..=game_speed::SLOWEST) => {
+                        self.speed = item
+                    }
+                    (menu::VOLUME, volume::SOUND_SILENT..=volume::SOUND_LOUDEST) => {
+                        self.audio.volume = item - volume::SOUND_SILENT;
+                        self.audio.sound = self.audio.volume != 0;
                         events.push(Event::Sound { resource_id: 642 });
                     }
-                    (135, 16..=26) => self.music_volume = item - 16,
+                    (menu::VOLUME, volume::MUSIC_SILENT..=volume::MUSIC_LOUDEST) => {
+                        self.audio.music_volume = item - volume::MUSIC_SILENT
+                    }
                     _ => return Err("This original menu action has not been reconstructed.".into()),
                 }
             }

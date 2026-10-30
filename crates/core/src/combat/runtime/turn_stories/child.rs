@@ -1,21 +1,25 @@
-//! The battle call inside a Getup NPC macro owns wrapper locals, never an arena.
+//! A battle started by a monster's turn story inside getup.
 use crate::combat::round_stories::RoundBattleReturn;
 use crate::{Content, RuleError, Session};
 use serde::{Deserialize, Serialize};
 
+/// What a battle started by a monster's turn script must restore: whether it is still waited for,
+/// the outer battle's rewards and messages, and the cleanup it interrupted.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TurnChildReturn {
     pub(super) waiting: bool,
     outer: Option<RoundBattleReturn>,
-    cleanup: Option<crate::story_cleanup::Stage>,
+    cleanup: Option<crate::story::cleanup::Stage>,
 }
 
 impl TurnChildReturn {
+    /// Refuses a saved child battle that interrupted unfinished cleanup or names a message, script
+    /// or action that does not exist.
     pub(super) fn validate(&self, content: &Content, state: &Session) -> Result<(), RuleError> {
         if self
             .cleanup
             .as_ref()
-            .is_some_and(|stage| *stage != crate::story_cleanup::Stage::Complete)
+            .is_some_and(|stage| *stage != crate::story::cleanup::Stage::Complete)
         {
             return Err("turn child suspended unfinished cleanup".into());
         }
@@ -39,6 +43,8 @@ impl TurnChildReturn {
         Ok(())
     }
 
+    /// Gives back the outer battle's rewards, messages and cleanup once the child battle has
+    /// returned.
     pub(super) fn restore(self, state: &mut Session) {
         if let Some(outer) = self.outer {
             state.battle_after_message = outer.after_message;
@@ -52,6 +58,8 @@ impl TurnChildReturn {
     }
 }
 
+/// Marks the turn script as waiting for a battle it started; true when a turn script owns the
+/// story.
 pub(crate) fn begin(state: &mut Session) -> Result<bool, RuleError> {
     if !state
         .turn_dispatch
@@ -63,7 +71,7 @@ pub(crate) fn begin(state: &mut Session) -> Result<bool, RuleError> {
     let cleanup = state.scripted_cleanup.clone();
     if cleanup
         .as_ref()
-        .is_some_and(crate::story_cleanup::Stage::pauses)
+        .is_some_and(crate::story::cleanup::Stage::pauses)
     {
         return Err("turn child entered during unfinished cleanup".into());
     }
@@ -94,12 +102,12 @@ pub(crate) fn begin(state: &mut Session) -> Result<bool, RuleError> {
     Ok(true)
 }
 
-/// A wrapper calls run_script only after its loot/promotion/message return.
+/// The story resumes only after the battle's loot, promotion and messages.
 pub(crate) fn resume(state: &mut Session) -> Result<(), RuleError> {
-    let ready = state.turn_dispatch.as_ref().is_some_and(|frame| {
+    let in_spell = state.turn_dispatch.as_ref().is_some_and(|frame| {
         frame.child.as_ref().is_some_and(|child| child.waiting) && frame.at_depth(state)
     });
-    if !ready || state.combat.is_some() {
+    if !in_spell || state.combat.is_some() {
         return Ok(());
     }
     if state.selected_battle_treasure.is_some()
@@ -124,6 +132,7 @@ pub(crate) fn resume(state: &mut Session) -> Result<(), RuleError> {
     Ok(())
 }
 
+/// Marks the turn script's cleanup as begun.
 pub(crate) fn mark_cleanup(state: &mut Session) {
     if state
         .turn_dispatch

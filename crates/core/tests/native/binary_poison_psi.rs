@@ -86,7 +86,7 @@ fn actual_actor_target_charge_and_resolution_match_native_complete_boundaries() 
         .unwrap();
     let mut combat = state.combat.unwrap();
     let warriors = party(before);
-    combat.enemies.records = monsters(before, "records");
+    combat.roster.records = monsters(before, "records");
     let cast = &case["casts"][0];
     let packet = cast.bytes("packet");
     let mut actual = random(before);
@@ -117,13 +117,13 @@ fn actual_actor_target_charge_and_resolution_match_native_complete_boundaries() 
     let mut expected_random = random(before);
     support::replay_rng(&mut expected_random, &rng[..23]);
     assert_eq!(actual, expected_random);
-    combat.enemies.records[6] = selected.caster;
+    combat.roster.records[6] = selected.caster;
     support::native_expect! {
-        bytes &support::record_bytes(&combat.enemies.records) => &resolution.bytes("records_after"), "complete charged monsters";
+        bytes &support::record_bytes(&combat.roster.records) => &resolution.bytes("records_after"), "complete charged monsters";
     };
     let result = resolve_bodies_with_item_cache(
         &warriors,
-        &combat.enemies.records,
+        &combat.roster.records,
         &resolution.words("mask"),
         &DirectSpell {
             packet: &packet,

@@ -5,7 +5,7 @@ pub(super) fn compare_attack_estimates() -> centurions_content::Content {
     let receipt: serde_json::Value =
         crate::original_content::fixture("thunder-attack-estimates.json");
     let content = crate::original_content::load();
-    let native = centurions_content::native_text::NativeText::load(
+    let native = centurions_content::game_text::GameText::load(
         &content,
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../analysis/extracted"),
     )
@@ -33,7 +33,7 @@ pub(super) fn compare_attack_estimates() -> centurions_content::Content {
             })
             .collect();
         assert_eq!(serde_json::json!(numbers), case["numbers"]);
-        let retained = plan.retained_definitions.as_ref().unwrap();
+        let retained = plan.loaded_items.as_ref().unwrap();
         for (bytes, field) in [
             (&retained.item, "item_after"),
             (&retained.ammo, "ammunition_after"),

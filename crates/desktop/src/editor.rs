@@ -1,6 +1,6 @@
 mod items;
 mod scans;
-pub use items::ItemEditor;
+pub use items::{ITEM_EDITOR_CLOSE, ItemEditor};
 pub use scans::ScanEditor;
 mod controls;
 use crate::{
@@ -13,6 +13,8 @@ use centurions_core::{Command, Event, Session, apply};
 use controls::UpgradeControl;
 use macroquad::prelude::*;
 
+/// The Upgrade Warrior dialog: a draft of the session in which a warrior's
+/// attributes and level are changed, with the choices to undo them.
 pub struct WarriorEditor {
     pub free: bool,
     pub draft: Session,
@@ -24,6 +26,7 @@ pub struct WarriorEditor {
     pub(crate) scans: Option<ScanEditor>,
 }
 impl WarriorEditor {
+    /// Opens the editor on squad member `member`, remembering the warrior as it is.
     pub fn new(state: &Session, member: usize) -> Result<Self, String> {
         let initial = state
             .warriors
@@ -41,7 +44,9 @@ impl WarriorEditor {
             scans: None,
         })
     }
-    /// upgradewarrior's entry for the current member (0x162376..0x1623e2).
+    /// upgradewarrior's entry for the current member.
+    ///
+    /// Original: upgradewarrior
     pub fn enter(&mut self, content: &Content) -> Result<(), centurions_core::RuleError> {
         apply(
             Command::EnterWarriorUpgrade {
@@ -54,12 +59,15 @@ impl WarriorEditor {
         self.previous = self.initial.clone();
         Ok(())
     }
+    /// Carries out a click on an Upgrade Warrior item: selecting an attribute,
+    /// applying an upgrade, undoing, editing the level, opening the scan selection, or moving to
+    /// another warrior.
     pub fn handle(
         &mut self,
         item: usize,
         content: &Content,
     ) -> Result<Vec<Event>, centurions_core::RuleError> {
-        let control = UpgradeControl::from_native(item);
+        let control = UpgradeControl::from_item(item);
         if control == UpgradeControl::EditLevel && !self.free {
             return Err("Level editing requires the active warrior editor.".into());
         }
@@ -74,13 +82,13 @@ impl WarriorEditor {
             UpgradeControl::ScanSelection => {
                 if self.draft.warriors[self.member]
                     .record()
-                    .scan_capacity()
+                    .max_spells_attacks()
                     .map_err(|e| e.to_string())?
                     == 0
                 {
-                    // upgradewarrior1628b6 returns to the editor after this native flash.
+                    // upgradewarrior returns to the editor after this flash.
                     return Ok(vec![Event::Feedback(
-                        centurions_core::feedback::NativeFeedback::Flash {
+                        centurions_core::feedback::GameFeedback::Flash {
                             address: 0x4005d4,
                             x: 50,
                             y: 50,
@@ -179,6 +187,9 @@ impl WarriorEditor {
         }
         Ok(vec![])
     }
+    /// Carries out a click on the scan selection: Done (asking first when scans
+    /// remain to be chosen), choosing a tier, or toggling a scan. A warning is
+    /// dismissed by the next click.
     fn scan_item(&mut self, item: usize, content: &Content) -> Result<Vec<Event>, String> {
         let scan = self.scans.as_mut().unwrap();
         if scan.warning {
@@ -220,6 +231,8 @@ impl WarriorEditor {
         }
         Ok(vec![])
     }
+    /// Answers the question raised by finishing with scans left to choose: yes
+    /// applies the chosen scans to the warrior and closes the selection.
     pub fn scan_answer(&mut self, answer: bool, content: &Content) -> Result<(), String> {
         let scan = self.scans.as_mut().ok_or("Scan editor is not open.")?;
         scan.question = false;
@@ -242,11 +255,14 @@ impl WarriorEditor {
         self.scans = None;
         Ok(())
     }
+    /// Puts the warrior back as it was when the editor last entered it or accepted a level or
+    /// scan change; upgrades since then are undone.
     pub fn cancel_current(&mut self) -> Result<(), String> {
         self.draft.warriors[self.member] = self.initial.clone();
         centurions_core::character::calculate_statistics(&mut self.draft.warriors[self.member])
             .map_err(|e| e.to_string())
     }
+    /// Item `item` of the Upgrade Warrior dialog as a rectangle in the window.
     fn rect(assets: &Assets, item: usize) -> Rect {
         let [top, left, bottom, right] = assets.upgrade_dialog[item - 1].rect;
         Rect::new(
@@ -256,9 +272,11 @@ impl WarriorEditor {
             f32::from(bottom - top),
         )
     }
+    /// Draws the Upgrade Warrior dialog: the warrior's attributes, statistics and
+    /// the controls.
     pub fn draw(&self, content: &Content, assets: &Assets, controls: &mut Vec<Control>) {
         clear_background(BLACK);
-        assets.panel(165, Rect::new(80., 80., 640., 460.));
+        assets.panel(165, crate::layout::DIALOG_FRAME);
         for item in [39, 88] {
             let picture = i16::from_be_bytes(
                 assets.upgrade_dialog[item - 1].data[..2]
@@ -270,7 +288,7 @@ impl WarriorEditor {
         assets.panel(233, Self::rect(assets, 100));
         let warrior = &self.draft.warriors[self.member];
         for index in 0..9 {
-            if warrior.record().special_skill(index).unwrap_or(0) < 1 {
+            if warrior.record().spec(index).unwrap_or(0) < 1 {
                 assets.panel(181, Self::rect(assets, 90 + index));
             }
         }
@@ -286,16 +304,7 @@ impl WarriorEditor {
             && let Some(portrait) = assets.portraits.get(&id)
         {
             let rect = Self::rect(assets, 3);
-            draw_texture_ex(
-                portrait,
-                rect.x,
-                rect.y,
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(vec2(rect.w, rect.h)),
-                    ..Default::default()
-                },
-            );
+            crate::assets::texture_in(portrait, rect);
         }
         let number = |item, value: i16| {
             let rect = Self::rect(assets, item);
@@ -383,16 +392,7 @@ impl WarriorEditor {
             if let Ok(id) = warrior.record().portrait()
                 && let Some(portrait) = assets.portraits.get(&id)
             {
-                draw_texture_ex(
-                    portrait,
-                    origin.x + 22.,
-                    origin.y + 22.,
-                    WHITE,
-                    DrawTextureParams {
-                        dest_size: Some(vec2(32., 32.)),
-                        ..Default::default()
-                    },
-                );
+                crate::assets::icon_in(portrait, vec2(origin.x + 22., origin.y + 22.));
             }
             controls.push(Control {
                 rect,

@@ -8,6 +8,8 @@ use serde::Serialize;
 use std::cell::RefCell;
 use std::panic::Location;
 
+/// One thing a trace noted: a random draw, a script instruction, the damage channels of an attack,
+/// or an original return that produced no events.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TraceEntry {
@@ -40,6 +42,7 @@ pub enum TraceEntry {
     },
 }
 
+/// Which kind of random draw was made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DrawCall {
@@ -48,6 +51,7 @@ pub enum DrawCall {
     Range(i16, i16),
 }
 
+/// The entries recorded so far on this thread, and whether recording is on.
 #[derive(Default)]
 struct Recorder {
     enabled: bool,
@@ -55,6 +59,7 @@ struct Recorder {
 }
 
 thread_local! {
+    /// The recorder of this thread.
     static RECORDER: RefCell<Recorder> = RefCell::new(Recorder::default());
 }
 
@@ -64,6 +69,7 @@ pub(crate) struct Scope {
 }
 
 impl Scope {
+    /// Turns recording on for the scope when `enabled`; otherwise recording stays as it was.
     pub(crate) fn enable(enabled: bool) -> Self {
         let previous = RECORDER.with_borrow_mut(|recorder| {
             let previous = recorder.enabled;
@@ -75,6 +81,7 @@ impl Scope {
 }
 
 impl Drop for Scope {
+    /// Puts recording back as it was before the scope.
     fn drop(&mut self) {
         RECORDER.with_borrow_mut(|recorder| recorder.enabled = self.previous);
     }
@@ -85,6 +92,7 @@ pub fn take() -> Vec<TraceEntry> {
     RECORDER.with_borrow_mut(|recorder| std::mem::take(&mut recorder.entries))
 }
 
+/// Notes an entry when recording is on.
 fn record(entry: impl FnOnce() -> TraceEntry) {
     RECORDER.with_borrow_mut(|recorder| {
         if recorder.enabled {
@@ -93,6 +101,7 @@ fn record(entry: impl FnOnce() -> TraceEntry) {
     });
 }
 
+/// Notes a random draw with where it was made.
 #[track_caller]
 pub(crate) fn draw(call: DrawCall, result: i16) {
     let site = Location::caller();
@@ -103,6 +112,7 @@ pub(crate) fn draw(call: DrawCall, result: i16) {
     });
 }
 
+/// Notes a script instruction a story interpreter decoded.
 pub(crate) fn story(
     interpreter: &'static str,
     script: i32,
@@ -119,6 +129,8 @@ pub(crate) fn story(
     });
 }
 
+/// Notes the damage of an attack: the nine rolled amounts, the same channels after every enabled
+/// defense, and the total.
 pub(crate) fn damage(rolled: &[i16; 9], components: &[i16; 9], total: i16) {
     record(|| TraceEntry::Damage {
         rolled: *rolled,
@@ -127,6 +139,7 @@ pub(crate) fn damage(rolled: &[i16; 9], components: &[i16; 9], total: i16) {
     });
 }
 
+/// Notes a place where the original game returns without producing events.
 pub(crate) fn declined(site: &'static str, owner: &'static str, reason: &'static str) {
     record(|| TraceEntry::Declined {
         site,

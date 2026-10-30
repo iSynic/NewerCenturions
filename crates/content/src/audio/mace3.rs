@@ -31,6 +31,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+/// Expands MACE 3:1 compressed sound into mono 16-bit PCM: each byte yields three samples, a
+/// three-bit, a two-bit and a three-bit code.
 pub(super) fn decode(payload: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(payload.len() * 6);
     let mut index: i32 = 0;
@@ -64,8 +66,10 @@ pub(super) fn decode(payload: &[u8]) -> Vec<u8> {
     output
 }
 
+/// Index step for each two-bit code.
 const TABLE4_SMALL: [i16; 4] = [-18, 140, 140, -18];
 
+/// Output coefficients for two-bit codes, selected by the running index.
 const TABLE4_BIG: [i16; 512] = [
     64, 216, -217, -65, 67, 226, -227, -68, 70, 236, -237, -71, 74, 246, -247, -75, 77, 257, -258,
     -78, 80, 268, -269, -81, 84, 280, -281, -85, 88, 294, -295, -89, 92, 307, -308, -93, 96, 321,
@@ -104,8 +108,10 @@ const TABLE4_BIG: [i16; 512] = [
     -15227, 15906, 32767, -32768, -15907, 16615, 32767, -32768, -16616,
 ];
 
+/// Index step for each three-bit code.
 const TABLE8_SMALL: [i16; 8] = [-13, 8, 76, 222, 222, 76, 8, -13];
 
+/// Output coefficients for three-bit codes, selected by the running index.
 const TABLE8_BIG: [i16; 1024] = [
     37, 116, 206, 330, -331, -207, -117, -38, 39, 121, 216, 346, -347, -217, -122, -40, 41, 127,
     225, 361, -362, -226, -128, -42, 42, 132, 235, 377, -378, -236, -133, -43, 44, 137, 245, 392,

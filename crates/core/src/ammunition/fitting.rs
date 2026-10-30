@@ -1,17 +1,21 @@
 use super::selection::validate_instance;
 use super::{
-    AmmunitionOutcome, AmmunitionResult, FitRequest, WorkBuffers, definition, initial, unsupported,
+    AmmunitionOutcome, AmmunitionResult, FitRequest, LoadedItems, definition, initial, unsupported,
 };
 use crate::{RandomState, RuleError};
 use centurions_content::records::ItemDefinition;
 use centurions_content::{Content, Warrior};
 
+/// Fits a reserve of ammunition into the weapon in a slot. The reserve must match the weapon's
+/// caliber and have rounds; the rounds move from the reserve into the weapon up to its capacity.
+/// Different ammunition already loaded goes back to its own reserve first. In a battle a fill that
+/// moves rounds costs an action point.
 pub fn fit(
     warrior: &Warrior,
     reserves: &[i32],
     content: &Content,
     request: FitRequest,
-    work: &WorkBuffers,
+    loaded: &LoadedItems,
     random: &mut RandomState,
 ) -> Result<AmmunitionResult, RuleError> {
     let inventory = warrior.inventory()?;
@@ -23,18 +27,19 @@ pub fn fit(
         return Err("ammunition candidate outside reserve table".into());
     }
     let ordinary = (request.reserve_index + 200) as i16;
-    let mut result = initial(warrior, reserves, work)?;
+    let mut result = initial(warrior, reserves, loaded)?;
     let mut next_random = random.clone();
     let old_ammo = record.ammunition_id()?;
     if old_ammo != 0 {
-        result.work.ammo = Some(definition(content, old_ammo)?);
+        result.loaded.ammo = Some(definition(content, old_ammo)?);
     }
-    result.work.item = Some(definition(content, record.id())?);
-    let caliber = ItemDefinition(result.work.item.as_deref().unwrap()).ammunition_caliber()?;
+    result.loaded.item = Some(definition(content, record.id())?);
+    let caliber = ItemDefinition(result.loaded.item.as_deref().unwrap()).ammunition_caliber()?;
     let mut candidates = Vec::new();
     for index in 0..=200 {
         let stock = if index == 200 {
-            // ID400 cannot match these calibers; accepted ammo replaces its cache write.
+            // Reserve 200 is never one of these calibers; fitting it overwrites its
+            // loot-quality bytes.
             let Some(quality) = request.loot_quality else {
                 continue;
             };
@@ -45,8 +50,8 @@ pub fn fit(
         if stock <= 0 {
             continue;
         }
-        result.work.ammo = Some(definition(content, (index + 200) as i16)?);
-        if ItemDefinition(result.work.ammo.as_deref().unwrap()).reserve_ammunition_kind()?
+        result.loaded.ammo = Some(definition(content, (index + 200) as i16)?);
+        if ItemDefinition(result.loaded.ammo.as_deref().unwrap()).reserve_ammunition_kind()?
             == caliber
         {
             candidates.push(index);
@@ -57,15 +62,15 @@ pub fn fit(
             "selected ammunition is not a positive compatible candidate",
         ));
     }
-    result.work.ammo = Some(definition(content, ordinary)?);
-    let mut loaded = record.quantity()?;
-    if !ItemDefinition(result.work.ammo.as_deref().unwrap()).supplies_shield_energy()?
+    result.loaded.ammo = Some(definition(content, ordinary)?);
+    let mut loaded = record.charge()?;
+    if !ItemDefinition(result.loaded.ammo.as_deref().unwrap()).supplies_shield_energy()?
         && old_ammo != 0
         && loaded >= 1
         && old_ammo != request.reserve_index as i16
     {
         result.changed_ammo = true;
-        result.work.ammo = Some(definition(content, old_ammo)?);
+        result.loaded.ammo = Some(definition(content, old_ammo)?);
         let old_index = (old_ammo - 200) as usize;
         result.reserves[old_index] = result.reserves[old_index].wrapping_add(i32::from(loaded));
         result
@@ -85,8 +90,8 @@ pub fn fit(
         needed = stock as i16;
     }
     if request.in_combat && needed > 0 {
-        let ap = result.warrior.record().action_points()?.wrapping_sub(1);
-        result.warrior.record_mut().set_action_points(ap);
+        let ap = result.warrior.record().attacks()?.wrapping_sub(1);
+        result.warrior.record_mut().set_attacks(ap);
     }
     result
         .warrior
@@ -98,8 +103,8 @@ pub fn fit(
         .record_mut()
         .set_inventory_ammunition(request.slot, ordinary);
     result.warrior.record_mut().set_loaded_ammunition(ordinary);
-    if ItemDefinition(result.work.ammo.as_deref().unwrap()).supplies_shield_energy()?
-        && record.equipment_flag() != 0
+    if ItemDefinition(result.loaded.ammo.as_deref().unwrap()).supplies_shield_energy()?
+        && record.equipped() != 0
     {
         let energy = result
             .warrior

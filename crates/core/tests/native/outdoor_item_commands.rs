@@ -1,27 +1,27 @@
 //! Selected Items source compositions, separate from the captured UI boundaries.
 use crate::{prelude::*, support};
 use centurions_content::records::{Condition, InventorySlotsMut};
-use centurions_core::combat::retained::InitiativeWork;
+use centurions_core::combat::globals::BattleOrder;
 
 fn input(content: &Content) -> Session {
     let case = &support::fixture("outdoor-medical.json")["cases"][0];
     let mut state = super::command_support_psi::outdoor(content, case);
-    state.selected_warrior = 1;
+    state.char_select_new = 1;
     state.warriors[2]
         .record_mut()
         .set_condition(Condition::Helpless, 7);
-    state.warriors[4].record_mut().set_carried_weight(321);
+    state.warriors[4].record_mut().set_load(321);
     state.warriors[4].record_mut().set_inventory_quantity(3, 2);
-    state.native_work.ready = 9;
-    state.native_work.party_mask.fill(1);
-    state.native_work.spell_target_tail = vec![1; 104];
-    state.native_work.initiative_work = InitiativeWork {
+    state.globals.in_spell = 9;
+    state.globals.party_track.fill(1);
+    state.globals.track_tail = vec![1; 104];
+    state.globals.battle_order = BattleOrder {
         order: case["before"].words("order"),
-        cursor: case["before"].n("cursor"),
+        index: case["before"].n("cursor"),
     };
-    state.native_work.weapon_work = crate::native_common::psi_work(&case["before"]);
+    state.globals.weapon_traits = crate::native_common::psi_work(&case["before"]);
     state
-        .native_work
+        .globals
         .health_context
         .marks_affected = true;
     state.scenario_duration_tail = Some(0);
@@ -45,7 +45,7 @@ fn outdoor_selected_items_keep_prefix_effects_and_saved_typed_returns() {
         &content,
     );
     assert!(state.outdoor_psi.is_none());
-    assert_eq!(state.selected_warrior, 1);
+    assert_eq!(state.char_select_new, 1);
     assert_eq!(
         state.warriors[2]
             .record()
@@ -53,30 +53,30 @@ fn outdoor_selected_items_keep_prefix_effects_and_saved_typed_returns() {
             .unwrap(),
         7
     );
-    assert_eq!(state.warriors[4].record().carried_weight().unwrap(), 319);
+    assert_eq!(state.warriors[4].record().load().unwrap(), 319);
     assert_eq!(
-        state.native_work.initiative_work,
-        before.native_work.initiative_work
+        state.globals.battle_order,
+        before.globals.battle_order
     );
-    assert_eq!(state.native_work.psi_memory, before.native_work.psi_memory);
-    assert_eq!(state.allies, before.allies);
-    assert_eq!(state.ally_count, before.ally_count);
+    assert_eq!(state.globals.define_spells, before.globals.define_spells);
+    assert_eq!(state.holdover, before.holdover);
+    assert_eq!(state.held_over, before.held_over);
     assert_eq!(
-        state.native_work.npc_backing,
-        before.native_work.npc_backing
+        state.globals.monsters,
+        before.globals.monsters
     );
-    assert_eq!(state.native_work.ready, 0);
+    assert_eq!(state.globals.in_spell, 0);
     assert!(
         state
-            .native_work
+            .globals
             .health_context
             .marks_affected
     );
-    assert_eq!(state.native_work.party_mask, [1; 6]);
+    assert_eq!(state.globals.party_track, [1; 6]);
     assert!(
         state
-            .native_work
-            .spell_target_tail
+            .globals
+            .track_tail
             .iter()
             .all(|value| *value == 0)
     );
@@ -93,8 +93,8 @@ fn outdoor_selected_items_keep_prefix_effects_and_saved_typed_returns() {
         state.warriors[4]
             .record_mut()
             .set_inventory_quantity(3, quantity);
-        state.native_work.inventory_record = state.warriors[4].record().inventory_slot(0);
-        state.native_work.character_bare_hand_bonus = -91;
+        state.globals.inventory_record = state.warriors[4].record().inventory_slot(0);
+        state.globals.character_bare_hand_bonus = -91;
         let before = state.clone();
         support::saved_command(
             Command::UseItem {
@@ -105,26 +105,26 @@ fn outdoor_selected_items_keep_prefix_effects_and_saved_typed_returns() {
             &content,
         );
         assert_eq!(state.outdoor_psi.as_ref().unwrap().actor, 4);
-        assert_eq!(state.selected_warrior, 1);
-        assert_eq!(state.native_work.ready, 9);
+        assert_eq!(state.char_select_new, 1);
+        assert_eq!(state.globals.in_spell, 9);
         assert_eq!(
             state.warriors[4]
                 .record()
                 .inventory_slot(3)
-                .quantity()
+                .charge()
                 .unwrap(),
             quantity
         );
-        assert_eq!(state.warriors[4].record().carried_weight().unwrap(), 321);
+        assert_eq!(state.warriors[4].record().load().unwrap(), 321);
         assert_eq!(state.warriors, before.warriors);
         let expected_record = if quantity == -1 {
             state.warriors[4].record().inventory_slot(3)
         } else {
-            before.native_work.inventory_record.clone()
+            before.globals.inventory_record.clone()
         };
-        assert_eq!(state.native_work.inventory_record, expected_record);
+        assert_eq!(state.globals.inventory_record, expected_record);
         assert_eq!(
-            state.native_work.character_bare_hand_bonus,
+            state.globals.character_bare_hand_bonus,
             if quantity == -1 {
                 state.warriors[4].record().bare_hand_bonus().unwrap()
             } else {
@@ -137,20 +137,20 @@ fn outdoor_selected_items_keep_prefix_effects_and_saved_typed_returns() {
             &content,
         );
         assert!(state.outdoor_psi.is_none());
-        assert_eq!(state.native_work.ready, 0);
+        assert_eq!(state.globals.in_spell, 0);
         assert_eq!(
             state.warriors[4]
                 .record()
                 .inventory_slot(3)
-                .quantity()
+                .charge()
                 .unwrap(),
             quantity
         );
-        assert_eq!(state.warriors[4].record().carried_weight().unwrap(), 321);
-        assert_eq!(state.selected_warrior, 1);
+        assert_eq!(state.warriors[4].record().load().unwrap(), 321);
+        assert_eq!(state.char_select_new, 1);
         assert_eq!(
-            state.native_work.initiative_work,
-            before.native_work.initiative_work
+            state.globals.battle_order,
+            before.globals.battle_order
         );
     }
 
@@ -174,12 +174,12 @@ fn outdoor_selected_items_keep_prefix_effects_and_saved_typed_returns() {
             Err(RuleError::RefusedAfterEffects { feedback }) if feedback.is_empty())
         );
         assert_eq!(state.random, random);
-        assert_eq!(state.native_work.attack_count, count);
-        assert_eq!(state.native_work.attack_packet, packet);
-        assert_eq!(state.native_work.attack_identity, [0, 3, 0]);
+        assert_eq!(state.globals.attack_count, count);
+        assert_eq!(state.globals.spell_info, packet);
+        assert_eq!(state.globals.cast_identity, [0, 3, 0]);
         assert_eq!(state.warriors, before.warriors);
-        assert_eq!(state.native_work.ready, 9);
-        assert_eq!(state.native_work.party_mask, before.native_work.party_mask);
+        assert_eq!(state.globals.in_spell, 9);
+        assert_eq!(state.globals.party_track, before.globals.party_track);
         assert!(state.outdoor_psi.is_none());
     }
     assert!(state == restored);
@@ -203,8 +203,8 @@ fn outdoor_selected_items_keep_prefix_effects_and_saved_typed_returns() {
         .record_mut()
         .set_inventory_slot(4, &following);
     InventorySlotsMut(&mut state.warriors[4].bytes).set_count(5);
-    state.native_work.character_bare_hand_bonus = -91;
-    state.native_work.health_context.affected = [11, 12, 13, 14, 15, 16];
+    state.globals.character_bare_hand_bonus = -91;
+    state.globals.health_context.affected = [11, 12, 13, 14, 15, 16];
     let mut script = vec![0; 42];
     script[8..10].copy_from_slice(&5_i16.to_be_bytes());
     script[24..26].copy_from_slice(&8_i16.to_be_bytes());
@@ -230,32 +230,32 @@ fn outdoor_selected_items_keep_prefix_effects_and_saved_typed_returns() {
     );
     assert!(support::event_sounds(&first).contains(&655));
     assert_eq!(state.outdoor_psi.as_ref().unwrap().item, Some(700));
-    assert_eq!(state.native_work.ready, 9);
-    assert_eq!(state.selected_warrior, 1);
+    assert_eq!(state.globals.in_spell, 9);
+    assert_eq!(state.char_select_new, 1);
     assert_eq!(state.warriors[4].record().inventory_slot(3), following);
-    assert_eq!(state.native_work.inventory_record, following);
+    assert_eq!(state.globals.inventory_record, following);
     assert_eq!(
-        state.native_work.character_bare_hand_bonus,
+        state.globals.character_bare_hand_bonus,
         state.warriors[4].record().bare_hand_bonus().unwrap()
     );
-    assert_eq!(state.warriors[4].record().carried_weight().unwrap(), 316);
-    assert_eq!(state.native_work.psi_memory, before.native_work.psi_memory);
+    assert_eq!(state.warriors[4].record().load().unwrap(), 316);
+    assert_eq!(state.globals.define_spells, before.globals.define_spells);
     let events = support::saved_command(
         Command::SelectOutdoorPsiTarget { warrior: 0 },
         &mut state,
         &content,
     );
     assert!(state.outdoor_psi.is_none());
-    assert_eq!(state.native_work.ready, 9);
-    assert_eq!(state.native_work.party_mask, [1, 0, 0, 0, 1, 0]);
+    assert_eq!(state.globals.in_spell, 9);
+    assert_eq!(state.globals.party_track, [1, 0, 0, 0, 1, 0]);
     assert!(
         state
-            .native_work
-            .spell_target_tail
+            .globals
+            .track_tail
             .iter()
             .all(|value| *value == 0)
     );
-    let health = &state.native_work.health_context;
+    let health = &state.globals.health_context;
     assert!(!health.marks_affected);
     assert_eq!(health.affected, [0; 6]);
     assert!(support::event_sounds(&events).contains(&5));

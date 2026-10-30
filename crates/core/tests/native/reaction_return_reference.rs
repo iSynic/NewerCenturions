@@ -20,7 +20,7 @@ mod outdoor_items;
 #[path = "selected_reward_reference.rs"]
 mod selected_rewards;
 #[path = "shop_work_reference.rs"]
-mod shop_work;
+mod the_shop;
 use crate::Session;
 use crate::test_support::{bytes, fixture};
 use centurions_content::combat::MonsterRecord;
@@ -36,7 +36,7 @@ fn input(case: &Value) -> Session {
         .map(|bytes| Warrior::read(bytes).unwrap())
         .collect();
     let combat = state.combat.as_mut().unwrap();
-    combat.enemies.records = bytes(&case["records_before"])
+    combat.roster.records = bytes(&case["records_before"])
         .as_chunks::<288>()
         .0
         .iter()
@@ -44,7 +44,7 @@ fn input(case: &Value) -> Session {
             bytes: bytes.to_vec(),
         })
         .collect();
-    combat.enemies.positions = case["enemy_positions"]
+    combat.roster.mon_pos = case["enemy_positions"]
         .as_array()
         .unwrap()
         .iter()
@@ -55,14 +55,14 @@ fn input(case: &Value) -> Session {
             )
         })
         .collect();
-    combat.map.tiles = bytes(&case["map_before"])
+    combat.field.tiles = bytes(&case["map_before"])
         .as_chunks::<2>()
         .0
         .iter()
         .map(|bytes| i16::from_be_bytes(*bytes))
         .collect();
-    combat.map.shift = (0, 0);
-    combat.squad.positions = (0..6)
+    combat.field.map_shift = (0, 0);
+    combat.squad.pos = (0..6)
         .map(|member| {
             if member == 0 {
                 (20, 20)
@@ -71,11 +71,11 @@ fn input(case: &Value) -> Session {
             }
         })
         .collect();
-    combat.cursor = 1;
-    combat.order[1] = 0;
+    combat.battle_order_index = 1;
+    combat.battle_order[1] = 0;
     // A declared admission control; these receipts omit the literal pair.
-    combat.victory_work.total = 1;
-    combat.victory_work.defeated = 0;
+    combat.kill_counts.num_enemy = 1;
+    combat.kill_counts.kill_mon = 0;
     state.random = RandomState::new(case["seed_before"].as_u64().unwrap() as u32);
     state
 }
@@ -93,16 +93,16 @@ fn native_forced_attack_return_interrupts_with_the_moving_warrior_still_alive() 
         let combat = state.combat.as_mut().unwrap();
         let before = state.random.clone();
         let mut mask = [0; 6];
-        let mut native = NativeNeighbors {
-            selected_warrior: 0,
-            party_mask: &mut mask,
+        let mut native = NeighborScan {
+            char_select_new: 0,
+            party_track: &mut mask,
             aliases: Default::default(),
             table: None,
         };
-        crate::combat::neighbor_work::begin(combat);
-        crate::combat::neighbor_work::scan(combat, &state.warriors, 1, (0, 0), &mut native)
+        crate::combat::neighbor_scan::begin(combat);
+        crate::combat::neighbor_scan::scan(combat, &state.warriors, 1, (0, 0), &mut native)
             .unwrap();
-        let list = crate::combat::neighbor_work::scan(
+        let list = crate::combat::neighbor_scan::scan(
             combat,
             &state.warriors,
             2,
@@ -120,7 +120,7 @@ fn native_forced_attack_return_interrupts_with_the_moving_warrior_still_alive() 
             buffs: &[0; 20],
             buffers: &mut buffers,
             display_writers: false,
-            native: Some(native),
+            scan: Some(native),
         };
         let mut calls = vec![];
         let mut changed = false;
@@ -170,10 +170,10 @@ fn source_callback_list_changes_do_not_replace_the_callers_local_count() {
     let fixture = fixture("warrior-opportunity.json");
     let mut state = input(&fixture["cases"][0]);
     let combat = state.combat.as_mut().unwrap();
-    for record in &mut combat.enemies.records {
+    for record in &mut combat.roster.records {
         record.bytes[0xb3] = 0;
     }
-    combat.neighbor_work.bodies[..3].copy_from_slice(&[10, 11, 12]);
+    combat.neighbors.bodies[..3].copy_from_slice(&[10, 11, 12]);
     let mut mask = [0; 6];
     let mut buffers = Default::default();
     let mut context = ReactionContext {
@@ -182,9 +182,9 @@ fn source_callback_list_changes_do_not_replace_the_callers_local_count() {
         buffs: &[0; 20],
         buffers: &mut buffers,
         display_writers: false,
-        native: Some(NativeNeighbors {
-            selected_warrior: 0,
-            party_mask: &mut mask,
+        scan: Some(NeighborScan {
+            char_select_new: 0,
+            party_track: &mut mask,
             aliases: Default::default(),
             table: None,
         }),
@@ -198,7 +198,7 @@ fn source_callback_list_changes_do_not_replace_the_callers_local_count() {
         {
             GuardStep::Attack(call) => {
                 calls.push(call.attacker);
-                combat.neighbor_work.bodies[1] = 12;
+                combat.neighbors.bodies[1] = 12;
                 frame.finish_attack(false).unwrap();
                 // A paused callback saves locals, while the next WORD stays shared.
                 frame = serde_json::from_slice(&serde_json::to_vec(&frame).unwrap()).unwrap();

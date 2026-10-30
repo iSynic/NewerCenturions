@@ -1,12 +1,13 @@
-//! Enhanced stock generation (installitem 0x12c874, randomitem 0x12d558).
-//! Random quantity selection precedes modifier rolls even though this caller
-//! installs fresh quantities afterward. No scratch address space is required.
+//! Enhanced shop stock. The quantity is rolled before the modifiers even though
+//! the shop installs a fresh quantity afterwards.
 use crate::{RandomState, RuleError};
 use centurions_content::{
     InventoryRecord,
     records::{EquipmentModifiers, InventoryModifier as Modifier, ItemDefinition, ItemUpgrade},
 };
 
+/// How much a modifier grows when an attempt succeeds: a set amount or a random amount above a
+/// base.
 enum Increment {
     Fixed(i16),
     Random { bound: i16, base: i16 },
@@ -17,12 +18,15 @@ struct Rolls {
     state: RandomState,
 }
 impl Rolls {
+    /// Draws a number from 1 to the bound.
     fn draw(&mut self, bound: i16) -> Result<i16, RuleError> {
         if self.state.draws == u64::MAX {
             return Err(RuleError::Invalid("random-draw counter overflow".into()));
         }
         Ok(self.state.bound(bound))
     }
+    /// Tries to improve an item's modifier: each attempt succeeds when a roll from 1 to 100 is
+    /// below the threshold, adding the increment and counting a change.
     fn improve(
         &mut self,
         record: &mut InventoryRecord,
@@ -46,6 +50,9 @@ impl Rolls {
     }
 }
 
+/// Makes the item a shop of enhanced stock sells: a fresh item whose level and modifiers come from
+/// a roll at the shop's enhancement level. With no enhancement the fresh item is returned without
+/// drawing random numbers.
 pub(super) fn generate(
     items: &[Vec<u8>],
     id: i16,
@@ -85,6 +92,9 @@ pub(super) fn generate(
     Ok(installed)
 }
 
+/// Rolls an enhanced item's level, accuracy, dodge, damage, armor, shield and range modifiers. A
+/// weapon that holds rounds also draws random numbers for its capacity and quantity, which only
+/// advance the random sequence.
 fn randomize(
     items: &[Vec<u8>],
     definition: ItemDefinition<'_>,
@@ -94,7 +104,7 @@ fn randomize(
 ) -> Result<InventoryRecord, RuleError> {
     let base = ItemUpgrade::read(definition.0)?;
     let equipment = EquipmentModifiers::read(definition.0)?;
-    let kind = definition.category()?.wrapping_abs();
+    let kind = definition.item_type()?.wrapping_abs();
     let mut item = InventoryRecord([0; 22]);
     for (modifier, value) in [
         (Modifier::RequiredLevel, definition.required_level()? as i8),
@@ -126,7 +136,7 @@ fn randomize(
     if capacity > 0 && [15, 13, 14].contains(&(kind as u8)) {
         if rolls.draw(100)? < difficulty.wrapping_mul(10).wrapping_add(50) {
             rolls.draw(capacity)?;
-            // Original selection reads the ammunition table before enhancements.
+            // The ammunition table is read before enhancements.
             if definition.ammunition_caliber()? != 14 {
                 for index in 200..400 {
                     let ammo = items.get(index).ok_or(RuleError::Invalid(
@@ -151,7 +161,7 @@ fn randomize(
     let mut changes = 0_i16;
     let mut enhancement_level = enhancement as i8;
     loop {
-        if kind == 26 || kind == 27 || definition.unit_weight()? != 0 {
+        if kind == 26 || kind == 27 || definition.charge_weight()? != 0 {
             return Ok(item);
         }
         if definition

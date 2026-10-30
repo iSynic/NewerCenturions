@@ -1,4 +1,4 @@
-//! Battle entry for combat.
+//! Starting a battle: the map, the squad, the monsters and the first round.
 use crate::combat::{
     Combat, EncounterBattle, allies, build_tactical_map, direction_offset, entry_party,
     place_enemies_with_allies, place_squad, round_stories, runtime,
@@ -8,7 +8,10 @@ use centurions_content::combat::{BattleRecord, MonsterRecord};
 use centurions_content::{Content, word};
 use serde::{Deserialize, Serialize};
 
-/// CODE 1 newland opcode 2, after the ten-byte extra record is loaded.
+/// Reads an encounter record's battle, sound, message and treasure. The battle is the first number,
+/// or a random pick from the first to the last when the last is not zero.
+///
+/// Original: newland, combatsetup
 pub fn encounter_battle(
     extra: &[u8],
     random: &mut RandomState,
@@ -31,6 +34,8 @@ pub fn encounter_battle(
     })
 }
 
+/// Starts the battle named by an encounter record: plays the encounter's sound, shows its message,
+/// then enters the battle with the encounter's treasure.
 pub fn begin(
     state: &mut Session,
     content: &Content,
@@ -48,7 +53,7 @@ pub fn begin(
         usize::from(encounter_id.unsigned_abs()) * 10,
         10,
     )?;
-    state.native_work.extra_record = encounter.to_vec();
+    state.globals.extra_record = encounter.to_vec();
     let plan = encounter_battle(encounter, &mut state.random)?;
     let mut effects = vec![];
     let sound = plan.sound;
@@ -74,6 +79,7 @@ pub fn begin(
     Ok(effects)
 }
 
+/// Starts a battle by its battle record, with the given initiative advantage.
 pub fn begin_battle(
     state: &mut Session,
     content: &Content,
@@ -83,6 +89,7 @@ pub fn begin_battle(
     begin_battle_with_group(state, content, id, advantage, false, None, None)
 }
 
+/// Starts a group battle for a story's group encounter.
 pub fn begin_group(
     state: &mut Session,
     content: &Content,
@@ -91,6 +98,7 @@ pub fn begin_group(
     begin_group_inner(state, content, parameter, false)
 }
 
+/// Starts a group battle whose treasure comes from the story that selected it.
 pub fn begin_selected_battle(
     state: &mut Session,
     content: &Content,
@@ -99,6 +107,8 @@ pub fn begin_selected_battle(
     begin_group_inner(state, content, parameter, true)
 }
 
+/// Enters a group battle for a story caller; `treasure` is true when the story that selected the
+/// battle supplies the treasure.
 pub(super) fn begin_group_inner(
     state: &mut Session,
     content: &Content,
@@ -108,6 +118,7 @@ pub(super) fn begin_group_inner(
     begin_group_return(state, content, parameter, treasure, false)
 }
 
+/// Starts the group battle that a selected battle asks for while another battle is running.
 pub(crate) fn begin_selected_child(
     state: &mut Session,
     content: &Content,
@@ -116,6 +127,8 @@ pub(crate) fn begin_selected_child(
     begin_group_return(state, content, parameter, true, true)
 }
 
+/// Enters the group battle an encounter record names. A selected battle (`treasure` true) asked for
+/// while a battle is running is refused unless it comes through `begin_selected_child`.
 fn begin_group_return(
     state: &mut Session,
     content: &Content,
@@ -143,8 +156,8 @@ fn begin_group_return(
         parameter.unsigned_abs() as usize * 10,
         10,
     )?;
-    state.native_work.extra_record = extra.to_vec();
-    let plan = crate::story_party::group_encounter(extra, &mut state.random)?;
+    state.globals.extra_record = extra.to_vec();
+    let plan = crate::story::party::group_encounter(extra, &mut state.random)?;
     let additional = if treasure {
         Some(runtime::SelectedBattleTreasure::new(
             state,
@@ -178,6 +191,8 @@ fn begin_group_return(
     Ok(events)
 }
 
+/// Starts the battle an NPC's script asks for: the NPC's sound and text come first, the battle is
+/// drawn from the encounter record, and the NPC is remembered for the end of the battle.
 pub fn begin_npc(
     state: &mut Session,
     content: &Content,
@@ -199,8 +214,8 @@ pub fn begin_npc(
         parameter.unsigned_abs() as usize * 10,
         10,
     )?;
-    state.native_work.extra_record = extra.to_vec();
-    let mut start = crate::story_npc_battle::NpcBattleStart::capture(
+    state.globals.extra_record = extra.to_vec();
+    let mut start = crate::story::npc_battle::NpcBattleStart::capture(
         extra,
         &script.record,
         i16::from(script.cursor),
@@ -223,6 +238,11 @@ pub fn begin_npc(
     Ok(events)
 }
 
+/// Sets up and enters a battle: builds the tactical map around the party, places the squad, allies
+/// and monsters, deals the battle order, resets the death and reward state and runs the first turn.
+/// The advantage is forced to -1 for a negative battle number.
+///
+/// Original: combatsetup
 pub(super) fn begin_battle_with_group(
     state: &mut Session,
     content: &Content,
@@ -238,9 +258,8 @@ pub(super) fn begin_battle_with_group(
             dependency: "child battle without a suspended selected caller",
         });
     }
-    state.retain_npcs();
-    // combatsetup11d452 resets the selected WORD before the first Getup.
-    state.selected_warrior = 0;
+    state.store_monsters();
+    state.char_select_new = 0;
     let mission = state
         .land(content)
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
@@ -255,9 +274,9 @@ pub(super) fn begin_battle_with_group(
         .ok_or_else(|| RuleError::Invalid("exploration missing".into()))?;
     let mut land = exploration.map_state();
     if let Some(combat) = &state.combat {
-        land.floor.clone_from(&combat.map.tiles);
+        land.floor.clone_from(&combat.field.tiles);
     }
-    let saved_land = super::tactical_work::BattleLand {
+    let saved_land = super::battlefield::BattleLand {
         level: state.scenario_level,
         map: exploration.map,
         records: land,
@@ -279,7 +298,7 @@ pub(super) fn begin_battle_with_group(
         &mut state.random,
     )?;
     let direction = state.random.bound(360);
-    state.native_work.npc_backing.rebase_origin(map.shift);
+    state.globals.monsters.rebase_origin(map.map_shift);
     let distance = state.random.bound(i16::from(battle.distance));
     let base = direction_offset(direction, distance);
     let mut squad = place_squad(
@@ -292,15 +311,15 @@ pub(super) fn begin_battle_with_group(
         &tables.race_moves,
     )?;
     let allies = allies::place_allies(
-        &state.allies,
-        if state.suppress_allies == 0 {
-            state.ally_count
+        &state.holdover,
+        if state.suspend_allies == 0 {
+            state.held_over
         } else {
             0
         },
         &mut map,
         mission,
-        squad.positions[0],
+        squad.pos[0],
         (5, 5, 85, 85),
         &mut state.random,
     )?;
@@ -314,43 +333,43 @@ pub(super) fn begin_battle_with_group(
         allies,
         state.difficulty,
     )?;
-    for (monster, position) in enemies.records.iter_mut().zip(&enemies.positions) {
-        if position.0 < squad.positions[0].0 {
+    for (monster, position) in enemies.records.iter_mut().zip(&enemies.mon_pos) {
+        if position.0 < squad.pos[0].0 {
             monster.record_mut().set_horizontal_direction(1);
-        } else if position.0 > squad.positions[0].0 {
+        } else if position.0 > squad.pos[0].0 {
             monster.record_mut().set_horizontal_direction(-1);
         }
     }
     let enemy_speeds = enemies
         .records
         .iter()
-        .map(|monster| monster.speed())
+        .map(|monster| monster.agility())
         .collect::<Result<Vec<_>, _>>()?;
     let advantage = if id < 0 { -1 } else { advantage };
-    let unavailable = if let Some(combat) = state.combat.as_ref() {
-        combat.unavailable
+    let kill_party = if let Some(combat) = state.combat.as_ref() {
+        combat.kill_party
     } else {
-        crate::story_health::retained_context(
-            state.selected_warrior,
-            &state.native_work.health_context,
+        crate::story::health::reselected_context(
+            state.char_select_new,
+            &state.globals.health_context,
         )
-        .unavailable
+        .kill_party
     };
     let party_order = entry_party::initiative(
         &state.warriors,
         &enemy_speeds,
         advantage,
-        unavailable,
+        kill_party,
         &mut state.random,
     )?;
     state.warriors = party_order.warriors;
     let mut order = party_order.order;
-    let setup = crate::story_party::apply_group_mask(
+    let setup = crate::story::party::apply_group_mask(
         &state.warriors,
         &map,
         &squad,
         &order,
-        &state.native_work.party_mask,
+        &state.globals.party_track,
         group,
     )?;
     state.warriors = setup.warriors;
@@ -359,23 +378,17 @@ pub(super) fn begin_battle_with_group(
     order = setup.order;
     let cursor = initial_cursor(&order)?;
     let count = enemies.records.len();
-    let mut death_queue = state
+    let mut todo_queue = state
         .combat
         .as_ref()
-        .map(|combat| combat.death_queue.clone())
-        .unwrap_or_else(|| {
-            state
-                .native_work
-                .retained_death_queue
-                .clone()
-                .unwrap_or_default()
-        });
-    death_queue.reset_for_battle();
-    state.native_work.death_processing.queue = 0;
-    state.native_work.battle_rewards_suppressed = 0;
-    // combatsetup reads the battle record over the bestiary loop's tail at43979c.
-    state.native_work.bestiary.battle_record_cold = false;
-    state.native_work.early_booty = 0;
+        .map(|combat| combat.todo_queue.clone())
+        .unwrap_or_else(|| state.globals.outer_todo_queue.clone().unwrap_or_default());
+    todo_queue.reset_for_battle();
+    state.globals.death_processing.doing_queue = 0;
+    state.globals.battle_rewards_suppressed = 0;
+    // The battle record overwrites the bestiary's cached record.
+    state.globals.bestiary.battle_record_cold = false;
+    state.globals.coward = 0;
     state.handled_deaths.clear();
     state.combat_story = None;
     state.battle_treasure = ordinary.unwrap_or(0);
@@ -383,68 +396,64 @@ pub(super) fn begin_battle_with_group(
     state.battle_after_message = battle.after_message;
     state.battle_group_script = None;
     state.battle_npc = None;
-    let (attack_packet, attack_identity) = state.combat.as_ref().map_or_else(
+    let (spell_info, cast_identity) = state.combat.as_ref().map_or_else(
         || {
             (
-                state.native_work.attack_packet.clone(),
-                state.native_work.attack_identity,
+                state.globals.spell_info.clone(),
+                state.globals.cast_identity,
             )
         },
-        |combat| (combat.attack_packet.clone(), combat.attack_identity),
+        |combat| (combat.spell_info.clone(), combat.cast_identity),
     );
-    let (selected_enemy, script_enemy) = state.combat.as_ref().map_or(
-        (
-            state.native_work.selected_enemy,
-            state.native_work.script_enemy,
-        ),
-        |combat| (combat.selected_enemy, combat.script_enemy),
+    let (monster_up, macro_monster) = state.combat.as_ref().map_or(
+        (state.globals.monster_up, state.globals.macro_monster),
+        |combat| (combat.monster_up, combat.macro_monster),
     );
-    let ready = state
+    let in_spell = state
         .combat
         .as_ref()
-        .map_or(state.native_work.ready, |combat| combat.ready);
-    // combatsetup counts each newly created nonzero-faction NPC; getbattleorder
-    // then clears the defeated WORD. This is an entry writer, not a live recount.
-    let total = enemies.records.iter().try_fold(0_i16, |total, enemy| {
-        Ok::<_, RuleError>(total.wrapping_add(i16::from(enemy.record().faction()? != 0)))
+        .map_or(state.globals.in_spell, |combat| combat.in_spell);
+    // Counts the monsters that join the battle; the battle order starts with
+    // none defeated.
+    let total = enemies.records.iter().try_fold(0_i16, |total, monster| {
+        Ok::<_, RuleError>(total.wrapping_add(i16::from(monster.record().faction()? != 0)))
     })?;
     let mut combat = Combat::from_records(map, squad, enemies);
-    combat.victory_work = super::victory_work::VictoryWork { total, defeated: 0 };
-    combat.neighbor_work = state.native_work.neighbor_work.clone();
-    combat.ready = ready;
+    combat.kill_counts = super::runtime::kill_counts::KillCounts {
+        num_enemy: total,
+        kill_mon: 0,
+    };
+    combat.neighbors = state.globals.neighbors.clone();
+    combat.in_spell = in_spell;
     combat.difficulty = state.difficulty;
     combat.battle = id;
-    combat.retained_npcs = state.native_work.npc_backing.clone();
-    combat.order = order;
-    combat.cursor = cursor;
-    combat.script_enemy = script_enemy;
-    combat.selected_enemy = selected_enemy;
-    combat.round_scripts =
-        round_stories::RoundScripts::read(&mission.combat.as_ref().unwrap().battles, id)?;
-    combat.death_queue = death_queue;
-    combat.attack_packet = attack_packet;
-    combat.attack_identity = attack_identity;
-    combat.weapon_work = state.native_work.weapon_work;
-    combat.unavailable = unavailable;
-    // combatsetup leaves the target mask; live combat carries its tail.
-    combat
-        .target_tail
-        .clone_from(&state.native_work.spell_target_tail);
-    combat.target_work = state.native_work.target_work;
-    let work = &state.native_work.tactical_work;
-    combat.spell_fields.clone_from(&work.spell_fields);
-    combat.field_used.clone_from(&work.field_used);
-    let mut work = super::tactical_work::TacticalWork::capture(&combat, work);
-    work.saved_land = Some(saved_land);
-    state.native_work.tactical_work = work;
+    combat.monsters = state.globals.monsters.clone();
+    combat.battle_order = order;
+    combat.battle_order_index = cursor;
+    combat.macro_monster = macro_monster;
+    combat.monster_up = monster_up;
+    combat.round_macros =
+        round_stories::RoundMacros::read(&mission.combat.as_ref().unwrap().battles, id)?;
+    combat.todo_queue = todo_queue;
+    combat.spell_info = spell_info;
+    combat.cast_identity = cast_identity;
+    combat.weapon_traits = state.globals.weapon_traits;
+    combat.kill_party = kill_party;
+    // The battle keeps the target mask's tail from before it began.
+    combat.track_tail.clone_from(&state.globals.track_tail);
+    combat.target_picks = state.globals.target_picks;
+    let battlefield = &state.globals.battlefield;
+    combat.spell_queue.clone_from(&battlefield.spell_queue);
+    combat.collide_check.clone_from(&battlefield.collide_check);
+    let mut battlefield = super::battlefield::Battlefield::capture(&combat, battlefield);
+    battlefield.saved_land = Some(saved_land);
+    state.globals.battlefield = battlefield;
     state.combat = Some(combat);
-    state.combat.as_mut().unwrap().attack_packet[19] = 0;
+    state.combat.as_mut().unwrap().spell_info[19] = 0;
     state.phase = Phase::Combat;
     state.selected_battle_treasure = additional;
     state.bandage_ready = 1;
-    // getup 125a92 clears WORD44719a.
-    state.native_work.fire_item = 0;
-    // getup 125a50 calls cleartarget.
+    state.globals.item_used = 0;
     state.clear_targets();
     effects.push(Event::CombatStarted {
         battle: id,
@@ -458,6 +467,7 @@ pub(super) fn begin_battle_with_group(
     }
     Ok(effects)
 }
+/// The first slot of the battle order that holds a combatant. Slot zero is never a turn.
 pub(super) fn initial_cursor(order: &[i16]) -> Result<usize, RuleError> {
     order
         .iter()
@@ -468,21 +478,29 @@ pub(super) fn initial_cursor(order: &[i16]) -> Result<usize, RuleError> {
         .ok_or_else(|| RuleError::Invalid("no initial combatant".into()))
 }
 
+/// The tactical map: one tile value per cell, the value read for a cell beyond the edge, and the
+/// shift that maps a position to a cell.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TacticalMap {
+pub struct CombatField {
     pub tiles: Vec<i16>,
     pub edge_word: i16,
-    pub shift: (i16, i16),
+    #[serde(rename = "shift")]
+    pub map_shift: (i16, i16),
 }
 
+/// Where the six warriors stand on the tactical map, and the tile under each.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SquadPlacement {
-    pub positions: Vec<(i16, i16)>,
-    pub under_tiles: Vec<i16>,
+    #[serde(rename = "positions")]
+    pub pos: Vec<(i16, i16)>,
+    #[serde(rename = "under_tiles")]
+    pub char_under: Vec<i16>,
 }
 
+/// The monsters a battle starts with and where each stands.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EnemySetup {
     pub records: Vec<MonsterRecord>,
-    pub positions: Vec<(i16, i16)>,
+    #[serde(rename = "positions")]
+    pub mon_pos: Vec<(i16, i16)>,
 }

@@ -1,6 +1,6 @@
-//! Placement for combat.
+//! Placing the squad and the monsters on the battle map.
 use crate::combat::{
-    EnemySetup, SquadPlacement, TacticalMap, calculate_movement, footprint, monster,
+    CombatField, EnemySetup, SquadPlacement, calculate_movement, footprint, monster,
 };
 use crate::{RandomState, RuleError};
 use centurions_content::combat::{BattleRecord, MonsterRecord};
@@ -12,8 +12,9 @@ use centurions_content::{
     },
 };
 
+/// Places the battle's monsters at normal difficulty.
 pub fn place_enemies(
-    map: &mut TacticalMap,
+    map: &mut CombatField,
     mission: &centurions_content::mission::OpeningMission,
     battle: &BattleRecord,
     definitions: &[u8],
@@ -23,8 +24,9 @@ pub fn place_enemies(
     place_enemies_at_difficulty(map, mission, battle, definitions, base, random, 0)
 }
 
+/// Places the battle's monsters, scaled for the difficulty.
 pub fn place_enemies_at_difficulty(
-    map: &mut TacticalMap,
+    map: &mut CombatField,
     mission: &centurions_content::mission::OpeningMission,
     battle: &BattleRecord,
     definitions: &[u8],
@@ -41,15 +43,20 @@ pub fn place_enemies_at_difficulty(
         random,
         EnemySetup {
             records: vec![],
-            positions: vec![],
+            mon_pos: vec![],
         },
         difficulty,
     )
 }
 
+/// Places the battle's monsters after any allies. Each cell of the battle grid names a monster; its
+/// level sets its stamina dice, and its armor, agility and psi are varied by chance before the
+/// difficulty scales it. A negative monster number reverses its side.
+///
+/// Original: combatsetup
 #[allow(clippy::too_many_arguments)]
 pub(super) fn place_enemies_with_allies(
-    map: &mut TacticalMap,
+    map: &mut CombatField,
     mission: &centurions_content::mission::OpeningMission,
     battle: &BattleRecord,
     definitions: &[u8],
@@ -60,17 +67,17 @@ pub(super) fn place_enemies_with_allies(
 ) -> Result<EnemySetup, RuleError> {
     for y in 0..26 {
         for x in 0..26 {
-            let id = battle.cells[x * 26 + y];
+            let id = battle.battle_grid[x * 26 + y];
             if id == 0 || result.records.len() == 100 {
                 continue;
             }
             let mut monster = MonsterRecord::read(definitions, id)?;
             let bytes = &mut monster.bytes;
-            let dice = EnemyRecord::from_bytes(bytes).level()?;
+            let dice = EnemyRecord::from_bytes(bytes).hit_dice()?;
             if dice == 0 {
                 continue;
             }
-            // The native signed BYTE dice cursor cannot terminate above 127.
+            // The dice count is a signed byte, so a count above 127 never ends.
             if dice > 127 {
                 return Err(RuleError::Unsupported {
                     action: "combat.enemies",
@@ -78,7 +85,7 @@ pub(super) fn place_enemies_with_allies(
                 });
             }
             super::monster_weapons::validate(bytes)?;
-            EnemyRecordMut::from_bytes(bytes).set_target_body(-1);
+            EnemyRecordMut::from_bytes(bytes).set_target(-1);
             EnemyRecordMut::from_bytes(bytes).set_target_scan_excluded(false);
             EnemyRecordMut::from_bytes(bytes).set_reaction_ready(false);
             let placed = footprint::find_placement(
@@ -95,54 +102,59 @@ pub(super) fn place_enemies_with_allies(
             let position = placed.position;
             let bytes = &mut monster.bytes;
             EnemyRecordMut::from_bytes(bytes).set_movement_direction(1, 1);
-            let armor = EnemyRecord::from_bytes(bytes).armor()?;
+            let armor = EnemyRecord::from_bytes(bytes).ac()?;
             if armor != 0 {
                 EnemyRecordMut::from_bytes(bytes)
                     .set_armor(armor.wrapping_add(random.bound(3) - 2));
             }
-            let armor = EnemyRecord::from_bytes(bytes).armor()?.max(0);
+            let armor = EnemyRecord::from_bytes(bytes).ac()?.max(0);
             EnemyRecordMut::from_bytes(bytes).set_armor(armor);
             let speed = EnemyRecord::from_bytes(bytes)
-                .speed()?
+                .agility()?
                 .wrapping_add(random.bound(3) - 2)
                 .max(1);
-            EnemyRecordMut::from_bytes(bytes).set_speed(speed);
-            let psi = EnemyRecord::from_bytes(bytes).maximum_psi()?;
+            EnemyRecordMut::from_bytes(bytes).set_agility(speed);
+            let psi = EnemyRecord::from_bytes(bytes).psi_points_max()?;
             let spread = psi / 10;
             let psi = psi.wrapping_add(random.range(-spread, spread));
-            EnemyRecordMut::from_bytes(bytes).set_maximum_psi(psi);
+            EnemyRecordMut::from_bytes(bytes).set_psi_points_max(psi);
             EnemyRecordMut::from_bytes(bytes).set_psi_points(psi);
-            let mut stamina = EnemyRecord::from_bytes(bytes).base_stamina()?;
+            let mut stamina = EnemyRecord::from_bytes(bytes).stamina_bonus()?;
             for _ in 0..dice {
                 stamina = stamina.wrapping_add(random.bound(8));
             }
             EnemyRecordMut::from_bytes(bytes).set_stamina(stamina);
-            EnemyRecordMut::from_bytes(bytes).set_maximum_stamina(stamina);
+            EnemyRecordMut::from_bytes(bytes).set_stamina_max(stamina);
             monster::adjust_battle(bytes, difficulty)?;
             if id < 0 {
                 let hostile = i16::from(EnemyRecord::from_bytes(bytes).faction()? == 0);
                 EnemyRecordMut::from_bytes(bytes).set_faction(hostile);
             }
-            let selector = EnemyRecord::from_bytes(bytes).selected_item()?;
+            let selector = EnemyRecord::from_bytes(bytes).weapon()?;
             super::monster_weapons::initialize(
                 bytes,
                 random,
                 super::monster_weapons::MatchOrder::Last,
             )?;
-            // The native table index replaces the local selector before this test.
+            // The table index replaces the weapon selector before this test.
             if matches!(selector, 0 | -1) && EnemyRecord::from_bytes(bytes).melee_weapon()? > 0 {
                 let weapon = EnemyRecord::from_bytes(bytes).melee_weapon()?;
-                EnemyRecordMut::from_bytes(bytes).set_selected_item(weapon);
+                EnemyRecordMut::from_bytes(bytes).set_weapon(weapon);
             }
             result.records.push(monster);
-            result.positions.push(position);
+            result.mon_pos.push(position);
         }
     }
     Ok(result)
 }
 
+/// Places the squad in formation on the map from the start cell along the given direction, and
+/// gives each warrior a clean start: no guarding, attacks, bleeding or target. Each living
+/// warrior's movement is worked out for their race.
+///
+/// Original: combatsetup
 pub fn place_squad(
-    map: &mut TacticalMap,
+    map: &mut CombatField,
     mission: &centurions_content::mission::OpeningMission,
     content: &Content,
     warriors: &mut [Warrior],
@@ -162,22 +174,25 @@ pub fn place_squad(
         -1
     };
     let shift_ud = if direction < 180 { -1 } else { 1 };
-    let origin = (map.shift.0.wrapping_add(5), map.shift.1.wrapping_add(5));
+    let origin = (
+        map.map_shift.0.wrapping_add(5),
+        map.map_shift.1.wrapping_add(5),
+    );
     let mut result = SquadPlacement {
-        positions: vec![],
-        under_tiles: vec![],
+        pos: vec![],
+        char_under: vec![],
     };
     for (index, warrior) in warriors.iter_mut().enumerate() {
         let bytes = &mut warrior.bytes;
         let mut record = WarriorRecordMut::from_bytes(bytes);
         record.set_guarding(0);
         record.set_attacks_used(0);
-        record.set_scans_used(0);
+        record.set_spells_so_far(0);
         record.set_faction(0);
-        record.set_damage_marker(0);
-        record.set_action_points(0);
-        record.set_bleeding_flag(0);
-        record.set_firing_mode(false);
+        record.set_been_attacked(0);
+        record.set_attacks(0);
+        record.set_bleeding(0);
+        record.set_toggle(false);
         record.initialize_placement_marker();
         let weapon = WarriorRecord::from_bytes(bytes).melee_weapon()?;
         let sound = if weapon != 0 {
@@ -190,7 +205,7 @@ pub fn place_squad(
             .impact_sound()?
         } else {
             if WarriorRecord::from_bytes(bytes).equipped_weapon()? != 0 {
-                WarriorRecordMut::from_bytes(bytes).set_firing_mode(true);
+                WarriorRecordMut::from_bytes(bytes).set_toggle(true);
             }
             CharacterInformation(bytes)
                 .gender()?
@@ -198,7 +213,7 @@ pub fn place_squad(
                 .wrapping_add(30)
         };
         DevelopmentField::MeleeSound.write(bytes, sound);
-        WarriorRecordMut::from_bytes(bytes).set_target_body(-1);
+        WarriorRecordMut::from_bytes(bytes).set_target(-1);
         let row = index as i16 / 3;
         let mut found = None;
         'search: for ring in 1..=180_i16 {
@@ -231,16 +246,16 @@ pub fn place_squad(
         let (position, cell, tile) =
             found.ok_or_else(|| RuleError::Invalid("no free squad placement cell".into()))?;
         map.tiles[cell] = index as i16;
-        result.positions.push(position);
-        result.under_tiles.push(tile);
+        result.pos.push(position);
+        result.char_under.push(tile);
         if warrior.stamina()? > 0 {
             let race = warrior.record().race()?;
             let movement = *race_moves
                 .get(race.wrapping_sub(1) as usize)
                 .ok_or_else(|| RuleError::Invalid("race movement missing".into()))?;
             calculate_movement(warrior, movement)?;
-            let value = warrior.record().movement_per_round()?;
-            warrior.record_mut().set_movement_points(value);
+            let value = warrior.record().movement_max()?;
+            warrior.record_mut().set_movement(value);
         }
     }
     Ok(result)

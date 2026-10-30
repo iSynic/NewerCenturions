@@ -1,7 +1,9 @@
-//! Items entry, owner change and exposed-row redraws, with quickinfo on entry.
+//! Opening the Items screen, changing its owner, scrolling and redrawing rows.
 use crate::{Content, Event, Phase, Presentation, RuleError, Session, combat, items};
 use centurions_content::records::{Condition, InventorySlots, ItemDefinition};
 
+/// Opens the Items screen for a warrior, tidying the pack, drawing the rows from the top and
+/// showing the detail panel when the preference is on.
 pub(crate) fn open(
     state: &mut Session,
     content: &Content,
@@ -9,20 +11,20 @@ pub(crate) fn open(
     quick_info: bool,
 ) -> Result<Vec<Event>, RuleError> {
     admit(state, owner)?;
-    state.native_work.health_context.marks_affected = true;
-    state.native_work.party_mask[1..].fill(0);
-    let tail = &mut state.native_work.spell_target_tail;
-    // 12959c clears WORDs1..7 only. Target0 and words8..109 survive.
+    state.globals.health_context.marks_affected = true;
+    state.globals.party_track[1..].fill(0);
+    let tail = &mut state.globals.track_tail;
+    // Only targets 1..7 clear; target 0 and targets 8..109 keep their marks.
     tail[..2].fill(0);
-    // 1299be clears WORD44719a.
-    state.native_work.fire_item = 0;
-    // 1299e8 precedes the initial compaction and redraw.
+    state.globals.item_used = 0;
     let events = vec![Event::Sound { resource_id: 20001 }];
-    // Entry shows display row0 at scroll0, so quickinfo reads the compacted slot0.
+    // The screen opens at the top, so the detail shows the first compacted slot.
     initialize_owner(state, content, owner, 0, quick_info.then_some(0))?;
     Ok(events)
 }
 
+/// Changes whose pack the Items screen shows, keeping the scroll position. Nothing happens when
+/// the owner is already the one shown.
 pub(crate) fn switch(
     state: &mut Session,
     content: &Content,
@@ -31,15 +33,14 @@ pub(crate) fn switch(
     quick_info: Option<i16>,
 ) -> Result<Vec<Event>, RuleError> {
     admit(state, owner)?;
-    let selected = state.native_work.health_context.selected_warrior;
-    // 12bda8/12bdae skips the whole owner-change body for the current owner.
+    let selected = state.globals.health_context.char_select_new;
     if selected == owner {
         return Ok(vec![]);
     }
     let row = quick_info;
     check_scroll(scroll)?;
-    // updateitems160d08 clamps the kept display row to the new owner's rows
-    // (count-1, and -1 to 0); quickinfo then reads the WORD row+scroll slot.
+    // The highlighted row is kept but clamped to the new owner's rows; the
+    // detail then shows row + scroll.
     let count = InventorySlots(&state.warriors[owner].bytes).count()?;
     let slot = row.map(|row| {
         let row = if row >= count { count - 1 } else { row };
@@ -50,6 +51,8 @@ pub(crate) fn switch(
     Ok(vec![])
 }
 
+/// Sets the screen up for an owner: the pack is tidied and the rows drawn from the scroll position,
+/// with the detail panel for the selected slot if asked.
 fn initialize_owner(
     state: &mut Session,
     content: &Content,
@@ -57,13 +60,13 @@ fn initialize_owner(
     scroll: usize,
     quick_info_slot: Option<usize>,
 ) -> Result<(), RuleError> {
-    // 12bdb6 changes the BYTE owner, preserving the selected-warrior WORD.
-    // Entry clears the scroll WORD44719c (1299c4); an owner change keeps the shown scroll.
+    // The owner changes without changing the warrior whose turn it is. Opening
+    // the screen resets the scroll; an owner change keeps it.
     state.set_warrior_selector(owner);
-    state.native_work.inventory_scroll = scroll as u16;
+    state.globals.inventory_scroll = scroll as u16;
     items::compact(&mut state.warriors[owner])?;
     redraw(state, content, owner, scroll, 0, 10)?;
-    // 129b62 runs quickinfo132b0c between the redraw and the Helpless suffix.
+    // The detail panel runs between the redraw and clearing Helpless.
     if let Some(slot) = quick_info_slot {
         super::quick_info(state, content, owner, slot)?;
     }
@@ -71,6 +74,9 @@ fn initialize_owner(
     Ok(())
 }
 
+/// Scrolls the Items rows by a number of rows. Each step plays the scroll sound, and a step that
+/// cannot move also plays the failure sound; scrolling down from scroll position 30 does nothing.
+/// The scroll arrows redraw without the detail panel.
 pub(crate) fn scroll(
     state: &mut Session,
     content: &Content,
@@ -80,10 +86,10 @@ pub(crate) fn scroll(
     quick_info: bool,
 ) -> Result<Vec<Event>, RuleError> {
     admit(state, owner)?;
-    // The scroll arrows redraw rows without calling quickinfo132b0c.
+    // The scroll arrows redraw rows without the detail panel.
     let _ = quick_info;
     check_scroll(position)?;
-    let selected = state.native_work.health_context.selected_warrior;
+    let selected = state.globals.health_context.char_select_new;
     if selected != owner {
         return Err("inventory scroll owner is not selected".into());
     }
@@ -104,13 +110,14 @@ pub(crate) fn scroll(
             events.push(Event::Sound { resource_id: 6000 });
         }
     }
-    // The arrows step WORD44719c by one (12b30a, 12b45e).
-    state.native_work.inventory_scroll = position as u16;
+    state.globals.inventory_scroll = position as u16;
     Ok(events)
 }
 
-/// items12c18a: a row click stores the display row and, with the quick-info
-/// preference, runs quickinfo132b0c on the row+scroll slot (12c26e).
+/// A row click highlights the row and, with the quick-info preference, shows
+/// the detail for that slot.
+///
+/// Original: items, quickinfo
 pub(crate) fn highlight(
     state: &mut Session,
     content: &Content,
@@ -124,17 +131,19 @@ pub(crate) fn highlight(
     if row > 10 {
         return Err("inventory row outside the eleven display rows".into());
     }
-    let selected = state.native_work.health_context.selected_warrior;
+    let selected = state.globals.health_context.char_select_new;
     if selected != owner {
         return Err("inventory row owner is not selected".into());
     }
-    state.native_work.inventory_scroll = scroll as u16;
+    state.globals.inventory_scroll = scroll as u16;
     if quick_info {
         super::quick_info(state, content, owner, scroll + row)?;
     }
     Ok(vec![])
 }
 
+/// Checks that the Items screen can be opened for an owner: in exploration or battle, with the
+/// owner in the squad and nothing but a typed prompt on screen.
 pub(super) fn admit(state: &Session, owner: usize) -> Result<(), RuleError> {
     if !matches!(state.phase, Phase::Exploration | Phase::Combat)
         || owner >= state.warriors.len()
@@ -150,6 +159,7 @@ pub(super) fn admit(state: &Session, owner: usize) -> Result<(), RuleError> {
     Ok(())
 }
 
+/// Checks that the scroll position is one the screen can reach.
 pub(super) fn check_scroll(scroll: usize) -> Result<(), RuleError> {
     if scroll > 30 {
         return Err("inventory scroll outside native rows".into());
@@ -157,7 +167,9 @@ pub(super) fn check_scroll(scroll: usize) -> Result<(), RuleError> {
     Ok(())
 }
 
-/// updateitems160d08 copies the owner, then loads and caches nonempty rows in order.
+/// Redraws the owner's rows, loading each nonempty row in order.
+///
+/// Original: updateitems
 pub(super) fn redraw(
     state: &mut Session,
     content: &Content,
@@ -166,44 +178,43 @@ pub(super) fn redraw(
     first: usize,
     last: usize,
 ) -> Result<(), RuleError> {
-    state.native_work.character_bare_hand_bonus =
-        state.warriors[owner].record().bare_hand_bonus()?;
+    state.globals.character_bare_hand_bonus = state.warriors[owner].record().bare_hand_bonus()?;
     for row in first..=last {
         let record = state.warriors[owner].record().inventory_slot(scroll + row);
         if record.id() != 0 {
-            state.load_item_work(content, record.id())?;
-            state.native_work.inventory_record = record;
+            state.load_item(content, record.id())?;
+            state.globals.inventory_record = record;
         }
     }
     Ok(())
 }
 
-/// 129aca..129e0a clears every member's Helpless word, then calcw and owner info.
+/// Clears every member's Helpless condition, then weighs the owner's load and
+/// refreshes the owner's information.
 fn resume(state: &mut Session, content: &Content, owner: usize) -> Result<(), RuleError> {
     for warrior in &mut state.warriors {
         warrior.record_mut().set_condition(Condition::Helpless, 0);
     }
     calcw(state, content, owner)?;
-    combat::item_activation::refresh_inventory_info_work(state, content, owner)
+    combat::item_activation::refresh_inventory_info_items(state, content, owner)
 }
 
-/// calcw 0x139192 clears the carried weight, then loads each carried item through ITEM
-/// work and adds its weight.
+/// Weighs a warrior's load: each carried item's weight, loaded in turn.
+///
+/// Original: calcw
 pub(crate) fn calcw(state: &mut Session, content: &Content, owner: usize) -> Result<(), RuleError> {
-    state.warriors[owner].record_mut().set_carried_weight(0);
+    state.warriors[owner].record_mut().set_load(0);
     let count = state.warriors[owner].inventory()?.len();
     for slot in 0..count {
         let record = state.warriors[owner].record().inventory_slot(slot);
-        state.load_item_work(content, record.id())?;
-        let definition = ItemDefinition(state.native_work.ammunition_work.item.as_ref().unwrap());
+        state.load_item(content, record.id())?;
+        let definition = ItemDefinition(state.globals.loaded_items.item.as_ref().unwrap());
         let weight = state.warriors[owner]
             .record()
-            .carried_weight()?
-            .wrapping_add(definition.unit_weight()?.wrapping_mul(record.quantity()?))
-            .wrapping_add(definition.base_weight()?);
-        state.warriors[owner]
-            .record_mut()
-            .set_carried_weight(weight);
+            .load()?
+            .wrapping_add(definition.charge_weight()?.wrapping_mul(record.charge()?))
+            .wrapping_add(definition.weight()?);
+        state.warriors[owner].record_mut().set_load(weight);
     }
     Ok(())
 }

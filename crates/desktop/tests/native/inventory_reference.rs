@@ -16,11 +16,9 @@ pub(super) fn compare_previews(
             decode(case["record"].as_str().unwrap())
         );
     }
-    let native = centurions_content::native_text::NativeText::load(
-        content,
-        &root.join("analysis/extracted"),
-    )
-    .unwrap();
+    let native =
+        centurions_content::game_text::GameText::load(content, &root.join("analysis/extracted"))
+            .unwrap();
     let mut strings = std::collections::BTreeMap::new();
     for resource in content.resources.iter().filter(|r| r.r#type == "STR#") {
         strings.insert(
@@ -112,7 +110,7 @@ pub(super) fn compare_encounter_returns(
     .chain(std::iter::once(("calendar-encounter-item.json", 0, true)))
     {
         let mut restored = initial.clone();
-        ui.feedback.clear();
+        ui.feedback.queue.clear();
         let mut content = content.clone();
         let encounter = native_fixture(name);
         let case = &encounter["cases"][index];
@@ -128,7 +126,7 @@ pub(super) fn compare_encounter_returns(
                 crate::original_content::fixture("earned-combat-reload.json");
             restored = serde_json::from_value(combat["foundations"][0]["session"].clone()).unwrap();
             let battle = restored.combat.as_mut().unwrap();
-            battle.order[battle.cursor] = 2;
+            battle.battle_order[battle.battle_order_index] = 2;
         }
         let native_party = case["before"]
             .as_str()
@@ -259,8 +257,8 @@ pub(super) fn compare_encounter_returns(
         }
         if case.get("warning").is_some() {
             assert_eq!(
-                ui.feedback.back(),
-                Some(&centurions_core::feedback::NativeFeedback::Warning {
+                ui.feedback.queue.back(),
+                Some(&centurions_core::feedback::GameFeedback::Warning {
                     index: case["warning"].as_i64().unwrap() as i16
                 })
             );
@@ -367,7 +365,7 @@ pub(super) fn compare_special_purchases(
         probe.shops.get_mut(&probe.scenario_level).unwrap()[3002..6004]
             .copy_from_slice(&decode(case["stock_before"].as_str().unwrap()));
         // The restricted moveicon receipt declares current work, after loadshop.
-        probe.native_work.shop_work = serde_json::from_value(serde_json::json!({
+        probe.globals.the_shop = serde_json::from_value(serde_json::json!({
             "bytes": decode(case["stock_before"].as_str().unwrap())
         }))
         .unwrap();
@@ -387,7 +385,7 @@ pub(super) fn compare_special_purchases(
         probe = centurions_core::load(path, &content).unwrap();
         let before = probe.clone();
         assert!(
-            matches!(apply(Command::SellItem { warrior: 0, slot: 0 }, &mut probe, &content), Err(centurions_core::RuleError::Refused { feedback }) if feedback == vec![centurions_core::feedback::NativeFeedback::Warning { index: generated["refusals"][0]["warning"].as_i64().unwrap() as i16 }])
+            matches!(apply(Command::SellItem { warrior: 0, slot: 0 }, &mut probe, &content), Err(centurions_core::RuleError::Refused { feedback }) if feedback == vec![centurions_core::feedback::GameFeedback::Warning { index: generated["refusals"][0]["warning"].as_i64().unwrap() as i16 }])
         );
         assert_eq!(probe, before);
         apply(Command::BuyItem { warrior: 0, stock }, &mut probe, &content).unwrap();
@@ -434,7 +432,7 @@ pub(super) fn compare_special_purchases(
         );
         let before = probe.clone();
         assert!(
-            matches!(apply(Command::BuyItem { warrior: 0, stock }, &mut probe, &content), Err(centurions_core::RuleError::Refused { feedback }) if feedback == vec![centurions_core::feedback::NativeFeedback::Warning { index: generated["refusals"][1]["warning"].as_i64().unwrap() as i16 }])
+            matches!(apply(Command::BuyItem { warrior: 0, stock }, &mut probe, &content), Err(centurions_core::RuleError::Refused { feedback }) if feedback == vec![centurions_core::feedback::GameFeedback::Warning { index: generated["refusals"][1]["warning"].as_i64().unwrap() as i16 }])
         );
         assert_eq!(probe, before);
         centurions_core::save(path, &probe, &content).unwrap();
@@ -450,14 +448,14 @@ pub(super) fn compare_special_purchases(
 pub(super) fn information_entry(actual: &Session, before: &Session, member: usize) {
     let mut expected = before.clone();
     // viewcharacter 163a54..163a7c copies the displayed record into character work.
-    expected.native_work.character_bare_hand_bonus =
+    expected.globals.character_bare_hand_bonus =
         before.warriors[member].record().bare_hand_bonus().unwrap();
     assert_eq!(*actual, expected);
 }
 
 pub(super) fn compare_character_fields(content: &Content, state: &Session, root: &std::path::Path) {
     let extracted = root.join("analysis/extracted");
-    let native = centurions_content::native_text::NativeText::load(content, &extracted).unwrap();
+    let native = centurions_content::game_text::GameText::load(content, &extracted).unwrap();
     let strings = content
         .resources
         .iter()
@@ -511,10 +509,8 @@ pub(super) fn compare_character_fields(content: &Content, state: &Session, root:
 }
 
 pub(super) fn stock(state: &Session) -> Vec<u8> {
-    serde_json::from_value(
-        serde_json::to_value(&state.native_work.shop_work).unwrap()["bytes"].clone(),
-    )
-    .unwrap()
+    serde_json::from_value(serde_json::to_value(&state.globals.the_shop).unwrap()["bytes"].clone())
+        .unwrap()
 }
 
 pub(super) fn compare_shop_stock(
@@ -524,7 +520,7 @@ pub(super) fn compare_shop_stock(
     source: &[u8],
 ) {
     // Independent cases and the main state's next script use the receipt's cold DATA work.
-    state.native_work.shop_work = serde_json::from_value(serde_json::json!({
+    state.globals.the_shop = serde_json::from_value(serde_json::json!({
         "bytes": vec![0u8; 3002]
     }))
     .unwrap();
@@ -545,11 +541,9 @@ pub(super) fn compare_shop_stock(
 
 /// Every original DATA address and expected byte comparison is retained.
 pub(super) fn compare_editor_data(content: &Content, root: &std::path::Path) {
-    let text = centurions_content::native_text::NativeText::load(
-        content,
-        &root.join("analysis/extracted"),
-    )
-    .unwrap();
+    let text =
+        centurions_content::game_text::GameText::load(content, &root.join("analysis/extracted"))
+            .unwrap();
     let original = std::fs::read(root.join("analysis/ghidra/startup/a5-mapped.bin")).unwrap();
     for (address, pascal) in [
         (0x403658, true),

@@ -4,6 +4,7 @@ use crate::assets::Assets;
 use centurions_content::{Content, InventoryRecord};
 use macroquad::prelude::*;
 impl Inventory {
+    /// Draws the information panel for `item` in the selected row.
     pub(crate) fn detail(
         &self,
         content: &Content,
@@ -29,7 +30,7 @@ impl Inventory {
                 map,
                 item,
                 stock,
-                &assets.native_text,
+                &assets.game_text,
                 &assets.character_strings,
             )
             .map_err(|error| {
@@ -44,6 +45,7 @@ impl Inventory {
         draw_detail_plan(plan, assets);
     }
 
+    /// Draws an item row's statistics at `(x, y)`, keeping them for the next frame.
     pub(super) fn row_stats(
         &self,
         content: &Content,
@@ -64,7 +66,7 @@ impl Inventory {
             match centurions_core::item_display::row(
                 content,
                 item,
-                &assets.native_text,
+                &assets.game_text,
                 &assets.character_strings,
             ) {
                 Ok(effects) => {

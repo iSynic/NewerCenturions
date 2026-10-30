@@ -1,15 +1,19 @@
-//! Warrior table records 0x448aa0 + body * 0xc42 that no squad member owns.
+//! Warrior records that no squad member owns.
 //!
-//! Bodies 0..5 are the party table the save/load pair 0x15298c/0x12f2fe transfers
-//! whole; records past the squad keep whatever the last writer left there.
-//! Bodies 6 and 7 are upgradewarrior's scratch records 0x44d42c and 0x44e06e, and
-//! bodies 8..13 the editor backup 0x44ecb0. All of them are zero at launch.
+//! Bodies 0..5 are the party table, which save and load transfer whole; records
+//! past the squad keep whatever the last writer left there. Bodies 6 and 7 are
+//! the held Upgrade records, the warrior before and on entering Upgrade, and
+//! bodies 8..13 the editor backup. All of them are zero at launch.
 use crate::{RuleError, Session};
 use centurions_content::{WARRIOR_BYTES, Warrior};
 use serde::{Deserialize, Serialize};
 
 /// Bodies 0..13: the six party records, the two Upgrade records and the backup.
 const TABLE_RECORDS: usize = 14;
+/// The record on entering Upgrade and before each upgrade purchase.
+pub(crate) const UPGRADE_PREVIOUS_BODY: usize = 6;
+/// The record on entering Upgrade.
+pub(crate) const UPGRADE_ENTRY_BODY: usize = 7;
 
 /// Records outside the squad as (body, bytes) sorted by body; an absent record is zero.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,10 +21,12 @@ const TABLE_RECORDS: usize = 14;
 pub struct WarriorTable(Vec<(usize, Vec<u8>)>);
 
 impl WarriorTable {
+    /// Whether no record outside the squad is held.
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    /// The record held for a body, if any.
     fn get(&self, body: usize) -> Option<&[u8]> {
         self.0
             .iter()
@@ -28,6 +34,8 @@ impl WarriorTable {
             .map(|(_, bytes)| bytes.as_slice())
     }
 
+    /// Checks that the held records are in body order, are outside the squad and are full records
+    /// that are not blank.
     pub(crate) fn validate(&self, squad: usize) -> Result<(), RuleError> {
         if !self.0.is_sorted_by(|a, b| a.0 < b.0)
             || self.0.iter().any(|(body, bytes)| {
@@ -50,6 +58,8 @@ impl WarriorTable {
         })
     }
 
+    /// A two-byte value of a record; zero for a body that holds none, and none for a body or offset
+    /// outside the table.
     pub(crate) fn word(&self, body: usize, offset: usize) -> Option<i16> {
         if body >= TABLE_RECORDS || offset + 2 > WARRIOR_BYTES {
             return None;
@@ -59,6 +69,7 @@ impl WarriorTable {
         }))
     }
 
+    /// Holds a record for a body; a blank record is not kept.
     pub(crate) fn store(&mut self, body: usize, bytes: Vec<u8>) -> Result<(), RuleError> {
         if body >= TABLE_RECORDS || bytes.len() != WARRIOR_BYTES {
             return Err("warrior table record outside the table".into());
@@ -74,6 +85,7 @@ impl WarriorTable {
         Ok(())
     }
 
+    /// Sets a two-byte value in a record, starting a blank record for a body that holds none.
     pub(crate) fn set_word(
         &mut self,
         body: usize,
@@ -94,34 +106,31 @@ impl Session {
     /// later records down and leaves the old last record behind; adding one copies
     /// over the record past the squad. Records past the new squad keep their bytes.
     pub(crate) fn replace_squad(&mut self, warriors: Vec<Warrior>) -> Result<(), RuleError> {
-        let mut table = self.native_work.warrior_table.clone();
+        let mut table = self.globals.warrior_table.clone();
         for (body, warrior) in self.warriors.iter().enumerate().skip(warriors.len()) {
             table.store(body, warrior.bytes.clone())?;
         }
         for body in 0..warriors.len() {
             table.0.retain(|(held, _)| *held != body);
         }
-        self.native_work.warrior_table = table;
+        self.globals.warrior_table = table;
         self.warriors = warriors;
         Ok(())
     }
 
-    /// The record at 0x448aa0 + body * 0xc42 for bodies 0..13, squad or held.
+    /// The warrior record of body 0..13, from the squad or held here.
     pub(crate) fn table_record(&self, body: usize) -> Option<Warrior> {
         if let Some(warrior) = self.warriors.get(body) {
             return Some(warrior.clone());
         }
-        self.native_work
-            .warrior_table
-            .bytes(body)
-            .map(|bytes| Warrior {
-                name: String::new(),
-                original_sha256: String::new(),
-                bytes,
-            })
+        self.globals.warrior_table.bytes(body).map(|bytes| Warrior {
+            name: String::new(),
+            original_sha256: String::new(),
+            bytes,
+        })
     }
 
-    /// Writes back records 0.. as a kernel left them: the squad, then held records.
+    /// Writes back records from body 0 on: the squad, then held records.
     pub(crate) fn store_table_records(&mut self, records: Vec<Warrior>) -> Result<(), RuleError> {
         if records.len() < self.warriors.len() {
             return Err("warrior table records shorter than the squad".into());
@@ -143,7 +152,7 @@ impl Session {
                 warrior.bytes = record.bytes;
                 Ok(())
             }
-            None => self.native_work.warrior_table.store(body, record.bytes),
+            None => self.globals.warrior_table.store(body, record.bytes),
         }
     }
 }

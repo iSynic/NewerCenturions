@@ -1,4 +1,5 @@
-//! PICT153 and the normal-combat hit rectangles in combat114378.
+//! The combat control panel (PICT 153), its buttons' hit rectangles and the
+//! tactical view the combat screen looks through.
 use crate::{
     input,
     presentation::{Action, Control, Inspection, UiState},
@@ -6,6 +7,7 @@ use crate::{
 use centurions_core::{Command, Session};
 use macroquad::prelude::*;
 
+/// The combat panel's buttons that change the tactical view.
 #[derive(Clone, Copy, Debug)]
 pub enum ViewAction {
     Center,
@@ -15,44 +17,51 @@ pub enum ViewAction {
     Reveal,
 }
 
+/// Which body and point the tactical view is centred on for the current turn.
 #[derive(Default)]
 pub struct View {
     pub body: Option<i16>,
     turn: Option<(i16, usize)>,
     point: Option<(i16, i16)>,
-    /// Reveal Friends: showrange(0) 0x1580be's frames and lines stay until its
-    /// WaitNextEvent loop 0x158416..0x15843c takes a mouseDown or keyDown.
+    /// Reveal Friends: showrange(0)'s frames and lines stay until its
+    /// WaitNextEvent loop takes a mouseDown or keyDown.
     pub reveal: bool,
     pub move_target: bool,
 }
 
 impl View {
+    /// The body the view is on: the player's pick for this turn, else the body whose
+    /// turn it is.
     pub fn selected(&self, state: &Session) -> Option<i16> {
         let c = state.combat.as_ref()?;
-        if self.turn == Some((c.round, c.cursor)) {
+        if self.turn == Some((c.combat_round, c.battle_order_index)) {
             self.body.or(c.active_body())
         } else {
             c.active_body()
         }
     }
 
+    /// Centres the view on a battlefield point for the rest of the turn.
     pub fn pan(&mut self, state: &Session, point: (i16, i16)) {
         if let Some(c) = &state.combat {
-            self.turn = Some((c.round, c.cursor));
+            self.turn = Some((c.combat_round, c.battle_order_index));
             self.point = Some(point);
             self.move_target = false;
         }
     }
 
+    /// Carries out a view button: centre on the active body, step to the next or
+    /// previous body in battle order that still stands, choose a cell to move the
+    /// view to, or toggle Reveal Friends.
     pub fn change(&mut self, state: &Session, action: ViewAction) {
         let Some(c) = &state.combat else { return };
-        if self.turn != Some((c.round, c.cursor)) {
+        if self.turn != Some((c.combat_round, c.battle_order_index)) {
             *self = Self::default();
         }
-        self.turn = Some((c.round, c.cursor));
+        self.turn = Some((c.combat_round, c.battle_order_index));
         if let ViewAction::Reveal = action {
-            // combat 0x116350 keeps the view: showrange(0), then centerfield at
-            // the current centre WORD408570/408572 once a click or key arrives.
+            // Reveal Friends keeps the view: showrange(0), then centerfield at
+            // the current centre once a click or key arrives.
             self.reveal = !self.reveal;
             return;
         }
@@ -76,18 +85,19 @@ impl View {
                 };
                 let mut index = self
                     .body
-                    .and_then(|body| c.order.iter().position(|id| *id == body))
-                    .unwrap_or(c.cursor);
-                // centerstage110644 wraps slots1..109; bounded even if no body remains.
+                    .and_then(|body| c.battle_order.iter().position(|id| *id == body))
+                    .unwrap_or(c.battle_order_index);
+                // centerstage wraps battle order slots 1..109; bounded even if no
+                // body remains.
                 for _ in 0..109 {
                     index = (index as i32 - 1 + step).rem_euclid(109) as usize + 1;
-                    let body = c.order[index];
+                    let body = c.battle_order[index];
                     let present = if (0..state.warriors.len() as i16).contains(&body) {
                         state.warriors[body as usize].stamina().unwrap_or(0) > 0
                     } else {
                         usize::try_from(body - 10)
                             .ok()
-                            .and_then(|i| c.enemies.records.get(i))
+                            .and_then(|i| c.roster.records.get(i))
                             .is_some_and(|m| m.stamina().unwrap_or(0) > 0)
                     };
                     if present {
@@ -100,6 +110,8 @@ impl View {
     }
 }
 
+/// The battlefield cell at the view's top left: the playback's view while it
+/// runs, otherwise centred on the panned point or the selected body.
 pub fn origin(state: &Session, ui: &UiState) -> Option<(i16, i16)> {
     if let Some(origin) = ui.playback.as_ref().and_then(|playback| playback.view) {
         return Some(origin);
@@ -107,27 +119,29 @@ pub fn origin(state: &Session, ui: &UiState) -> Option<(i16, i16)> {
     let live = state.combat.as_ref()?;
     let body = ui.combat_view.selected(state)?;
     let c = live;
-    let point = if ui.combat_view.turn == Some((live.round, live.cursor))
+    let point = if ui.combat_view.turn == Some((live.combat_round, live.battle_order_index))
         && let Some(point) = ui.combat_view.point
     {
         point
-    } else if body < 10 {
-        *c.squad.positions.get(body as usize)?
+    } else if crate::acting::is_warrior_body(body) {
+        *c.squad.pos.get(body as usize)?
     } else {
-        *c.enemies.positions.get((body - 10) as usize)?
+        *c.roster.mon_pos.get((body - 10) as usize)?
     };
     Some(centered(c, point))
 }
 
 /// The view origin that puts a tactical position at the view's centre cell.
 pub fn centered(c: &centurions_core::combat::Combat, point: (i16, i16)) -> (i16, i16) {
-    let shift = (c.map.shift.0 + 5, c.map.shift.1 + 5);
+    let shift = (c.field.map_shift.0 + 5, c.field.map_shift.1 + 5);
     (
         (point.0 - 7).clamp(-shift.0, 75 - shift.0),
         (point.1 - 6).clamp(-shift.1, 77 - shift.1),
     )
 }
 
+/// The combat panel's button controls (PICT 153), enabled for the acting
+/// warrior's current choices.
 pub fn buttons(
     state: &Session,
     content: &centurions_content::Content,
@@ -139,7 +153,9 @@ pub fn buttons(
         .and_then(|c| c.active_body())
         .filter(|i| (0..state.warriors.len() as i16).contains(i))
         .map_or(selected, |i| i as usize);
-    let firearm = state.warriors[actor].bytes[0x9dd] != 0;
+    let firearm = state.warriors[actor].record().toggle();
+    // The controls sit 20 pixels lower here than in the game's window (combat's
+    // Guard at 526, 436 is drawn at 526, 456).
     let entries = [
         (
             Rect::new(526., 456., 46., 15.),
@@ -248,6 +264,8 @@ pub fn buttons(
         .collect()
 }
 
+/// The action a combat key press stands for (G, D, F, W and so on, one for
+/// each panel button), if its button is available.
 pub fn shortcut(
     key: KeyCode,
     state: &Session,
@@ -279,7 +297,8 @@ pub fn shortcut(
         .map(|c| c.action.clone())
 }
 
-/// Original CNTL190..195 retain their own automation flags between turns.
+/// The Auto boxes, CNTL 190..195, keep each warrior's automatic flag between
+/// turns.
 pub fn draw_automatic(
     state: &Session,
     assets: &crate::assets::Assets,
@@ -287,8 +306,8 @@ pub fn draw_automatic(
 ) {
     let Some(c) = &state.combat else { return };
     for member in 0..state.warriors.len() {
-        let rect = assets.main_controls[&(190 + member as i16)];
-        assets.panel(if c.automatic[member] { 179 } else { 180 }, rect);
+        let rect = assets.main_controls[&(crate::layout::control::AUTO_POSITION + member as i16)];
+        assets.panel(if c.do_auto[member] { 179 } else { 180 }, rect);
         let action = Action::Command(Command::ToggleCombatAuto { warrior: member });
         controls.push(Control {
             rect,
@@ -298,6 +317,8 @@ pub fn draw_automatic(
     }
 }
 
+/// Draws up to 12 of the acting warrior's weapons from the current page under
+/// their category headings, with ammunition counts.
 pub fn draw_weapons(
     state: &Session,
     assets: &crate::assets::Assets,
@@ -319,7 +340,7 @@ pub fn draw_weapons(
         if category != Some(kind) {
             let address = if kind == 15 { 0x403d28 } else { 0x403cfc };
             rows.push((
-                assets.native_text.text(address, true).unwrap_or_default(),
+                assets.game_text.text(address, true).unwrap_or_default(),
                 None,
                 false,
             ));
@@ -329,16 +350,16 @@ pub fn draw_weapons(
         let mut label = assets.name(item.id());
         if kind == 15 || amount > 0 {
             let prefix = assets
-                .native_text
+                .game_text
                 .text(if kind == 15 { 0x403d22 } else { 0x403cfa }, false)
                 .unwrap_or_default();
             let suffix = assets
-                .native_text
+                .game_text
                 .text(if kind == 15 { 0x403d1c } else { 0x403cf4 }, false)
                 .unwrap_or_default();
             label.push_str(&format!("{prefix}{amount}{suffix}"));
         }
-        rows.push((label, Some(slot), item.equipment_flag() != 0));
+        rows.push((label, Some(slot), item.equipped() != 0));
     }
     let width = rows
         .iter()

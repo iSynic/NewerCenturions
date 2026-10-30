@@ -1,8 +1,13 @@
 use centurions_content::Content;
-use centurions_core::{Command, Session, apply, load, native_save, save, trace};
+use centurions_core::{Command, Session, apply, load, original_save, save, trace};
 use serde_json::{Value, json};
 use std::{error::Error, fs, path::Path};
 
+/// Imports an original saved game, saves and reloads it to check that nothing
+/// changes, then applies the commands in order. Returns a JSON report with each
+/// command's events and trace, stopping at the first rejected command. The work
+/// folder must be inside the checkout's analysis directory, and an existing
+/// round-trip save is never overwritten.
 pub(crate) fn run(
     content: &Content,
     original: &Path,
@@ -20,7 +25,7 @@ pub(crate) fn run(
     }
     let commands: Vec<Command> = serde_json::from_slice(&fs::read(commands)?)?;
     let fresh = Session::new(content);
-    let imported = native_save::import(
+    let imported = original_save::import(
         original,
         content,
         &fresh.random,
@@ -43,7 +48,7 @@ pub(crate) fn run(
     let mut accepted = true;
     for (index, command) in commands.into_iter().enumerate() {
         let before = state.clone();
-        let result = apply(super::super::traced(command), &mut state, content);
+        let result = apply(crate::replay::traced(command), &mut state, content);
         let entries = trace::take();
         match result {
             Ok(events) => steps.push(json!({"index":index,"events":events,"trace":entries})),

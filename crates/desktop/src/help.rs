@@ -1,6 +1,14 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+mod page;
+pub use page::draw as draw_page;
+
+/// Popup-help Done button (item 3 of the PICT 168 strip); Escape and Enter press it.
+pub const DONE: usize = 3;
+
+/// The popup help: whether it is turned on, the tutorial page showing, the pages
+/// already seen, and the settings file.
 pub struct Help {
     pub(crate) settings: serde_json::Value,
     pub enabled: bool,
@@ -16,6 +24,7 @@ pub struct Help {
 mod tests;
 
 impl Default for Help {
+    /// Popup help on, with no page showing and none seen.
     fn default() -> Self {
         Self {
             settings: serde_json::json!({}),
@@ -30,6 +39,7 @@ impl Default for Help {
 }
 
 impl Help {
+    /// Reads the settings file at `path`: whether help is on and the pages seen.
     pub fn preferences(&mut self, path: PathBuf) -> Result<(), String> {
         self.path = Some(path.clone());
         if !path.exists() {
@@ -63,6 +73,7 @@ impl Help {
         Ok(())
     }
 
+    /// Writes the settings file, if one is set.
     pub(crate) fn save(&self) -> Result<(), String> {
         let Some(path) = &self.path else {
             return Ok(());
@@ -77,6 +88,8 @@ impl Help {
         centurions_core::atomic_write(path, &bytes).map_err(|error| error.to_string())
     }
 
+    /// Shows the first tutorial page of `first` through `last` that has not been
+    /// seen yet, if help is on.
     pub fn open(&mut self, first: usize, last: usize) -> Result<(), String> {
         if first > last || last >= 256 {
             return Err("Invalid popup-help page range.".into());
@@ -94,12 +107,14 @@ impl Help {
         Ok(())
     }
 
+    /// Carries out a click on the help strip: Done, the previous and next pages, or
+    /// turning help off. Returns the sound to play.
     pub fn action(&mut self, item: usize) -> Result<i16, String> {
         let Some(page) = self.page else {
             return Ok(0);
         };
         match item {
-            1 | 3 => {
+            1 | DONE => {
                 self.seen.extend(self.first..=self.last);
                 self.page = None;
             }
@@ -118,12 +133,14 @@ impl Help {
         Ok(if item == 1 || item == 3 { 148 } else { 141 })
     }
 
+    /// Turns help on and forgets which pages were seen.
     pub fn reset(&mut self) -> Result<(), String> {
         self.enabled = true;
         self.seen.clear();
         self.save()
     }
 
+    /// Turns help on again, keeping the pages seen.
     pub fn resume(&mut self) -> Result<(), String> {
         self.enabled = true;
         self.save()

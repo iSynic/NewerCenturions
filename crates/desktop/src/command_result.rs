@@ -1,4 +1,4 @@
-//! Desktop consequences of a command, classified from the original input identity.
+//! What the desktop does after a command, chosen by the input that issued it.
 use crate::{
     application::Application,
     audio::Audio,
@@ -18,7 +18,7 @@ pub fn execute(
     automatic_turn: bool,
 ) -> bool {
     let input = InputEffects::of(&command);
-    let previous_round = state.combat.as_ref().map(|c| c.round);
+    let previous_round = state.combat.as_ref().map(|c| c.combat_round);
     let previous_session = state.combat.is_some().then(|| state.clone());
     let previous_view = crate::combat_controls::origin(state, ui);
     match apply(application.command(command), state, content) {
@@ -44,6 +44,9 @@ pub fn execute(
     }
 }
 
+/// Settles the screen after a command succeeds: clears the entry and selection
+/// state the command finished, queues the round notices, builds the playback of
+/// the combat steps and plays the sounds.
 fn present_success(
     input: &InputEffects,
     state: &Session,
@@ -62,15 +65,15 @@ fn present_success(
         ui.typed_text.clear();
     }
     if input.collection {
-        ui.collection_slot = None;
-        ui.collection_drag = false;
+        ui.collection.slot = None;
+        ui.collection.drag = false;
     }
     if input.shot
         && events
             .iter()
             .any(|event| matches!(event, Event::AttackResolved { .. }))
     {
-        ui.firearm_map_target = false;
+        ui.targeting.firearm_map = false;
     }
     application.prepare_combat_round(previous_round, state, events);
     if input.movement
@@ -85,9 +88,9 @@ fn present_success(
     }
     if input.psi {
         ui.inspection = None;
-        ui.psi_pending = None;
-        ui.psi_choice = None;
-        ui.medical_cancel = false;
+        ui.psi.pending = None;
+        ui.psi.choice = None;
+        ui.targeting.medical_cancel = false;
         if state.psi_selection.is_some() {
             ui.page = 0;
         }
@@ -116,17 +119,21 @@ fn present_success(
                 events,
                 &crate::combat_playback::Settings {
                     speed: application.speed as i16,
-                    effect: state.native_work.health_context.effect,
+                    effect: state.globals.health_context.effect,
                     targeting: state
                         .combat
                         .as_ref()
-                        .and_then(|combat| combat.attack_packet.get(1).copied())
+                        .and_then(|combat| combat.spell_info.get(1).copied())
                         .unwrap_or(0),
-                    short_walks: ui.preferences.enabled(9),
-                    batched_effects: ui.preferences.enabled(10),
+                    short_walks: ui
+                        .preferences
+                        .enabled(crate::preferences::pref::FASTER_SCAN_CASTING),
+                    batched_effects: ui
+                        .preferences
+                        .enabled(crate::preferences::pref::FASTER_SCAN_RESOLUTION),
                     item_value: state
-                        .native_work
-                        .ammunition_work
+                        .globals
+                        .loaded_items
                         .item
                         .as_deref()
                         .and_then(|item| item.get(0x30..0x32))
@@ -144,8 +151,8 @@ fn present_success(
         ui.inspection = None;
         ui.effects.clear();
         ui.movement.reset();
-        ui.psi_pending = None;
-        ui.psi_choice = None;
+        ui.psi.pending = None;
+        ui.psi.choice = None;
     }
     if let Some(audio) = audio {
         if input.field_control.is_some() && ui.field_repeating {
@@ -168,6 +175,8 @@ fn present_success(
     }
 }
 
+/// What the kind of command that was issued does to the screen's input state
+/// when it succeeds or fails.
 struct InputEffects {
     text_entry: bool,
     collection: bool,
@@ -180,6 +189,7 @@ struct InputEffects {
     field_control: Option<centurions_core::field_controls::Action>,
 }
 impl InputEffects {
+    /// Classifies `command` into the input effects it has.
     fn of(command: &Command) -> Self {
         let text_entry = matches!(command, Command::SubmitText { .. } | Command::CancelMenu);
         let collection = matches!(

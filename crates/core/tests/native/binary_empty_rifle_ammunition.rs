@@ -2,7 +2,7 @@ use crate::{native_common, prelude::*, support};
 
 use centurions_core::ammunition;
 use centurions_core::ammunition::RefitFlags;
-use centurions_core::ammunition::WorkBuffers;
+use centurions_core::ammunition::LoadedItems;
 use centurions_core::items;
 
 use native_common::snapshot_party as party;
@@ -144,7 +144,7 @@ fn automatic_empty_refit_matches_twelve_native_direct_helper_cases() {
             "refit{i} native stock"
         );
         let mut warriors = party(before);
-        let work = WorkBuffers {
+        let work = LoadedItems {
             item: Some(before.bytes("item_work")),
             weapon: Some(before.bytes("weapon")),
             ammo: Some(before.bytes("ammo")),
@@ -172,11 +172,11 @@ fn automatic_empty_refit_matches_twelve_native_direct_helper_cases() {
         warriors[0] = result.warrior;
         assert_party(&warriors, after, &format!("refit{i} all six warriors"));
         assert_eq!(result.reserves, reserves(after), "refit{i} all200 reserves");
-        support::expect(result.native_return, &case["refit_return"]);
+        support::expect(result.return_code, &case["refit_return"]);
         for (actual, key) in [
-            (result.work.item, "item_work"),
-            (result.work.weapon, "weapon"),
-            (result.work.ammo, "ammo"),
+            (result.loaded.item, "item_work"),
+            (result.loaded.weapon, "weapon"),
+            (result.loaded.ammo, "ammo"),
         ] {
             assert_eq!(
                 actual,

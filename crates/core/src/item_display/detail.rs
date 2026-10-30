@@ -1,9 +1,9 @@
-//! The quickinfo panel (0x132b0c): direct item calculations and drawing output.
-//! File data is already loaded by content; no emulated I/O, stack or SANE calls.
+//! The Items detail panel: the item's figures and how they are drawn.
 use super::{
-    BTreeMap, BodyRect, Content, Draw, InventoryRecord, NativeText, PanelEffect, PanelPlan,
+    BTreeMap, BodyRect, Content, Draw, GameText, InventoryRecord, PanelEffect, PanelPlan,
     PascalString, RuleError,
 };
+use crate::combat::spells::{FIRST_SPELL_DESCRIPTOR, spell_level};
 use centurions_content::{
     mission::OpeningMission,
     records::{InventoryModifier as Modifier, ItemDefinition, ItemPanelRecord},
@@ -13,16 +13,17 @@ use centurions_content::{
 mod drawing;
 use drawing::Panel;
 
+/// Original: quickinfo
 pub fn detail(
     content: &Content,
     mission: &OpeningMission,
     item: &InventoryRecord,
     stock: bool,
-    native: &NativeText,
+    game_text: &GameText,
     strings: &BTreeMap<i16, Vec<u8>>,
 ) -> Result<PanelPlan, RuleError> {
-    native.bytes(0x402900, 0x640)?;
-    // Retain the original adapter's admission of all three records before drawing.
+    game_text.bytes(0x402900, 0x640)?;
+    // All three item definitions must exist before anything is drawn.
     for id in [0, item.id(), item.ammunition_id()?] {
         content
             .items
@@ -33,7 +34,7 @@ pub fn detail(
     let base = ItemDefinition(&definition);
     let original = ItemPanelRecord(&definition);
     let spell = base.spell()?;
-    if (1101..4000).contains(&spell) {
+    if (FIRST_SPELL_DESCRIPTOR..4000).contains(&spell) {
         let attacks = &mission
             .combat
             .as_ref()
@@ -78,7 +79,7 @@ pub fn detail(
                 original
                     .shield_chance()?
                     .wrapping_add(modifier(Modifier::ShieldChance)),
-                item.quantity()?,
+                item.charge()?,
                 item.capacity()?,
                 original.range()?.wrapping_add(
                     modifier(Modifier::Range)
@@ -90,9 +91,9 @@ pub fn detail(
                 Modifier::MeleeAccuracy.read(item),
             )
         };
-    let mut panel = Panel::new(native, strings);
+    let mut panel = Panel::new(game_text, strings);
     panel.start(i16::from_be_bytes(
-        native.bytes(0x402f3c, 2)?.try_into().unwrap(),
+        game_text.bytes(0x402f3c, 2)?.try_into().unwrap(),
     ));
     for (vertical, value, plus) in [
         (479, required_level, false),
@@ -104,7 +105,8 @@ pub fn detail(
     ] {
         panel.number_at(450, vertical, value, plus)?;
     }
-    // quickinfo rounds the factor to Single, then multiplies in extended precision.
+    // The factor is rounded to single precision, then multiplied in extended
+    // precision.
     let factor = (100_i32 + i32::from(item.damage_enhancement())) as f32 / 100.0;
     let mut damage = base.missile_damage()?.wrapping_add(base.melee_damage()?);
     if has_ammunition {
@@ -185,7 +187,7 @@ pub fn detail(
         panel.indexed(-11000, i16::from(original.equipment_type()).wrapping_add(1))?
     } else {
         panel.literal(0x402922)?;
-        panel.indexed(-11000, base.category()?.wrapping_add(1))?
+        panel.indexed(-11000, base.item_type()?.wrapping_add(1))?
     };
     panel.move_to(168, 571);
     panel.draw(Draw::DrawString(label));
@@ -207,13 +209,16 @@ pub fn detail(
     Ok(panel.plan)
 }
 
+/// Writes the special-effect lines of the detail panel: one for the item's effect, one for a
+/// weapon condition (effect -10), one for its spell, one for effect 122, and one for each skill the
+/// item changes.
 fn special_information(
     panel: &mut Panel<'_>,
     item: &ItemDefinition<'_>,
     values: &ItemPanelRecord<'_>,
 ) -> Result<(), RuleError> {
-    // Keep a local encoded text buffer because description_box changes it from
-    // C to Pascal between branches. Unknown subselectors retain those bytes.
+    // The description text changes from C to Pascal form between branches, so
+    // keep it as encoded bytes; unknown subselectors leave it as it was.
     let mut text = vec![0];
     let effect = item.effect_selector()?;
     let amount = item.spell()?;
@@ -226,16 +231,16 @@ fn special_information(
         panel.description(&mut text)?;
     }
     if effect == -10 {
-        text = panel.native_c(0x402a3a)?;
+        text = panel.c_string(0x402a3a)?;
         append(
             &mut text,
             panel.indexed(133, amount.wrapping_sub(19))?.payload(),
         );
         panel.description(&mut text)?;
     }
-    if (1101..4000).contains(&amount) {
-        text = panel.native_c(0x402a30)?;
-        let tier = amount % 1000 / 100 - 1;
+    if (FIRST_SPELL_DESCRIPTOR..4000).contains(&amount) {
+        text = panel.c_string(0x402a30)?;
+        let tier = spell_level(amount);
         let selection = amount % 100 - 1;
         append(
             &mut text,
@@ -256,17 +261,17 @@ fn special_information(
             4 => Some(0x4029b2),
             _ => None,
         } {
-            text = panel.native_c(address)?;
+            text = panel.c_string(address)?;
         }
         panel.description(&mut text)?;
     }
     let (attributes, adjustment) = values.attribute_changes()?;
     for attribute in attributes {
         if (1..16).contains(&attribute) {
-            text = panel.native_c(if adjustment > 0 { 0x4029b0 } else { 0x402d2d })?;
+            text = panel.c_string(if adjustment > 0 { 0x4029b0 } else { 0x402d2d })?;
             let number = panel.convert_number(adjustment)?;
             append(&mut text, number.payload());
-            append(&mut text, &panel.native_c(0x4029aa)?);
+            append(&mut text, &panel.c_string(0x4029aa)?);
             append(&mut text, panel.indexed(1201, attribute)?.payload());
             panel.description(&mut text)?;
         }
@@ -274,6 +279,7 @@ fn special_information(
     Ok(())
 }
 
+/// Adds a string to the end of a zero-terminated text.
 fn append(text: &mut Vec<u8>, suffix: &[u8]) {
     text.truncate(
         text.iter()

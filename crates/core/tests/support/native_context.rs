@@ -14,16 +14,16 @@ use centurions_core::Session;
 /// Boat status, facing and shore-attempt work are absent from these captures.
 pub fn captured_session(state: &Session) -> Session {
     let mut captured = state.clone();
-    captured.native_work.boat = 0;
-    captured.native_work.boat_facing = 0;
-    captured.native_work.shore_attempts = 0;
-    captured.native_work.npc_work = Default::default();
-    captured.native_work.early_booty = 0;
-    captured.native_work.walking_confusion = 0;
-    captured.native_work.spell_target_tail = vec![0; 104];
-    captured.native_work.target_work = Default::default();
-    captured.native_work.monster_work = Default::default();
-    captured.native_work.bestiary = Default::default();
+    captured.globals.boat = 0;
+    captured.globals.boat_facing = 0;
+    captured.globals.shore_attempts = 0;
+    captured.globals.monster_turn_flags = Default::default();
+    captured.globals.coward = 0;
+    captured.globals.possessed = 0;
+    captured.globals.track_tail = vec![0; 104];
+    captured.globals.target_picks = Default::default();
+    captured.globals.monster_pick = Default::default();
+    captured.globals.bestiary = Default::default();
     let mut current = captured.combat_story.as_mut();
     while let Some(story) = current {
         if let Some(caller) = story.return_to.as_mut() {
@@ -34,49 +34,49 @@ pub fn captured_session(state: &Session) -> Session {
         }
         current = story.parent.as_deref_mut();
     }
-    captured.native_work.character_bare_hand_bonus = 0;
-    captured.native_work.shop_work = Default::default();
-    captured.native_work.turn_round = None;
-    captured.native_work.round_work = Default::default();
+    captured.globals.character_bare_hand_bonus = 0;
+    captured.globals.the_shop = Default::default();
+    captured.globals.turn_round = None;
+    captured.globals.round_scripts = Default::default();
     captured.ordinary_battle_rewards = None;
     captured.recovery_return = None;
-    captured.native_work.battle_rewards_suppressed = 0;
-    captured.native_work.recovery_work = Default::default();
-    captured.native_work.npc_backing.active_count = 0;
-    captured.native_work.treasure_record = vec![0; 88];
-    captured.native_work.extra_record = vec![0; 10];
-    captured.native_work.tactical_work = centurions_core::combat::tactical_work::TacticalWork {
-        map: centurions_core::combat::TacticalMap {
+    captured.globals.battle_rewards_suppressed = 0;
+    captured.globals.storage = Default::default();
+    captured.globals.monsters.num_mon = 0;
+    captured.globals.treasure = vec![0; 88];
+    captured.globals.extra_record = vec![0; 10];
+    captured.globals.battlefield = centurions_core::combat::battlefield::Battlefield {
+        field: centurions_core::combat::CombatField {
             tiles: vec![0; 8100],
             edge_word: 0,
-            shift: (0, 0),
+            map_shift: (0, 0),
         },
         saved_land: None,
-        positions: [(0, 0); 6],
-        under_tiles: [0; 6],
-        spell_fields: vec![0; 1200],
-        field_used: vec![0; 128],
+        pos: [(0, 0); 6],
+        char_under: [0; 6],
+        spell_queue: vec![0; 1200],
+        collide_check: vec![0; 128],
         battle: None,
     };
-    captured.native_work.victory_work = Default::default();
-    captured.native_work.neighbor_work = Default::default();
-    captured.native_work.weapon_work.natural_attack_index = 0;
-    captured.native_work.encounter_work = Default::default();
-    captured.native_work.ready = 0;
-    captured.native_work.death_processing = Default::default();
-    captured.native_work.initiative_work = centurions_core::combat::retained::InitiativeWork {
+    captured.globals.kill_counts = Default::default();
+    captured.globals.neighbors = Default::default();
+    captured.globals.weapon_traits.natural_attack_index = 0;
+    captured.globals.encounter_headers = Default::default();
+    captured.globals.in_spell = 0;
+    captured.globals.death_processing = Default::default();
+    captured.globals.battle_order = centurions_core::combat::globals::BattleOrder {
         order: vec![0; 110],
-        cursor: 0,
+        index: 0,
     };
     if let Some(combat) = &mut captured.combat {
-        combat.npc_inhibit_write = None;
-        combat.target_tail = vec![0; 104];
-        combat.target_work = Default::default();
-        combat.retained_npcs.active_count = 0;
-        combat.victory_work = Default::default();
-        combat.neighbor_work = Default::default();
-        combat.ready = 0;
-        combat.weapon_work.natural_attack_index = 0;
+        combat.did_attack_write = None;
+        combat.track_tail = vec![0; 104];
+        combat.target_picks = Default::default();
+        combat.monsters.num_mon = 0;
+        combat.kill_counts = Default::default();
+        combat.neighbors = Default::default();
+        combat.in_spell = 0;
+        combat.weapon_traits.natural_attack_index = 0;
     }
     captured
 }
@@ -100,7 +100,7 @@ pub fn source_victory_context_recorded(
     let combat = state.combat.as_mut().unwrap();
     let mut total = 0_i16;
     let mut defeated = 0_i16;
-    for record in &combat.enemies.records {
+    for record in &combat.roster.records {
         if record.record().faction().unwrap() != 0 && record.record().mechanical_state() != 255 {
             total += 1;
             defeated += i16::from(record.stamina().unwrap() <= 0);
@@ -114,11 +114,11 @@ pub fn source_victory_context_recorded(
         }
     }
     let dead = recorded_defeated.unwrap_or(defeated);
-    combat.victory_work.defeated = dead;
+    combat.kill_counts.kill_mon = dead;
     // A recorded defeated prefix can include bodies outside this helper slice.
-    combat.victory_work.total =
+    combat.kill_counts.num_enemy =
         recorded_total.unwrap_or(total.wrapping_sub(defeated).wrapping_add(dead));
-    state.native_work.victory_work = combat.victory_work;
+    state.globals.kill_counts = combat.kill_counts;
 }
 
 /// Deserialize a record foundation with the declared source caller history.

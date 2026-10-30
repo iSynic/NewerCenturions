@@ -1,8 +1,12 @@
-//! The two attack2 condition layouts. Enemy counters are signed bytes; warrior
-//! counters are signed words. Rule order and duration caps belong to the caller.
+//! Conditions and saving throws of an attack's target, warrior or monster.
+//! Monster durations are signed bytes; warrior durations are signed words.
+//! The caller owns rule order and duration caps.
+use super::warrior_layout::{CONDITIONS, REMAINING_EXPERIENCE, UPGRADE_POINTS};
 use super::{Condition, DamageTargetKind, put_word};
+use crate::bytes::add_long_wrapping;
 use crate::{ContentError, span, word};
 
+/// The nine kinds of attack a target gets a saving throw against.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 pub enum SavingThrow {
@@ -18,6 +22,7 @@ pub enum SavingThrow {
 }
 
 impl SavingThrow {
+    /// The saving throw numbered `index`, if there is one.
     pub fn from_index(index: i16) -> Option<Self> {
         Some(match index {
             0 => Self::Mental,
@@ -34,12 +39,14 @@ impl SavingThrow {
     }
 }
 
+/// A warrior or monster record seen as the target of conditions and saving throws.
 pub struct ConditionTarget<'a> {
     bytes: &'a mut [u8],
     kind: DamageTargetKind,
 }
 
 impl<'a> ConditionTarget<'a> {
+    /// Views `bytes` as a target of the given kind; a record too short is refused.
     pub fn new(bytes: &'a mut [u8], kind: DamageTargetKind) -> Result<Self, ContentError> {
         span(
             bytes,
@@ -52,50 +59,61 @@ impl<'a> ConditionTarget<'a> {
         )?;
         Ok(Self { bytes, kind })
     }
+    /// Whether the target is a monster.
     pub fn is_enemy(&self) -> bool {
         self.kind == DamageTargetKind::Enemy
     }
+    /// Whether the target is a warrior of the Cyborg race.
     pub fn is_cyborg(&self) -> Result<bool, ContentError> {
         Ok(!self.is_enemy() && word(self.bytes, 0x32)? == 3)
     }
+    /// The monster's resistance to scans (its Psi resistance); a warrior's lies elsewhere in its
+    /// record.
     pub fn magic_immunity(&self) -> Result<i16, ContentError> {
         word(self.bytes, 0xa)
     }
+    /// Which side the target fights on; zero is the party's side, nonzero the opposing side.
     pub fn faction(&self) -> Result<i16, ContentError> {
         word(self.bytes, if self.is_enemy() { 0xe } else { 0x10 })
     }
+    /// Moves the target to a side.
     pub fn set_faction(&mut self, faction: i16) {
         let offset = if self.is_enemy() { 0xe } else { 0x10 };
         put_word(self.bytes, offset, faction);
     }
-    pub fn saving_throw(&self, save: SavingThrow) -> Result<i16, ContentError> {
+    /// The target's saving throw against one kind of attack.
+    pub fn save(&self, save: SavingThrow) -> Result<i16, ContentError> {
         if self.is_enemy() {
             Ok(i16::from(self.bytes[0x8b + save as usize] as i8))
         } else {
             word(self.bytes, 0x112 + save as usize * 2)
         }
     }
+    /// Remaining duration of `condition`; a negative duration is permanent.
     pub fn duration(&self, condition: Condition) -> Result<i16, ContentError> {
         self.slot_duration(condition as usize)
     }
+    /// Sets how long `condition` lasts.
     pub fn set_duration(&mut self, condition: Condition, duration: i16) {
         self.set_slot_duration(condition as usize, duration);
     }
-    /// Condition slots by raw index, for data-selected slots such as weapon conditions.
+    /// A condition slot by index, for slots that data selects, such as weapon conditions.
     pub fn slot_duration(&self, slot: usize) -> Result<i16, ContentError> {
         if self.is_enemy() {
             Ok(i16::from(span(self.bytes, 0xb2 + slot, 1)?[0] as i8))
         } else {
-            word(self.bytes, 0x5e + slot * 2)
+            word(self.bytes, CONDITIONS + slot * 2)
         }
     }
+    /// Sets how long condition slot `slot` lasts.
     pub fn set_slot_duration(&mut self, slot: usize, duration: i16) {
         if self.is_enemy() {
             self.bytes[0xb2 + slot] = duration as u8;
         } else {
-            put_word(self.bytes, 0x5e + slot * 2, duration);
+            put_word(self.bytes, CONDITIONS + slot * 2, duration);
         }
     }
+    /// Halves the movement and attacks the target has left this turn.
     pub fn halve_remaining_turn(&mut self) -> Result<(), ContentError> {
         if self.is_enemy() {
             for offset in [0x109, 0x106] {
@@ -108,6 +126,7 @@ impl<'a> ConditionTarget<'a> {
         }
         Ok(())
     }
+    /// Takes away the movement and attacks the target has left this turn.
     pub fn clear_remaining_turn(&mut self) {
         if self.is_enemy() {
             self.bytes[0x109] = 0;
@@ -117,6 +136,7 @@ impl<'a> ConditionTarget<'a> {
             put_word(self.bytes, 0x40, 0);
         }
     }
+    /// Whether the target is protected from damage of element `element`.
     pub fn elemental_protection(&self, element: usize) -> Result<bool, ContentError> {
         if self.is_enemy() {
             Ok(self.bytes[0xbb + element] != 0)
@@ -124,20 +144,23 @@ impl<'a> ConditionTarget<'a> {
             Ok(word(self.bytes, 0x70 + element * 2)? != 0)
         }
     }
+    /// The target's current Psi points.
     pub fn psi_points(&self) -> Result<i16, ContentError> {
         word(self.bytes, if self.is_enemy() { 0x10e } else { 0x58 })
     }
+    /// Sets the target's current Psi points.
     pub fn set_psi_points(&mut self, points: i16) {
         let offset = if self.is_enemy() { 0x10e } else { 0x58 };
         put_word(self.bytes, offset, points);
     }
     /// Warrior experience drain: remaining experience gains what upgrade points lose.
     pub fn shift_experience(&mut self, amount: i32) -> Result<(), ContentError> {
-        span(self.bytes, 0x9ce, 8)?;
-        for (offset, delta) in [(0x9ce, amount), (0x9d2, amount.wrapping_neg())] {
-            let value = i32::from_be_bytes(self.bytes[offset..offset + 4].try_into().unwrap());
-            self.bytes[offset..offset + 4]
-                .copy_from_slice(&value.wrapping_add(delta).to_be_bytes());
+        span(self.bytes, REMAINING_EXPERIENCE, 8)?;
+        for (offset, delta) in [
+            (REMAINING_EXPERIENCE, amount),
+            (UPGRADE_POINTS, amount.wrapping_neg()),
+        ] {
+            add_long_wrapping(self.bytes, offset, delta);
         }
         Ok(())
     }

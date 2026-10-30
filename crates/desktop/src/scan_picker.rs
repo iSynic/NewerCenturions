@@ -1,4 +1,4 @@
-//! castspell10b89e / DLOG144: level, power, learned scan and Perform Scan.
+//! castspell's scan picker, DLOG 144: level, power, learned scan and Perform Scan.
 use crate::{
     assets::Assets,
     presentation::{Action, Control, UiState},
@@ -7,6 +7,18 @@ use centurions_content::{Content, word};
 use centurions_core::{Command, Session};
 use macroquad::prelude::*;
 
+/// The Psi power, scan and template rotation the player has chosen in the scan picker.
+#[derive(Default)]
+pub struct PsiSelection {
+    pub power: i16,
+    pub choice: Option<(i16, i16)>,
+    pub pending: Option<(i16, i16)>,
+    pub rotation: u8,
+    pub preview: Option<(i16, i16)>,
+}
+
+/// The action Perform Scan stands for: casting the scan at once when it needs no
+/// target, or beginning to choose its targets.
 fn action(
     state: &Session,
     content: &Content,
@@ -41,6 +53,8 @@ fn action(
     }
 }
 
+/// Whether the warrior can perform the scan now: it is known, the psi points
+/// cover its cost, and the situation (battle, whose turn, the map) allows it.
 fn allowed(
     state: &Session,
     content: &Content,
@@ -92,6 +106,7 @@ fn allowed(
         })
 }
 
+/// Draws the scan picker (DLOG 144) beside the map for `member`.
 pub fn draw(
     content: &Content,
     state: &Session,
@@ -116,9 +131,9 @@ pub fn draw(
         return;
     };
     let level = ui.page.min(6);
-    let power = ui.psi_power.clamp(1, 7);
+    let power = ui.psi.power.clamp(1, 7);
     let school = warrior.record().psi_school().unwrap_or(0);
-    let field = |item, text: &str| assets.wrapped_color(text, rectangle(item), 12, 14., YELLOW);
+    let field = |item, text: &str| assets.dialog_text(text, rectangle(item));
     let mut chosen = None;
     for row in 0..7 {
         let spell = school * 1000 + (level as i16 + 1) * 100 + row as i16 + 1;
@@ -132,7 +147,7 @@ pub fn draw(
         } else {
             draw_rectangle(rect.x, rect.y, rect.w, rect.h, Color::new(0., 0., 0., 0.5));
         }
-        if ui.psi_choice.is_some_and(|choice| choice.0 == spell) && known {
+        if ui.psi.choice.is_some_and(|choice| choice.0 == spell) && known {
             draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1., YELLOW);
             chosen = Some(spell);
         }
@@ -171,16 +186,7 @@ pub fn draw(
         .and_then(|id| assets.portraits.get(&id))
     {
         let rect = rectangle(49);
-        draw_texture_ex(
-            image,
-            rect.x,
-            rect.y,
-            WHITE,
-            DrawTextureParams {
-                dest_size: Some(rect.size()),
-                ..Default::default()
-            },
-        );
+        crate::assets::texture_in(image, rect);
     }
     field(44, &warrior.psi_points().unwrap_or(0).to_string());
     let mut perform = None;
@@ -188,18 +194,17 @@ pub fn draw(
         && let Ok(packet) =
             centurions_core::combat::spells::load_packet(&combat_content.attacks, spell)
     {
-        if ui.preferences.enabled(11)
+        if ui
+            .preferences
+            .enabled(crate::preferences::pref::SHOW_SCAN_DESCRIPTION)
             && let Ok(description) =
                 mission.scan_description(school, level, (spell % 100 - 1) as usize)
         {
             let description_origin = vec2(0., 436.);
             assets.draw_dialog_at(169, description_origin);
-            assets.wrapped_color(
+            assets.dialog_text(
                 &description,
                 assets.dialog_rect_at(169, 2, description_origin),
-                12,
-                14.,
-                YELLOW,
             );
         }
         let cost = centurions_core::combat::player_psi::cost(&packet, power).unwrap_or(0);
@@ -263,14 +268,17 @@ pub fn draw(
     }
 }
 
+/// The scan's fields and the icon for the spell's target pattern.
+///
+/// Original: spellinfoupdate
 fn draw_spell_fields(
     packet: &[u8],
     power: i16,
     assets: &Assets,
     rectangle: impl Fn(usize) -> Rect,
 ) {
-    // spellinfoupdate15947c reads signed BYTE modifiers and wrapping WORD totals.
-    let field = |item, text: &str| assets.wrapped_color(text, rectangle(item), 12, 14., YELLOW);
+    // Signed byte modifiers and wrapping 16-bit totals.
+    let field = |item, text: &str| assets.dialog_text(text, rectangle(item));
     for (modifier, base, item) in [(11, 32, 13), (12, 34, 50)] {
         let value = i16::from(packet[modifier] as i8)
             .wrapping_mul(power)
@@ -300,7 +308,7 @@ fn draw_spell_fields(
     field(
         52,
         &assets
-            .native_text
+            .game_text
             .text(damage_label, true)
             .unwrap_or_default(),
     );
@@ -308,16 +316,7 @@ fn draw_spell_fields(
     let icon = |id, item| {
         if let Some(image) = assets.icons.get(&id) {
             let rect = rectangle(item);
-            draw_texture_ex(
-                image,
-                rect.x,
-                rect.y,
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(rect.size()),
-                    ..Default::default()
-                },
-            );
+            crate::assets::texture_in(image, rect);
         }
     };
     if duration == 1 || duration > 2 {
@@ -363,10 +362,7 @@ fn draw_spell_fields(
             11 => 0x400b18,
             _ => 0x400bed,
         };
-        field(
-            67,
-            &assets.native_text.text(label, true).unwrap_or_default(),
-        );
+        field(67, &assets.game_text.text(label, true).unwrap_or_default());
     }
     let shape = match packet[1] {
         3 => i16::from(packet[31]) + 9999,

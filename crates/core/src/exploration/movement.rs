@@ -1,8 +1,10 @@
-//! Movement for maintained exploration.
+//! Moving the party across a land.
 use super::{Regional, active_map, apply_region, regional_selection, run_script};
 use crate::{Event, MovementContinuation, Phase, RuleError, ScriptState, Session, travel};
 use centurions_content::Content;
 
+/// Triggers an encounter by hand, as a player does from the field controls, when nothing else is on
+/// screen.
 pub fn manual_encounter(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     if state.phase != Phase::Exploration
         || state
@@ -16,7 +18,7 @@ pub fn manual_encounter(state: &mut Session, content: &Content) -> Result<Vec<Ev
     }
     let map = active_map(state, content)?;
     let position = state.exploration.as_mut().unwrap();
-    let id = crate::story_manual_encounter::select(
+    let id = crate::story::manual_encounter::select(
         &mut position.region_state,
         (position.x, position.y),
         &mut state.random,
@@ -29,6 +31,8 @@ pub fn manual_encounter(state: &mut Session, content: &Content) -> Result<Vec<Ev
     run_script(state, content)
 }
 
+/// Moves the party one square in a direction. It is refused, with warning 54, when fatigue is over
+/// 134 and the scenario has not disabled camping.
 pub fn move_squad(
     state: &mut Session,
     content: &Content,
@@ -47,13 +51,13 @@ pub fn move_squad(
     if !crate::field_controls::free(state) {
         return Err(RuleError::Refused { feedback: vec![] });
     }
-    // buttonchoice 0x109526 refuses any move above fatigue 134 while camping is
-    // allowed, before it breaks camp.
-    if state.exploration.as_ref().unwrap().fatigue > 134 && !state.native_work.camp_disabled {
+    // Above fatigue 134 the party cannot move while camping is allowed; the
+    // test comes before breaking camp.
+    if state.exploration.as_ref().unwrap().fatigue > 134 && !state.globals.camp_disabled {
         return Err(RuleError::Refused {
             feedback: vec![
-                crate::feedback::NativeFeedback::Warning { index: 54 },
-                crate::feedback::NativeFeedback::Tutorial {
+                crate::feedback::GameFeedback::Warning { index: 54 },
+                crate::feedback::GameFeedback::Tutorial {
                     first: 80,
                     last: 80,
                 },
@@ -71,12 +75,14 @@ pub fn move_squad(
     let position = state.exploration.as_mut().unwrap();
     if dx != 0 {
         position.facing = u8::from(dx > 0);
-        state.native_work.boat_facing = if dx < 0 { -1 } else { 0 };
+        state.globals.boat_facing = if dx < 0 { -1 } else { 0 };
     }
     position.last_move = [dx, dy];
     super::boat::start(state, content)
 }
 
+/// Carries a step on through its remaining stages (time passing, region checks, walking header and
+/// secrets) until something needs the player.
 pub(crate) fn resume_movement(
     state: &mut Session,
     content: &Content,
@@ -130,7 +136,6 @@ pub(crate) fn resume_movement(
                 }
             }
             Some(MovementContinuation::RegionalReturn { header }) => {
-                // timeclick15ea8c resumes buttonchoice after clearing the movement deltas.
                 state.exploration.as_mut().unwrap().last_move = [0; 2];
                 state.movement_continuation = Some(if header {
                     MovementContinuation::Header
@@ -158,7 +163,7 @@ pub(crate) fn resume_movement(
                 }
             }
             Some(MovementContinuation::Secrets) => {
-                // buttonchoice109afe clears WORD443316 before checkforsecret.
+                // The Psi movement gate clears before the search for secrets.
                 state.bandage_ready = 0;
                 if crate::field_controls::automatic_search(state) {
                     continue;
@@ -173,7 +178,7 @@ pub(crate) fn resume_movement(
                 )?;
                 for discovery in &search.discoveries {
                     effects.push(Event::Feedback(
-                        crate::feedback::NativeFeedback::ResourceFlash {
+                        crate::feedback::GameFeedback::ResourceFlash {
                             resource_id: 138,
                             index: usize::from(discovery.ordinal),
                             x: 30,
@@ -185,7 +190,7 @@ pub(crate) fn resume_movement(
                 }
                 position.floor = search.floor;
                 if search.center_revealed {
-                    // Packed (mode0, argument1) returns to the walking-header branch.
+                    // A mode 0, argument 1 return goes back to the walking header.
                     state.movement_continuation = Some(MovementContinuation::Header);
                 }
             }
@@ -195,6 +200,7 @@ pub(crate) fn resume_movement(
     Ok(effects)
 }
 
+/// Looks for the walking event of the square the party stepped on and runs it.
 pub(super) fn walking_header(
     state: &mut Session,
     content: &Content,
@@ -208,7 +214,7 @@ pub(super) fn walking_header(
         &mut state.random,
     )?;
     if let Some(row) = found.matched {
-        state.native_work.header_row = row as i16;
+        state.globals.header_row = row as i16;
     }
     if let Some(header) = found.header {
         position.script = Some(ScriptState {

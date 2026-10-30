@@ -1,4 +1,4 @@
-//! Compatibility entry points for the maintained combat runtime.
+//! The battle's turns, attacks, spells and deaths.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum TurnFlow {
     #[default]
@@ -14,31 +14,30 @@ pub(crate) struct TurnOutcome {
 
 mod actors;
 pub use actors::neighbors;
-use actors::{
-    FireOutcome, alive, has_active_warrior, hostile, neighbors_at, position, refusal,
-    spell_identity,
-};
+use actors::{FireOutcome, has_active_warrior, hostile, neighbors_at, refusal, spell_identity};
 mod attacks;
-mod detached_attack;
-mod detached_warrior;
+mod out_of_combat_attack;
+mod out_of_combat_warrior;
 mod outdoor_death;
 mod weapon_context;
 pub(crate) use weapon_context::refresh_body_item;
-use weapon_context::{is_melee_weapon, load_melee_work, load_natural_work};
+use weapon_context::{is_melee_weapon, load_melee_weapon, load_natural_attack};
 mod movement_return;
+mod out_of_combat_arms;
 mod reaction_calls;
 mod reaction_frame;
-mod retained_arms;
-pub(crate) use retained_arms::run as retained_arm;
-mod retained_spell;
-mod retained_turn;
+pub(crate) use out_of_combat_arms::run as out_of_combat_arm;
+pub(crate) mod booty_setup;
+mod out_of_combat_getup;
+mod out_of_combat_spell;
 pub(crate) mod reward_cleanup;
-pub(crate) use movement_return::answer_retained_walk;
-pub use movement_return::{CombatReturn, MoveFrame, RetainedWalkChoice};
+pub(crate) use movement_return::answer_out_of_combat_walk;
+pub use movement_return::{CombatReturn, MoveFrame, OutOfCombatWalkChoice};
 pub(crate) use movement_return::{MovePlan, begin as begin_move};
+pub mod neighbor_scan;
 mod reactions;
 use reactions::check_neighbors_with_items;
-pub(crate) use reactions::check_neighbors_with_work;
+pub(crate) use reactions::check_neighbors_with_loaded;
 pub use reactions::{
     check_neighbors, check_neighbors_with_buffs, check_neighbors_with_context,
     check_neighbors_with_definitions,
@@ -48,7 +47,7 @@ pub(crate) use departure::move_actor_with_reactions;
 pub use departure::{warrior_departure, warrior_departure_with_buffs};
 mod enemy_actions;
 pub use enemy_actions::{
-    EnemyWork, enemy_action, enemy_action_with_work, enemy_action_with_work_and_buffs,
+    EnemyGlobals, enemy_action, enemy_action_with_globals, enemy_action_with_globals_and_buffs,
 };
 mod spell_results;
 pub(crate) use spell_results::{append_spell_outcomes, resolve_spell_mask};
@@ -62,9 +61,10 @@ mod player_actions;
 pub use player_actions::{player_attack, player_attack_friend, player_guard, select_enemy_target};
 mod actor_turns;
 pub use actor_turns::{controlled_turn, controlled_warrior, enemy_turn};
-mod npc_return;
-pub use npc_return::NpcActionFrame;
-pub(crate) use npc_return::resume_pending as resume_npc_action;
+mod monster_return;
+pub use monster_return::MonsterActionFrame;
+pub(crate) use monster_return::resume_pending as resume_monster_action;
+pub use monster_return::turn_flags as monster_turn_flags;
 mod player_psi;
 pub use player_psi::{player_psi, player_psi_warrior};
 mod medical;
@@ -90,6 +90,7 @@ mod turns;
 pub(crate) use turns::resume_selection;
 pub use turns::{end_turn, initialize_active_turn};
 use turns::{select_turn, select_turn_bounded};
+pub mod round_scripts;
 mod rounds;
 use rounds::advance_round;
 pub(crate) use rounds::{continue_round, finish_round_dispatch};
@@ -101,18 +102,20 @@ pub use enemy_round::{EnemyRoundOutcome, reduce_enemy_round_with_fields};
 use enemy_round::{record_spell_deaths, reduce_enemy_round_impl};
 mod fields;
 pub use fields::collide_fields;
-pub(crate) use fields::collide_fields_with_work;
+pub(crate) use fields::collide_fields_with_refresh;
 use fields::{FieldActor, collide_fields_impl};
+pub mod kill_counts;
 mod victory;
 pub use victory::{victory_loot, victory_records};
-mod retained_rewards;
+mod out_of_combat_rewards;
 mod reward_context;
-pub(crate) use retained_rewards::{
-    begin as begin_retained_rewards, confirm as confirm_retained_rewards, resume_deferred_getup,
-    validate_count as validate_retained_reward_count, validate_deferred_getup,
+pub(crate) use out_of_combat_rewards::{
+    begin as begin_out_of_combat_rewards, confirm as confirm_out_of_combat_rewards,
+    resume_deferred_getup, validate_count as validate_out_of_combat_reward_count,
+    validate_deferred_getup,
 };
 pub(crate) use reward_context::{
-    detach as detach_reward_combat, survivors as synchronize_reward_survivors,
+    leave_battle as leave_reward_battle, survivors as synchronize_reward_survivors,
 };
 mod battle_return;
 mod ordinary_rewards;
@@ -132,6 +135,6 @@ mod death_return;
 use death::finish_action;
 pub use death::{DeathStory, continue_death};
 pub(crate) use death::{
-    finish_death_story, finish_player_action, retain_death_header, retain_death_parent,
-    retain_last_defeated,
+    finish_death_story, finish_player_action, store_death_header, store_death_parent,
+    store_last_defeated,
 };

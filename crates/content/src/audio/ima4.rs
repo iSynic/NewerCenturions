@@ -1,6 +1,7 @@
 use super::Sample;
-use crate::{ContentError, mission::long, span, word};
+use crate::{ContentError, bytes::long, span, word};
 
+/// The IMA ADPCM step sizes, indexed 0 to 88 by the running step index.
 const STEPS: [i32; 89] = [
     7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66,
     73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449,
@@ -9,6 +10,8 @@ const STEPS: [i32; 89] = [
     10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767,
 ];
 
+/// Expands an IMA4 compressed sound (blocks of 64 samples per channel, 34 bytes
+/// each) into 16-bit PCM, interleaving the channels.
 pub(super) fn decode(bytes: &[u8], offset: usize, rate_fixed: u32) -> Result<Sample, ContentError> {
     span(bytes, offset, 64)?;
     let channels = long(bytes, offset + 4)?;

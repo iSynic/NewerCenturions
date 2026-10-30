@@ -1,7 +1,8 @@
-//! itemcost 0x13c018 rounds each intermediate result to binary32 before the
-//! final signed LONG conversion. Integer percentage math is not equivalent.
+//! Shop prices. Each intermediate result is rounded to single precision before
+//! the final conversion; integer percentage math gives different prices.
 use crate::RuleError;
 
+/// A price as a percentage of a cost; a sale is paid at most the full cost.
 pub(super) fn percentage_price(cost: i32, percent: i16, selling: bool) -> Result<i32, RuleError> {
     let absolute = (cost as f32).abs();
     let percent = if selling { percent.min(100) } else { percent };

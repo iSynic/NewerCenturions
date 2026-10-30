@@ -3,12 +3,16 @@ use centurions_content::{Content, InventoryRecord};
 use centurions_core::{Command, RuleError, Session};
 use macroquad::prelude::*;
 use std::{cell::RefCell, collections::BTreeMap};
+/// The item list rows already built for each item record and its definition.
 type ItemRows = BTreeMap<Vec<u8>, Vec<(i32, String)>>;
+/// The item information panel already built for an item record.
 type ItemDetail = (
     Vec<u8>,
     Result<centurions_core::item_display::output::PanelPlan, String>,
 );
 
+/// A choice on the Items screen: a warrior, an item, scrolling, transferring,
+/// stockpiling, shopping, refitting, ammunition and item information.
 #[derive(Clone, Debug)]
 pub enum InventoryAction {
     Warrior {
@@ -47,13 +51,15 @@ pub enum InventoryAction {
     },
 }
 
+/// The Items screen's state: the two warriors shown, their scrolling, the item
+/// picked up or selected, and the information and ammunition popups open.
 pub struct Inventory {
     pub members: [usize; 2],
     pub scroll: [usize; 2],
     pub selected: Option<(usize, usize)>,
     pub quick_info: bool,
-    /// The native selected display row WORD4471aa: zero on entry, set by a
-    /// row selection and kept when the owner changes.
+    /// The selected display row: zero on entry, set by a row selection and kept
+    /// when the owner changes.
     display_row: i16,
     drag: Option<(usize, usize)>,
     last_click: f64,
@@ -72,6 +78,7 @@ pub struct Inventory {
     ammunition: Option<ammunition::Popup>,
 }
 impl Default for Inventory {
+    /// The first two warriors, nothing selected.
     fn default() -> Self {
         Self {
             members: [0, 1],
@@ -93,6 +100,8 @@ impl Default for Inventory {
     }
 }
 impl Inventory {
+    /// The command that tells the rules which warriors, scrolling and selection the
+    /// Items screen is showing.
     pub fn context_command(&self) -> Command {
         Command::InspectInventory {
             members: self.members,
@@ -101,6 +110,8 @@ impl Inventory {
             shop_family: self.category,
         }
     }
+    /// Opens the Items screen on warrior `selected` and the next one of `count`,
+    /// with nothing selected.
     pub fn open(&mut self, selected: usize, count: usize) {
         self.members = [
             selected,
@@ -121,6 +132,8 @@ impl Inventory {
         self.use_list = None;
         self.ammunition = None;
     }
+    /// Carries out a choice on the Items screen, returning the action for the game
+    /// to take, if any.
     pub fn handle(
         &mut self,
         action: InventoryAction,
@@ -187,7 +200,7 @@ impl Inventory {
                     let before = self.scroll[side];
                     let change =
                         i16::try_from(delta).map_err(|_| "inventory scroll delta outside WORD")?;
-                    if state.native_work.health_context.selected_warrior == self.members[side] {
+                    if state.globals.health_context.char_select_new == self.members[side] {
                         let maximum = count.saturating_sub(11).min(30).max(before);
                         self.scroll[side] =
                             (before as i64 + i64::from(delta)).clamp(0, maximum as i64) as usize;
@@ -276,7 +289,7 @@ impl Inventory {
                         Command::UseAmmunitionPack { warrior, slot }
                     }
                     Stockpile => return Err(RuleError::Refused { feedback: vec![] }),
-                    _ if item.equipment_flag() != 0 => Command::UnequipItem { warrior, slot },
+                    _ if item.equipped() != 0 => Command::UnequipItem { warrior, slot },
                     _ if (1..=20).contains(&item.category_code()) => {
                         Command::EquipItem { warrior, slot }
                     }
@@ -288,6 +301,7 @@ impl Inventory {
         }
         Ok(Some(Action::Command(self.context_command())))
     }
+    /// Carries out a choice in the item information window.
     fn handle_information(&mut self, action: InventoryAction, state: &Session) -> Option<Action> {
         use centurions_core::ItemInformationList as List;
         let (member, slot) = self.information?;
@@ -343,8 +357,8 @@ impl Inventory {
             }
             InventoryAction::UseList(professions) => {
                 let widened = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
-                let work = state.native_work.ammunition_work.item.clone()?;
-                self.use_list = Some((professions, widened, work));
+                let item = state.globals.loaded_items.item.clone()?;
+                self.use_list = Some((professions, widened, item));
                 Some(Action::Command(Command::ListItemUsers {
                     warrior,
                     professions,
@@ -400,9 +414,12 @@ impl Inventory {
         self.information = Some((owner, 0));
         self.information_item = Some((id, true));
     }
+    /// Whether the item information window is open over the booty screen.
     pub fn loot_information_open(&self) -> bool {
         self.information.is_some() && self.information_item.is_some_and(|(_, loot)| loot)
     }
+    /// Ends a drag: an item dropped on the other warrior's list is transferred to
+    /// that warrior.
     pub fn release(&mut self, pointer: Option<Vec2>) -> Option<InventoryAction> {
         let (side, slot) = self.drag.take()?;
         let pointer = pointer?;
@@ -420,6 +437,7 @@ impl Inventory {
             None
         }
     }
+    /// The item record in `slot` of the warrior shown on `side`.
     pub(super) fn record(
         &self,
         state: &Session,
@@ -433,12 +451,15 @@ impl Inventory {
             .map(|(_, item)| item)
             .ok_or_else(|| "inventory item unavailable".into())
     }
+    /// Whether the shop is open.
     pub(super) fn shop(state: &Session) -> bool {
         state
             .exploration
             .as_ref()
             .is_some_and(|p| p.presentation == Some(centurions_core::Presentation::Shop))
     }
+    /// The items listed on `side`: a warrior's pack, or the shop's stock on the
+    /// right side in a shop.
     pub(super) fn items(
         &self,
         state: &Session,
@@ -465,6 +486,7 @@ impl Inventory {
     }
 }
 
+/// Draws an item's information panel from the plan the rules built.
 pub(crate) fn draw_detail_plan(
     plan: &centurions_core::item_display::output::PanelPlan,
     assets: &Assets,
@@ -509,16 +531,7 @@ pub(crate) fn draw_detail_plan(
             PanelEffect::Drawing(Draw::PlotColorIcon { handle, rect }) => {
                 if let Some(image) = assets.icons.get(&(*handle as i16)) {
                     let r = rectangle(rect);
-                    draw_texture_ex(
-                        image,
-                        r.x,
-                        r.y,
-                        WHITE,
-                        DrawTextureParams {
-                            dest_size: Some(vec2(r.w, r.h)),
-                            ..Default::default()
-                        },
-                    );
+                    crate::assets::texture_in(image, r);
                 }
             }
             PanelEffect::TextBox {

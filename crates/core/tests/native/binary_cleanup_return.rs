@@ -20,18 +20,18 @@ fn scripted_cleanup_records_rewards_and_outer_suppression_match_native() {
         });
         support::pause_script(&mut state, case.bytes("inner"), 0);
         let arena = state.combat.as_mut().unwrap();
-        arena.enemies.records = support::monsters(&case["npc_before"]);
-        arena.enemies.positions = vec![(40, 40)];
-        arena.order.fill(-1);
-        arena.script_enemy = 0;
-        arena.selected_enemy = 0;
-        arena.cursor = 110;
+        arena.roster.records = support::monsters(&case["npc_before"]);
+        arena.roster.mon_pos = vec![(40, 40)];
+        arena.battle_order.fill(-1);
+        arena.macro_monster = 0;
+        arena.monster_up = 0;
+        arena.battle_order_index = 110;
         arena.turn_origin = None;
-        arena.victory_work.total = 2;
-        arena.victory_work.defeated = 1;
-        arena.spell_fields = case.bytes("fields_before");
-        arena.round_scripts.slots = [900, 0, 0, 0, 0];
-        arena.round_scripts.pending = Some(RoundProgram {
+        arena.kill_counts.num_enemy = 2;
+        arena.kill_counts.kill_mon = 1;
+        arena.spell_queue = case.bytes("fields_before");
+        arena.round_macros.slots = [900, 0, 0, 0, 0];
+        arena.round_macros.pending = Some(RoundProgram {
             slot: 0,
             script: Some(900),
             cursor: 1,
@@ -42,11 +42,11 @@ fn scripted_cleanup_records_rewards_and_outer_suppression_match_native() {
         state.random = RandomState::new(12);
         state.difficulty = 0;
         state.party_currency = 37;
-        state.suppress_allies = 1;
-        state.ally_count = 0;
+        state.suspend_allies = 1;
+        state.held_over = 0;
         state.flags.fill(0);
-        state.native_work.treasure_record = case.bytes("treasure_before");
-        state.native_work.extra_record = case.bytes("extra");
+        state.globals.treasure = case.bytes("treasure_before");
+        state.globals.extra_record = case.bytes("extra");
         let mut events = support::saved_command(Command::Continue, &mut state, &content);
         if case.n::<usize>("windows") != 0 {
             assert_eq!(
@@ -55,11 +55,11 @@ fn scripted_cleanup_records_rewards_and_outer_suppression_match_native() {
             );
             compare_records(&state, case, "prepared");
             assert_eq!(
-                support::record_bytes(&state.booty_items),
+                support::record_bytes(&state.booty_list),
                 case.bytes("loot_prepared")
             );
             assert_eq!(
-                state.native_work.battle_rewards_suppressed,
+                state.globals.battle_rewards_suppressed,
                 case.n::<i8>("suppression_prepared")
             );
             assert_eq!(state.flags[..100], case.bytes("flags_prepared"));
@@ -90,18 +90,18 @@ fn scripted_cleanup_records_rewards_and_outer_suppression_match_native() {
         compare_records(&state, case, "after");
         assert_eq!(state.flags[..100], case.bytes("flags_after"));
         assert_eq!(
-            state.native_work.treasure_record,
+            state.globals.treasure,
             case.bytes("treasure_after")
         );
         assert_eq!(
             state
-                .native_work
-                .tactical_work
-                .spell_fields,
+                .globals
+                .battlefield
+                .spell_queue,
             case.bytes("fields_after")
         );
         assert_eq!(
-            state.native_work.battle_rewards_suppressed,
+            state.globals.battle_rewards_suppressed,
             case.n::<i8>("suppression_after")
         );
         assert!(state.combat.is_none() && state.ordinary_battle_rewards.is_none());
@@ -115,7 +115,7 @@ fn compare_records(state: &Session, case: &Value, suffix: &str) {
         case.bytes(&format!("party_{suffix}"))
     );
     assert_eq!(
-        state.native_work.npc_backing.slots[0]
+        state.globals.monsters.slots[0]
             .as_ref()
             .unwrap()
             .record
@@ -162,34 +162,34 @@ fn outer_early_cleanup_retains_fixed_arrays_after_zero_count_child_return() {
     support::pause_script(&mut state, support::script_record(&[]), 0);
     state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
     state.combat = None;
-    state.native_work.npc_backing.active_count = 0;
+    state.globals.monsters.num_mon = 0;
     state.phase = Phase::Exploration;
     state.warriors = support::warriors(&case["party_before"]);
-    state.booty_items.fill(InventoryRecord([0; 22]));
+    state.booty_list.fill(InventoryRecord([0; 22]));
     state.random = RandomState::new(12);
     state.party_currency = 37;
     state.flags.fill(0);
-    state.allies = case.bytes("allies_before");
-    state.ally_count = 1;
-    state.suppress_allies = 1;
+    state.holdover = case.bytes("allies_before");
+    state.held_over = 1;
+    state.suspend_allies = 1;
     state
-        .native_work
+        .globals
         .health_context
-        .unavailable = 6;
-    state.native_work.extra_record = case.bytes("extra");
-    state.native_work.treasure_record = case.bytes("treasure_before");
+        .kill_party = 6;
+    state.globals.extra_record = case.bytes("extra");
+    state.globals.treasure = case.bytes("treasure_before");
     state
-        .native_work
-        .tactical_work
-        .spell_fields = case.bytes("fields_before");
+        .globals
+        .battlefield
+        .spell_queue = case.bytes("fields_before");
     for (slot, record) in state
-        .native_work
-        .npc_backing
+        .globals
+        .monsters
         .slots
         .iter_mut()
         .zip(support::monsters(&case["npc_before"]))
     {
-        *slot = Some(centurions_core::combat::retained::NpcSlot {
+        *slot = Some(centurions_core::combat::globals::MonsterSlot {
             record,
             position: Some((0, 0)),
         });
@@ -200,37 +200,37 @@ fn outer_early_cleanup_retains_fixed_arrays_after_zero_count_child_return() {
         case.bytes("party_after")
     );
     let records: Vec<_> = state
-        .native_work
-        .npc_backing
+        .globals
+        .monsters
         .slots
         .iter()
         .flat_map(|slot| slot.as_ref().unwrap().record.bytes.iter().copied())
         .collect();
     assert_eq!(records, case.bytes("npc_after"));
-    assert_eq!(state.allies, case.bytes("allies_after"));
+    assert_eq!(state.holdover, case.bytes("allies_after"));
     assert_eq!(
         state
-            .native_work
+            .globals
             .health_context
-            .unavailable,
+            .kill_party,
         case.n::<i8>("unavailable_after")
     );
     assert_eq!(
         state
-            .native_work
-            .tactical_work
-            .spell_fields,
+            .globals
+            .battlefield
+            .spell_queue,
         case.bytes("fields_after")
     );
     assert_eq!(
-        state.native_work.treasure_record,
+        state.globals.treasure,
         case.bytes("treasure_after")
     );
     assert_eq!(state.flags[..100], case.bytes("flags_after"));
     support::expect(state.party_currency, &case["currency_after"]);
     support::assert_rng(&state.random, &case["seed_after"], &case["draws_after"]);
     assert_eq!(
-        state.native_work.battle_rewards_suppressed,
+        state.globals.battle_rewards_suppressed,
         case.n::<i8>("suppression_after")
     );
     assert!(state.combat.is_none() && state.ordinary_battle_rewards.is_none());

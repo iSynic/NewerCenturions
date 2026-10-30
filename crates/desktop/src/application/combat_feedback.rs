@@ -1,38 +1,43 @@
-//! Combat feedback workflow ownership.
+//! The messages and sounds that open a new combat round.
 use super::Application;
 use centurions_core::{Event, Session};
 use macroquad::prelude::*;
 
 impl Application {
+    /// The notices that open a new combat round: the warning about bleeding warriors with its
+    /// tutorial page, then the round sound and the round message; the warning and the message
+    /// can each be turned off in the preferences.
     pub fn combat_notices(&self, previous_round: Option<i16>, state: &Session) -> Vec<Event> {
         let Some(combat) = &state.combat else {
             return vec![];
         };
-        if previous_round.is_none_or(|round| round == combat.round) {
+        if previous_round.is_none_or(|round| round == combat.combat_round) {
             return vec![];
         }
-        use centurions_core::feedback::NativeFeedback;
+        use centurions_core::feedback::GameFeedback;
         let mut events = vec![];
-        if !self.native_preferences.enabled(14)
-            && state
-                .warriors
-                .iter()
-                .any(|w| w.record().bleeding_flag() != 0)
+        if !self
+            .preferences
+            .enabled(crate::preferences::pref::IGNORE_BLEEDING_WARRIORS)
+            && state.warriors.iter().any(|w| w.record().bleeding() != 0)
         {
-            events.push(Event::Feedback(NativeFeedback::Flash {
+            events.push(Event::Feedback(GameFeedback::Flash {
                 address: 0x403708,
                 x: 30,
                 y: 100,
                 wait: 120,
                 sound: 10122,
             }));
-            events.push(Event::Feedback(NativeFeedback::Tutorial {
+            events.push(Event::Feedback(GameFeedback::Tutorial {
                 first: 118,
                 last: 118,
             }));
         }
-        if !self.native_preferences.enabled(13) {
-            events.push(Event::Feedback(NativeFeedback::Flash {
+        if !self
+            .preferences
+            .enabled(crate::preferences::pref::IGNORE_NEXT_ROUND_MESSAGE)
+        {
+            events.push(Event::Feedback(GameFeedback::Flash {
                 address: 0x4036f2,
                 x: 30,
                 y: 100,
@@ -40,12 +45,15 @@ impl Application {
                 sound: 0,
             }));
         }
-        // getup1263ca..1263f4 plays the round sound twice, then closes the flash.
+        // getup plays the round sound twice, then closes the flash.
         for _ in 0..2 {
-            events.push(Event::Feedback(NativeFeedback::Sound { resource_id: -139 }));
+            events.push(Event::Feedback(GameFeedback::Sound { resource_id: -139 }));
         }
-        if !self.native_preferences.enabled(13) {
-            events.push(Event::Feedback(NativeFeedback::Flash {
+        if !self
+            .preferences
+            .enabled(crate::preferences::pref::IGNORE_NEXT_ROUND_MESSAGE)
+        {
+            events.push(Event::Feedback(GameFeedback::Flash {
                 address: 0x4036f1,
                 x: 30,
                 y: 100,
@@ -55,7 +63,8 @@ impl Application {
         }
         events
     }
-    /// Preserve round sound order while presenting the paired nonblocking native flash.
+    /// Places the round notices at the round sound, keeping the sounds in order;
+    /// the round message flash does not wait for a click.
     pub fn prepare_combat_round(
         &self,
         previous: Option<i16>,
@@ -73,7 +82,10 @@ impl Application {
             return;
         };
         let mut tail = events.split_off(start).into_iter().peekable();
-        let sounds = if self.native_preferences.enabled(13) {
+        let sounds = if self
+            .preferences
+            .enabled(crate::preferences::pref::IGNORE_NEXT_ROUND_MESSAGE)
+        {
             2
         } else {
             3
@@ -93,7 +105,7 @@ impl Application {
                 }
             } else if let Some(resource_id) = event.sound() {
                 events.push(Event::Feedback(
-                    centurions_core::feedback::NativeFeedback::Sound { resource_id },
+                    centurions_core::feedback::GameFeedback::Sound { resource_id },
                 ));
             } else {
                 events.push(event);

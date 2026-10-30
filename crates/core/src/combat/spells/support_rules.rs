@@ -1,19 +1,23 @@
-//! Support rules for combat/spells.
+//! Saving throws against condition and healing spells, and Psi drains.
 use super::{
     AttackResult, BodySpellResult, DamageFlags, DamagePacket, DirectSpell, FieldUsage, RandomState,
     RestrictionMemoryView, RuleError, monster_race_is_excluded, race_is_excluded,
     resolve_damage_with_amount,
 };
+use centurions_content::WARRIOR_BYTES;
+use centurions_content::combat::MONSTER_BYTES;
 use centurions_content::combat::MonsterRecord;
 use centurions_content::{
     Warrior,
     records::{
-        AttackPacket, Condition, EnemyRecord, EnemyRecordMut, SavingThrow, WarriorRecord,
+        Condition, EnemyRecord, EnemyRecordMut, SavingThrow, SpellInfoRecord, WarriorRecord,
         WarriorRecordMut,
     },
 };
 
-/// resist150432..150580 runs the mental save before the general save-mode gate.
+/// The mental save comes before the general save-mode gate.
+///
+/// Original: resist
 fn mental_resisted(
     target: &[u8],
     monster: bool,
@@ -22,15 +26,15 @@ fn mental_resisted(
     memory: Option<RestrictionMemoryView<'_>>,
     random: &mut RandomState,
 ) -> Result<bool, RuleError> {
-    let category = AttackPacket(packet).defense_category();
-    // resist150420: a negative animation byte other than -9 skips the category test.
-    let animation = AttackPacket(packet).effect_animation();
+    let category = SpellInfoRecord(packet).defense_category();
+    // A negative animation byte other than -9 skips the category test.
+    let animation = SpellInfoRecord(packet).effect_animation();
     if category != 0 && (animation >= 0 || animation == -9) {
         return Ok(false);
     }
     let threshold = if category != 0 {
         let level = if monster {
-            EnemyRecord::from_bytes(target).level()?
+            EnemyRecord::from_bytes(target).hit_dice()?
         } else {
             WarriorRecord::from_bytes(target).level()?
         };
@@ -46,7 +50,7 @@ fn mental_resisted(
             .wrapping_sub(caster.wrapping_mul(5))
     } else if monster {
         let record = EnemyRecord::from_bytes(target);
-        record.level()?.wrapping_mul(4).wrapping_add(
+        record.hit_dice()?.wrapping_mul(4).wrapping_add(
             if record.has_creature_category(EnemyRecord::MECHANICAL_CATEGORY) {
                 1035
             } else {
@@ -56,18 +60,20 @@ fn mental_resisted(
     } else {
         let record = WarriorRecord::from_bytes(target);
         record
-            .saving_throw(SavingThrow::Mental)?
+            .save(SavingThrow::Mental)?
             .wrapping_add(if record.race()? == 3 { 1000 } else { 0 })
     };
     Ok(random.bound(100)
         <= threshold.wrapping_add(
-            AttackPacket(packet)
+            SpellInfoRecord(packet)
                 .save_bonus_per_attack()
                 .wrapping_mul(count),
         ))
 }
 
-/// resist1501a0..15040e: category 9 replaces every save with the missile hit test.
+/// Category 9 replaces every save with the missile hit test.
+///
+/// Original: resist
 fn physical_resisted(
     target: &[u8],
     monster: bool,
@@ -85,10 +91,10 @@ fn physical_resisted(
         if record.turn_skip_duration() != 0 {
             return Ok(false);
         }
-        let level = record.level()?;
+        let level = record.hit_dice()?;
         hit = hit
             .wrapping_sub(record.missile_dodge_bonus()?)
-            .wrapping_sub(random.bound(record.speed()? / 3))
+            .wrapping_sub(random.bound(record.agility()? / 3))
             .wrapping_sub(level.wrapping_mul(3))
             .wrapping_sub(i16::from(record.guarding()).wrapping_mul(level))
             .wrapping_add(match record.size()?.wrapping_abs() {
@@ -116,7 +122,9 @@ fn physical_resisted(
     Ok(random.bound(100) > hit)
 }
 
-/// resist's ordered saves for condition and healing packets.
+/// The ordered saves for condition and healing packets.
+///
+/// Original: resist
 pub(super) fn status_resisted(
     target: &[u8],
     monster: bool,
@@ -127,6 +135,9 @@ pub(super) fn status_resisted(
     status_resisted_with_feedback(target, monster, context, memory, random, &mut false)
 }
 
+/// Whether a body resists a condition or healing spell, with its mental-resistance message. An
+/// armor-filter shot cannot be resisted; a defense category 9 spell is resisted physically, any
+/// other mentally.
 pub(super) fn status_resisted_with_feedback(
     target: &[u8],
     monster: bool,
@@ -139,7 +150,7 @@ pub(super) fn status_resisted_with_feedback(
     if context.armor_filter {
         return Ok(false);
     }
-    if AttackPacket(context.packet).defense_category() == 9 {
+    if SpellInfoRecord(context.packet).defense_category() == 9 {
         return physical_resisted(target, monster, memory, random);
     }
     if mental_resisted(
@@ -153,26 +164,26 @@ pub(super) fn status_resisted_with_feedback(
         *mental_feedback = true;
         return Ok(true);
     }
-    // resist150588 compares the category as a signed BYTE; a negative one indexes
-    // the NPC save bytes backwards, still inside the record.
-    let category = AttackPacket(context.packet).defense_category() as i8;
+    // The category is signed; a negative one indexes the monster save bytes backwards,
+    // still inside the record.
+    let category = SpellInfoRecord(context.packet).defense_category() as i8;
     if category <= 6
         && monster
         && (target[(0x8b + isize::from(category)) as usize] as i8 > 100
-            || EnemyRecord::from_bytes(target).magic_immunity()? > 100)
+            || EnemyRecord::from_bytes(target).psi_resistance()? > 100)
     {
         return Ok(true);
     }
     // The mode is signed too: only 1 and 3..127 skip the save, except category -9.
-    let mode = AttackPacket(context.packet).saving_throw_mode() as i8;
+    let mode = SpellInfoRecord(context.packet).cannot() as i8;
     if (mode == 1 || mode > 2) && category != -9 {
         return Ok(false);
     }
-    if matches!(AttackPacket(context.packet).defense_category(), 0 | 5)
+    if matches!(SpellInfoRecord(context.packet).defense_category(), 0 | 5)
         && if monster {
             EnemyRecord::from_bytes(target).condition(Condition::ComputerControl) != 0
         } else {
-            WarriorRecord::from_bytes(target).automatic_mode()? != 0
+            WarriorRecord::from_bytes(target).computer_control()? != 0
         }
     {
         return Ok(true);
@@ -186,17 +197,17 @@ pub(super) fn status_resisted_with_feedback(
         } else {
             WarriorRecord::from_bytes(target).signed_level_protection(level)
         }
-        // resolve_support_inner admits levels 0..6, so 0x7e + 2 * level stays inside.
+        // Levels are 0..6, so the protection field stays inside the record.
         .map_err(|_| RuleError::Invalid("signed level protection level".into()))?;
         immune |= protected != 0;
     }
     let resistance = if monster {
-        EnemyRecord::from_bytes(target).magic_immunity()?
+        EnemyRecord::from_bytes(target).psi_resistance()?
     } else {
         WarriorRecord::from_bytes(target).base_psionic_resistance()?
     };
     let threshold = resistance.wrapping_add(
-        AttackPacket(context.packet)
+        SpellInfoRecord(context.packet)
             .resistance_bonus_per_attack()
             .wrapping_mul(context.count),
     );
@@ -208,10 +219,11 @@ pub(super) fn status_resisted_with_feedback(
     })
 }
 
-/// resolvespell151022 and spelllist15bd50 retain the original Psi-drain ordering.
-/// Party targets clear the amount before Siphon's transfer; NPC targets transfer
-/// the negative half before clearing it. Neither branch applies stamina damage.
-/// `caster` is the current initiative body; a collision passes its usage bytes.
+/// A Psi drain. Party targets clear the amount before Siphon's transfer; monster targets
+/// transfer the negative half before clearing it. Neither applies stamina damage.
+/// `caster` is the battle order's current body; a collision passes its usage bytes.
+///
+/// Original: resolvespell, spelllist
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_psi_drain(
     warriors: &[Warrior],
@@ -232,17 +244,21 @@ pub(crate) fn resolve_psi_drain(
     {
         return Err(RuleError::Invalid("Psi drain inputs".into()));
     }
-    let effect = AttackPacket(packet).effect()?;
+    let effect = SpellInfoRecord(packet).effect()?;
     // Drains in other categories are support packets (is_support).
-    if !matches!(effect, 60 | 61) || AttackPacket(packet).defense_category() != 5 {
+    if !matches!(effect, 60 | 61) || SpellInfoRecord(packet).defense_category() != 5 {
         return Err(RuleError::Invalid("not a category-5 Psi drain".into()));
     }
     let caster =
         usize::try_from(caster).map_err(|_| RuleError::Invalid("negative Psi caster".into()))?;
     if caster >= warriors.len() && caster < 10
         || caster >= 10 + enemies.len()
-        || warriors.iter().any(|record| record.bytes.len() != 3138)
-        || enemies.iter().any(|record| record.bytes.len() != 288)
+        || warriors
+            .iter()
+            .any(|record| record.bytes.len() != WARRIOR_BYTES)
+        || enemies
+            .iter()
+            .any(|record| record.bytes.len() != MONSTER_BYTES)
         || mask[warriors.len()..10].iter().any(|flag| *flag > 0)
     {
         return Err(RuleError::Invalid("Psi drain body records".into()));
@@ -256,10 +272,9 @@ pub(crate) fn resolve_psi_drain(
         targets: vec![],
         race_excluded: vec![],
     };
-    let (minimum, maximum) = AttackPacket(packet).duration_bounds();
+    let (minimum, maximum) = SpellInfoRecord(packet).duration_range();
     next_random.range(minimum, maximum);
-    let (additional_minimum, additional_maximum) =
-        AttackPacket(packet).additional_duration_bounds();
+    let (additional_minimum, additional_maximum) = SpellInfoRecord(packet).power_duration_range();
     if additional_minimum != 0 {
         for _ in 0..context.count {
             next_random.range(additional_minimum, additional_maximum);
@@ -271,7 +286,7 @@ pub(crate) fn resolve_psi_drain(
         }
         let monster = body >= 10;
         let excluded = if monster {
-            AttackPacket(packet).race_restriction()? != 0
+            SpellInfoRecord(packet).race_restriction()? != 0
                 && monster_race_is_excluded(packet, body, Some(memory))?
         } else {
             race_is_excluded(packet, &result.warriors[body].bytes, Some(memory))?
@@ -284,7 +299,7 @@ pub(crate) fn resolve_psi_drain(
         if status_resisted(target, monster, context, Some(memory), &mut next_random)? {
             continue;
         }
-        // Resistance precedes collide's usage byte WORD4358c2, as in the body loop.
+        // Resistance precedes the collision's usage byte, as in the body loop.
         if let Some(usage) = usage.as_deref_mut() {
             if usage.used[usage.slot + 1] != 0 {
                 continue;
@@ -317,15 +332,15 @@ pub(crate) fn resolve_psi_drain(
             .wrapping_add(amount)
             .max(0);
         if actual < 10 {
-            points = points.min(WarriorRecord::from_bytes(target).maximum_psi()?);
+            points = points.min(WarriorRecord::from_bytes(target).psi_points_max()?);
         }
         set_psi_points(target, actual >= 10, points);
         if effect == 61 && actual >= 10 {
-            // 15bb0c: a party initiative body credits WORD4435d2; an NPC one credits
-            // WORD447196, which live NPC turns hold at the acting NPC.
+            // A party body credits `charup`; a monster credits `monsterup`, which live monster
+            // turns hold at the acting monster.
             let recipient = if caster < 9 {
                 memory
-                    .selected_warrior()
+                    .char_up()
                     .map(usize::try_from)
                     .transpose()
                     .map_err(|_| RuleError::Invalid("negative Siphon recipient".into()))?
@@ -356,6 +371,7 @@ pub(crate) fn resolve_psi_drain(
     Ok(result)
 }
 
+/// The record of a warrior (below 10) or monster body.
 pub(super) fn spell_body<'a>(
     warriors: &'a mut [Warrior],
     enemies: &'a mut [MonsterRecord],
@@ -374,6 +390,7 @@ pub(super) fn spell_body<'a>(
     }
 }
 
+/// A body's psi points.
 fn psi_points(target: &[u8], enemy: bool) -> Result<i16, RuleError> {
     Ok(if enemy {
         EnemyRecord::from_bytes(target).psi_points()?
@@ -382,6 +399,7 @@ fn psi_points(target: &[u8], enemy: bool) -> Result<i16, RuleError> {
     })
 }
 
+/// Sets a body's psi points.
 fn set_psi_points(target: &mut [u8], enemy: bool, points: i16) {
     if enemy {
         EnemyRecordMut::from_bytes(target).set_psi_points(points);

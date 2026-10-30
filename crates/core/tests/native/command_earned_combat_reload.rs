@@ -7,7 +7,7 @@ fn input(fixture: &Value, case: &Value) -> Session {
     .unwrap();
     if case["kind"] == "normalized_diagonal_attempt" {
         // Native display normalization reaches Getup's full item refresh before this command.
-        state.native_work.ammunition_work.item = Some(case["before_command"].bytes("item_work"));
+        state.globals.loaded_items.item = Some(case["before_command"].bytes("item_work"));
     }
     native_common::source_victory_context(&mut state);
     state
@@ -15,9 +15,9 @@ fn input(fixture: &Value, case: &Value) -> Session {
 fn project(state: &mut Session, snapshot: &Value, baseline: &Value) {
     snapshots::earned_projection(state, snapshot, baseline);
     if snapshot["seed"] != baseline["seed"] || snapshot["ammunition"] != baseline["ammunition"] {
-        state.native_work.ammunition_work.item = Some(snapshot.bytes("item_work"));
-        state.native_work.ammunition_work.weapon = Some(snapshot.bytes("weapon_work"));
-        state.native_work.ammunition_work.ammo = Some(snapshot.bytes("ammo_work"));
+        state.globals.loaded_items.item = Some(snapshot.bytes("item_work"));
+        state.globals.loaded_items.weapon = Some(snapshot.bytes("weapon_work"));
+        state.globals.loaded_items.ammo = Some(snapshot.bytes("ammo_work"));
     }
 }
 
@@ -42,18 +42,18 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
             && events.iter().any(|e| {
                 matches!(
                     e,
-                    Event::Feedback(centurions_core::feedback::NativeFeedback::Combat { .. })
+                    Event::Feedback(centurions_core::feedback::GameFeedback::Combat { .. })
                 )
             })
         {
             assert_eq!((index, step), (1, 149));
             assert!(matches!(&command, Command::ShootEnemy { body: 15 }));
             let feedback = vec![
-                centurions_core::feedback::NativeFeedback::Tutorial {
+                centurions_core::feedback::GameFeedback::Tutorial {
                     first: 76,
                     last: 77,
                 },
-                centurions_core::feedback::NativeFeedback::Combat {
+                centurions_core::feedback::GameFeedback::Combat {
                     kind: centurions_core::feedback::CombatRefusal::OutOfRange,
                 },
             ];
@@ -61,8 +61,8 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
             assert_eq!(state.warriors, before.warriors);
             assert_eq!(state.random, before.random);
             let combat = current_combat(&state);
-            let start = combat.squad.positions[1];
-            let end = combat.enemies.positions[5];
+            let start = combat.squad.pos[1];
+            let end = combat.roster.mon_pos[5];
             let dx = f32::from(start.0 - end.0);
             let dy = f32::from(start.1 - end.1);
             assert_eq!((dx * dx + dy * dy).sqrt().trunc() as i16, 9);
@@ -103,7 +103,7 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
         Some(centurions_core::MovementContinuation::RegionalReturn { header: false });
     // The recorded prefix defeats body16; native killbody retains that body.
     expected
-        .native_work
+        .globals
         .health_context
         .last_body = 16;
     // The seed12 receipt's last full pair writer is its real Shoot at command145.
@@ -115,9 +115,9 @@ fn replay_historical_prefix(fixture: &Value, case: &Value, content: &Content) ->
             weapon[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
         }
     }
-    expected.native_work.ammunition_work.weapon = Some(weapon);
-    expected.native_work.ammunition_work.ammo = Some(ammo);
-    expected.native_work.inventory_record = native_common::earned_inventory_work(index);
+    expected.globals.loaded_items.weapon = Some(weapon);
+    expected.globals.loaded_items.ammo = Some(ammo);
+    expected.globals.inventory_record = native_common::earned_inventory_work(index);
     expected.combat.as_mut().unwrap().turn_origin =
         snapshots::recorded_turn_origin(&receipt, current_combat(&expected));
     // The earned prefix's last walking command is Move(1,0); combatchoice

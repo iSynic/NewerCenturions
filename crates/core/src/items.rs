@@ -2,7 +2,7 @@
 use crate::*;
 use crate::{Event, Phase, RandomState, RuleError, Session};
 use centurions_content::{
-    Content, InventoryRecord, Warrior,
+    Content, ITEM_BYTES, InventoryRecord, Warrior,
     records::{EquipmentStat, InventoryModifier as Modifier, InventorySlotsMut, ItemDefinition},
 };
 mod ammunition_menu;
@@ -23,7 +23,10 @@ pub(crate) use item_information::{
     show_loot as show_loot_item_information,
 };
 
-/// booty1061fc..10630c retains the last higher-class record copied during sorting.
+/// Sorts loot by category, highest first. Returns the last record moved up,
+/// which booty leaves behind as the inventory record.
+///
+/// Original: booty
 pub(crate) fn sort_loot(items: &mut [InventoryRecord]) -> Option<InventoryRecord> {
     let mut temporary = None;
     for _ in 0..items.len() {
@@ -37,10 +40,14 @@ pub(crate) fn sort_loot(items: &mut [InventoryRecord]) -> Option<InventoryRecord
     temporary
 }
 
+/// Tidies a warrior's pack: worn items move to the front with the worn firearm first, the worn
+/// melee weapon second and the worn shield battery (category 20) third, and the unused slots are
+/// cleared.
 pub fn compact(warrior: &mut Warrior) -> Result<(), RuleError> {
     compact_inner(warrior, None)
 }
 
+/// Tidies a pack as compact does, following one selected slot to its new place.
 fn compact_inner(warrior: &mut Warrior, mut selected: Option<&mut usize>) -> Result<(), RuleError> {
     let count = warrior.inventory()?.len();
     let mut records: Vec<_> = (0..100)
@@ -58,22 +65,22 @@ fn compact_inner(warrior: &mut Warrior, mut selected: Option<&mut usize>) -> Res
     };
     for _ in 1..count {
         for index in 1..count {
-            if records[index].equipment_flag() != 0 && records[index - 1].equipment_flag() == 0 {
+            if records[index].equipped() != 0 && records[index - 1].equipped() == 0 {
                 swap(&mut records, index, index - 1);
             }
         }
     }
     for record in &mut records[count..] {
         record.set_id(0);
-        record.set_quantity(0);
-        record.set_equipment_flag(0);
+        record.set_charge(0);
+        record.set_equipped(0);
     }
     // Firearm first, melee second, category 20 third. The third scan deliberately
     // does not stop after a match; duplicate equipped records retain that order.
     for (category, destination, first_only) in [(15, 0, true), (2, 1, true), (20, 2, false)] {
         for index in 0..count {
             if records[index].id() == EquipmentStat::Equipment(category).read(warrior)?
-                && records[index].equipment_flag() != 0
+                && records[index].equipped() != 0
             {
                 swap(&mut records, index, destination);
                 if category == 15 {
@@ -93,7 +100,9 @@ fn compact_inner(warrior: &mut Warrior, mut selected: Option<&mut usize>) -> Res
     Ok(())
 }
 
-/// randomitem with no forced enhancement (CODE 1 +0x2d558).
+/// A fresh item with no forced enhancement.
+///
+/// Original: randomitem
 pub fn initialize_plain(
     id: i16,
     content: &Content,
@@ -102,7 +111,9 @@ pub fn initialize_plain(
     initialize(id, 0, content, random)
 }
 
-/// randomitem for a fresh item record at difficulty zero.
+/// A fresh item at difficulty zero.
+///
+/// Original: randomitem
 pub fn initialize(
     id: i16,
     enhancement: i16,
@@ -112,7 +123,9 @@ pub fn initialize(
     initialize_at_difficulty(id, enhancement, 0, content, random)
 }
 
-/// randomitem uses the signed difficulty word at 0x442576 for draw thresholds and loop counts.
+/// A fresh item; the difficulty sets the draw thresholds and loop counts.
+///
+/// Original: randomitem
 pub fn initialize_at_difficulty(
     id: i16,
     enhancement: i16,
@@ -125,13 +138,13 @@ pub fn initialize_at_difficulty(
         .items
         .get(usize::from(id.unsigned_abs()))
         .ok_or_else(|| RuleError::Invalid("item id outside loaded bands".into()))?;
-    if definition.len() != 150 {
+    if definition.len() != ITEM_BYTES {
         return Err(RuleError::Invalid(
             "item definition requires 150 bytes".into(),
         ));
     }
     let definition = ItemDefinition(definition);
-    let kind = definition.category()?.wrapping_abs();
+    let kind = definition.item_type()?.wrapping_abs();
     let mut record = InventoryRecord([0; 22]);
     record.set_id(id);
     record.set_category(kind as u8);
@@ -149,12 +162,12 @@ pub fn initialize_at_difficulty(
     let maximum = maximum.max(base);
     record.set_capacity(maximum);
     if capacity == 0 && (base > 0 || additional != 0) {
-        record.set_quantity(base);
+        record.set_charge(base);
     }
     if maximum > 0 && [13, 14, 15].contains(&kind) {
         if random.bound(100) < 50_i16.wrapping_add(difficulty.wrapping_mul(10)) {
             let quantity = random.bound(maximum);
-            record.set_quantity(quantity);
+            record.set_charge(quantity);
             let ammunition_type = definition.ammunition_caliber()?;
             if ammunition_type != 14
                 && let Some(ammo) = (200..400).find(|i| {
@@ -168,15 +181,15 @@ pub fn initialize_at_difficulty(
         }
     } else if base > 0 {
         let quantity = random.bound(maximum);
-        record.set_quantity(quantity);
+        record.set_charge(quantity);
     }
     if definition.reserve_ammunition_kind()? != 0 {
-        record.set_quantity(base);
+        record.set_charge(base);
         record.set_ammunition(0);
         record.set_capacity(0);
     }
     let enhanced = random.bound(100) >= 94_i16.wrapping_sub(difficulty) || enhancement != 0;
-    if enhanced && kind != 26 && kind != 27 && definition.unit_weight()? == 0 {
+    if enhanced && kind != 26 && kind != 27 && definition.charge_weight()? == 0 {
         let mut changes = 0_i16;
         let mut upgrades = 0_i8;
         for iteration in 0..enhancement.max(1) {
@@ -272,6 +285,8 @@ pub fn initialize_at_difficulty(
     Ok(record)
 }
 
+/// Adds the rounds of an ammunition item to the party's reserve for that item (item number minus
+/// 200), with its sound.
 pub(crate) fn add_ammunition(
     state: &mut Session,
     content: &Content,
@@ -283,7 +298,7 @@ pub(crate) fn add_ammunition(
             dependency: "other ammunition types",
         });
     }
-    let quantity = item.quantity()?;
+    let quantity = item.charge()?;
     if quantity < 0 {
         return Err(RuleError::Invalid("ammunition pack is exhausted".into()));
     }
@@ -293,14 +308,14 @@ pub(crate) fn add_ammunition(
         .get(id)
         .ok_or_else(|| RuleError::Invalid("ammunition definition unavailable".into()))?;
     if ItemDefinition(definition).reserve_ammunition_kind()? == 0
-        || ItemDefinition(definition).category()? != 26
+        || ItemDefinition(definition).item_type()? != 26
     {
         return Err(RuleError::Invalid(
             "item is not an ammunition supply".into(),
         ));
     }
     state.ammunition[id - 200] = state.ammunition[id - 200].wrapping_add(i32::from(quantity));
-    let authored = ItemDefinition(definition).pickup_sound()?;
+    let authored = ItemDefinition(definition).sound()?;
     let sound = if authored != 0 {
         authored
     } else {
@@ -319,12 +334,13 @@ pub(crate) fn add_ammunition(
     ])
 }
 
+/// Removes the item in one slot of the pack, which must not be worn, and tidies the pack.
 pub(crate) fn remove_inventory_slot(warrior: &mut Warrior, slot: usize) -> Result<(), RuleError> {
     let count = warrior.inventory()?.len();
     if slot >= count {
         return Err(RuleError::Invalid("inventory slot outside warrior".into()));
     }
-    if warrior.record().inventory_slot(slot).equipment_flag() != 0 {
+    if warrior.record().inventory_slot(slot).equipped() != 0 {
         return Err(RuleError::Unsupported {
             action: "inventory.remove",
             dependency: "removing equipped items",
@@ -334,6 +350,8 @@ pub(crate) fn remove_inventory_slot(warrior: &mut Warrior, slot: usize) -> Resul
     compact(warrior)
 }
 
+/// Converts an ammunition pack in a warrior's pack into rounds in the party's reserve, using the
+/// pack up.
 pub fn use_ammunition_pack(
     state: &mut Session,
     content: &Content,
@@ -359,7 +377,7 @@ pub fn use_ammunition_pack(
         .get(slot)
         .cloned()
         .ok_or_else(|| RuleError::Invalid("inventory slot outside warrior".into()))?;
-    if item.equipment_flag() != 0 {
+    if item.equipped() != 0 {
         return Err(RuleError::Invalid("ammunition pack is equipped".into()));
     }
     if !(200..400).contains(&item.id()) || item.category_code() != 26 {
@@ -368,7 +386,7 @@ pub fn use_ammunition_pack(
             dependency: "inventory record is not an ammunition supply",
         });
     }
-    if item.quantity()? <= 0 {
+    if item.charge()? <= 0 {
         return Err(RuleError::Invalid("ammunition pack is exhausted".into()));
     }
     let effects = add_ammunition(state, content, &item)?;

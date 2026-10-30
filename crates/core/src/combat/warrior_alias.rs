@@ -1,18 +1,19 @@
-//! Warrior-indexed WORDs read and written for bodies past the warrior table.
+//! Warrior fields read and written for bodies past the warrior table.
 //!
-//! Party records live at 0x448aa0 + body * 3138. Native code indexes NPC bodies 10.. the
-//! same way, so their fields land in the memory that follows the table.
+//! Some routines index a monster body as if it were a warrior, so its fields land in
+//! the records that follow the warrior table (see docs/source-notes/combat.md).
 use crate::RuleError;
-use crate::shop::ShopWork;
+use crate::shop::TheShop;
 use crate::state::WarriorTable;
 use centurions_content::{ITEM_BYTES, WARRIOR_BYTES, Warrior};
 
+/// Where the warrior table starts; a body number counts warrior-sized records from here.
 const WARRIOR_TABLE: usize = 0x448aa0;
 /// The startup editor backup record.
 const EDITOR_BACKUP: (usize, usize) = (0x44ecb0, 18_828);
 /// The ITEM work record; AMMO and WEAPON work follow it.
-const ITEM_WORK: (usize, usize) = (0x45363c, ITEM_BYTES);
-/// loaditem 0x130afe caches definitions in banks out of logical order.
+const LOADED_ITEM: (usize, usize) = (0x45363c, ITEM_BYTES);
+/// loaditem keeps item definitions in banks out of numeric order.
 const DEFINITION_BANKS: [(usize, usize); 5] = [
     (0x4537fe, 0),
     (0x45ad2e, 400),
@@ -20,31 +21,35 @@ const DEFINITION_BANKS: [(usize, usize); 5] = [
     (0x46978e, 600),
     (0x470cbe, 800),
 ];
-const SHOP_WORK: (usize, usize) = (0x478288, 3002);
+/// The shop's work record.
+const THE_SHOP: (usize, usize) = (0x478288, 3002);
 /// The current map record starts with its 4200-byte event headers.
 const MAP_HEADER: (usize, usize) = (0x478e42, 4200);
+/// The top of the memory the aliases can land in.
 const A5_TOP: usize = 0x479ff0;
 
-/// The owner of a warrior-indexed WORD, with the WORD's offset inside it.
+/// The record a warrior-indexed field lands in, with its offset there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Alias {
-    /// Party records 0..5 and the Upgrade records 6..7 (0x44d42c, 0x44e06e).
+    /// Party records 0..5 and the Upgrade records 6..7.
     Record {
         body: usize,
         offset: usize,
     },
     EditorBackup(usize),
-    ItemWork(usize),
+    LoadedItem(usize),
     Definition {
         item: usize,
         offset: usize,
     },
-    ShopWork(usize),
+    TheShop(usize),
     MapHeader(usize),
     AboveA5,
     Unrepresented,
 }
 
+/// Finds the record that a field of the given body number lands in, counting warrior-sized records
+/// from the start of the warrior table.
 pub(crate) fn locate(body: usize, field: usize) -> Alias {
     let Some(address) = body
         .checked_mul(WARRIOR_BYTES)
@@ -64,8 +69,8 @@ pub(crate) fn locate(body: usize, field: usize) -> Alias {
         }
     } else if let Some(offset) = within(EDITOR_BACKUP) {
         Alias::EditorBackup(offset)
-    } else if let Some(offset) = within(ITEM_WORK) {
-        Alias::ItemWork(offset)
+    } else if let Some(offset) = within(LOADED_ITEM) {
+        Alias::LoadedItem(offset)
     } else if let Some((offset, first)) = DEFINITION_BANKS
         .into_iter()
         .find_map(|(base, first)| within((base, 200 * ITEM_BYTES)).map(|offset| (offset, first)))
@@ -74,8 +79,8 @@ pub(crate) fn locate(body: usize, field: usize) -> Alias {
             item: first + offset / ITEM_BYTES,
             offset: offset % ITEM_BYTES,
         }
-    } else if let Some(offset) = within(SHOP_WORK) {
-        Alias::ShopWork(offset)
+    } else if let Some(offset) = within(THE_SHOP) {
+        Alias::TheShop(offset)
     } else if let Some(offset) = within(MAP_HEADER) {
         Alias::MapHeader(offset)
     } else if address + 2 > A5_TOP {
@@ -89,25 +94,45 @@ pub(crate) fn locate(body: usize, field: usize) -> Alias {
 macro_rules! session_owners {
     ($state:expr) => {
         $crate::combat::warrior_alias::Owners::new(
-            $state.native_work.ammunition_work.item.as_deref(),
-            &$state.native_work.shop_work,
+            $state.globals.loaded_items.item.as_deref(),
+            &$state.globals.the_shop,
             $state
                 .exploration
                 .as_ref()
                 .map(|position| position.event_headers.as_slice()),
         )
-        .with_table(&$state.warriors, &$state.native_work.warrior_table)
+        .with_table(&$state.warriors, &$state.globals.warrior_table)
     };
 }
 pub(crate) use session_owners;
+
+/// Owners backed by the warrior backup table, borrowing only the session fields read;
+/// the item alias defaults to none.
+macro_rules! backup_owners {
+    ($state:expr) => {
+        $crate::combat::warrior_alias::backup_owners!($state, None)
+    };
+    ($state:expr, $item:expr) => {
+        $crate::combat::warrior_alias::Owners::new(
+            $item,
+            &$state.globals.the_shop,
+            $state
+                .exploration
+                .as_ref()
+                .map(|position| position.event_headers.as_slice()),
+        )
+        .with_backup(&$state.globals.warrior_table)
+    };
+}
+pub(crate) use backup_owners;
 
 /// Commits a live combat's pending writes while `$combat` stays borrowed from the session.
 macro_rules! commit_pending {
     ($state:expr, $combat:expr) => {
         $crate::combat::warrior_alias::commit(
-            $state.native_work.ammunition_work.item.as_mut(),
-            Some(&mut $state.native_work.shop_work),
-            Some(&mut $state.native_work.warrior_table),
+            $state.globals.loaded_items.item.as_mut(),
+            Some(&mut $state.globals.the_shop),
+            Some(&mut $state.globals.warrior_table),
             $state
                 .exploration
                 .as_mut()
@@ -118,11 +143,11 @@ macro_rules! commit_pending {
 }
 pub(crate) use commit_pending;
 
-/// The retained owners a caller passes for warrior-indexed NPC reads.
+/// The retained owners a caller passes for warrior-indexed monster reads.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Owners<'a> {
-    pub item_work: Option<&'a [u8]>,
-    pub shop_work: Option<&'a ShopWork>,
+    pub loaded_item: Option<&'a [u8]>,
+    pub the_shop: Option<&'a TheShop>,
     pub header: Option<&'a [u8]>,
     /// The squad records and the table records outside it.
     pub warriors: Option<&'a [Warrior]>,
@@ -130,21 +155,22 @@ pub(crate) struct Owners<'a> {
 }
 
 impl<'a> Owners<'a> {
+    /// The owners a caller holds: item work, the shop and the map header.
     pub(crate) fn new(
-        item_work: Option<&'a [u8]>,
-        shop_work: &'a ShopWork,
+        loaded_item: Option<&'a [u8]>,
+        the_shop: &'a TheShop,
         header: Option<&'a [u8]>,
     ) -> Self {
         Self {
-            item_work,
-            shop_work: Some(shop_work),
+            loaded_item,
+            the_shop: Some(the_shop),
             header,
             warriors: None,
             table: None,
         }
     }
 
-    /// The table alone, for NPC-indexed callers that lend the squad elsewhere.
+    /// The table alone, for monster-indexed callers that lend the squad elsewhere.
     pub(crate) fn with_backup(self, table: &'a WarriorTable) -> Self {
         Self {
             table: Some(table),
@@ -152,6 +178,7 @@ impl<'a> Owners<'a> {
         }
     }
 
+    /// These owners with the squad's warriors and the warrior table added.
     pub(crate) fn with_table(self, warriors: &'a [Warrior], table: &'a WarriorTable) -> Self {
         Self {
             warriors: Some(warriors),
@@ -160,8 +187,8 @@ impl<'a> Owners<'a> {
         }
     }
 
-    /// The warrior table, ITEM work, shop work or map header WORD at `alias`, if this
-    /// caller passed it.
+    /// The value at `alias` in the warrior table, item work, shop work or map header,
+    /// if this caller passed it.
     pub(crate) fn read(self, alias: Alias) -> Option<i16> {
         let word = |bytes: &[u8], offset: usize| {
             bytes
@@ -169,8 +196,8 @@ impl<'a> Owners<'a> {
                 .map(|word| i16::from_be_bytes([word[0], word[1]]))
         };
         match alias {
-            Alias::ItemWork(offset) => word(self.item_work?, offset),
-            Alias::ShopWork(offset) => self.shop_work?.read_word(offset).ok(),
+            Alias::LoadedItem(offset) => word(self.loaded_item?, offset),
+            Alias::TheShop(offset) => self.the_shop?.read_word(offset).ok(),
             Alias::MapHeader(offset) => word(self.header?, offset),
             Alias::Record { body, offset } => match self.warriors?.get(body) {
                 Some(warrior) => word(&warrior.bytes, offset),
@@ -184,7 +211,8 @@ impl<'a> Owners<'a> {
     }
 }
 
-/// A spelllist write to a warrior-indexed NPC WORD, committed by the caller in order.
+/// A spelllist write to a monster field past the warrior table, committed by the
+/// caller in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AliasWrite {
     pub body: usize,
@@ -192,16 +220,16 @@ pub struct AliasWrite {
     pub value: i16,
 }
 
-/// Commits recorded writes to the session's ITEM work, shop work and map header.
+/// Commits recorded writes to the session's item work, shop work and map header.
 pub(crate) fn commit(
-    item_work: Option<&mut Vec<u8>>,
-    shop_work: Option<&mut ShopWork>,
+    loaded_item: Option<&mut Vec<u8>>,
+    the_shop: Option<&mut TheShop>,
     table: Option<&mut WarriorTable>,
     header: Option<&mut Vec<u8>>,
     writes: &[AliasWrite],
 ) -> Result<(), RuleError> {
-    let (mut item_work, mut shop_work, mut table, mut header) =
-        (item_work, shop_work, table, header);
+    let (mut loaded_item, mut the_shop, mut table, mut header) =
+        (loaded_item, the_shop, table, header);
     for write in writes {
         let put = |bytes: Option<&mut Vec<u8>>, offset: usize| {
             let word = bytes
@@ -211,13 +239,13 @@ pub(crate) fn commit(
             Ok::<_, RuleError>(())
         };
         match locate(write.body, write.field) {
-            Alias::ItemWork(offset) => put(item_work.as_deref_mut(), offset)?,
+            Alias::LoadedItem(offset) => put(loaded_item.as_deref_mut(), offset)?,
             Alias::MapHeader(offset) => put(header.as_deref_mut(), offset)?,
-            Alias::ShopWork(offset) => shop_work
+            Alias::TheShop(offset) => the_shop
                 .as_deref_mut()
                 .ok_or_else(|| RuleError::from("warrior-indexed write owner missing"))?
                 .write_word(offset, write.value)?,
-            // NPC bodies 10..13 index the backup; party bodies never record alias writes.
+            // Monster bodies 10..13 land in the editor backup; warriors never get here.
             Alias::EditorBackup(offset) => table
                 .as_deref_mut()
                 .ok_or_else(|| RuleError::from("warrior-indexed write owner missing"))?
@@ -235,26 +263,28 @@ pub(crate) fn commit(
 /// Owned copies of the owners for a caller that also mutates its work record.
 #[derive(Clone, Default)]
 pub(crate) struct Snapshot {
-    item_work: Option<Vec<u8>>,
-    shop_work: Option<ShopWork>,
+    loaded_item: Option<Vec<u8>>,
+    the_shop: Option<TheShop>,
     header: Option<Vec<u8>>,
     table: Option<WarriorTable>,
 }
 
 impl Snapshot {
+    /// Copies the owners so a caller can change its own record meanwhile.
     pub(crate) fn new(owners: Owners<'_>) -> Self {
         Self {
-            item_work: owners.item_work.map(<[u8]>::to_vec),
-            shop_work: owners.shop_work.cloned(),
+            loaded_item: owners.loaded_item.map(<[u8]>::to_vec),
+            the_shop: owners.the_shop.cloned(),
             header: owners.header.map(<[u8]>::to_vec),
             table: owners.table.cloned(),
         }
     }
 
+    /// The owners as the copy holds them.
     pub(crate) fn owners(&self) -> Owners<'_> {
         Owners {
-            item_work: self.item_work.as_deref(),
-            shop_work: self.shop_work.as_ref(),
+            loaded_item: self.loaded_item.as_deref(),
+            the_shop: self.the_shop.as_ref(),
             header: self.header.as_deref(),
             warriors: None,
             table: self.table.as_ref(),
@@ -263,7 +293,7 @@ impl Snapshot {
 }
 
 impl crate::Session {
-    /// Commits a live cast's pending warrior-indexed writes to the retained owners.
+    /// Commits a cast's pending warrior-indexed writes.
     pub(crate) fn commit_alias_writes(&mut self) -> Result<(), RuleError> {
         let Some(combat) = self.combat.as_mut() else {
             return Ok(());
@@ -272,11 +302,12 @@ impl crate::Session {
         self.commit_writes(&writes)
     }
 
+    /// Commits pending warrior-indexed writes to the records they land in.
     pub(crate) fn commit_writes(&mut self, writes: &[AliasWrite]) -> Result<(), RuleError> {
         commit(
-            self.native_work.ammunition_work.item.as_mut(),
-            Some(&mut self.native_work.shop_work),
-            Some(&mut self.native_work.warrior_table),
+            self.globals.loaded_items.item.as_mut(),
+            Some(&mut self.globals.the_shop),
+            Some(&mut self.globals.warrior_table),
             self.exploration
                 .as_mut()
                 .map(|position| &mut position.event_headers),

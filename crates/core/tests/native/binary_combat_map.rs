@@ -20,7 +20,7 @@ fn tactical_map_matches_all_cells_and_random_consumption() {
             .iter()
             .map(|v| i32::from_be_bytes(*v))
             .collect(),
-        tile_properties: properties[64..12064].to_vec(),
+        map_stats: properties[64..12064].to_vec(),
         default_tile: word(&properties, 0).unwrap(),
         minutes_per_tick: if word(&properties, 2).unwrap() == 0 {
             5
@@ -38,7 +38,7 @@ fn tactical_map_matches_all_cells_and_random_consumption() {
             "position {},{} seed {}",
             case["x"], case["y"], case["seed"]
         );
-        assert_eq!(map.shift, (case.n("shift_x"), case.n("shift_y")));
+        assert_eq!(map.map_shift, (case.n("shift_x"), case.n("shift_y")));
         assert_eq!(map.edge_word, case.n::<i16>("edge_after"));
         support::assert_rng(&random, &case["after_seed"], &case["draws"]);
     }

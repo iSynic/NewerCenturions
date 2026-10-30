@@ -1,8 +1,13 @@
-//! Owned-item preparation through the shared prepattack kernel.
+//! Preparing a medical item's attack, as prepattack prepares any item.
 use crate::{RuleError, combat::firearm};
 use centurions_content::records::{ItemDefinition, WeaponAttackParameters};
 use centurions_content::{Content, Warrior, mission::OpeningMission};
 
+/// Prepares a medicine item's attack packet as an item prepares any attack. A warrior whose
+/// inventory rows carry a range modifier, or a damage enhancement the packet would use, is
+/// unsupported.
+///
+/// Original: prepattack
 pub(in crate::combat) fn prepared_packet(
     content: &Content,
     mission: &OpeningMission,
@@ -18,9 +23,8 @@ pub(in crate::combat) fn prepared_packet(
         .attacks;
     let packet = firearm::prepare_packet(&weapon, &ammunition, attacks)?;
     let prepared = WeaponAttackParameters::read(&packet)?;
-    // prepattack(actor,1) retains D3 for its per-instance reads. A zero damage
-    // packet stays zero for every finite BYTE enhancement; range still needs
-    // the actual row. Ammunition enhancement could mask nonzero inputs.
+    // Zero damage stays zero under any enhancement, but range still needs the real
+    // inventory row, and ammunition enhancement could hide nonzero damage.
     let damage_uses_row = prepared.physical != (0, 0)
         || prepared.elemental_maximum.iter().any(|damage| *damage != 0)
         || ItemDefinition(&ammunition).damage_enhancement() != 0;
@@ -36,6 +40,7 @@ pub(in crate::combat) fn prepared_packet(
     Ok(packet)
 }
 
+/// Checks the packet has its fixed size.
 pub(super) fn validate_packet(packet: &[u8]) -> Result<(), RuleError> {
     if packet.len() != 58 {
         return Err("prepared medical packet size".into());

@@ -12,11 +12,10 @@ import json
 import re
 import sys
 from collections import Counter
-from pathlib import Path
 
 import engine_inventory
+from repository import ROOT
 
-ROOT = Path(__file__).resolve().parent.parent
 MAP_PATH = ROOT / "evidence/capability-map.json"
 NOTES_PATH = ROOT / "evidence/capability-map-notes.json"
 DOC_PATH = ROOT / "docs/capability-map.md"
@@ -28,10 +27,10 @@ CONTEXTS = {
     "exploration": ("crates/core/src/exploration/script_execution",),
     "battle_round": ("crates/core/src/combat/round_stories.rs", "crates/core/src/combat/round_stories"),
     "enemy_turn": ("crates/core/src/combat/final_turn_stories.rs",),
-    "combat_story": ("crates/core/src/story_combat.rs",),
+    "combat_story": ("crates/core/src/story/combat.rs",),
     "death_script": ("crates/core/src/combat/death_scripts.rs", "crates/core/src/combat/death_scripts",
                      "crates/core/src/story_death.rs", "crates/core/src/death_story"),
-    "getup": ("crates/core/src/combat/runtime/retained_turn.rs", "crates/core/src/combat/runtime/retained_turn"),
+    "getup": ("crates/core/src/combat/runtime/out_of_combat_getup.rs", "crates/core/src/combat/runtime/out_of_combat_getup"),
     "nested_callback": ("crates/core/src/combat/npc_return", "crates/core/src/story_callbacks.rs",
                         "crates/core/src/exploration/callbacks"),
 }
@@ -67,7 +66,7 @@ RECORDS = {
     "npc": ("crates/content/src/combat.rs", ("MonsterRecord",)),
     "battle": ("crates/content/src/combat.rs", ("BattleRecord",)),
     "item": ("crates/content/src/records/item.rs", ("ItemDefinition",)),
-    "spell": ("crates/content/src/records/attack.rs", ("AttackPacket",)),
+    "spell": ("crates/content/src/records/attack.rs", ("SpellInfoRecord",)),
     "terrain": ("crates/content/src/tile_sets.rs", None),
     "encounter": ("crates/content/src/records/typed_encounter.rs", None),
     "extra": ("crates/content/src/records/exploration_extras.rs", None),
@@ -81,8 +80,8 @@ RECORDS = {
 # (family, file, view, field, offset, width, type, pattern naming its maintained readers).
 SURFACES = [
     ("terrain", "crates/content/src/tile_sets.rs", "TileSet", "properties", None, 2, "i16",
-     r"\b(?:tile_properties|tile_word|tactical_movement_property|movement_blocker|movement_sound)\b"),
-    ("battle", "crates/content/src/combat.rs", "BattleRecord", "cells", None, 2, "i16", r"\.cells\b"),
+     r"\b(?:map_stats|tile_word|tactical_movement_property|movement_blocker|movement_sound)\b"),
+    ("battle", "crates/content/src/combat.rs", "BattleRecord", "battle_grid", None, 2, "i16", r"\.battle_grid\b"),
     ("item", "crates/content/src/records/equipment.rs", "EquipmentModifiers", "attributes", 46, 2, "i16",
      r"\.attributes\b"),
 ]
@@ -199,10 +198,17 @@ def operation_arms(sites, index):
             rel = path.relative_to(ROOT).as_posix()
             text = path.read_text(encoding="utf-8")
             for match in OPERATION.finditer(text):
+                # A match arm (the name, an optional payload and further or-patterns),
+                # or an `== Operation::Name {` test guarding its own block.
                 arrow = text.find("=>", match.end())
-                if arrow < 0 or text[match.end():arrow].strip(" |\n") not in ("",) and "Operation::" not in text[match.end():arrow]:
+                brace = text.find("{", match.end())
+                if arrow >= 0 and ARM_TAIL.fullmatch(text[match.end():arrow].strip()):
+                    start, end = blocks(text, arrow)
+                elif (brace >= 0 and not text[match.end():brace].strip()
+                      and text[:match.start()].rstrip().endswith("==")):
+                    start, end = blocks(text, brace)
+                else:
                     continue
-                start, end = blocks(text, arrow)
                 first, last = line_of(text, start), line_of(text, end)
                 found = {ident for (file, line), ident in sites.items()
                          if file == rel and first <= line <= last}
@@ -217,7 +223,7 @@ def literal_routes():
     """Opcodes the enemy-turn and combat-story interpreters handle locally by literal arm."""
     routes = {}
     for context, path in (("enemy_turn", "crates/core/src/combat/final_turn_stories.rs"),
-                          ("combat_story", "crates/core/src/story_combat.rs")):
+                          ("combat_story", "crates/core/src/story/combat.rs")):
         text = (ROOT / path).read_text(encoding="utf-8")
         found = set()
         for match in re.finditer(r"match opcode \{", text):

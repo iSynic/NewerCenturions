@@ -1,16 +1,24 @@
-//! booty10 returns held wealth and the displaced item WORD prefix.
+//! Booty mode 10 gives back the party's held money and displaced items.
+use crate::combat::runtime;
 use crate::{Content, Event, InventoryRecord, Phase, Presentation, RuleError, Session};
 use serde::{Deserialize, Serialize};
-mod work;
-pub use work::RecoveryWork;
+mod storage;
+pub use storage::Storage;
 
+/// Who is waiting on the held property to be given back: a scenario script, ordinary play, or a
+/// confiscation (in a battle or not).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RecoveryReturn {
     Scripted,
     Ordinary,
-    Confiscation { detached: bool },
+    Confiscation {
+        #[serde(rename = "detached")]
+        in_combat: bool,
+    },
 }
 
+/// Gives the party back the money and items taken from it: the money is added to the party's and
+/// the items are offered as loot.
 pub(crate) fn begin(
     state: &mut Session,
     content: &Content,
@@ -19,35 +27,32 @@ pub(crate) fn begin(
     if state.recovery_return.is_some() {
         return Err("recovery loot is already pending".into());
     }
-    crate::combat::runtime::mark_turn_cleanup(state);
-    let ids = state.native_work.recovery_work.prefix();
+    runtime::mark_turn_cleanup(state);
+    let ids = state.globals.storage.prefix();
     let money = state
         .confiscated
         .as_ref()
-        .map_or(state.native_work.recovery_work.held_money, |saved| {
-            saved.money
-        });
-    let events = crate::combat::runtime::refit_after_combat(state, content)?;
+        .map_or(state.globals.storage.wealth_store, |saved| saved.money);
+    let events = runtime::refit_after_combat(state, content)?;
     state.party_currency = state.party_currency.wrapping_add(money);
-    // booty mode 10 moves the held money into a3 and clears -$96 and 0x443392
-    // (0x10586c..0x1058bc).
     state.booty_tally = crate::BootyTally {
         credits: money,
         ..Default::default()
     };
-    state.native_work.recovery_work.held_money = 0;
+    state.globals.storage.wealth_store = 0;
     if let Some(saved) = state.confiscated.as_mut() {
         saved.money = 0;
     }
-    state.booty_items.fill(InventoryRecord([0; 22]));
-    for (record, id) in state.booty_items.iter_mut().zip(ids) {
+    state.booty_list.fill(InventoryRecord([0; 22]));
+    for (record, id) in state.booty_list.iter_mut().zip(ids) {
         record.set_id(id);
     }
-    // The common award tail adds an exact zero; only its signed fallback can change a LONG.
+    // The shared award adds exactly zero here; only its signed fallback can
+    // change a total.
     for warrior in &mut state.warriors {
         if warrior.stamina()? > 0
-            && warrior.record().automatic_mode()? >= 0
-            && warrior.record().active_flag() != 0
+            && warrior.record().computer_control()? >= 0
+            && warrior.record().in_battle() != 0
         {
             let points = warrior.record().upgrade_points();
             if points < 0 {
@@ -57,10 +62,10 @@ pub(crate) fn begin(
             }
         }
     }
-    let health = &mut state.native_work.health_context;
-    health.unavailable = 0;
+    let health = &mut state.globals.health_context;
+    health.kill_party = 0;
     if state.combat.is_some() {
-        crate::combat::runtime::detach_reward_combat(state)?;
+        runtime::leave_reward_battle(state)?;
     }
     state.phase = Phase::Exploration;
     if let Some(story) = state.combat_story.as_mut() {
@@ -68,9 +73,9 @@ pub(crate) fn begin(
     }
     if matches!(
         caller,
-        RecoveryReturn::Scripted | RecoveryReturn::Confiscation { detached: true }
+        RecoveryReturn::Scripted | RecoveryReturn::Confiscation { in_combat: true }
     ) {
-        state.scripted_cleanup = Some(crate::story_cleanup::Stage::Rewards);
+        state.scripted_cleanup = Some(crate::story::cleanup::Stage::Rewards);
     }
     state.recovery_return = Some(caller);
     state
@@ -83,6 +88,8 @@ pub(crate) fn begin(
     Ok(events)
 }
 
+/// Closes the loot window opened by a return of held property and carries on with whoever was
+/// waiting for it. Does nothing when no return is pending.
 pub(crate) fn close(
     state: &mut Session,
     content: &Content,
@@ -90,18 +97,18 @@ pub(crate) fn close(
     let Some(caller) = state.recovery_return.take() else {
         return Ok(None);
     };
-    let mut events = crate::combat::runtime::refit_after_combat(state, content)?;
+    let mut events = runtime::refit_after_combat(state, content)?;
     events.extend(match caller {
-        RecoveryReturn::Scripted => crate::story_cleanup::close_rewards(state, content)?
+        RecoveryReturn::Scripted => crate::story::cleanup::close_rewards(state, content)?
             .ok_or("scripted storage return missing")?,
         RecoveryReturn::Ordinary => {
             state.reload_battle_land()?;
-            crate::combat::runtime::close_ordinary_rewards(state, content)?
+            runtime::close_ordinary_rewards(state, content)?
                 .ok_or("ordinary storage return missing")?
         }
-        RecoveryReturn::Confiscation { detached } => {
-            if detached {
-                state.scripted_cleanup = Some(crate::story_cleanup::Stage::Complete);
+        RecoveryReturn::Confiscation { in_combat } => {
+            if in_combat {
+                state.scripted_cleanup = Some(crate::story::cleanup::Stage::Complete);
             }
             crate::exploration::run_script(state, content)?
         }
@@ -109,8 +116,9 @@ pub(crate) fn close(
     Ok(Some(events))
 }
 
+/// Checks that the held property and any pending return are consistent.
 pub(crate) fn validate(state: &Session) -> Result<(), RuleError> {
-    state.native_work.recovery_work.validate()?;
+    state.globals.storage.validate()?;
     if let Some(caller) = &state.recovery_return {
         let mut page = state
             .exploration
@@ -134,8 +142,8 @@ pub(crate) fn validate(state: &Session) -> Result<(), RuleError> {
                     .is_none_or(|saved| saved.active || saved.money != 0)
             || matches!(
                 caller,
-                RecoveryReturn::Scripted | RecoveryReturn::Confiscation { detached: true }
-            ) && state.scripted_cleanup != Some(crate::story_cleanup::Stage::Rewards)
+                RecoveryReturn::Scripted | RecoveryReturn::Confiscation { in_combat: true }
+            ) && state.scripted_cleanup != Some(crate::story::cleanup::Stage::Rewards)
         {
             return Err("invalid recovery loot return".into());
         }

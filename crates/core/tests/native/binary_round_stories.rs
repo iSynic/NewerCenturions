@@ -16,14 +16,14 @@ fn summon_capacity_matches_native_boundaries_and_rejects_position_aliasing_atomi
         let after = &case["after"];
         let count = case.n::<usize>("count_before");
         let mut combat = support::battle();
-        combat.enemies.records = support::monsters(&before.bytes("records"))[..count].to_vec();
-        combat.enemies.positions =
+        combat.roster.records = support::monsters(&before.bytes("records"))[..count].to_vec();
+        combat.roster.mon_pos =
             support::positions(&before.bytes("npc_positions"))[..count].to_vec();
-        combat.squad.positions = support::positions(&before.bytes("party_positions"));
-        combat.map.tiles = before.words("map");
-        combat.map.shift = (-5, -5);
-        combat.order = before.words("order");
-        let mut scripts = RoundScripts {
+        combat.squad.pos = support::positions(&before.bytes("party_positions"));
+        combat.field.tiles = before.words("map");
+        combat.field.map_shift = (-5, -5);
+        combat.battle_order = before.words("order");
+        let mut scripts = RoundMacros {
             slots: [1, 0, 0, 0, 0],
             ..Default::default()
         };
@@ -55,17 +55,17 @@ fn summon_capacity_matches_native_boundaries_and_rejects_position_aliasing_atomi
             let result = result.unwrap();
             let size = after.n::<usize>("allocated");
             support::assert_bytes(
-                &support::record_bytes(&combat.enemies.records),
+                &support::record_bytes(&combat.roster.records),
                 &after.bytes("records")[..size * 288],
                 "summon boundary records",
             );
             assert_eq!(
-                combat.enemies.positions,
+                combat.roster.mon_pos,
                 support::positions(&after.bytes("npc_positions"))[..size]
             );
-            assert_eq!(combat.map.tiles, after.words("map"));
-            assert_eq!(combat.order, after.words("order"));
-            assert_eq!(combat.squad.positions, original.0.squad.positions);
+            assert_eq!(combat.field.tiles, after.words("map"));
+            assert_eq!(combat.battle_order, after.words("order"));
+            assert_eq!(combat.squad.pos, original.0.squad.pos);
             support::assert_rng(&random, &after["seed"], &after["draws"]);
             assert_eq!(
                 result.hostile_additions,
@@ -97,11 +97,11 @@ fn shared_round_operations_match_native_flags_pages_slots_and_saved_returns() {
         let initial_random = state.random.clone();
         state.flags[..100].copy_from_slice(&case.bytes("flags_before"));
         state.phase = Phase::Combat;
-        state.ally_count = 0;
-        state.allies.fill(0);
-        arena.cursor = 109;
-        arena.order[109] = 0;
-        arena.round_scripts = RoundScripts {
+        state.held_over = 0;
+        state.holdover.fill(0);
+        arena.battle_order_index = 109;
+        arena.battle_order[109] = 0;
+        arena.round_macros = RoundMacros {
             counter: case.n("counter_before"),
             slots: [1, 2, 0, 0, 0],
             pending: None,
@@ -122,14 +122,14 @@ fn shared_round_operations_match_native_flags_pages_slots_and_saved_returns() {
                 .combat
                 .as_ref()
                 .unwrap()
-                .round_scripts
+                .round_macros
                 .pending
                 .as_ref()
                 .unwrap();
             assert_eq!(program.slot, page.n::<u8>("slot"));
             assert!(program.delegated);
             assert_eq!(
-                state.combat.as_ref().unwrap().round_scripts.counter,
+                state.combat.as_ref().unwrap().round_macros.counter,
                 page.n::<i8>("counter")
             );
             let restored = support::checkpoint(&state, &content, "shared-round-operations");
@@ -150,7 +150,7 @@ fn shared_round_operations_match_native_flags_pages_slots_and_saved_returns() {
         assert!(state.exploration.as_ref().unwrap().script.is_none());
         assert_eq!(&state.flags[..100], case.bytes("flags_after"));
         assert_eq!(
-            state.combat.as_ref().unwrap().round_scripts.counter,
+            state.combat.as_ref().unwrap().round_macros.counter,
             case.n::<i8>("counter_after")
         );
         assert_eq!(
@@ -158,7 +158,7 @@ fn shared_round_operations_match_native_flags_pages_slots_and_saved_returns() {
                 .combat
                 .as_ref()
                 .unwrap()
-                .round_scripts
+                .round_macros
                 .slots
                 .as_slice(),
             words(&case.bytes("slots_after"))
@@ -200,23 +200,23 @@ pub(crate) fn input(
     let mut combat = support::battle();
     // These controlled round inputs start with cold NPC backing. The active
     // native record comparisons below do not qualify inactive slot behavior.
-    combat.retained_npcs = Session::new(&support::fixture_content("round backing"))
-        .native_work
-        .npc_backing;
+    combat.monsters = Session::new(&support::fixture_content("round backing"))
+        .globals
+        .monsters;
     combat.battle = 146;
-    combat.map.tiles = case.words("map_before");
-    combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
-    combat.enemies.records = support::monsters(&case["records_before"]);
-    combat.enemies.positions = support::positions(&case["positions_before"]);
-    combat.order[1] = 10;
+    combat.field.tiles = case.words("map_before");
+    combat.squad.pos = (0..6).map(|i| (40 + i, 40)).collect();
+    combat.roster.records = support::monsters(&case["records_before"]);
+    combat.roster.mon_pos = support::positions(&case["positions_before"]);
+    combat.battle_order[1] = 10;
     if case.get("order_before").is_some() {
-        combat.order = case.words("order_before");
+        combat.battle_order = case.words("order_before");
     }
-    combat.script_enemy = case["actor_before"].as_u64().unwrap_or(0) as usize;
+    combat.macro_monster = case["actor_before"].as_u64().unwrap_or(0) as usize;
     let (total, defeated) = recorded_victory(case);
-    combat.victory_work = centurions_core::combat::victory_work::VictoryWork {
-        total: total.unwrap_or(0),
-        defeated: defeated.unwrap_or(0),
+    combat.kill_counts = centurions_core::combat::kill_counts::KillCounts {
+        num_enemy: total.unwrap_or(0),
+        kill_mon: defeated.unwrap_or(0),
     };
     (
         combat,
@@ -241,7 +241,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
             let (mut combat, warriors, mut random) = input(&fixture, case);
             let initial_hostiles = case["hostile_count_before"].as_i64().unwrap_or_else(|| {
                 combat
-                    .enemies
+                    .roster
                     .records
                     .iter()
                     .filter(|m| {
@@ -251,7 +251,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                     .count() as i64
             });
             let slot_words = words(&case.bytes("slots_before"));
-            let mut state = RoundScripts {
+            let mut state = RoundMacros {
                 counter: case.n::<i8>("round_before"),
                 slots: slot_words.try_into().unwrap(),
                 pending: None,
@@ -264,7 +264,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                         program.text = None;
                     }
                     let caller = round_stories::RoundCaller {
-                        active_enemy: combat.script_enemy,
+                        active_enemy: combat.macro_monster,
                         last_defeated: case["last_defeated"].as_i64().map(|body| body as i16),
                         party_positions: [(0, 0); 6],
                     };
@@ -287,32 +287,32 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
             }
             if let Some(dead) = case.get("dead_after").and_then(Value::as_i64) {
                 assert_eq!(
-                    combat.victory_work.defeated,
+                    combat.kill_counts.kill_mon,
                     dead as i16,
                     "defeated case{index}"
                 );
             }
             if case.get("hostile_count_before").is_some() {
                 assert_eq!(
-                    combat.victory_work.total,
+                    combat.kill_counts.num_enemy,
                     case.n::<i16>("hostile_count_after")
                 );
             }
-            let records: Vec<u8> = support::record_bytes(&combat.enemies.records);
+            let records: Vec<u8> = support::record_bytes(&combat.roster.records);
             assert_eq!(records, case.bytes("records_after"), "records case{index}");
             assert_eq!(
-                combat.map.tiles,
+                combat.field.tiles,
                 words(&case.bytes("map_after")),
                 "map case{index}"
             );
             assert_eq!(
-                combat.order,
+                combat.battle_order,
                 words(&case.bytes("order_after")),
                 "order case{index}"
             );
             let positions: Vec<i16> = combat
-                .enemies
-                .positions
+                .roster
+                .mon_pos
                 .iter()
                 .flat_map(|&(x, y)| [x, y])
                 .collect();
@@ -365,8 +365,8 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 session.warriors = party;
                 session.random = start_random;
                 session.phase = Phase::Combat;
-                arena.cursor = 110;
-                arena.round_scripts = RoundScripts {
+                arena.battle_order_index = 110;
+                arena.round_macros = RoundMacros {
                     counter: state.counter,
                     slots: words(&case.bytes("slots_before")).try_into().unwrap(),
                     pending: Some(round_stories::RoundProgram {
@@ -377,7 +377,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                         delegated: true,
                     }),
                 };
-                arena.round_scripts.slots[1] = 1;
+                arena.round_macros.slots[1] = 1;
                 session.combat = Some(arena);
                 session.round_dispatch = Some(round_stories::RoundDispatch {
                     suspended_script: None,
@@ -438,12 +438,12 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 expected_effects.push(RoundEffect::Text(155));
                 assert_eq!(observed, expected_effects, "shared round case{index}");
                 support::native_expect! {
-                    bytes &support::record_bytes(&actual.enemies.records) => &case.bytes("records_after"), &format!("shared round monsters case{index}");
+                    bytes &support::record_bytes(&actual.roster.records) => &case.bytes("records_after"), &format!("shared round monsters case{index}");
                 };
-                assert_eq!(actual.enemies.positions, combat.enemies.positions);
-                assert_eq!(actual.map, combat.map);
-                assert_eq!(actual.order, combat.order);
-                assert_eq!(actual.round_scripts.slots[0], state.slots[0]);
+                assert_eq!(actual.roster.mon_pos, combat.roster.mon_pos);
+                assert_eq!(actual.field, combat.field);
+                assert_eq!(actual.battle_order, combat.battle_order);
+                assert_eq!(actual.round_macros.slots[0], state.slots[0]);
                 assert_eq!(session.random, random);
                 support::native_expect! {
                     bytes &support::record_bytes(&session.warriors) => &case.bytes("warriors_after"), &format!("shared round warriors case{index}");
@@ -465,19 +465,19 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                 state.phase = Phase::Combat;
                 let mut health = centurions_core::story_health::context(&state.warriors, 0, None);
                 health.last_body = case["last_defeated"].as_i64().unwrap_or(-1) as i16;
-                state.native_work.health_context = health;
+                state.globals.health_context = health;
                 if !carried {
-                    arena.order[109] = 0;
+                    arena.battle_order[109] = 0;
                 }
-                arena.cursor = 109;
-                arena.round = case.n("round_before");
-                arena.round_scripts = RoundScripts {
+                arena.battle_order_index = 109;
+                arena.combat_round = case.n("round_before");
+                arena.round_macros = RoundMacros {
                     counter: case.n("round_before"),
                     slots: words(&case.bytes("slots_before")).try_into().unwrap(),
                     pending: None,
                 };
                 if carried {
-                    arena.round_scripts.slots[1] = 35;
+                    arena.round_macros.slots[1] = 35;
                 }
                 state.combat = Some(arena);
                 let (total, defeated) = recorded_victory(case);
@@ -490,7 +490,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                     events.extend(next);
                 }
                 assert_eq!(
-                    support::record_bytes(&current_combat(&state).enemies.records),
+                    support::record_bytes(&current_combat(&state).roster.records),
                     case.bytes("records_after")
                 );
                 support::assert_rng(&state.random, &case["seed_after"], &case["rng_draws"]);
@@ -501,7 +501,7 @@ fn original_round_callers_match_records_map_order_slots_party_and_rng() {
                     }
                 }
                 support::saved_command(Command::Continue, &mut state, &content);
-                let scripts = &current_combat(&state).round_scripts;
+                let scripts = &current_combat(&state).round_macros;
                 assert!(scripts.pending.is_none());
             }
         }
@@ -518,12 +518,12 @@ fn original_round_surrender_enters_question_then_declines_or_cleans_without_rewa
         state.warriors = warriors;
         state.random = random;
         state.phase = Phase::Combat;
-        state.ally_count = 0;
-        state.allies.fill(0);
-        arena.cursor = 109;
-        arena.order[109] = 0;
-        arena.round_scripts.counter = 2;
-        arena.round_scripts.slots = [10, 0, 0, 0, 0];
+        state.held_over = 0;
+        state.holdover.fill(0);
+        arena.battle_order_index = 109;
+        arena.battle_order[109] = 0;
+        arena.round_macros.counter = 2;
+        arena.round_macros.slots = [10, 0, 0, 0, 0];
         state.combat = Some(arena);
         let (total, defeated) = recorded_victory(case);
         crate::native_common::source_victory_context_recorded(&mut state, total, defeated);
@@ -561,15 +561,15 @@ fn original_round_surrender_enters_question_then_declines_or_cleans_without_rewa
         assert_eq!((position.x, position.y), (stop.n("x"), stop.n("y")));
         if stop.n::<u8>("answer") == 0 {
             assert!(state.round_dispatch.is_none());
-            assert!(current_combat(&state).round_scripts.pending.is_none());
-            assert_eq!(current_combat(&state).round_scripts.counter, 3);
+            assert!(current_combat(&state).round_macros.pending.is_none());
+            assert_eq!(current_combat(&state).round_macros.counter, 3);
         } else {
             assert!(state.combat.is_none());
             assert_eq!(
                 support::record_bytes(&state.warriors),
                 case.bytes("warriors_after")
             );
-            assert_eq!(state.allies, stop.bytes("allies"));
+            assert_eq!(state.holdover, stop.bytes("allies"));
             support::assert_rng(&state.random, &case["seed_after"], &case["rng_draws"]);
             assert!(matches!(
                 position.presentation,
@@ -601,8 +601,8 @@ fn original_round_surrender_enters_question_then_declines_or_cleans_without_rewa
             state = support::checkpoint(&state, &content, "round-child-battle");
             for candidate in [&mut state, &mut resumed] {
                 let arena = candidate.combat.as_mut().unwrap();
-                for body in 0..arena.enemies.records.len() {
-                    arena.enemies.records[body].bytes[0x110..0x112].fill(0);
+                for body in 0..arena.roster.records.len() {
+                    arena.roster.records[body].bytes[0x110..0x112].fill(0);
                     centurions_core::combat::lifecycle::kill_body(
                         arena,
                         &mut candidate.warriors,
@@ -626,15 +626,15 @@ fn surrender_question_cleanup_and_saved_script_return_match_native_early_exit() 
         let mut state = support::mission_session(&content);
         state.phase = Phase::Combat;
         state.warriors = support::warriors(&before["party"]);
-        state.allies = before.bytes("allies");
-        state.ally_count = 2;
+        state.holdover = before.bytes("allies");
+        state.held_over = 2;
         state.random = RandomState::new(before.n("seed"));
         let mut arena = support::battle();
-        arena.enemies.records = support::monsters(&before["records"]);
-        arena.enemies.positions = vec![(40, 40); 2];
-        arena.squad.positions = support::positions(&before["party_positions"]);
-        arena.cursor = 110;
-        arena.round_scripts.pending = Some(round_stories::RoundProgram {
+        arena.roster.records = support::monsters(&before["records"]);
+        arena.roster.mon_pos = vec![(40, 40); 2];
+        arena.squad.pos = support::positions(&before["party_positions"]);
+        arena.battle_order_index = 110;
+        arena.round_macros.pending = Some(round_stories::RoundProgram {
             slot: 0,
             script: Some(11),
             cursor: 3,
@@ -669,17 +669,17 @@ fn surrender_question_cleanup_and_saved_script_return_match_native_early_exit() 
         assert_eq!(state, resumed);
         let after = &case["after"];
         assert_eq!(support::record_bytes(&state.warriors), after.bytes("party"));
-        assert_eq!(state.allies, after.bytes("allies"));
+        assert_eq!(state.holdover, after.bytes("allies"));
         assert_eq!(
-            support::record_bytes(&state.booty_items),
+            support::record_bytes(&state.booty_list),
             after.bytes("booty")
         );
         support::assert_rng(&state.random, &after["seed"], &after["draws"]);
         assert_eq!(
             state
-                .native_work
+                .globals
                 .health_context
-                .unavailable,
+                .kill_party,
             after.n::<i8>("unavailable")
         );
         assert!(state.combat.is_none());

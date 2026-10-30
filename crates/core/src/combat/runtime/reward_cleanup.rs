@@ -1,7 +1,7 @@
-//! Booty's integer following-record stores after the ordinary award loop.
+//! booty's writes to the record after the last award.
 use crate::{RuleError, Session};
 
-/// The following-record stores address the native 100-record allocation.
+/// The writes after the last award stay inside the 100 monster records.
 pub(crate) fn validate(count: i16) -> Result<(), RuleError> {
     if count > 100 {
         return Err("reward cleanup count outside native record allocation".into());
@@ -9,26 +9,29 @@ pub(crate) fn validate(count: i16) -> Result<(), RuleError> {
     Ok(())
 }
 
+/// Closes the reward after the last award: the monster record after the awarded ones is cleared of
+/// conditions, faction and stamina (not in a mode 5 award), and no monsters are counted any
+/// longer.
+///
+/// Original: booty
 pub(crate) fn finish(state: &mut Session, count: i16, mode: i16) -> Result<(), RuleError> {
-    state.retain_monster_work();
+    state.store_monster_pick();
     validate(count)?;
-    // A negative signed count skips the loop with cursor0; exact zero skips
-    // the following stores entirely.1060e4 clears the count in either case.
-    // Mode5 reuses the cursor for1000 crate rows, so a positive count stores
-    // into slot1001, past the top of the A5 world and so outside the
-    // application partition. Compatibility policy: those stores are skipped.
+    // A negative count skips the award loop and writes record 0; a count of zero
+    // writes nothing. Mode 5 would write record 1001, outside the game's memory, so
+    // those writes are skipped (see docs/source-notes/combat.md).
     if count != 0 && !(mode == 5 && count > 0) {
         let following = count.max(0) as usize;
         if following == 100 {
-            state.native_work.monster_work.clear_reward_fields();
-        } else if let Some(slot) = state.native_work.npc_backing.slots[following].as_mut() {
+            state.globals.monster_pick.clear_reward_fields();
+        } else if let Some(slot) = state.globals.monsters.slots[following].as_mut() {
             slot.record.record_mut().clear_conditions();
             slot.record.record_mut().set_faction(0);
             slot.record.record_mut().set_stamina(0);
         }
-        // An absent whole NPC record remains unknown; do not invent its244
-        // unwritten bytes or a position merely to retain these field stores.
+        // A missing monster record stays unknown; its other bytes and position are
+        // not invented for these writes.
     }
-    state.native_work.npc_backing.active_count = 0;
+    state.globals.monsters.num_mon = 0;
     Ok(())
 }

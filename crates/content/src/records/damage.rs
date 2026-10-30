@@ -1,20 +1,22 @@
 use super::put_word;
 use crate::{ContentError, word};
 
-/// The damage fields read by resolvedamage150e7a. The other packet bytes remain
-/// in their original storage; decoding this view never normalizes that storage.
+/// The damage fields of a spell info packet. Reading them leaves the packet
+/// unchanged.
 pub struct DamageDefinition {
     pub physical: (i16, i16),
     pub per_attack: (i16, i16),
     pub elemental_maximum: [u8; 7],
     pub scale_by_target_size: bool,
     pub healing: bool,
-    pub saving_throw_mode: i8,
+    /// The saving-throw mode: above one, the target gets no saving throw.
+    pub cannot: i8,
     pub saving_throw_bonus: i8,
     pub saving_throw_bonus_per_attack: i8,
 }
 
 impl DamageDefinition {
+    /// Reads the damage fields of a 58-byte spell info packet.
     pub fn read(packet: &[u8]) -> Result<Self, ContentError> {
         crate::span(packet, 0, 58)?;
         Ok(Self {
@@ -23,23 +25,24 @@ impl DamageDefinition {
             elemental_maximum: packet[23..30].try_into().unwrap(),
             scale_by_target_size: packet[42] != 0,
             healing: word(packet, 40)? == 57,
-            saving_throw_mode: packet[9] as i8,
+            cannot: packet[9] as i8,
             saving_throw_bonus: packet[6] as i8,
             saving_throw_bonus_per_attack: packet[8] as i8,
         })
     }
 }
 
+/// Whether the target of damage is a warrior or a monster.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DamageTargetKind {
     Warrior,
     Enemy,
 }
 
-/// Defense data, independent of the two original record layouts. Values remain
-/// signed and unbounded here; caps and original exceptional rules belong to the
-/// damage resolver. Element order is chemical, heat, cold, electrical, Psi,
-/// atomic, biological, matching the original attack packet.
+/// A target's defenses, read from a warrior or monster record. Values are
+/// signed and unbounded; the damage rules apply caps and exceptions. Elements
+/// run chemical, heat, cold, electrical, Psi, atomic, biological, as in the
+/// spell info packet.
 pub struct DamageDefenses {
     pub kind: DamageTargetKind,
     pub size: i16,
@@ -54,16 +57,19 @@ pub struct DamageDefenses {
     pub race: Option<i16>,
 }
 
+/// A warrior or monster record seen as the target of damage.
 pub struct DamageTargetRecord<'a> {
     bytes: &'a mut [u8],
     kind: DamageTargetKind,
 }
 
 impl<'a> DamageTargetRecord<'a> {
+    /// Views `bytes` as a target of the given kind.
     pub fn new(bytes: &'a mut [u8], kind: DamageTargetKind) -> Self {
         Self { bytes, kind }
     }
 
+    /// Reads the target's defenses.
     pub fn defenses(&self) -> Result<DamageDefenses, ContentError> {
         let enemy = self.kind == DamageTargetKind::Enemy;
         let mut saves = [0; 7];
@@ -103,18 +109,21 @@ impl<'a> DamageTargetRecord<'a> {
         })
     }
 
+    /// Sets the charge left in the target's power shield; a warrior's worn battery
+    /// follows it.
     pub fn set_shield_charge(&mut self, charge: i16) {
         match self.kind {
             DamageTargetKind::Enemy => put_word(self.bytes, 0x58, charge),
             DamageTargetKind::Warrior => {
                 put_word(self.bytes, 0x26, charge);
-                // The original also updates the battery slot's stored quantity.
+                // The worn battery's charge follows the shield.
                 put_word(self.bytes, 0x160, charge);
             }
         }
     }
 
-    pub fn mark_damaged(&mut self) {
+    /// Marks the target as attacked this round.
+    pub fn mark_been_attacked(&mut self) {
         match self.kind {
             DamageTargetKind::Enemy => self.bytes[0x105] = 1,
             DamageTargetKind::Warrior => put_word(self.bytes, 0x14, 1),

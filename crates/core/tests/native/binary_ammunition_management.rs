@@ -2,12 +2,12 @@ use crate::{native_common, prelude::*, snapshots, support};
 
 use centurions_core::ammunition;
 
-use ammunition::{AmmunitionResult, FitRequest, RefitFlags, WorkBuffers};
+use ammunition::{AmmunitionResult, FitRequest, RefitFlags, LoadedItems};
 
 use support::buffer as bytes;
 
-fn work(fixture: &Value, snapshot: &Value) -> WorkBuffers {
-    WorkBuffers {
+fn work(fixture: &Value, snapshot: &Value) -> LoadedItems {
+    LoadedItems {
         item: Some(bytes(fixture, &snapshot["item_work"])),
         ammo: Some(bytes(fixture, &snapshot["ammo_work"])),
         weapon: Some(bytes(fixture, &snapshot["weapon_work"])),
@@ -31,9 +31,9 @@ fn compare(fixture: &Value, case: &Value, actual: AmmunitionResult, actual_rando
         .copy_from_slice(&actual.warrior.bytes);
     assert_eq!(party, bytes(fixture, &after["party"]));
     assert_eq!(actual.reserves, reserves(fixture, after));
-    assert_eq!(actual.work, work(fixture, after));
+    assert_eq!(actual.loaded, work(fixture, after));
     support::native_expect! {
-        scalar actual.native_return => &case["native_helper_return_word"], "binary_ammunition_management";
+        scalar actual.return_code => &case["native_helper_return_word"], "binary_ammunition_management";
         scalar (actual.sounds) => &case["sounds"], "binary_ammunition_management";
         scalar (actual.warnings) => &case["warnings"], "binary_ammunition_management";
     }
@@ -85,15 +85,15 @@ fn refit_matches_original_manual_and_automatic_records_caches_returns_and_audio(
             let after = &case["after"];
             let read = |key: &str| bytes(fixture, &before[key]);
             let mut state = snapshots::helper_frame(fixture, before, case.n("member"));
-            state.native_work.ammunition_work = work(fixture, before);
+            state.globals.loaded_items = work(fixture, before);
             let combat = state.combat.as_mut().unwrap();
-            combat.enemies.records = support::monsters(&read("npcs"));
-            combat.enemies.positions = support::positions(&read("npc_positions"));
+            combat.roster.records = support::monsters(&read("npcs"));
+            combat.roster.mon_pos = support::positions(&read("npc_positions"));
             // Native control uses an unbuilt MD13 (zero HP); assist both input and unchanged NPC expectation.
-            combat.enemies.records[0].bytes[0x110..0x112].copy_from_slice(&100_i16.to_be_bytes());
+            combat.roster.records[0].bytes[0x110..0x112].copy_from_slice(&100_i16.to_be_bytes());
             let mut expected_npcs = bytes(fixture, &after["npcs"]);
             expected_npcs[0x110..0x112].copy_from_slice(&100_i16.to_be_bytes());
-            combat.weapon_work = snapshots::weapon_work(&read);
+            combat.weapon_traits = snapshots::weapon_traits(&read);
             native_common::source_victory_context(&mut state);
             let events =
                 support::saved_command(Command::Move { dx: 1, dy: 1 }, &mut state, &content);
@@ -102,11 +102,11 @@ fn refit_matches_original_manual_and_automatic_records_caches_returns_and_audio(
                 bytes(fixture, &after["party"])
             );
             assert_eq!(state.ammunition, reserves(fixture, after));
-            assert_eq!(state.native_work.ammunition_work, work(fixture, after));
+            assert_eq!(state.globals.loaded_items, work(fixture, after));
             assert_eq!(state.random, random(after));
             assert_eq!(
                 state
-                    .native_work
+                    .globals
                     .inventory_record
                     
                     .0
@@ -115,11 +115,11 @@ fn refit_matches_original_manual_and_automatic_records_caches_returns_and_audio(
             );
             let combat = current_combat(&state);
             assert_eq!(
-                support::record_bytes(&combat.enemies.records),
+                support::record_bytes(&combat.roster.records),
                 expected_npcs
             );
             assert_eq!(
-                combat.map.tiles,
+                combat.field.tiles,
                 support::words(&bytes(fixture, &after["map"]))
             );
             let warnings: Vec<_> = case
@@ -139,10 +139,10 @@ fn refit_matches_original_manual_and_automatic_records_caches_returns_and_audio(
             assert_eq!(events, expected);
             if case["expanded_caller"] == true {
                 assert_eq!(
-                    state.native_work.attack_packet,
+                    state.globals.spell_info,
                     bytes(fixture, &after["packet"])
                 );
-                assert_eq!(state.native_work.attack_count, after.n::<i16>("count"));
+                assert_eq!(state.globals.attack_count, after.n::<i16>("count"));
             }
         }
     }

@@ -16,8 +16,8 @@ from pathlib import Path
 import scenario_route
 import source_audit
 import engine_diagnostics
+from repository import ROOT
 
-ROOT = Path(__file__).resolve().parent.parent
 SOURCES = ("crates/content/src", "crates/core/src", "crates/desktop/src", "archive/crates/reference/src")
 LITERAL = re.compile(r'Unsupported\s*\{\s*action:\s*"([^"]*)",\s*dependency:\s*"([^"]*)"')
 DEFAULT_ACTION = re.compile(
@@ -27,7 +27,7 @@ ONE_ARG = re.compile(r'\bunsupported\(\s*"([^"]*)",?\s*\)')
 TWO_ARG = re.compile(r'\bunsupported\(\s*"([^"]*)",\s*"([^"]*)",?\s*\)')
 ROUTINE = re.compile(r'Routine \{ name: "([^"]+)", entry: 0x([0-9a-f]+), decompiled: (\w+), blocks: (\d+), '
                      r'instructions: (\d+), translation: Translation::(\w+), rust: &\[([^\]]*)\]')
-OPERATION = re.compile(r'(-?\d+) => Self::(\w+),')
+OPERATION = re.compile(r'^\s*(\w+) = (-?\d+) => \w+,', re.M)
 ADMITTED = re.compile(r'!matches!\(\s*[^,]*condition,\s*([\d\s|.=]+)\)')
 # Rust sites that admit natural-attack conditions, per original attack2 target table.
 CONDITION_GUARDS = {"warrior": ("crates/core/src/combat/attack/natural.rs",
@@ -73,8 +73,8 @@ def routines():
 
 def story_operations():
     text = (ROOT / "crates/core/src/exploration/script_execution/operation.rs").read_text(encoding="utf-8")
-    body = text[text.index("fn from_native"):text.index("fn native(")]
-    return {int(opcode): name for opcode, name in OPERATION.findall(body)}
+    body = text[text.index("operations! {"):]
+    return {int(opcode): name for name, opcode in OPERATION.findall(body)}
 
 
 def admitted(path):

@@ -1,8 +1,8 @@
 //! Original field, condition and queue prefixes through the terminal caller boundary.
 use super::detached_attacks::{initial, saved_return};
 use super::outdoor_deaths::verify;
-use crate::combat::death_scripts::{DeathEntry, DeathQueue};
-use crate::combat::runtime::{CombatReturn, TurnFlow, retained_turn};
+use crate::combat::death_scripts::{DeathEntry, TodoQueue};
+use crate::combat::runtime::{CombatReturn, TurnFlow, out_of_combat_getup};
 use crate::test_support::{bytes, content, fixture};
 use crate::{Command, Content, Event, Session};
 use serde_json::{Value, json};
@@ -31,14 +31,14 @@ fn prepare(source: &Value) -> (Session, Content) {
     let before = &source["before"];
     state.exploration.as_mut().unwrap().event_headers = bytes(&before["event_headers"]);
     state
-        .native_work
-        .shop_work
+        .globals
+        .the_shop
         .copy_file(&bytes(&before["current_shop_work"]));
-    state.allies = bytes(&before["allies"]);
-    state.native_work.turn_round = Some(1);
-    state.native_work.character_bare_hand_bonus = 0;
-    state.native_work.round_work.counter = Some(number(before, "round_counter") as i8);
-    state.native_work.round_work.slots = Some(
+    state.holdover = bytes(&before["allies"]);
+    state.globals.turn_round = Some(1);
+    state.globals.character_bare_hand_bonus = 0;
+    state.globals.round_scripts.counter = Some(number(before, "round_counter") as i8);
+    state.globals.round_scripts.slots = Some(
         bytes(&before["rounds"])
             .as_chunks::<2>()
             .0
@@ -48,11 +48,11 @@ fn prepare(source: &Value) -> (Session, Content) {
             .try_into()
             .unwrap(),
     );
-    state.native_work.round_work.slot = Some(number(before, "round_slot"));
-    state.native_work.round_work.processing = Some(number(before, "round_flag") as u8);
-    state.native_work.script_enemy = number(before, "script_enemy") as usize;
+    state.globals.round_scripts.slot = Some(number(before, "round_slot"));
+    state.globals.round_scripts.processing = Some(number(before, "round_flag") as u8);
+    state.globals.macro_monster = number(before, "script_enemy") as usize;
     let raw = bytes(&before["death_queue"]);
-    state.native_work.retained_death_queue = Some(DeathQueue {
+    state.globals.outer_todo_queue = Some(TodoQueue {
         entries: raw
             .as_chunks::<14>()
             .0
@@ -70,7 +70,7 @@ fn prepare(source: &Value) -> (Session, Content) {
         pointer: i32::from_be_bytes(bytes(&before["death_queue_pointer"]).try_into().unwrap()),
         processing: number(before, "death_queue_flag") != 0,
     });
-    state.native_work.death_processing.queue = number(before, "death_queue_flag") as u8;
+    state.globals.death_processing.doing_queue = number(before, "death_queue_flag") as u8;
     (state, content)
 }
 
@@ -81,7 +81,7 @@ fn field_condition_and_queue_returns_match_native_terminal_prefixes() {
         let (mut state, content) = prepare(source);
         let (events, terminated) = match source["parent"].as_str().unwrap() {
             "collide" => {
-                let result = retained_turn::collide_fields(
+                let result = out_of_combat_getup::collide_fields(
                     &mut state,
                     &content,
                     source["body"].as_i64().unwrap() as i16,
@@ -90,12 +90,12 @@ fn field_condition_and_queue_returns_match_native_terminal_prefixes() {
                 (result.events, result.flow == TurnFlow::Terminated)
             }
             "reduce" => {
-                let result = retained_turn::reduction::apply(&mut state, &content)
+                let result = out_of_combat_getup::reduction::apply(&mut state, &content)
                     .unwrap_or_else(|error| panic!("{}: {error}", case["name"]));
                 (result.events, result.flow == TurnFlow::Terminated)
             }
             "emptyque" => {
-                let result = retained_turn::queue::drain(&mut state, &content)
+                let result = out_of_combat_getup::queue::drain(&mut state, &content)
                     .unwrap_or_else(|error| panic!("{}: {error}", case["name"]));
                 (result.events, result.flow == TurnFlow::Terminated)
             }
@@ -120,7 +120,7 @@ fn field_condition_and_queue_returns_match_native_terminal_prefixes() {
             case["name"]
         );
         verify(&state, &content, &events, case);
-        let queue = state.native_work.retained_death_queue.as_ref().unwrap();
+        let queue = state.globals.outer_todo_queue.as_ref().unwrap();
         assert_eq!(
             queue
                 .entries
@@ -139,7 +139,7 @@ fn field_condition_and_queue_returns_match_native_terminal_prefixes() {
             ) as usize
         );
         assert_eq!(
-            state.native_work.death_processing.queue,
+            state.globals.death_processing.doing_queue,
             number(
                 &json!({"flag":case["memory"]["death_queue_flag"]["hex"]}),
                 "flag"

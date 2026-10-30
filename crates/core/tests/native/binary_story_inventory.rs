@@ -29,7 +29,7 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
             let retained = case
                 .get("selected_before")
                 .map(|_| InventoryRecord(case.bytes("selected_before").try_into().unwrap()));
-            let result = consume_party_items_retained(
+            let result = consume_party_items_with_record(
                 &before,
                 &content,
                 &race_movements,
@@ -67,7 +67,7 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                         shop[2000] = 1;
                         // This assisted screen input declares both the file and
                         // current work before the independent native consumer.
-                        state.native_work.shop_work = serde_json::from_value(serde_json::json!({
+                        state.globals.the_shop = serde_json::from_value(serde_json::json!({
                             "bytes": shop[..3002].to_vec()
                         })).unwrap();
                         state.shop_access = Some(centurions_core::shop::Access {
@@ -98,7 +98,7 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                         &content,
                     )
                     .unwrap();
-                    assert_eq!(state.native_work.inventory_record, record);
+                    assert_eq!(state.globals.inventory_record, record);
                     if stock {
                         apply(Command::CloseShop, &mut state, &content).unwrap();
                     }
@@ -106,13 +106,13 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                 if case["writer"] == "refit" {
                     assert_eq!(state.warriors, support::warriors(&case["before_prefix"]));
                     support::assert_bytes(
-                        state.native_work.ammunition_work.item.as_ref().unwrap(),
+                        state.globals.loaded_items.item.as_ref().unwrap(),
                         &case.bytes("item_before_prefix"),
                         "inspection before native refit",
                     );
                     state.ammunition = support::longs(&case.bytes("reserves_before_prefix")[..800]);
-                    state.native_work.ammunition_work.ammo = Some(case.bytes("ammo_before_prefix"));
-                    state.native_work.ammunition_work.weapon =
+                    state.globals.loaded_items.ammo = Some(case.bytes("ammo_before_prefix"));
+                    state.globals.loaded_items.weapon =
                         Some(case.bytes("weapon_before_prefix"));
                     let random = state.random.clone();
                     let mut prefix_events = vec![];
@@ -135,9 +135,9 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                         support::longs(&case.bytes("reserves_after_prefix")[..800])
                     );
                     support::native_expect! {
-                        bytes state.native_work.ammunition_work.ammo.as_ref().unwrap() => &case["prefix_ammo"], "refit ammo before consumer";
-                        bytes state.native_work.ammunition_work.item.as_ref().unwrap() => &case["prefix_item"], "refit item before consumer";
-                        bytes state.native_work.ammunition_work.weapon.as_ref().unwrap() => &case["prefix_weapon"], "refit weapon before consumer";
+                        bytes state.globals.loaded_items.ammo.as_ref().unwrap() => &case["prefix_ammo"], "refit ammo before consumer";
+                        bytes state.globals.loaded_items.item.as_ref().unwrap() => &case["prefix_item"], "refit item before consumer";
+                        bytes state.globals.loaded_items.weapon.as_ref().unwrap() => &case["prefix_weapon"], "refit weapon before consumer";
                     }
                     support::assert_bytes(
                         &records(&state.warriors),
@@ -173,13 +173,13 @@ fn quest_consumption_matches_original_complete_warriors_and_drop_effects() {
                 assert_eq!(state.random, random);
                 if case.get("item_after").is_some() {
                     assert_eq!(
-                        state.native_work.ammunition_work.item,
+                        state.globals.loaded_items.item,
                         Some(case.bytes("item_after"))
                     );
                 }
                 if case.get("selected_after").is_some() {
                     support::native_expect! {
-                        bytes &state.native_work.inventory_record.0 => &case.bytes("selected_after"), "retained inventory work";
+                        bytes &state.globals.inventory_record.0 => &case.bytes("selected_after"), "retained inventory work";
                     };
                 }
                 support::checkpoint(&state, &content, "story-charge-after");
@@ -254,10 +254,10 @@ fn weighted_quest_item_pickup_and_transfer_preserve_quantity_and_weight() {
     let weights: Vec<_> = state
         .warriors
         .iter()
-        .map(|w| w.record().carried_weight().unwrap())
+        .map(|w| w.record().load().unwrap())
         .collect();
     let random = state.random.clone();
-    state.booty_items[0] = item.clone();
+    state.booty_list[0] = item.clone();
     state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
     let events = support::saved_command(
         Command::TakeLoot {
@@ -275,10 +275,10 @@ fn weighted_quest_item_pickup_and_transfer_preserve_quantity_and_weight() {
     let slot = state.warriors[0].inventory().unwrap().len() - 1;
     assert_eq!(state.warriors[0].record().inventory_slot(slot), item);
     assert_eq!(
-        state.warriors[0].record().carried_weight().unwrap(),
+        state.warriors[0].record().load().unwrap(),
         weights[0] + 25
     );
-    assert_eq!(state.booty_items[0].id(), 0);
+    assert_eq!(state.booty_list[0].id(), 0);
     state.exploration.as_mut().unwrap().presentation = None;
     support::saved_command(
         Command::TransferItem {
@@ -290,30 +290,30 @@ fn weighted_quest_item_pickup_and_transfer_preserve_quantity_and_weight() {
         &content,
     );
     assert_eq!(
-        state.warriors[0].record().carried_weight().unwrap(),
+        state.warriors[0].record().load().unwrap(),
         weights[0]
     );
     assert_eq!(
-        state.warriors[1].record().carried_weight().unwrap(),
+        state.warriors[1].record().load().unwrap(),
         weights[1] + 25
     );
     assert_eq!(state.warriors[1].inventory().unwrap().last(), Some(&item));
     // booty108fbc merges before admission and retains the owned row's quality.
     // Even refusal keeps those effects and leaves the loot available.
     state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
-    let retained = state.native_work.inventory_record.clone();
+    let retained = state.globals.inventory_record.clone();
     for refused in [false, true] {
-        let weight = state.warriors[1].record().carried_weight().unwrap();
+        let weight = state.warriors[1].record().load().unwrap();
         if refused {
             state.warriors[1].record_mut().set_weight_capacity(weight);
         }
         let count = state.warriors[1].inventory().unwrap().len();
         let mut expected = state.warriors[1].record().inventory_slot(count - 1);
-        expected.set_quantity(expected.quantity().unwrap() + 2);
+        expected.set_charge(expected.charge().unwrap() + 2);
         let mut incoming = item.clone();
-        incoming.set_quantity(2);
+        incoming.set_charge(2);
         incoming.set_editor_modifier(1, 7);
-        state.booty_items[0] = incoming.clone();
+        state.booty_list[0] = incoming.clone();
         let events = support::saved_command(
             Command::TakeLoot {
                 slot: 0,
@@ -332,14 +332,14 @@ fn weighted_quest_item_pickup_and_transfer_preserve_quantity_and_weight() {
             expected
         );
         assert_eq!(
-            state.warriors[1].record().carried_weight().unwrap(),
+            state.warriors[1].record().load().unwrap(),
             weight + 2
         );
         if !refused {
             incoming.clear_id();
         }
-        assert_eq!(state.booty_items[0], incoming);
-        assert_eq!(state.native_work.inventory_record, retained);
+        assert_eq!(state.booty_list[0], incoming);
+        assert_eq!(state.globals.inventory_record, retained);
     }
     assert_eq!(state.random, random);
 }

@@ -1,4 +1,5 @@
 use crate::{RandomState, RuleError, combat, rules};
+use centurions_content::combat::MONSTER_BYTES;
 use centurions_content::{
     combat::MonsterRecord,
     mission::OpeningMission,
@@ -6,8 +7,9 @@ use centurions_content::{
     span,
 };
 
+/// The body size of a monster, 0 to 3, ignoring the sign.
 fn size(monster: &MonsterRecord) -> Result<i16, RuleError> {
-    span(&monster.bytes, 0, 288)?;
+    span(&monster.bytes, 0, MONSTER_BYTES)?;
     let size = monster.record().size()?.wrapping_abs();
     if !(0..=3).contains(&size) {
         return Err(RuleError::Unsupported {
@@ -18,29 +20,31 @@ fn size(monster: &MonsterRecord) -> Result<i16, RuleError> {
     Ok(size)
 }
 
+/// The index of the map cell at offset `dx`, `dy` from a body's position.
 fn index(
-    map: &combat::TacticalMap,
+    map: &combat::CombatField,
     position: (i16, i16),
     dx: i16,
     dy: i16,
 ) -> Result<usize, RuleError> {
-    OpeningMission::index(
-        i32::from(position.0) + i32::from(map.shift.0) + 5 + i32::from(dx),
-        i32::from(position.1) + i32::from(map.shift.1) + 5 + i32::from(dy),
-    )
-    .map_err(Into::into)
+    let (x, y) = crate::combat::records::grid_point(position, map.map_shift);
+    OpeningMission::index(x + i32::from(dx), y + i32::from(dy)).map_err(Into::into)
 }
 
+/// A monster set down on the map: the map with its tiles written, the monster with its footprint
+/// tiles remembered and its position.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlacedBody {
-    pub map: combat::TacticalMap,
+    pub map: combat::CombatField,
     pub monster: MonsterRecord,
     pub position: (i16, i16),
 }
 
-/// placemonster stores the anchor first, followed by northwest, north and west.
+/// Places a monster's footprint: the anchor cell, then northwest, north and west.
+///
+/// Original: placemonster
 pub fn place(
-    map: &combat::TacticalMap,
+    map: &combat::CombatField,
     monster: &MonsterRecord,
     position: (i16, i16),
     body: i16,
@@ -80,40 +84,44 @@ pub fn place(
     Ok(result)
 }
 
-/// bodyfield has a signed size check on the north cell, independent of its other cells.
-pub fn restore_body(combat: &combat::Combat, body: i16) -> Result<combat::TacticalMap, RuleError> {
+/// Restores the tiles under a body. The north cell has its own signed size test.
+///
+/// Original: bodyfield
+pub fn restore_body(combat: &combat::Combat, body: i16) -> Result<combat::CombatField, RuleError> {
     if body < 10 {
         let index = usize::try_from(body)
             .map_err(|_| RuleError::Invalid("body-field warrior position unavailable".into()))?;
         let position =
-            *combat.squad.positions.get(index).ok_or_else(|| {
+            *combat.squad.pos.get(index).ok_or_else(|| {
                 RuleError::Invalid("body-field warrior position unavailable".into())
             })?;
-        let under = *combat.squad.under_tiles.get(index).ok_or_else(|| {
+        let under = *combat.squad.char_under.get(index).ok_or_else(|| {
             RuleError::Invalid("body-field warrior under-tile unavailable".into())
         })?;
-        restore_warrior(&combat.map, position, under)
+        restore_warrior(&combat.field, position, under)
     } else {
         let index = (body - 10) as usize;
         let monster = combat
-            .enemies
+            .roster
             .records
             .get(index)
             .ok_or_else(|| RuleError::Invalid("body-field enemy record unavailable".into()))?;
         let position =
-            *combat.enemies.positions.get(index).ok_or_else(|| {
+            *combat.roster.mon_pos.get(index).ok_or_else(|| {
                 RuleError::Invalid("body-field enemy position unavailable".into())
             })?;
-        restore(&combat.map, monster, position)
+        restore(&combat.field, monster, position)
     }
 }
 
-/// bodyfield's warrior arm: the cell under a party body gets its saved tile back.
+/// The cell under a warrior gets its saved tile back.
+///
+/// Original: bodyfield
 pub(crate) fn restore_warrior(
-    map: &combat::TacticalMap,
+    map: &combat::CombatField,
     position: (i16, i16),
     under: i16,
-) -> Result<combat::TacticalMap, RuleError> {
+) -> Result<combat::CombatField, RuleError> {
     let cell = index(map, position, 0, 0)?;
     let mut result = map.clone();
     *result
@@ -123,13 +131,15 @@ pub(crate) fn restore_warrior(
     Ok(result)
 }
 
-/// Original bodyfield enemy suffix; signed sizes have no eligibility gate.
+/// Restores the tiles under a monster; any size, even negative, is restored.
+///
+/// Original: bodyfield
 pub fn restore(
-    map: &combat::TacticalMap,
+    map: &combat::CombatField,
     monster: &MonsterRecord,
     position: (i16, i16),
-) -> Result<combat::TacticalMap, RuleError> {
-    span(&monster.bytes, 0, 288)?;
+) -> Result<combat::CombatField, RuleError> {
+    span(&monster.bytes, 0, MONSTER_BYTES)?;
     let signed_size = monster.record().size()?;
     let size = signed_size.wrapping_abs();
     let mut result = map.clone();
@@ -151,6 +161,9 @@ pub fn restore(
     Ok(result)
 }
 
+/// Whether the whole body stands on open ground: its anchor cell is blocked by obstruction 2, or by
+/// any obstruction if it has size zero, each other cell by obstruction of two or more, and a
+/// footprint tile below 1000 is never open.
 pub(crate) fn placement_passable(
     body: &PlacedBody,
     mission: &OpeningMission,
@@ -180,9 +193,12 @@ pub(crate) fn placement_passable(
     Ok(true)
 }
 
-/// combatsetup searches complete rings and consumes position jitter only for size zero.
+/// Finds a place for a monster in widening rings; only size-zero monsters get a
+/// random nudge.
+///
+/// Original: combatsetup
 pub fn find_placement(
-    map: &combat::TacticalMap,
+    map: &combat::CombatField,
     monster: &MonsterRecord,
     mission: &OpeningMission,
     body: i16,
@@ -191,7 +207,10 @@ pub fn find_placement(
     random: &mut RandomState,
 ) -> Result<PlacedBody, RuleError> {
     let size = size(monster)?;
-    let origin = (map.shift.0.wrapping_add(5), map.shift.1.wrapping_add(5));
+    let origin = (
+        map.map_shift.0.wrapping_add(5),
+        map.map_shift.1.wrapping_add(5),
+    );
     let mut next_random = random.clone();
     let mut current_map = map.clone();
     for ring in 1..=180_i16 {
@@ -242,7 +261,10 @@ pub fn find_placement(
     ))
 }
 
-/// checkforenemy expands its adjacent scan by one cell for each extra footprint dimension.
+/// How far a monster looks for neighbours: one more cell for each extra footprint
+/// dimension.
+///
+/// Original: checkforenemy
 pub fn neighbor_scan(monster: &MonsterRecord) -> Result<(i16, i16), RuleError> {
     let size = size(monster)?;
     Ok((
@@ -251,6 +273,10 @@ pub fn neighbor_scan(monster: &MonsterRecord) -> Result<(i16, i16), RuleError> {
     ))
 }
 
+/// Chooses a new heading when a monster's step is blocked, drawing random numbers. When the target
+/// is farther along x than y, a heading with a y part has an even chance of dropping it; otherwise
+/// a new y part is drawn and then possibly a new x part. When it is not, a heading with an x part
+/// drops it, and one without draws new x and y parts.
 pub(crate) fn shift_direction(
     position: (i16, i16),
     target: (i16, i16),
@@ -291,6 +317,8 @@ pub(crate) fn shift_direction(
     }
 }
 
+/// A monster after its move: the battle with the new position, whether it moved and the sounds its
+/// steps made.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BodyMovement {
     pub combat: combat::Combat,
@@ -298,6 +326,9 @@ pub struct BodyMovement {
     pub sounds: Vec<i16>,
 }
 
+/// Moves a monster toward its target, or away from it when it flees.
+///
+/// Original: movemonster
 pub fn move_enemy(
     combat: &combat::Combat,
     mission: &OpeningMission,
@@ -313,25 +344,29 @@ pub fn move_enemy(
     )
 }
 
-/// The position slot movemonster13e276 reads for a target body.
+/// The position slot a monster reads for its target body.
 pub(crate) enum TargetSlot {
-    Npc(usize),
+    Monster(usize),
     Party(usize),
 }
 
-/// Targets below 9 index the party positions 0x44709a and others the NPC positions
-/// 0x446f0a, four bytes a slot. The NPC array's 100 slots end at 0x44709a, so targets
-/// -100..-1 alias NPC slots 0..99 and targets from 110 the party slots.
+/// Targets below 9 read the party positions and others the monster positions. The
+/// monster positions run straight into the party positions, so targets -100..-1
+/// read monster slots and targets from 110 read party slots.
+///
+/// Original: movemonster
 pub(crate) fn target_slot(target: i16) -> Option<TargetSlot> {
-    const NPCS: i32 = 0x446f0a;
+    /// Where the monster positions begin.
+    const MON_POS: i32 = 0x446f0a;
+    /// Where the party positions begin, which the monster positions run into.
     const PARTY: i32 = 0x44709a;
     let address = if target < 9 {
         PARTY + 4 * i32::from(target)
     } else {
-        NPCS + 4 * (i32::from(target) - 10)
+        MON_POS + 4 * (i32::from(target) - 10)
     };
-    if (NPCS..PARTY).contains(&address) {
-        Some(TargetSlot::Npc(((address - NPCS) / 4) as usize))
+    if (MON_POS..PARTY).contains(&address) {
+        Some(TargetSlot::Monster(((address - MON_POS) / 4) as usize))
     } else if address >= PARTY {
         Some(TargetSlot::Party(((address - PARTY) / 4) as usize))
     } else {
@@ -339,9 +374,16 @@ pub(crate) fn target_slot(target: i16) -> Option<TargetSlot> {
     }
 }
 
+/// What happens when a fleeing monster leaves its cell, called with the cell it steps to before the
+/// body is placed there.
 type DepartureReaction<'a> =
     dyn FnMut(&mut combat::Combat, &mut RandomState, (i16, i16)) -> Result<(), RuleError> + 'a;
 
+/// Moves a monster one cell toward its target (away when it flees) in up to twenty-one tries. A
+/// blocked step changes heading; a step costs the terrain's movement cost and must fit the
+/// monster's movement. If no try succeeds the monster loses its target and its movement.
+///
+/// Original: movemonster
 pub(crate) fn move_enemy_before_place(
     combat: &combat::Combat,
     (mission, aliases): (&OpeningMission, super::map_alias::MapAliases<'_>),
@@ -350,24 +392,24 @@ pub(crate) fn move_enemy_before_place(
     before_place: &mut DepartureReaction<'_>,
 ) -> Result<BodyMovement, RuleError> {
     let monster = combat
-        .enemies
+        .roster
         .records
         .get(enemy_index)
         .ok_or_else(|| RuleError::Invalid("enemy movement record unavailable".into()))?;
     let size = size(monster)?;
     let fleeing = monster.record().fleeing_duration() != 0;
-    let target = monster.record().target_body()?;
+    let target = monster.record().target()?;
     let outside = || RuleError::Unsupported {
         action: "combat.move",
         dependency: "NPC movement target outside the represented position arrays",
     };
     let target_position = match target_slot(target).ok_or_else(outside)? {
-        TargetSlot::Npc(slot) => combat.story_position(slot)?,
-        TargetSlot::Party(slot) => *combat.squad.positions.get(slot).ok_or_else(outside)?,
+        TargetSlot::Monster(slot) => combat.story_position(slot)?,
+        TargetSlot::Party(slot) => *combat.squad.pos.get(slot).ok_or_else(outside)?,
     };
     let position = *combat
-        .enemies
-        .positions
+        .roster
+        .mon_pos
         .get(enemy_index)
         .ok_or_else(|| RuleError::Invalid("enemy movement position unavailable".into()))?;
     let body = enemy_index as i16 + 10;
@@ -383,7 +425,7 @@ pub(crate) fn move_enemy_before_place(
         dx = -dx;
         dy = -dy;
     }
-    result.combat.enemies.records[enemy_index]
+    result.combat.roster.records[enemy_index]
         .record_mut()
         .set_movement_direction(dx, dy);
     let mut cost = 0;
@@ -402,7 +444,7 @@ pub(crate) fn move_enemy_before_place(
             if !occupied || blocked {
                 continue;
             }
-            let mut tile = super::map::movement_tile(&combat.map, aliases, next, (ox, oy))?;
+            let mut tile = super::map::movement_tile(&combat.field, aliases, next, (ox, oy))?;
             tile = tile.wrapping_abs();
             if tile == body {
                 tile = mission.default_tile.wrapping_add(1000);
@@ -424,7 +466,7 @@ pub(crate) fn move_enemy_before_place(
                 dx,
                 dy,
             ));
-            if cost > i16::from(monster.record().movement_points()) {
+            if cost > i16::from(monster.record().movement()) {
                 break;
             }
         }
@@ -438,29 +480,24 @@ pub(crate) fn move_enemy_before_place(
             );
             continue;
         }
-        if cost > i16::from(monster.record().movement_points()) {
+        if cost > i16::from(monster.record().movement()) {
             continue;
         }
         if fleeing {
             before_place(&mut result.combat, &mut next_random, next)?;
         }
         let map = restore(
-            &result.combat.map,
-            &result.combat.enemies.records[enemy_index],
+            &result.combat.field,
+            &result.combat.roster.records[enemy_index],
             position,
         )?;
-        let placed = place(
-            &map,
-            &result.combat.enemies.records[enemy_index],
-            next,
-            body,
-        )?;
-        result.combat.map = placed.map;
-        result.combat.enemies.records[enemy_index] = placed.monster;
-        result.combat.enemies.positions[enemy_index] = next;
-        let bytes = &mut result.combat.enemies.records[enemy_index].bytes;
-        if i16::from(EnemyRecord::from_bytes(bytes).movement_points())
-            == EnemyRecord::from_bytes(bytes).movement_per_round()?
+        let placed = place(&map, &result.combat.roster.records[enemy_index], next, body)?;
+        result.combat.field = placed.map;
+        result.combat.roster.records[enemy_index] = placed.monster;
+        result.combat.roster.mon_pos[enemy_index] = next;
+        let bytes = &mut result.combat.roster.records[enemy_index].bytes;
+        if i16::from(EnemyRecord::from_bytes(bytes).movement())
+            == EnemyRecord::from_bytes(bytes).movement_max()?
             && EnemyRecord::from_bytes(bytes).movement_sound()? != 0
         {
             result
@@ -468,34 +505,32 @@ pub(crate) fn move_enemy_before_place(
                 .push(EnemyRecord::from_bytes(bytes).movement_sound()?);
         }
         let remaining = EnemyRecord::from_bytes(bytes)
-            .movement_points()
+            .movement()
             .wrapping_sub(cost as i8);
-        EnemyRecordMut::from_bytes(bytes).set_movement_points(remaining);
+        EnemyRecordMut::from_bytes(bytes).set_movement(remaining);
         result
             .sounds
             .push(mission.tile_word(EnemyRecord::from_bytes(bytes).underlying_tile()? - 1000, 0)?);
-        let absolute = (
-            next.0.wrapping_add(combat.map.shift.0).wrapping_add(5),
-            next.1.wrapping_add(combat.map.shift.1).wrapping_add(5),
-        );
+        let absolute = crate::combat::records::wrapping_grid_point(next, combat.field.map_shift);
         if !(2..=87).contains(&absolute.0) || !(2..=87).contains(&absolute.1) {
             if EnemyRecord::from_bytes(bytes).survivor_marker()? == -1 {
                 EnemyRecordMut::from_bytes(bytes)
                     .set_movement_direction(dx.wrapping_neg(), dy.wrapping_neg());
             } else {
                 EnemyRecordMut::from_bytes(bytes).set_reaction_ready(false);
-                EnemyRecordMut::from_bytes(bytes).set_movement_points(0);
-                EnemyRecordMut::from_bytes(bytes).set_fleeing_chance(101);
-                result.combat.cursor = result.combat.cursor.saturating_sub(1);
+                EnemyRecordMut::from_bytes(bytes).set_movement(0);
+                EnemyRecordMut::from_bytes(bytes).set_surrender_percent(101);
+                result.combat.battle_order_index =
+                    result.combat.battle_order_index.saturating_sub(1);
             }
         }
         result.moved = true;
         *random = next_random;
         return Ok(result);
     }
-    let bytes = &mut result.combat.enemies.records[enemy_index].bytes;
-    EnemyRecordMut::from_bytes(bytes).set_target_body(-1);
-    EnemyRecordMut::from_bytes(bytes).set_movement_points(0);
+    let bytes = &mut result.combat.roster.records[enemy_index].bytes;
+    EnemyRecordMut::from_bytes(bytes).set_target(-1);
+    EnemyRecordMut::from_bytes(bytes).set_movement(0);
     *random = next_random;
     Ok(result)
 }

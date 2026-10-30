@@ -1,25 +1,31 @@
-//! newland2 rereads shared EXTRA after combat, then calls booty once.
+//! A story battle's rewards: the story rereads its extra record, then calls booty once.
 use super::battle_return::{finish_prepared_battle_wrapper, refit_after_combat};
+use super::booty_setup as reward;
 use crate::{Event, Phase, Presentation, RuleError, Session};
 use centurions_content::{Content, word};
 use serde::{Deserialize, Serialize};
 
+/// A story battle's reward in progress: the reward mode its extra record named and whether the
+/// reward window is up.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrdinaryBattleRewards {
-    /// None until the caller evaluates EXTRA443312 at142902.
+    /// None until the caller reads the reward mode from its extra record.
     mode: Option<i16>,
     #[serde(default)]
     pub(super) loot: bool,
 }
 
 impl OrdinaryBattleRewards {
+    /// Whether the storage window is open for the battle's loot.
     pub(crate) fn storage_window(&self) -> bool {
         self.mode == Some(10) && self.loot
     }
 
+    /// Refuses a saved reward whose window, cleanup, messages or mode do not fit where the game is.
     pub(crate) fn validate(&self, state: &Session) -> Result<(), RuleError> {
         let mut cleanup = state.scripted_cleanup.as_ref();
-        while let Some(crate::story_cleanup::Stage::RetainedGetupSurvivors { parent }) = cleanup {
+        while let Some(crate::story::cleanup::Stage::OutOfCombatGetupSurvivors { parent }) = cleanup
+        {
             cleanup = parent.as_deref();
         }
         let mut page = state
@@ -36,18 +42,18 @@ impl OrdinaryBattleRewards {
                 && matches!(page, Some(Presentation::Loot))
         } else {
             state.combat.is_some()
-                || super::movement_return::npc_pending(state)
+                || super::movement_return::monster_pending(state)
                 || matches!(
                     cleanup,
                     Some(
-                        crate::story_cleanup::Stage::Rewards
-                            | crate::story_cleanup::Stage::Complete
-                            | crate::story_cleanup::Stage::RetainedSurvivors { .. }
+                        crate::story::cleanup::Stage::Rewards
+                            | crate::story::cleanup::Stage::Complete
+                            | crate::story::cleanup::Stage::OutOfCombatSurvivors { .. }
                     )
                 )
         };
-        let retained_mode_matches = match cleanup {
-            Some(crate::story_cleanup::Stage::RetainedSurvivors {
+        let out_of_combat_mode_matches = match cleanup {
+            Some(crate::story::cleanup::Stage::OutOfCombatSurvivors {
                 mode,
                 ordinary: true,
             }) => {
@@ -56,14 +62,14 @@ impl OrdinaryBattleRewards {
                         && self
                             .mode
                             .is_some_and(|requested| !matches!(requested, 2 | 10))
-                        && state.native_work.early_booty != 0
+                        && state.globals.coward != 0
             }
             _ => true,
         };
         if !valid
-            || !retained_mode_matches
+            || !out_of_combat_mode_matches
             || matches!(cleanup,
-                Some(crate::story_cleanup::Stage::RetainedSurvivors { ordinary: true, .. })
+                Some(crate::story::cleanup::Stage::OutOfCombatSurvivors { ordinary: true, .. })
                     if self.loot)
             || self.storage_window()
                 && state.recovery_return != Some(crate::loot_recovery::RecoveryReturn::Ordinary)
@@ -75,25 +81,29 @@ impl OrdinaryBattleRewards {
     }
 }
 
+/// Fixes the reward mode for the battle, reading it from the extra record the first time and
+/// adjusting it for a defeated or fled party.
 pub(super) fn freeze(state: &mut Session) -> Result<i16, RuleError> {
     let Some(pending) = state.ordinary_battle_rewards.as_ref() else {
         if state.battle_treasure != 0 {
             return Err(RuleError::from("battle treasure without its reward caller"));
         }
-        return crate::combat::reward_work::effective_mode(state, 0);
+        return reward::effective_mode(state, 0);
     };
     let mode = match pending.mode {
         Some(mode) => mode,
-        None => word(&state.native_work.extra_record, 8)?,
+        None => word(&state.globals.extra_record, 8)?,
     };
-    let effective = crate::combat::reward_work::effective_mode(state, mode)?;
+    let effective = reward::effective_mode(state, mode)?;
     if !matches!(effective, 2 | 10) {
-        super::super::rewards::RewardMode::select(effective, &state.native_work.treasure_record)?;
+        super::super::rewards::RewardMode::select(effective, &state.globals.treasure)?;
     }
     state.ordinary_battle_rewards.as_mut().unwrap().mode = Some(mode);
     Ok(effective)
 }
 
+/// Begins the reward of a story battle: the reward mode is fixed and, on first entry for any mode
+/// but 2 and 10, the party's firearms are refitted. Returns the mode.
 pub(super) fn begin(
     state: &mut Session,
     content: &Content,
@@ -107,7 +117,7 @@ pub(super) fn begin(
     }
     let mode = freeze(state)?;
     if let Some(combat) = state.combat.as_ref() {
-        super::reward_cleanup::validate(combat.enemies.records.len() as i16)?;
+        super::reward_cleanup::validate(combat.roster.records.len() as i16)?;
     }
     let events = if entering && !matches!(mode, 2 | 10) {
         refit_after_combat(state, content)?
@@ -117,6 +127,7 @@ pub(super) fn begin(
     Ok((mode, events))
 }
 
+/// Marks the reward window as up, if a story battle's reward is pending.
 pub(super) fn defer(state: &mut Session) -> bool {
     let Some(pending) = state.ordinary_battle_rewards.as_mut() else {
         return false;
@@ -125,6 +136,7 @@ pub(super) fn defer(state: &mut Session) -> bool {
     true
 }
 
+/// Closes the reward window of a story battle; refused before the battle has returned.
 pub(crate) fn after_close(
     state: &mut Session,
     content: &Content,
@@ -138,6 +150,8 @@ pub(crate) fn after_close(
     finish(state, content).map(Some)
 }
 
+/// Finishes a story battle's reward and closes the battle, continuing a death story that waits
+/// on it.
 pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     state.ordinary_battle_rewards = None;
     state.battle_treasure = 0;
@@ -153,6 +167,7 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
     Ok(events)
 }
 
+/// Opens the storage window for the battle's loot.
 pub(super) fn storage(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let events = crate::loot_recovery::begin(
         state,
@@ -163,6 +178,8 @@ pub(super) fn storage(state: &mut Session, content: &Content) -> Result<Vec<Even
     Ok(events)
 }
 
+/// Puts the dealt reward into the game: the booty list and its quality, the surviving monsters and
+/// warriors, the credits, the share and the experience.
 pub(crate) fn install(
     state: &mut Session,
     content: &Content,
@@ -170,28 +187,27 @@ pub(crate) fn install(
     rewards: crate::combat::rewards::Rewards,
 ) -> Result<(), RuleError> {
     // Booty clears this table; generated items and sorting also write it.
-    state.native_work.loot_quality = if mode == 5 || rewards.items.is_empty() {
+    state.globals.loot_quality = if mode == 5 || rewards.items.is_empty() {
         Some(vec![0; 1000])
     } else {
         None
     };
     if !matches!(mode, 0 | 5) {
-        centurions_content::records::TreasureRecordMut(&mut state.native_work.treasure_record)
+        centurions_content::records::TreasureRecordMut(&mut state.globals.treasure)
             .consume_items()?;
     }
     if let Some(combat) = state.combat.as_mut() {
-        combat.unavailable = rewards.unavailable;
-        combat.enemies.records = rewards.enemies;
+        combat.kill_party = rewards.kill_party;
+        combat.roster.records = rewards.monsters;
     } else {
-        state.native_work.health_context.unavailable = rewards.unavailable;
+        state.globals.health_context.kill_party = rewards.kill_party;
     }
     if let Some(id) = rewards.last_item_id {
-        state.native_work.loaded_item_field32 =
-            state.native_work.ammunition_work.load_item(content, id)?;
+        state.globals.loaded_item_field32 = state.globals.loaded_items.load_item(content, id)?;
     }
     state.warriors = rewards.warriors;
     if let Some(record) = rewards.inventory_record {
-        state.native_work.inventory_record = record;
+        state.globals.inventory_record = record;
     }
     state.party_currency = rewards.currency;
     state.booty_tally = crate::BootyTally {
@@ -199,20 +215,22 @@ pub(crate) fn install(
         share: rewards.share,
         experience: rewards.total,
     };
-    for item in &mut state.booty_items {
+    for item in &mut state.booty_list {
         item.0.fill(0);
     }
     for (index, item) in rewards.items.into_iter().enumerate() {
-        if index >= state.booty_items.len() {
+        if index >= state.booty_list.len() {
             return Err(RuleError::Invalid(
                 "battle loot exceeds booty capacity".into(),
             ));
         }
-        state.booty_items[index] = item;
+        state.booty_list[index] = item;
     }
     Ok(())
 }
 
+/// Hands out the reward of a battle that ended inside another story: storage or the out-of-combat
+/// reward, unless rewards are suppressed.
 pub(super) fn outer(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     if suppressed(state)? {
         return finish(state, content);
@@ -221,9 +239,10 @@ pub(super) fn outer(state: &mut Session, content: &Content) -> Result<Vec<Event>
     if mode == 10 {
         return storage(state, content);
     }
-    super::retained_rewards::begin(state, content, mode, true)
+    super::out_of_combat_rewards::begin(state, content, mode, true)
 }
 
+/// Whether battle rewards are suppressed.
 fn suppressed(state: &Session) -> Result<bool, RuleError> {
-    Ok(state.native_work.battle_rewards_suppressed != 0)
+    Ok(state.globals.battle_rewards_suppressed != 0)
 }

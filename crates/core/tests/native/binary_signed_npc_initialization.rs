@@ -1,7 +1,7 @@
 //! Original initializer components; the placement caller's file and rectangle services are explicit.
 use crate::support::{self, NativeCase};
 use centurions_content::combat::{BattleRecord, MonsterRecord};
-use centurions_core::combat::{TacticalMap, monster, place_enemies_at_difficulty};
+use centurions_core::combat::{CombatField, monster, place_enemies_at_difficulty};
 use centurions_core::{RandomState, RuleError};
 use serde_json::Value;
 
@@ -24,11 +24,11 @@ fn signed_npc_levels_preserve_original_records_and_draws() {
         } else {
             let mut mission = support::mission();
             let properties = std::fs::read(support::root().join(before.text("properties"))).unwrap();
-            mission.tile_properties = properties[64..12064].to_vec();
+            mission.map_stats = properties[64..12064].to_vec();
             let battle = BattleRecord::read(&before.bytes("battle"), 0).unwrap();
-            let initial_map = TacticalMap {
+            let initial_map = CombatField {
                 tiles: before.words("map"),
-                shift: (-5, -5),
+                map_shift: (-5, -5),
                 edge_word: 0,
             };
             let mut map = initial_map.clone();
@@ -47,7 +47,7 @@ fn signed_npc_levels_preserve_original_records_and_draws() {
             assert_eq!(result.records.len(), case.n::<usize>("after_count"), "{name}");
             assert_eq!(map.tiles, case.words("after_map"), "{name} complete map");
             support::native_expect! {
-                positions result.positions => &case.bytes("after_positions"), "signed placement";
+                positions result.mon_pos => &case.bytes("after_positions"), "signed placement";
             };
             // The native BYTE cursor wraps to -128 and can never reach level128.
             definitions[288..290].copy_from_slice(&128_i16.to_be_bytes());

@@ -1,14 +1,16 @@
-//! downbutton 0x153720 and upbutton 0x1537ee: a 1-pixel bevel around rect
-//! 0x44292c in PenMode 0 and a 1 by 1 pen. Each draws MoveTo(left, bottom - 1),
-//! LineTo(left, top), LineTo(right - 1, top) in one pixel pattern, then
-//! MoveTo(right - 1, top + 1), LineTo(right - 1, bottom - 1), LineTo(left + 1,
-//! bottom - 1) in the other. downbutton starts with the dark pen 0x4358de and
-//! upbutton with the light pen 0x4358e2, so a pressed button looks sunken.
+//! The 1-pixel bevel downbutton and upbutton draw around a button in PenMode 0
+//! with a 1 by 1 pen. Each draws MoveTo(left, bottom - 1), LineTo(left, top),
+//! LineTo(right - 1, top) in one pixel pattern, then MoveTo(right - 1, top + 1),
+//! LineTo(right - 1, bottom - 1), LineTo(left + 1, bottom - 1) in the other.
+//! downbutton starts with the dark pen and upbutton with the light pen, so a
+//! pressed button looks sunken.
 use crate::assets::Assets;
 use centurions_content::graphics::Image;
 use macroquad::prelude::*;
 
 /// downbutton's look for a combat panel button held under the pointer.
+///
+/// Original: downbutton
 pub(super) fn draw_pressed(assets: &Assets, rect: Rect) {
     let [light, dark] = &assets.button_pens;
     let (left, top) = (rect.x as i32, rect.y as i32);

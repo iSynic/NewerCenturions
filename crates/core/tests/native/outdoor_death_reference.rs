@@ -1,8 +1,8 @@
 //! Native combat-zero death aliases and the terminal party-loss caller boundary.
 use super::detached_attacks::{compare, initial, saved_return};
 use crate::combat::runtime::reaction_frame::ReactionFrame;
-use crate::combat::runtime::{detached_attack, outdoor_death};
-use crate::feedback::NativeFeedback;
+use crate::combat::runtime::{out_of_combat_attack, outdoor_death};
+use crate::feedback::GameFeedback;
 use crate::test_support::{bytes, content, fixture};
 use crate::{Command, Content, Event, Session};
 use serde_json::Value;
@@ -16,7 +16,7 @@ pub(super) fn prepare(source: &Value) -> (Session, Content) {
         }
     }
     let mut state = initial(source, &content);
-    state.native_work.character_bare_hand_bonus =
+    state.globals.character_bare_hand_bonus =
         source["character_work_bonus"].as_i64().unwrap_or(0) as i16;
     let before = &source["before"];
     assert!(
@@ -26,8 +26,8 @@ pub(super) fn prepare(source: &Value) -> (Session, Content) {
     );
     state.exploration.as_mut().unwrap().event_headers = bytes(&before["event_headers"]);
     state
-        .native_work
-        .shop_work
+        .globals
+        .the_shop
         .copy_file(&bytes(&before["current_shop_work"]));
     if before.get("death_queue").is_some() {
         assert!(bytes(&before["death_queue"]).iter().all(|byte| *byte == 0));
@@ -42,9 +42,9 @@ pub(super) fn prepare(source: &Value) -> (Session, Content) {
                 .all(|byte| *byte == 0)
         );
         assert_eq!(bytes(&before["death_queue_flag"]), [0]);
-        state.native_work.retained_death_queue = Some(Default::default());
-        state.native_work.death_processing.queue = 0;
-        state.native_work.turn_round = Some(source["turn_round"].as_u64().unwrap() as i16);
+        state.globals.outer_todo_queue = Some(Default::default());
+        state.globals.death_processing.doing_queue = 0;
+        state.globals.turn_round = Some(source["turn_round"].as_u64().unwrap() as i16);
     }
     (state, content)
 }
@@ -52,7 +52,7 @@ pub(super) fn prepare(source: &Value) -> (Session, Content) {
 pub(super) fn verify(state: &Session, content: &Content, events: &[Event], case: &Value) {
     compare(state, events, case);
     assert_eq!(
-        state.native_work.shop_work.record(),
+        state.globals.the_shop.record(),
         bytes(&case["memory"]["current_shop_work"]["hex"]),
         "{} retained current shop",
         case["name"]
@@ -88,9 +88,7 @@ pub(super) fn verify(state: &Session, content: &Content, events: &[Event], case:
     let statuses: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
-            Event::Feedback(NativeFeedback::OutdoorBodyStatus { permanent, .. }) => {
-                Some(*permanent)
-            }
+            Event::Feedback(GameFeedback::OutdoorBodyStatus { permanent, .. }) => Some(*permanent),
             _ => None,
         })
         .collect();
@@ -122,7 +120,7 @@ fn outdoor_deaths_match_native_aliases_work_rng_and_terminal_returns() {
             saved_return(&mut state, &content);
             let events = crate::apply(Command::Continue, &mut state, &content).unwrap();
             verify(&state, &content, &events, case);
-            let queue = state.native_work.retained_death_queue.as_ref().unwrap();
+            let queue = state.globals.outer_todo_queue.as_ref().unwrap();
             assert_eq!(
                 queue
                     .entries
@@ -148,7 +146,7 @@ fn outdoor_deaths_match_native_aliases_work_rng_and_terminal_returns() {
                 )
             );
             assert_eq!(
-                state.native_work.death_processing.queue,
+                state.globals.death_processing.doing_queue,
                 bytes(&case["memory"]["death_queue_flag"]["hex"])[0]
             );
             assert_eq!(state.bandage_ready, 1);
@@ -167,14 +165,14 @@ fn outdoor_deaths_match_native_aliases_work_rng_and_terminal_returns() {
                 (false, terminated, events)
             }
             "attack2" => {
-                let outcome = detached_attack::run(
+                let outcome = out_of_combat_attack::run(
                     &mut state,
                     &content,
                     crate::combat::runtime::reaction_calls::AttackCall {
                         attacker: source["attacker"].as_i64().unwrap() as i16,
                         recipient: source["target"].as_i64().unwrap() as i16,
                         index: source["index"].as_u64().unwrap() as usize,
-                        retained_actor: 10,
+                        turn_actor: 10,
                     },
                 )
                 .unwrap();
@@ -209,10 +207,10 @@ fn outdoor_deaths_match_native_aliases_work_rng_and_terminal_returns() {
         }
         if parent == "checkforenemy-warrior-guard" && !terminal {
             let (mut missing, content) = prepare(source);
-            let npc = missing.native_work.npc_backing.slot(0).unwrap().clone();
-            *missing.native_work.npc_backing.slot_mut(55).unwrap() = npc;
-            missing.native_work.selected_enemy = 55;
-            missing.native_work.initiative_work.order[0] = 65;
+            let npc = missing.globals.monsters.slot(0).unwrap().clone();
+            *missing.globals.monsters.slot_mut(55).unwrap() = npc;
+            missing.globals.monster_up = 55;
+            missing.globals.battle_order.order[0] = 65;
             saved_return(&mut missing, &content);
             let before = missing.clone();
             assert!(matches!(

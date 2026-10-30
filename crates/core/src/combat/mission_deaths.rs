@@ -1,4 +1,6 @@
 use crate::RuleError;
+use centurions_content::WARRIOR_BYTES;
+use centurions_content::combat::MONSTER_BYTES;
 use centurions_content::{
     Warrior,
     mission::OpeningMission,
@@ -8,12 +10,15 @@ use centurions_content::{
 
 use super::Combat;
 
+/// What a scenario's death story did: the text it shows and whether the battle ended at once.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MissionDeath {
     pub text: i16,
     pub ended_early: bool,
 }
 
+/// The death story that is running, the monster that ran it and the side that monster was on when
+/// it was queued.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeathContext {
     pub script: i16,
@@ -21,6 +26,7 @@ pub struct DeathContext {
     pub deferred_faction: Option<i16>,
 }
 
+/// Reports a death story this build cannot yet run, without changing anything.
 fn unsupported(dependency: &'static str) -> RuleError {
     RuleError::Unsupported {
         action: "combat.mission_death",
@@ -28,29 +34,32 @@ fn unsupported(dependency: &'static str) -> RuleError {
     }
 }
 
-/// Authored death336/337 after killbody cleanup; queued stories retain global actor zero.
+/// The scenario's death stories 336 and 337, after killbody's cleanup; queued
+/// stories run as actor zero.
 pub fn apply(
     combat: &mut Combat,
     warriors: &mut [Warrior],
     mission: &OpeningMission,
     extras: &[u8],
     context: DeathContext,
-    unavailable: &mut i8,
+    kill_party: &mut i8,
 ) -> Result<MissionDeath, RuleError> {
     let DeathContext {
         script,
         actor,
         deferred_faction,
     } = context;
-    if combat.enemies.records.len() > 100
+    if combat.roster.records.len() > 100
         || combat
-            .enemies
+            .roster
             .records
             .iter()
-            .any(|record| record.bytes.len() != 288)
-        || actor >= combat.enemies.records.len()
+            .any(|record| record.bytes.len() != MONSTER_BYTES)
+        || actor >= combat.roster.records.len()
         || !(1..=6).contains(&warriors.len())
-        || warriors.iter().any(|warrior| warrior.bytes.len() != 3138)
+        || warriors
+            .iter()
+            .any(|warrior| warrior.bytes.len() != WARRIOR_BYTES)
     {
         return Err(RuleError::Invalid(
             "invalid mission death story input".into(),
@@ -72,7 +81,7 @@ pub fn apply(
     }
     let mut next = combat.clone();
     let mut next_warriors = warriors.to_vec();
-    let mut next_unavailable = *unavailable;
+    let mut next_unavailable = *kill_party;
     let ended_early = if script == 336 {
         let extra = span(extras, 619 * 10, 10)?;
         for (index, value) in [113, 114, 115, 0, 0].into_iter().enumerate() {
@@ -82,14 +91,14 @@ pub fn apply(
                 ));
             }
         }
-        let faction = deferred_faction.unwrap_or(next.enemies.records[actor].record().faction()?);
+        let faction = deferred_faction.unwrap_or(next.roster.records[actor].record().faction()?);
         for class in [113, 114, 115] {
-            for record in &mut next.enemies.records {
-                if i16::from(record.record().definition_id()) == class
+            for record in &mut next.roster.records {
+                if i16::from(record.record().monster_id()) == class
                     && record.record().faction()? == faction
                 {
                     record.record_mut().set_condition(Condition::Retreating, -1);
-                    record.record_mut().set_fleeing_chance(70);
+                    record.record_mut().set_surrender_percent(70);
                 }
             }
         }
@@ -97,12 +106,12 @@ pub fn apply(
     } else if 5 < i16::from(next_unavailable) {
         for warrior in &mut next_warriors {
             warrior.record_mut().set_stamina(1);
-            warrior.record_mut().set_automatic_mode(0);
+            warrior.record_mut().set_computer_control(0);
             next_unavailable = 0;
         }
         true
     } else {
-        let record = &mut next.enemies.records[actor].bytes;
+        let record = &mut next.roster.records[actor].bytes;
         EnemyRecordMut::from_bytes(record).set_stamina(1);
         EnemyRecordMut::from_bytes(record).set_faction(0);
         EnemyRecordMut::from_bytes(record).set_target_scan_excluded(true);
@@ -110,7 +119,7 @@ pub fn apply(
     };
     *combat = next;
     warriors.clone_from_slice(&next_warriors);
-    *unavailable = next_unavailable;
+    *kill_party = next_unavailable;
     Ok(MissionDeath {
         text: expected[0].1,
         ended_early,

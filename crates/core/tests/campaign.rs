@@ -113,13 +113,13 @@ fn replay(
                 || state
                     .combat
                     .as_ref()
-                    .map(|c| (c.selection_pending, c.script_enemy))
+                    .map(|c| (c.selection_pending, c.macro_monster))
                     != before
                         .combat
                         .as_ref()
-                        .map(|c| (c.selection_pending, c.script_enemy))
-                || state.combat.as_ref().map(|c| &c.round_scripts.pending)
-                    != before.combat.as_ref().map(|c| &c.round_scripts.pending)
+                        .map(|c| (c.selection_pending, c.macro_monster))
+                || state.combat.as_ref().map(|c| &c.round_macros.pending)
+                    != before.combat.as_ref().map(|c| &c.round_macros.pending)
                 || state.exploration.as_ref().map(|p| &p.presentation)
                     != before.exploration.as_ref().map(|p| &p.presentation))
         {

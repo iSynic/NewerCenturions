@@ -11,8 +11,12 @@ use recovery::recover;
 
 mod zero;
 pub use zero::{ZeroOwners, ZeroTimeReturn};
-pub(crate) use zero::{resume_owned, retain_zero_work, validate_zero, zero_tick};
+pub(crate) use zero::{resume_owned, store_zero_record, validate_zero, zero_tick};
 
+/// Lets time pass on the land by a number of ticks of so many minutes each. When the minutes reach
+/// an hour, party buffs wear off, the warriors are reduced outdoors, fatigue rises and psi energy
+/// returns. At hour 24 the day turns and the calendar is scanned, and at hour 12 the warriors
+/// recover. A tick count of zero only turns the day when the hour is 24.
 pub(crate) fn advance(
     state: &mut Session,
     content: &Content,
@@ -29,13 +33,13 @@ pub(crate) fn advance(
         if position.minute < 60 {
             continue;
         }
-        // CODE 1 timeclick: reduce precedes the hour, fatigue and energy updates.
-        crate::combat::party_buffs::reduce(&mut state.party_buffs)?;
-        let context = crate::story_health::retained_context(
-            state.selected_warrior,
-            &state.native_work.health_context,
+        // Party buffs wear off before the hour, fatigue and energy change.
+        crate::combat::party_buffs::reduce(&mut state.party_condition)?;
+        let context = crate::story::health::reselected_context(
+            state.char_select_new,
+            &state.globals.health_context,
         );
-        let reduced = crate::story_reduce::reduce_outdoors(
+        let reduced = crate::story::reduce::reduce_outdoors(
             &state.warriors,
             &context,
             &mut state.random,
@@ -44,7 +48,7 @@ pub(crate) fn advance(
         let lost = reduced
             .events
             .iter()
-            .any(|event| matches!(event, crate::story_health::HealthEvent::PartyLost));
+            .any(|event| matches!(event, crate::story::health::HealthEvent::PartyLost));
         let control_returns = state.warriors.iter().zip(&reduced.warriors).try_fold(
             0_i16,
             |delta, (before, after)| {
@@ -56,15 +60,15 @@ pub(crate) fn advance(
                 )
             },
         )?;
-        state.native_work.victory_work.add_total(control_returns);
+        state.globals.kill_counts.add_num_enemy(control_returns);
         state.warriors = reduced.warriors;
-        state.native_work.health_context = reduced.context;
+        state.globals.health_context = reduced.context;
         events.extend(reduced.events.into_iter().filter_map(|event| match event {
-            crate::story_health::HealthEvent::Sound(resource_id) => {
+            crate::story::health::HealthEvent::Sound(resource_id) => {
                 Some(Event::Sound { resource_id })
             }
-            crate::story_health::HealthEvent::Flash { address, sound } => {
-                Some(Event::Feedback(crate::feedback::NativeFeedback::Flash {
+            crate::story::health::HealthEvent::Flash { address, sound } => {
+                Some(Event::Feedback(crate::feedback::GameFeedback::Flash {
                     address,
                     x: 100,
                     y: 30,
@@ -84,11 +88,11 @@ pub(crate) fn advance(
         for warrior in &mut state.warriors {
             let bytes = &mut warrior.bytes;
             let energy = WarriorRecord::from_bytes(bytes).psi_points()?;
-            let maximum = WarriorRecord::from_bytes(bytes).maximum_psi()?;
+            let maximum = WarriorRecord::from_bytes(bytes).psi_points_max()?;
             if state.energy_recovery_disabled == 0
                 && energy < maximum
                 && WarriorRecord::from_bytes(bytes).stamina()? > 0
-                && WarriorRecord::from_bytes(bytes).automatic_mode()? == 0
+                && WarriorRecord::from_bytes(bytes).computer_control()? == 0
             {
                 let level = WarriorRecord::from_bytes(bytes).level()?;
                 let amount = (level.wrapping_add((level as u16 >> 15) as i16) >> 1) as i8;
@@ -97,14 +101,14 @@ pub(crate) fn advance(
             }
         }
         if state.energy_recovery_disabled == 0 {
-            for bytes in state.allies[..state.ally_count * story_allies::ALLY_BYTES]
+            for bytes in state.holdover[..state.held_over * story_allies::ALLY_BYTES]
                 .as_chunks_mut::<{ story_allies::ALLY_BYTES }>()
                 .0
             {
                 let energy = EnemyRecord::from_bytes(bytes).psi_points()?;
-                let maximum = EnemyRecord::from_bytes(bytes).maximum_psi()?;
+                let maximum = EnemyRecord::from_bytes(bytes).psi_points_max()?;
                 if energy < maximum {
-                    let level = EnemyRecord::from_bytes(bytes).level()?;
+                    let level = EnemyRecord::from_bytes(bytes).hit_dice()?;
                     let amount = (level.wrapping_add((level as u16 >> 15) as i16) >> 1) as i8;
                     EnemyRecordMut::from_bytes(bytes)
                         .set_psi_points(energy.wrapping_add(i16::from(amount.max(1))).min(maximum));
@@ -141,6 +145,8 @@ pub(crate) fn advance(
     Ok(events)
 }
 
+/// Runs the calendar's scheduled scripts that have come due, one after another, with recovery after
+/// each scan. Returns true when a script needs the player or a battle took over.
 fn scheduled_events(
     state: &mut Session,
     content: &Content,
@@ -170,7 +176,7 @@ fn scheduled_events(
             .record(script_id.unsigned_abs())?
             .to_vec();
         state.exploration.as_mut().unwrap().script = Some(ScriptState::scheduled(record, 0));
-        // Keep the caller visible while a child executes a nested time opcode.
+        // Keep the caller visible while a nested time operation runs.
         state.time_continuation = Some(pending.clone());
         events.extend(super::exploration::run_script(state, content)?);
         state.time_continuation = None;
@@ -185,6 +191,7 @@ fn scheduled_events(
     }
 }
 
+/// Carries time on after a script or message that interrupted it.
 pub(crate) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     if state.zero_time.is_some() {
         return zero::resume(state, content);
@@ -217,6 +224,9 @@ pub(crate) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event
     Ok(events)
 }
 
+/// Finds the next scheduled script due today whose chance roll, required item, flag and region
+/// pass, moving the cursor along the schedule. A due entry that fails one of those is rescheduled
+/// and ends the scan; one at the wrong map or square is skipped.
 fn scan_schedule(
     state: &mut Session,
     cursor: &mut usize,

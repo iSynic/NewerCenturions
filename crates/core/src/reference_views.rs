@@ -1,6 +1,10 @@
+use crate::story::allies::ALLY_BYTES;
 use crate::{Event, RuleError, Session};
+use centurions_content::combat::MONSTER_BYTES;
 use centurions_content::{Content, span, ui, word};
 
+/// Shows a note the party holds: its record and text. Refused when the note is not held, when a
+/// note without a picture names a map the scenario lacks, or when its picture is not installed.
 pub fn note(state: &Session, content: &Content, index: usize) -> Result<Vec<Event>, RuleError> {
     if state.notes.get(index).copied().unwrap_or(0) == 0 {
         return Err(crate::RuleError::Refused { feedback: vec![] });
@@ -27,7 +31,10 @@ pub fn note(state: &Session, content: &Content, index: usize) -> Result<Vec<Even
     }])
 }
 
-/// updatemonstermenu 0x135bb2: terminated records, hidden flag, then bytewise name ordering.
+/// The bestiary entries: the records before the terminator, minus hidden ones. Without a shipped
+/// archive table they are sorted by name byte by byte.
+///
+/// Original: updatemonstermenu
 pub fn archive_entries(
     state: &Session,
     content: &Content,
@@ -41,9 +48,9 @@ pub fn archive_entries(
     let mut entries = Vec::new();
     let order: Vec<_> = map
         .archive_order()
-        .unwrap_or_else(|| (0..records.len() / 288).collect());
+        .unwrap_or_else(|| (0..records.len() / MONSTER_BYTES).collect());
     for index in order {
-        let record = span(records, index * 288, 288)?;
+        let record = span(records, index * MONSTER_BYTES, MONSTER_BYTES)?;
         if word(record, 0)? == 255 {
             break;
         }
@@ -53,8 +60,8 @@ pub fn archive_entries(
     }
     if map.archive_table.is_none() {
         entries.sort_by(|(a, _), (b, _)| {
-            let a = a * 288 + 218;
-            let b = b * 288 + 218;
+            let a = a * MONSTER_BYTES + 218;
+            let b = b * MONSTER_BYTES + 218;
             records[a + 1..a + 1 + usize::from(records[a])]
                 .cmp(&records[b + 1..b + 1 + usize::from(records[b])])
         });
@@ -62,6 +69,8 @@ pub fn archive_entries(
     Ok(entries)
 }
 
+/// Shows the record of a bestiary creature with its description, or of a held-over ally, which has
+/// no description. Refused when the entry is not available.
 pub fn view(
     state: &Session,
     content: &Content,
@@ -70,11 +79,11 @@ pub fn view(
 ) -> Result<Vec<Event>, RuleError> {
     let map = state.land(content).ok_or("creature scenario unavailable")?;
     let (record, description) = if ally {
-        if index >= state.ally_count {
+        if index >= state.held_over {
             return Err("ally entry unavailable".into());
         }
         (
-            span(&state.allies, index * 288, 288)?.to_vec(),
+            span(&state.holdover, index * ALLY_BYTES, ALLY_BYTES)?.to_vec(),
             String::new(),
         )
     } else {
@@ -84,7 +93,12 @@ pub fn view(
         {
             return Err("archive entry unavailable".into());
         }
-        let record = span(&map.combat.as_ref().unwrap().monsters, index * 288, 288)?.to_vec();
+        let record = span(
+            &map.combat.as_ref().unwrap().monsters,
+            index * MONSTER_BYTES,
+            MONSTER_BYTES,
+        )?
+        .to_vec();
         let text = span(&map.creature_descriptions, index * 256, 256)?;
         (record, ui::pascal_text(text)?)
     };
@@ -96,7 +110,8 @@ pub fn view(
     }])
 }
 
-/// combat's selected-body portrait uses the live creature, including changed conditions.
+/// The portrait of a selected body in battle shows the creature as it is now,
+/// including changed conditions.
 pub fn combat_body(state: &Session, content: &Content, body: i16) -> Result<Vec<Event>, RuleError> {
     crate::combat::controls::actor(state)?;
     if (0..state.warriors.len() as i16).contains(&body) {
@@ -106,7 +121,7 @@ pub fn combat_body(state: &Session, content: &Content, body: i16) -> Result<Vec<
         .combat
         .as_ref()
         .unwrap()
-        .enemies
+        .roster
         .records
         .get(usize::try_from(body - 10).map_err(|_| "combat body invalid")?)
         .ok_or("combat body missing")?

@@ -9,14 +9,14 @@ fn random_weapon_callers_preserve_prefix_draws_and_their_overlapping_range_order
     let fixture = support::fixture("enemies.json");
     let mission = support::terrain_mission(&support::fixture("combat-map.json"));
     let mut battle = BattleRecord::read(&fixture.bytes("battle"), 0).unwrap();
-    let cell = battle.cells.iter().position(|id| *id != 0).unwrap();
+    let cell = battle.battle_grid.iter().position(|id| *id != 0).unwrap();
     let mut definition =
-        MonsterRecord::read(&fixture.bytes("definitions"), battle.cells[cell]).unwrap();
-    definition.record_mut().set_selected_item(150);
+        MonsterRecord::read(&fixture.bytes("definitions"), battle.battle_grid[cell]).unwrap();
+    definition.record_mut().set_weapon(150);
     definition.record_mut().set_primary_weapon(150);
     definition.bytes[0x28..0x2a].copy_from_slice(&50_i16.to_be_bytes());
-    battle.cells.fill(0);
-    battle.cells[cell] = 1;
+    battle.battle_grid.fill(0);
+    battle.battle_grid[cell] = 1;
     let menu = vec![0; 20 * 288];
     for (caller, selector, primary, item) in [
         (0, -2, 125, 125),
@@ -35,9 +35,9 @@ fn random_weapon_callers_preserve_prefix_draws_and_their_overlapping_range_order
                 }
                 1 => monster::summon(definition.clone(), -1, 0, &mut random).unwrap(),
                 _ => {
-                    let mut map = TacticalMap {
+                    let mut map = CombatField {
                         tiles: fixture.words("map"),
-                        shift: (-39, -15),
+                        map_shift: (-39, -15),
                         edge_word: 0,
                     };
                     let mut definitions = vec![0; 576];
@@ -67,14 +67,14 @@ fn random_weapon_callers_preserve_prefix_draws_and_their_overlapping_range_order
             })
             .unwrap();
         let mut selected = definition.clone();
-        selected.record_mut().set_selected_item(selector);
+        selected.record_mut().set_weapon(selector);
         let (actual, random) = initialize(&selected, seed);
         expected_record.record_mut().set_primary_weapon(primary);
-        expected_record.record_mut().set_selected_item(item);
+        expected_record.record_mut().set_weapon(item);
         assert_eq!(actual, expected_record, "caller{caller}");
         assert_eq!(random, expected_random, "caller{caller}");
     }
-    definition.record_mut().set_selected_item(-10);
+    definition.record_mut().set_weapon(-10);
     let mut random = RandomState::new(1);
     let before = random.clone();
     let refused = monster::summon(definition, -1, 0, &mut random);
@@ -114,7 +114,7 @@ fn signed_removal_dispatch_precedes_unneeded_origin_reads_and_survives_save_resu
             .collect();
         assert_eq!(bodies, if removed { vec![10] } else { vec![] });
         assert_eq!(
-            current_combat(&state).enemies.records[0].stamina().unwrap() == 0,
+            current_combat(&state).roster.records[0].stamina().unwrap() == 0,
             removed
         );
         assert_eq!(state.random, expected);
@@ -129,8 +129,8 @@ fn initial_npc_story_resumes_its_saved_entry_without_an_advance_announcement() {
     let record = &mut tables.door_scripts[..42];
     record.copy_from_slice(&support::script_record(&[(47, 2), (1, 1), (47, 3)]));
     let definitions = &mut tables.combat.as_mut().unwrap().monsters;
-    for enemy in definitions.as_chunks_mut::<288>().0 {
-        enemy[0x5c..0x60].copy_from_slice(&support::word_bytes(&[100, 0]));
+    for monster in definitions.as_chunks_mut::<288>().0 {
+        monster[0x5c..0x60].copy_from_slice(&support::word_bytes(&[100, 0]));
     }
     let mut state = support::mission_session(&content);
     let position = state.exploration.as_mut().unwrap();

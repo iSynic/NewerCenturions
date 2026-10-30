@@ -5,6 +5,68 @@ The maintained runtime is the editing surface for game behavior. The Centurions
 implementations and live visual observations establish different kinds of
 evidence; a structural refactor does not improve their qualification by itself.
 
+## Start here
+
+### Crates
+
+- `crates/content` (`centurions-content`): opens the original installation and
+  its resource forks, and exposes original records through borrowed views in
+  `records`, plus graphics, audio, interface resources and mission data.
+- `crates/core` (`centurions-core`): game rules and `Session` state. Gameplay
+  changes enter through `Command` and `apply` and produce `Event`s. State is saved
+  by `persistence` or imported from original saves by `original_save`.
+- `crates/desktop` (`centurions-desktop`): the playable application. Screens,
+  input, rendering and platform services (file dialogs, audio, windows) turn
+  player actions into the same commands.
+- `crates/tools` (`centurions-tools`): command-line `inspect` (the default),
+  `replay`, `audit-resources`, `audit-import` and `convert-assets`; `--help`
+  lists their arguments. `main.rs` routes actions; `replay.rs`,
+  `convert_assets.rs` and `acceptance/` own the larger ones.
+
+### Running from source
+
+The desktop and tools read an existing New Centurions installation (see
+[installation notes](installation.md) for its layout). Pass the folder as the
+first argument, or set `CENTURIONS_ASSET_ROOT`; otherwise the executable's own
+folder is searched, which is not an installation when running from `target/`:
+
+```sh
+cargo run -p centurions-desktop --release -- "<installation folder>"
+cargo run -p centurions-tools -- inspect "<installation folder>"
+cargo run -p centurions-tools -- replay "<installation folder>" commands.json --trace
+```
+
+### Reading order
+
+1. This section, then [building and testing](building.md) for the checks and
+   test layout.
+2. The rest of this guide: ownership, the combat-click path and change guides.
+3. [Source translation workflow](reconstruction.md) for how recovered routines
+   become Rust, and [the reconstruction toolkit](toolkit.md) for comparisons
+   and acceptance records.
+4. In a development checkout, `docs/README.md` indexes the subsystem notes,
+   the unsupported-behavior backlog and the capability map.
+
+### Adding a feature
+
+1. **Record view.** Read and write original fields through a view in
+   `crates/content/src/records/`. Native offsets and integer widths stay there.
+2. **Rule owner.** Put arithmetic, RNG draws and effect order in the subsystem
+   owner listed below. A native global that outlives its caller belongs in
+   `Globals` (`crates/core/src/state/globals.rs`).
+3. **Command.** Reach the rule through a `Command` (`crates/core/src/command.rs`)
+   dispatched by `commands` and entered through `apply`. An unsupported path
+   returns a diagnostic without changing state. A new saved field or
+   continuation raises `CURRENT_SCHEMA_VERSION` in `persistence`.
+4. **Test.** Prefer a command/replay case in a `crates/core/tests/command_*.rs`
+   file, using the helpers in `tests/support`. A new file is declared as a
+   module of `tests/native_reference.rs` (see [test layout](building.md#test-layout)).
+5. **Verify** with the commands listed in `AGENTS.md`:
+   `python -m unittest discover -s tests/python`, `cargo fmt --check`,
+   `cargo test --workspace --features original-fixtures`,
+   `cargo clippy --workspace --all-targets --features original-fixtures -- -D warnings`
+   and `cargo build --workspace --release`.
+
 ## Ownership and dependencies
 
 | Responsibility | Owner | Calls into |
@@ -12,7 +74,7 @@ evidence; a structural refactor does not improve their qualification by itself.
 | Command admission and transactions | core `commands` | maintained game subsystems |
 | Native records and saved session representation | core `state` | content records and explicit defaults |
 | Session validation | core `session` | subsystem validation |
-| Save encoding, migrations and atomic writes | core `persistence` | session validation and filesystem |
+| Save encoding, schema check and atomic writes | core `persistence` | session validation and filesystem |
 | Click routing and occupied-cell continuations | core combat `interaction`, `occupied_cell` | record views, movement and shooting |
 | Attack, reaction, turn and round execution | core combat `runtime` submodules | recovered arithmetic and record adapters |
 | Spell selection, restrictions and effects | core combat `spells`, `player_psi` | packet, mask and native record rules |
@@ -101,22 +163,21 @@ The following boundaries are intended editing surfaces:
 | Enhanced shop stock | shop `generated_stock` | named instance modifiers and bounded RNG draws |
 | Script operation and resumption | exploration `script_execution`, `ScriptState::restart_from` | named `Operation`, `StoryRecord`, operation-specific EXTRA views |
 | Death and battle-round stories | runtime `death`, combat `round_stories` | the same `Operation` names, each interpreter's own subset |
-| Retained native work globals | state `NativeWorkContext` | each field documents its global, reason and consumers |
-| Encounter headers and shared labels | story `EncounterWork` | loader, file-copy, replacement, redraw and saveencounter adapters |
+| Globals that outlast a battle | state `Globals` | each field documents its global, reason and consumers |
+| Encounter headers and shared labels | story `EncounterHeaders` | loader, file-copy, replacement, redraw and saveencounter adapters |
 | Upgrade selection and drawing | desktop editor `controls`, warrior upgrade view | original DITL IDs and base/derived/purchase fields |
 | Selected-battle reward windows | combat runtime `selected_rewards` | newland48's separate ordinary and additional loot returns |
-| Save acceptance and restoration | persistence `compatibility::restore` | ordered compatibility steps for versions 1-49 |
+| Save acceptance | `persistence::load` | `CURRENT_SCHEMA_VERSION`, then `Session::validate` |
 
 The round interpreter keeps its specialized NPC and slot operations. At another
 recognized story operation it delegates the current action and remaining script
 to exploration's shared interpreter, just as the original round loop calls
 `newland` in mode -1. `RoundDispatch` holds the suspended caller until all modal
 pages and script replacements finish; returning advances the round slot once.
-Schema 17 accepts these additional saved entries. Earlier question continuations
-remain compatible. See [shared round operations](shared-round-operations.md).
+These suspended callers are saved.
 
-Schema 18 adds the clinic introduction's pending entry. Credits remain carried
-until its original textbox returns. See [clinic entry](clinic-introduction.md).
+The clinic introduction's pending entry is saved. Credits remain carried until
+its original textbox returns.
 
 Native arithmetic is still implemented by bounded routines such as firearm
 resolution, turn initialization and equipment record rules. Their purpose is to
@@ -126,7 +187,8 @@ filesystem access and turn scheduling out of those adapters. Expanded translatio
 crates remain a separate recovery surface, not the normal place to edit a feature.
 
 An uncertain field must keep an honest context-specific name. For example,
-`retained_field32` is category-dependent native work data, not a universal item
+item word 32 (`ammunition_caliber`) is the caliber only for weapons; other
+item classes give the word other meanings, so it is not a universal item
 statistic. The owned-firearm health-context ID restriction is documented at its
 caller and is not generalized by this refactor. Broadening such qualifications
 requires a behavioral change with independent evidence.
@@ -179,10 +241,11 @@ session's existing continuation; presentation does not own the script. Fatigue
 percentage arithmetic divides before multiplying with word wrapping, even when
 a more conventional percentage calculation would produce a different result.
 
-For a save, read the compatibility pipeline in order: version/schedule, control
-contexts, nested story contexts, actor defaults, campaign contexts, then map and
-spell-memory restoration. Rejection and restoration are interleaved intentionally;
-moving all defaults ahead of rejection would change which legacy files are accepted.
+For a save, `persistence::load` checks the size limit, parses the document,
+refuses any version other than `CURRENT_SCHEMA_VERSION` with `unsupported save
+version`, then runs `Session::validate` before the loaded session replaces the
+current one. Saves from earlier reconstruction schemas are not migrated.
+Original 1.3.2 game files are imported separately through `original_save`.
 
 **Combat:** start at command routing, then the relevant combat owner. Attack
 resolution, reactions, actor turns, round effects, medical work, shooting and
@@ -211,25 +274,27 @@ before extraction. A common ancestor must not become the implementation site for
 each child screen.
 
 **Saves:** keep serialized field/variant names, defaults and order stable during a
-structural refactor. The structural refactor retained schema 12 and readers for 1–11. A subsequent
-original-instruction correction introduced schema 13 for the retained natural-attack
-index, with readers for 1–12 and explicit unknown legacy context. Schema 14 moved
-`party_mask` and `health_context` into `NativeWorkContext`, changing only their
-saved key order, with readers for 1–13. Schema 15 added the random-battles flag
-`random_battles` (BYTE402f42), with readers for 1–14 defaulting it to enabled. It also carries
-`saved_position` (opcode 70), omitted while zero, and two script fields omitted
-while unset: `caller_action` (newland's encounter-caller action, used by opcode 34)
-and `chained` (an event started by opcode 20 keeps the party in place), and the
-coordinate-display word `coordinates_hidden` (WORD4354fe, opcode 71), omitted while
-zero and read from original saves. A running encounter's `eliminated` branches
-(opcode 44) are omitted while zero, and the multi-member `PartyPick` presentation
-(opcodes 14 and -14) is new. The camping flag
-(WORD4394b4) is deliberately not saved, as in the original save, so a loaded
-session allows camping. Preserve that versioned boundary and the
-existing validation/rejection rules. Newly required persistence belongs in a separate, explicitly
-versioned feature change. `NativeWorkContext` is flattened into `Session`, so its
-saved keys keep their names. A loaded session is validated before replacement;
-original assets and imported saves remain read-only.
+structural refactor. Only `CURRENT_SCHEMA_VERSION` loads; earlier reconstruction
+saves are refused rather than migrated. Newly required persistence belongs in a
+separate feature change that raises that constant. `Globals` is
+flattened into `Session`, so its saved keys keep their names. A loaded session
+is validated before replacement; original assets and imported saves remain
+read-only.
+
+Some saved fields need context:
+
+- `party_mask` and `health_context` live in `Globals`.
+- `random_battles` is BYTE402f42.
+- `saved_position` (opcode 70) is omitted while zero.
+- The script fields `caller_action` (newland's encounter-caller action, used by
+  opcode 34) and `chained` (an event started by opcode 20 keeps the party in
+  place) are omitted while unset.
+- `coordinates_hidden` (WORD4354fe, opcode 71) is omitted while zero and is read
+  from original saves.
+- A running encounter's `eliminated` branches (opcode 44) are omitted while
+  zero. The multi-member `PartyPick` presentation serves opcodes 14 and -14.
+- The camping flag (WORD4394b4) is deliberately not saved, as in the original
+  save, so a loaded session allows camping.
 
 **Controls:** drawing and hit testing consume the same Control records and
 original resource rectangles. Mouse and keyboard eligibility remains in the
@@ -237,7 +302,101 @@ existing shared policy. Preserve explicit modal precedence and deliberate
 differences between gestures. Operating-system file panels and audio services
 remain outside rule execution.
 
+### Retained work ownership
+
+Native work globals that outlive a caller have one owner each. A missing value
+is unknown history; do not fabricate it from a default, the current roster or a
+parent's copy.
+
+- **Turn story returns:** saved NPC turn frames distinguish initial entry from
+  advancement; initial entry suppresses the extra `TurnStarted` that advancement
+  emits. Saved item selections admit the original signed item mode and WORD power
+  domain.
+- **Health work:** `story_health` and `Globals`. Fresh work copies
+  initialized DATA. Session consumers use the fallible retained accessor; the
+  public record-only helper keeps its existing default contract. A command
+  epilogue may refresh known work but must not turn absent work into a
+  fabricated origin.
+- **Calendar recovery:** food consumption and noon/midnight recovery belong to
+  `time/recovery.rs`; clock and schedule routing stay in `time.rs`. Recovery
+  emits deterministic original status feedback and returns immediately after
+  mission defeat. Keep native presentation addresses in the feedback owner and
+  preserve heal/partyloss effect order.
+- **Zero-time calendar returns:** `time::zero` owns them. The parent cursor and
+  locals survive while its instruction record is replaced by the final shared
+  child DOOR. The ordinary positive-time recovery continuation stays separate.
+- **Ready:** `Globals::in_spell` records supported outdoor writers;
+  unrecovered tactical histories are unknown. While combat is live,
+  `Combat::ready` owns WORD438760. Session-level writers use `set_ready`;
+  record, turn and cast owners update the live copy at their recovered write
+  boundaries. Teardown carries that global value instead of a parent snapshot.
+  Presentation reads the same admission as replay.
+- **Death scripts:** they run in the shared exploration interpreter;
+  `runtime::death` owns their queue and return frames. A death caller saves only
+  DOOR actions and parameters, so its suspended record follows the child's
+  shared header and level byte. Keep the loop and its early and normal return
+  retention points together.
+- **Death processing bytes:** the literal queue and callback bytes belong to
+  `Globals::death_processing`, not to the lifetime of `DeathStory` or
+  `DeathQueue::processing`. New queue calls and resumed local scans have
+  different writer boundaries. `story_combat` reads the actual queue byte before
+  selecting a live or retained origin; keep missing history explicit.
+- **Death callback refresh:** `runtime::death_return` owns it. Its rule-side item
+  loads and firing-mode correction read current initiative, not the saved
+  attacker. `combat::retained::InitiativeWork` holds the native order and cursor
+  after teardown; a live `Combat` owns those WORDs while present. Keep
+  compatibility-only record helpers separate from Session callers that have
+  literal processing and Ready work.
+- **Neighbors:** shared neighbor rows and the body-list/party-mask alias
+  belong to `combat::neighbor_scan`. The caller owns its local loop count and
+  cursor; `Globals` keeps them through teardown. Session
+  entry points supply the selected warrior and shared mask explicitly.
+  Record-only helpers keep their existing contracts. Do not reconstruct a
+  before-move row from the current map or restore a parent copy after a child
+  call.
+
 ## Code hygiene
+
+### Code style
+
+The code should read as the game's own source would: written by someone who
+designed the rules, not by someone describing a binary.
+
+- **Names.** Use the original author's vocabulary from the [glossary](glossary.md):
+  Realmz names for shared concepts (`stamina`, `stamina_max`, `battle_order`,
+  `killbody`, `getup`, `booty`), adopted only where the 1.3.2 binary confirms the
+  meaning, and plain game terms for Centurions-only concepts. Avoid
+  engine-emulation words such as "native", "legacy", "WORD", "alias" or "work"
+  in identifiers when a game term exists. Serialized names stay fixed; rename
+  through `#[serde(rename = "...")]`.
+- **Comments.** State the rule and its intent in the present tense: what the game
+  does and why. Don't narrate how it was recovered. Use comments sparingly; a
+  well-named function rarely needs more than a sentence.
+- **Provenance.** A function that follows an original routine ends its doc comment
+  with one line, `Original: <routine>` (for example `Original: getbattleorder`).
+  Addresses, WORD/BYTE globals, register notes and decompilation detail belong in
+  the subsystem notes under `docs/`, in `evidence/` and in fixture provenance, not
+  in code.
+- **Deliberate oddities.** When the game does something surprising on purpose, or
+  the reconstruction keeps an original quirk, say so plainly and point to the note
+  that records the evidence, for example: "A warrior still on automatic keeps an
+  initiative slot (see docs/enemy-turn-dispatch.md)."
+
+Before:
+
+```rust
+// combatsetup counts each newly created nonzero-faction NPC; getbattleorder
+// then clears the defeated WORD. This is an entry writer, not a live recount.
+```
+
+After:
+
+```rust
+/// Counts the monsters that join the battle; the battle order starts with none
+/// defeated.
+///
+/// Original: combatsetup
+```
 
 ### Replacing execution machinery
 
@@ -374,7 +533,7 @@ natural attacker is replaced by Thunder MD 7 (firearm 70), keeping the replaced
 enemy's 26/26 health because battle setup normally rolls it. After five
 `EndTurn`s, `RunEnemyTurn` acts for body 10.
 
-- `runtime::actor_turns` passes `native_work.loaded_item_field32` as the
+- `runtime::actor_turns` passes `globals.loaded_item_field32` as the
   work-item context. That is the last item a *player* loaded, and
   `enemy_weapons::ammo_id` uses it to choose the enemy's ammunition.
 - `runtime::enemy_actions` draws against `firearm_chance` (`enemy_actions.rs`
@@ -445,45 +604,3 @@ and handler behavior. The following checks require a user-operated desktop:
   - error messages reworded for equipment wear and generated stock;
   - heat, cold, psionic and atomic natural attacks against warriors;
   - the desktop `--audit-log` trace output.
-
-Schema21 distinguishes initial NPC turn returns from advancement and admits the original signed item mode/WORD power domain. Schema20 frames keep the advancement default; earlier documents cannot claim the new continuations. Readers accept versions1 through21 with ordered compatibility validation.
-
-Retained health work belongs to `story_health` and `NativeWorkContext`. Fresh work copies initialized DATA; Session consumers use the fallible retained accessor, while the public record-only helper keeps its existing default contract. A command epilogue may refresh known work but must not convert absent legacy work into a fabricated origin.
-
-Calendar recovery and food consumption belong to `time/recovery.rs`; clock and schedule routing stay in `time.rs`. Recovery emits deterministic original status feedback and returns immediately after mission defeat. Keep native presentation addresses in the feedback owner and preserve heal/partyloss effect order.
-
-Schema24 keeps zero-time calendar return ownership in `time::zero`: the parent
-cursor and locals survive while its instruction record is replaced by the final
-shared child DOOR. The ordinary positive-time recovery continuation stays separate.
-`NativeWorkContext::ready` records supported outdoor writers; unrecovered tactical
-histories are unknown. Presentation reads the same admission as replay.
-
-While combat is live, `Combat::ready` owns WORD438760. Session-level writers use
-`set_ready`; record/turn/cast owners update the live copy at their recovered
-write boundaries. Teardown carries that global value instead of a parent snapshot.
-Schema25 keeps older omitted tactical values unknown.
-
-Death scripts use the shared exploration interpreter; `runtime::death` owns
-their queue and return frames. A death caller saves only DOOR actions/parameters,
-so its suspended record follows the child's shared header and level byte. Keep
-the loop and early/normal return retention points together. See
-[death script returns](death-script-returns.md).
-
-Literal queue/callback bytes belong to `NativeWorkContext::death_processing`,
-not the lifetime of `DeathStory` or `DeathQueue::processing`. New queue calls and
-resumed local scans have different writer boundaries. `story_combat` reads the
-actual queue byte before selecting a live or retained origin; keep missing
-history explicit. See [death processing work](death-processing-context.md).
-
-Death callback refresh belongs to `runtime::death_return`. Its rule-side item
-loads and firing-mode correction read current initiative, not the saved attacker.
-`combat::retained::InitiativeWork` holds the native order/cursor after teardown;
-a live Combat owns those WORDs while present. Keep compatibility-only record
-helpers separate from Session callers that have literal processing/Ready work.
-
-Shared neighbor rows and the body-list/party-mask alias belong to
-`combat::neighbor_work`. The caller owns its local loop count and cursor;
-`NativeWorkContext` retains the globals through teardown. Session work entry
-points supply the selected warrior and shared mask explicitly. Record-only
-helpers keep their existing contracts. Do not reconstruct a before-move row
-from the current map or restore a parent copy after a child call.

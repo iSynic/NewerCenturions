@@ -200,19 +200,19 @@ fn replacement_firearm_preparation_shot_and_refill_match_four_native_callers() {
         state.phase = Phase::Combat;
         let mut combat = support::battle();
         combat.battle = 85;
-        combat.map.tiles = tiles;
-        combat.squad.positions.fill((20, 10));
-        combat.enemies.records = vec![MonsterRecord {
+        combat.field.tiles = tiles;
+        combat.squad.pos.fill((20, 10));
+        combat.roster.records = vec![MonsterRecord {
             bytes: case["prepared"].bytes("target"),
         }];
-        combat.enemies.positions = vec![(20, 20)];
-        combat.order = order;
+        combat.roster.mon_pos = vec![(20, 20)];
+        combat.battle_order = order;
         state.combat = Some(combat);
         state.random = RandomState::new(12);
         let events = runtime::player_shoot_action(&mut state, &content, 10).unwrap();
         assert_party(&state.warriors, &case["fired"], &format!("shot{index}"));
         support::native_expect! {
-            bytes &current_combat(&state).enemies.records[0].bytes => &case["fired"].bytes("target"), "shot target";
+            bytes &current_combat(&state).roster.records[0].bytes => &case["fired"].bytes("target"), "shot target";
         };
         assert_eq!(state.random.draws, 54);
         support::expect(state.random.seed, &case["fired"]["rng_seed"]);

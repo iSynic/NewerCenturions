@@ -7,12 +7,12 @@ resolvespell and castspell dispatch through range guards on reused temporaries,
 so their domains are not generated here.
 """
 import argparse
-import hashlib
 import json
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from repository import ROOT, data_digest
+
 NEWLAND = "analysis/reconstruction/application-actions-1/001400e4.c"
 ATTACK2 = "analysis/ghidra/m6-exports/attack2.c"
 CASE = r"^{indent}case (\w+):"
@@ -25,7 +25,7 @@ def signed(text):
 
 def source(path):
     data = (ROOT / path).read_bytes()
-    return data.decode("utf-8"), {"path": path, "sha256": hashlib.sha256(data).hexdigest()}
+    return data.decode("utf-8"), {"path": path, "sha256": data_digest(data)}
 
 
 def switch_arms(lines, start, indent):

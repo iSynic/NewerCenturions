@@ -9,34 +9,23 @@ part of the public source.
 
 Desktop integration is tracked separately from source translation. Recovered
 routine coverage does not mean that every original menu or control is connected.
-The runtime correction pass connects original editor feedback, paid/free upgrades,
-warrior information, appearance selection, music playlist toggles and typed combat
-refusals. Native refusal receipts cover the bounded ranged-selection branch;
-ordinary map-click routing remains source-derived until the complete original
-event loop is observed. Live desktop comparison is still required for visual
-parity. Creation, roster, mission-ending and preference handlers are connected;
-their existence does not establish complete interactive or original-game parity.
+Native refusal receipts cover the bounded ranged-selection branch; ordinary
+map-click routing remains source-derived until the complete original event loop
+is observed. Live desktop comparison is still required for visual parity.
+Connected handlers do not by themselves establish complete interactive or
+original-game parity.
 
-## Local implementation checkpoint
+## Current functionality checkpoint
 
-The maintained runtime keeps the compiler split and shared command boundary.
-Schema 14 saves retain readers for versions 1–13. Version 14 moves the party
-mask and health context into the retained native work group, which changes only
-their saved key order. Version 13 adds the original
-retained natural-attack index used by unarmed NPC result audio. Historical saves
-leave that context unknown until an original writer establishes it; the reader
-does not guess an index. Persistent round/death caller
-ownership, retained death queues and script pauses are validated before replacing
-a session; older formats cannot silently admit those new contexts. Version 10 also
-retains outdoor camp/search state, clinic access and interrupted control actions.
-Old saves initialize these new contexts as inactive.
-
-The current repairs connect authored credit chests, retained equipment and NPC
-work, conditioned battle entry, large allies, friendly rifle turns, ordinary
-click reload, natural combat effects, the previously omitted learned powers,
-encounter item returns and original text conversion. The About menu uses its
-original resources, sounds and delay. Creature labels respect their original
-Pascal lengths and the supplied bestiary order.
+The maintained runtime keeps the compiler split and the shared command boundary.
+Saves carry `CURRENT_SCHEMA_VERSION` from `crates/core/src/persistence.rs`, and
+only that version loads; earlier reconstruction saves are refused rather than
+migrated. Original 1.3.2 saves are imported separately. Round and death caller
+ownership, retained death queues, script pauses, outdoor camp/search state,
+clinic access and interrupted control actions are saved and validated before a
+loaded session replaces the current one. Retained work that no original writer
+has established, such as the natural-attack index used by unarmed NPC result
+audio, stays unknown rather than guessed.
 
 The exploration panel uses original PICT 176 and its original control rectangles.
 Inventory, trade, Psi, camp, automatic/active search, rest, healing and contextual
@@ -45,65 +34,39 @@ uses their retained ownership checks rather than requiring an active script.
 Held control loops are bounded and stop retrying after refusals. These connections
 are source-backed compositions of independently compared rule primitives; full
 button-level native comparison and user-operated visual acceptance remain separate.
-Mechanical capture now has shared entry, target, cancellation and saved-state commands. Bounded original transactions compare records, costs, RNG and feedback; whole-click and live presentation parity remain separate.
+Mechanical capture has shared entry, target, cancellation and saved-state
+commands. Bounded original transactions compare records, costs, RNG and feedback;
+whole-click and live presentation parity remain separate.
 
 Six assisted command routes exercise all six Thunder stages, the authored
 conclusion and mission-one reset. Each recording is independently replayed and
 compared with saved suffixes. Assistance is explicit; these checks test
-functionality without requiring unaided campaign completion.
+functionality without requiring unaided campaign completion. The headless
+Thunder checklist is complete at its recorded native/component service
+boundaries. This does not certify complete original-game fidelity or live
+desktop behavior.
 
-The headless Thunder checklist is complete at its recorded native/component
-service boundaries, including the accepted Hive Leader compatibility qualification below.
-This does not certify complete original-game fidelity or live desktop behavior.
-All 35 historical case identities now have executed current ownership or an
-exact independent superseding receipt. Ten original ray-dispatch and six movement-spell controls now compare actual
-commands and saved replay at explicit native service boundaries. Four historical
-occupied-refill controls also run through Move with documented NPC health
-assistance. The source-domain script-entry audit classifies all 26 previously
-unqualified identities without using campaign route absence as proof.
-The two nested-caller cases compare the
-complete captured three-window sequence, retained records, queue/header bytes,
-RNG and ordered feedback. Their controlled service boundaries remain explicit.
-
-At this checkpoint the single ratio was 27,468 test code lines / 110,367
-production code lines (24.8879%). That denominator included the recovered
-execution bodies. `python tools/source_audit.py` now reports the maintained and
-reference layers separately (see `docs/building.md`). Test helpers and
-verification scripts are counted; expanded bodies, generated catalogs, fixtures,
-vendor code and recovery tools are excluded. All frozen native references
-remain intact. New bounded native cases compare natural effects and all 256
-original MacRoman case-fold outputs. A complete original opcode-8 header copy
-now agrees with the actual movement/save path. Original script replacement
-retains the full footer; Click Mouse pauses persist and resume through the
-desktop feedback handler. These are distinct from live observations.
-
-The latest caller pass compares 90 bounded original controls. It corrects rifle
-targeting and retry/Getup ordering, partial reload work, paid portrait-healing
-selection, enemy healing/death feedback, retained attack audio, owned-item
-inspection and battery refits. Three repeated six-route assisted campaign checks
-and the 316-test original-data workspace suite passed. Component and
-source-composed joins are explicitly distinguished from whole original UI runs.
-
-Hive Leader shape zero reads 49 bytes beyond guest RAM/ROM. New bounded original
+Hive Leader shape zero reads 49 bytes beyond guest RAM/ROM. Bounded original
 execution shows that readable host memory can change selection; two unreadable-
-memory controls agree with deterministic empty-mask/zero-fill handling. The owner
-accepted that compatibility policy, closing T-V06 with qualification. Original-Mac
-whole-turn fidelity remains unverified. No host-memory-dependent result or
-compatibility policy is claimed as complete original-game parity.
+memory controls agree with deterministic empty-mask/zero-fill handling. That
+compatibility policy is accepted with qualification. Original-Mac whole-turn
+fidelity remains unverified, and no host-memory-dependent result is claimed as
+original-game parity.
 
-Fresh cold, representative maintained-runtime edit and no-change release
-measurements, compiler version, hardware and memory peaks are recorded in the
-local checkpoint provenance. The gates remain ten minutes cold and two minutes
-incremental. These do not predict hosted runner times. Compiler priority and
-memory guards remain in place.
+Build-time gates are ten minutes cold and two minutes incremental, measured
+locally; they do not predict hosted runner times. Compiler priority and memory
+guards remain in place.
 
-Native file dialogs, fullscreen restoration, held movement and targeting,
-inventory/trade/shops, music/audio, original visuals/help and actual desktop
-resource use require user-operated acceptance. Complete populated Mac save
-import, other genuine scenarios and publishing remain separate work. Experimental
-Linux and macOS builds are available; live acceptance on those platforms remains
-separate from compilation and save roundtrip checks.
-Headless checks do not operate the user's desktop or close live acceptance.
+### Known limitations
+
+- Native file dialogs, fullscreen restoration, held movement and targeting,
+  inventory/trade/shops, music/audio, original visuals/help and actual desktop
+  resource use require user-operated acceptance. Headless checks do not close
+  live acceptance.
+- Complete populated Mac save import and other genuine scenarios remain
+  separate work.
+- Linux and macOS builds are experimental; live acceptance on those platforms
+  is separate from compilation and save round-trip checks.
 
 ## Recovery workflow
 
@@ -297,8 +260,8 @@ fifteen parents cover another 9,239 exported instructions and share one candidat
 call-depth limit and RNG budget. Concrete existing child adapters are connected;
 remaining application children diagnose explicitly rather than return invented
 results. Hidden native stack saves, complete child CPU outputs and some imported
-arithmetic remain qualified projections. See
-[application control evidence](../evidence/source-application-control-actions.md).
+arithmetic remain qualified projections. See the
+application control evidence (`evidence/source-application-control-actions.md`, private checkout).
 
 All 344 cataloged application routines now have provisional source-derived
 Rust bodies; none remain partial or recovery-only in the source catalog.
@@ -307,8 +270,8 @@ instructions. Complete source ownership does not establish a connected
 application. All ninety previously identified direct child targets in that
 final family are now connected through the shared candidate memory/RNG
 boundary. Further dependencies remain, including two children of the newly
-connected drawing routine. See
-[gameplay control evidence](../evidence/source-gameplay-control-actions.md).
+connected drawing routine. See the
+gameplay control evidence (`evidence/source-gameplay-control-actions.md`, private checkout).
 The compiled `items` dispatcher also includes a separately recovered
 2,224-instruction continuation, qualified outside that immutable inventory.
 Its 709-instruction canonical prefix is now a source port; the inventory
@@ -332,7 +295,7 @@ The complete Items source translation composes 45 distinct child targets across
 entry saves retain known masks and diagnose reached unknown aliases. One new
 critical test covers symbolic entry and bounded atomic failure; the queue
 transaction case was rerun because the shared application boundary changed.
-See [Items source evidence](../evidence/source-items-control-actions.md).
+See the Items source evidence (`evidence/source-items-control-actions.md`, private checkout).
 
 Startup, the outer event loop, menu initialization and scenario availability,
 scenario selection/addition/removal, game loading, map display, warrior editing,
@@ -343,7 +306,7 @@ stack/register observations are limited to actual Toolbox and imported library
 boundaries; application logic continues through recovered Rust bodies or a
 reached diagnostic. Default native observations remain unavailable until an
 adapter supplies actual outputs. These are source ports, not native UI parity.
-See [system control evidence](../evidence/source-system-control-actions.md).
+See the system control evidence (`evidence/source-system-control-actions.md`, private checkout).
 
 Attack, secondary attack, casting, enemy detection, collision, combat and combat
 selection, encounter selection, monster movement, area transitions, buttons and
@@ -359,8 +322,8 @@ field and encounter control, text/dialogs, menus, loading/storage, combat displa
 cursor/window, record and profile/filename children. Existing addressed Items
 adapters are reused without entering Items. Native working registers that their
 typed plans do not establish remain unavailable. This adds no routine-coverage
-credit and does not establish complete application integration. See
-[shared gameplay child evidence](../evidence/source-gameplay-child-adapters.md).
+credit and does not establish complete application integration. See the
+shared gameplay child evidence (`evidence/source-gameplay-child-adapters.md`, private checkout).
 
 Thirty-two additional native bodies now retain 2,920 instructions in 426 fixed
 Rust control blocks for spatial/range checks, body and monster handling, sound,
@@ -368,8 +331,8 @@ spell and missile helpers. Existing typed owners and reference cases remain in
 the catalog. Indexed address scales recovered from native instructions correct
 the earlier combat, movement, area and temple translations. These connections
 bring the shared dispatcher to 220 entries; they do not establish a completed
-application or native fidelity. See
-[native gameplay leaf evidence](../evidence/source-gameplay-leaf-actions.md).
+application or native fidelity. See the
+native gameplay leaf evidence (`evidence/source-gameplay-leaf-actions.md`, private checkout).
 Expanded instruction compilation is split across the internal gameplay,
 system and application libraries. The composition library supplies the complete
 routine registry; the maintained runtime receives an explicit object-safe
@@ -380,11 +343,9 @@ targets. Maintained runtime release settings remain unchanged.
 
 The consolidated native-reference runner depends only on the maintained runtime
 and content library. Separate execution-limit tests use four synthetic routines,
-without the production registry. `tools/source_audit.py` enforces the project
-ceiling of 25 percent test code relative to maintained runtime code, including
-test helpers, optional native harnesses and test scripts. Expanded instruction
-bodies, generated catalogs, fixture data and build/recovery code are excluded
-from the production denominator. `tools/Build.ps1` runs this gate before compiling.
+without the production registry. `tools/source_audit.py` enforces the maintained
+test-line ceiling and reports the ratios described in [building and
+testing](building.md). `tools/Build.ps1` runs this gate before compiling.
 
 Campaign checks exercise functionality rather than unaided adventure completion.
 The headless recorder keeps explicit test-only assistance receipts for health,
@@ -404,5 +365,4 @@ acceptance remain open. Weapon-mode W and general inventory/Archives access are
 distinct actions. Camera controls are source-derived; inspected-body information
 and original range presentation still require comparison. The finite control
 audit is tracked alongside the private completion checklist. Mechanical targeting
-has been saved since schema 11. Older saves initialize it as inactive and cannot
-admit it.
+state is saved.

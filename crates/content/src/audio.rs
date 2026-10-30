@@ -1,16 +1,24 @@
-use crate::{ContentError, mission::long, span, word};
+use crate::{ContentError, bytes::long, span, word};
 
 mod ima4;
 mod mace3;
 
+/// A decoded `snd ` resource: raw PCM ready for playback or conversion.
 #[derive(Debug)]
 pub struct Sample {
+    /// One for mono, two for stereo.
     pub channels: u16,
+    /// Sample rate as the resource stores it, an unsigned 16.16 fixed-point number of
+    /// samples per second.
     pub rate_fixed: u32,
+    /// Width of one sample, 8 or 16 bits.
     pub bits_per_sample: u16,
+    /// Interleaved sample bytes; 16-bit samples are little-endian.
     pub samples: Vec<u8>,
 }
 
+/// Decodes a `snd ` resource (plain, extended, IMA4 or MACE 3:1) into PCM. A
+/// command list or header the game never uses is refused.
 pub fn decode_snd(bytes: &[u8]) -> Result<Sample, ContentError> {
     let (command, header_minimum) = match word(bytes, 0)? {
         1 if word(bytes, 2)? == 1 && word(bytes, 4)? == 5 && word(bytes, 10)? == 1 => (12, 20),
@@ -27,7 +35,8 @@ pub fn decode_snd(bytes: &[u8]) -> Result<Sample, ContentError> {
         ));
     }
     let mut offset = long(bytes, command + 4)?;
-    // Supplied format-2 sounds 105/134 retain the format-1 offset after its six-byte header removal.
+    // Supplied format-2 sounds 105 and 134 keep the format-1 offset although
+    // their six-byte header was removed.
     if header_minimum == 14 && offset == 20 && bytes.len() >= 36 {
         let count = long(bytes, 18)?;
         if count > 0 && count as usize == bytes.len() - 36 && bytes[34] == 0 {
@@ -95,6 +104,7 @@ pub fn decode_snd(bytes: &[u8]) -> Result<Sample, ContentError> {
     })
 }
 
+/// Expands a MACE 3:1 compressed sound into mono 16-bit PCM.
 fn decode_mace3(bytes: &[u8], offset: usize, rate_fixed: u32) -> Result<Sample, ContentError> {
     span(bytes, offset, 64)?;
     if long(bytes, offset)? != 0
@@ -135,7 +145,8 @@ fn decode_mace3(bytes: &[u8], offset: usize, rate_fixed: u32) -> Result<Sample, 
 }
 
 impl Sample {
-    /// WAV uses integral sample rates; retain the original 16.16 rate in conversion receipts.
+    /// WAV takes an integral sample rate, so the 16.16 rate is rounded;
+    /// conversion receipts keep the exact rate.
     pub fn wave(&self) -> Vec<u8> {
         let rate = (u64::from(self.rate_fixed) + 32768) / 65536;
         let count = self.samples.len() as u32;

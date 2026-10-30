@@ -127,7 +127,7 @@ fn normal_secret_search_matches_original_full_map_and_rng() {
                     .iter()
                     .filter(|event| matches!(
                         event,
-                        Event::Feedback(centurions_core::feedback::NativeFeedback::ResourceFlash {
+                        Event::Feedback(centurions_core::feedback::GameFeedback::ResourceFlash {
                             resource_id: 138,
                             sound: 5000,
                             ..

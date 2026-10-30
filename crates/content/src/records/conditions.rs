@@ -1,5 +1,6 @@
-/// Condition slots are shared by warrior WORDs and enemy signed BYTEs. Names
-/// follow Cargo Pod STR#133; blank original labels use their observed rule role.
+/// The forty condition slots, held as words by warriors and signed bytes by
+/// monsters. Names follow Cargo Pod STR#133; a slot with a blank label is named
+/// for what the rules do with it.
 #[derive(Clone, Copy)]
 #[repr(usize)]
 pub enum Condition {
@@ -10,7 +11,7 @@ pub enum Condition {
     Regenerating = 4,
     ScanBlocked = 5,
     MovingSlowly = 6,
-    UnlabelledDefensePenalty = 7,
+    ShieldedFromHits = 7,
     SeventhLevelProtection = 22,
     Speedy = 23,
     ComputerControl = 25,

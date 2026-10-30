@@ -32,7 +32,7 @@ fn calendar_content(schedule: Vec<u8>) -> Content {
                 floor: vec![1; 8100],
                 objects: vec![0; 8100],
                 events: vec![0; 8100],
-                tile_properties: properties,
+                map_stats: properties,
                 terrain: 2,
                 default_tile: 0,
                 minutes_per_tick: 5,
@@ -84,7 +84,7 @@ fn calendar_save_resume_preserves_trigger_history() {
             put(&mut tables.scheduled_scripts, 117 * 42 + offset, value);
         }
         map.regions[..8].copy_from_slice(&[0, 0, 0, 0, 0, 10, 0, 10]);
-        map.tile_properties[42..44].copy_from_slice(&i16::from(!zero).to_be_bytes());
+        map.map_stats[42..44].copy_from_slice(&i16::from(!zero).to_be_bytes());
         let mut state = calendar_state(&content, case["input"].as_str().unwrap(), 23, 55);
         if zero {
             state.exploration.as_mut().unwrap().hour = 24;
@@ -153,17 +153,17 @@ fn hourly_protection_and_word_clock_survive_byte_time_and_saved_commands() {
         (20, 20, -256, i16::MAX, (i16::MAX, 59)),
     ] {
         let map = &mut content.scenario.as_mut().unwrap().maps[0];
-        map.tile_properties[42..44].copy_from_slice(&ticks.to_be_bytes());
+        map.map_stats[42..44].copy_from_slice(&ticks.to_be_bytes());
         let mut state = calendar_state(&content, case["input"].as_str().unwrap(), hour, 59);
         state.exploration.as_mut().unwrap().day = i16::MIN;
-        state.native_work.psi_memory = crate::initial_psi_memory(&state.warriors).unwrap();
-        state.party_buffs[4..6].copy_from_slice(&duration.to_be_bytes());
+        state.globals.define_spells = crate::initial_psi_memory(&state.warriors).unwrap();
+        state.party_condition[4..6].copy_from_slice(&duration.to_be_bytes());
         let path = std::env::temp_dir().join(format!(
             "centurions-hourly-buff-{}-{duration}.json",
             std::process::id()
         ));
         command_resumed(&path, &mut state, &content, Command::Move { dx: 1, dy: 0 });
-        assert_eq!(word(&state.party_buffs, 4).unwrap(), after);
+        assert_eq!(word(&state.party_condition, 4).unwrap(), after);
         let p = state.exploration.as_ref().unwrap();
         assert_eq!((p.day, p.hour, p.minute), (i16::MIN, clock.0, clock.1));
         fs::remove_file(path).unwrap();
@@ -187,17 +187,17 @@ fn command_resumed(
 
 #[test]
 fn terminal_noon_recovery_commits_ordered_feedback_and_stops_after_saved_defeat() {
-    use crate::feedback::NativeFeedback::OutdoorBodyStatus;
+    use crate::feedback::GameFeedback::OutdoorBodyStatus;
     use Event::{Feedback, MissionEnded, Sound};
     let fixture = crate::test_support::fixture("calendar.json");
     let case = &fixture["cases"][0];
     let content = calendar_content(decode(case["schedule_before"].as_str().unwrap()));
     let mut state = calendar_state(&content, case["input"].as_str().unwrap(), 11, 55);
-    let health = &mut state.native_work.health_context;
+    let health = &mut state.globals.health_context;
     health.marks_affected = true;
     for warrior in &mut state.warriors {
         let mut record = warrior.record_mut();
-        record.set_maximum_stamina(i16::MAX);
+        record.set_stamina_max(i16::MAX);
         record.set_stamina(32760);
         put(&mut warrior.bytes, 0x3a, 127);
     }
@@ -223,7 +223,7 @@ fn terminal_noon_recovery_commits_ordered_feedback_and_stops_after_saved_defeat(
     assert!(events.ends_with(&expected), "{events:?}");
     assert_eq!(state.random, random);
     assert_eq!(state.phase, Phase::SquadSelection);
-    let health = state.native_work.health_context;
+    let health = state.globals.health_context;
     assert_eq!(health.last_body, (count - 1) as i16);
     assert_eq!(health.affected[count - 1], 0);
     assert_eq!(health.affected[0], -1);

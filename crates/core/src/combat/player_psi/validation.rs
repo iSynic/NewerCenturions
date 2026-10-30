@@ -1,4 +1,4 @@
-//! Validation for combat/player_psi.
+//! Checking a psi command before it is cast.
 use super::COMBAT_SPELLS;
 use super::{
     CastRequest, Combat, RuleError, can_cast, cost, in_range, lifecycle, mode_allowed, packet,
@@ -6,8 +6,9 @@ use super::{
 };
 use crate::combat::map_alias::MapAliases;
 use centurions_content::mission::OpeningMission;
-use centurions_content::{Warrior, records::AttackPacket};
+use centurions_content::{Warrior, records::SpellInfoRecord};
 
+/// Checks a psi command before it is cast.
 pub fn validate(
     combat: &Combat,
     warriors: &[Warrior],
@@ -25,6 +26,7 @@ pub fn validate(
     )
 }
 
+/// Checks a psi command aimed at a warrior.
 pub fn validate_warrior(
     combat: &Combat,
     warriors: &[Warrior],
@@ -36,7 +38,7 @@ pub fn validate_warrior(
 ) -> Result<(), RuleError> {
     let target = *combat
         .squad
-        .positions
+        .pos
         .get(warrior)
         .ok_or("Psi warrior target missing")?;
     validate_target(
@@ -54,6 +56,9 @@ pub fn validate_warrior(
     )
 }
 
+/// Checks a psi command: a power battle offers at power level 1 to 7, cast by the active warrior
+/// who may cast, knows it and has the psi points, in range and in sight, and aimed at the kind of
+/// target the power takes.
 pub(super) fn validate_target(
     combat: &Combat,
     warriors: &[Warrior],
@@ -86,15 +91,15 @@ pub(super) fn validate_target(
     let packet = packet(mission, request.spell)?;
     if !mode_allowed(&packet, true)? {
         return Err(RuleError::Refused {
-            feedback: vec![crate::feedback::NativeFeedback::Warning { index: 23 }],
+            feedback: vec![crate::feedback::GameFeedback::Warning { index: 23 }],
         });
     }
     if warriors[actor as usize].psi_points()? < cost(&packet, request.power)? {
         return Err(RuleError::Invalid("insufficient psi".into()));
     }
-    if AttackPacket(&packet).targeting_mode() == 7 {
+    if SpellInfoRecord(&packet).is_party_duration() {
         if range(&packet, request.power)? != 0
-            || !(0..10).contains(&AttackPacket(&packet).effect()?)
+            || !(0..10).contains(&SpellInfoRecord(&packet).effect()?)
             || request.target.is_some()
         {
             return Err(RuleError::Invalid(
@@ -103,7 +108,7 @@ pub(super) fn validate_target(
         }
         return Ok(());
     }
-    if matches!(AttackPacket(&packet).targeting_mode(), 9 | 10 | 12) {
+    if SpellInfoRecord(&packet).is_global() {
         if request.target.is_some() {
             return Err(RuleError::Invalid(
                 "global psi spell does not take a point target".into(),
@@ -116,37 +121,34 @@ pub(super) fn validate_target(
         .ok_or_else(|| RuleError::Invalid("psi point target missing".into()))?;
     let from = *combat
         .squad
-        .positions
+        .pos
         .get(actor as usize)
         .ok_or_else(|| RuleError::Invalid("psi caster position missing".into()))?;
     if !in_range(from, target, range(&packet, request.power)?) {
         return Err(RuleError::Refused {
-            feedback: vec![crate::feedback::NativeFeedback::Combat {
+            feedback: vec![crate::feedback::GameFeedback::Combat {
                 kind: crate::feedback::CombatRefusal::OutOfRange,
             }],
         });
     }
-    let center = (
-        i32::from(target.0) + i32::from(combat.map.shift.0) + 5,
-        i32::from(target.1) + i32::from(combat.map.shift.1) + 5,
-    );
-    if AttackPacket(&packet).base_range() + AttackPacket(&packet).range_per_power() > 0
+    let center = crate::combat::records::grid_point(target, combat.field.map_shift);
+    if SpellInfoRecord(&packet).range_base() + SpellInfoRecord(&packet).range_per_power() > 0
         && !lifecycle::can_see(combat, mission, from, target, 0)?
     {
         return Err(RuleError::Refused {
-            feedback: vec![crate::feedback::NativeFeedback::Combat {
+            feedback: vec![crate::feedback::GameFeedback::Combat {
                 kind: crate::feedback::CombatRefusal::Blocked,
             }],
         });
     }
-    if AttackPacket(&packet).targeting_mode() < 2 {
+    if SpellInfoRecord(&packet).target_type() < 2 {
         if let Some(body) = body {
             let warrior = usize::try_from(body)
                 .ok()
                 .and_then(|index| warriors.get(index))
                 .ok_or("Psi warrior target outside party")?;
-            if AttackPacket(&packet).targeting_mode() != 1
-                || warrior.record().active_flag() == 0 && AttackPacket(&packet).effect()? != 64
+            if SpellInfoRecord(&packet).target_type() != 1
+                || warrior.record().in_battle() == 0 && SpellInfoRecord(&packet).effect()? != 64
             {
                 return Err(RuleError::Refused { feedback: vec![] });
             }
@@ -155,10 +157,10 @@ pub(super) fn validate_target(
         }
         return Ok(());
     }
-    let shape = match AttackPacket(&packet).targeting_mode() {
+    let shape = match SpellInfoRecord(&packet).target_type() {
         3 => {
-            usize::from(AttackPacket(&packet).area_shape())
-                + if AttackPacket(&packet).has_randomized_animation() {
+            usize::from(SpellInfoRecord(&packet).area_size())
+                + if SpellInfoRecord(&packet).can_rotate() {
                     usize::from(request.rotation)
                 } else {
                     0
@@ -173,13 +175,13 @@ pub(super) fn validate_target(
     let area = centurions_content::span(&mission.areas, (shape - 1) * 49, 49)?;
     for y in 0..7 {
         for x in 0..7 {
-            // spelltargets indexes MULU.W column*90 plus a signed row, so a row past
-            // either edge reads the neighbouring column or the memory beside the map.
+            // The map is read as an unsigned column × 90 plus a signed row, so a row
+            // past either edge reads the next column or what lies beside the map.
             let column = i32::from((center.0 - 3 + x as i32) as i16 as u16);
             let index = column * 90 + (center.1 - 3 + y as i32);
             if request.spell == 1305 && area[y * 7 + x] != 0 {
                 let body = aliases
-                    .read(&combat.map, index)?
+                    .read(&combat.field, index)?
                     .ok_or(RuleError::Unsupported {
                         action: "combat.player_psi",
                         dependency: "spell area outside the map and the represented memory beside it",
@@ -194,20 +196,21 @@ pub(super) fn validate_target(
     Ok(())
 }
 
+/// The body in a cell, if it is a warrior in the battle or a monster still standing.
 pub(crate) fn selected_body(
     combat: &Combat,
     warriors: &[Warrior],
     target: (i16, i16),
 ) -> Result<i16, RuleError> {
     let cell = OpeningMission::index(
-        i32::from(target.0 + combat.map.shift.0 + 5),
-        i32::from(target.1 + combat.map.shift.1 + 5),
+        i32::from(target.0 + combat.field.map_shift.0 + 5),
+        i32::from(target.1 + combat.field.map_shift.1 + 5),
     )?;
-    let body = combat.map.tiles[cell].wrapping_abs();
+    let body = combat.field.tiles[cell].wrapping_abs();
     if (0..warriors.len() as i16).contains(&body)
-        && warriors[body as usize].record().active_flag() != 0
-        || (10..10 + combat.enemies.records.len() as i16).contains(&body)
-            && combat.enemies.records[(body - 10) as usize]
+        && warriors[body as usize].record().in_battle() != 0
+        || (10..10 + combat.roster.records.len() as i16).contains(&body)
+            && combat.roster.records[(body - 10) as usize]
                 .record()
                 .stamina()?
                 > 0

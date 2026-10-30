@@ -4,6 +4,8 @@ use crate::assets::Assets;
 use centurions_content::{ContentError, Warrior};
 use macroquad::prelude::*;
 
+/// Fills the scenario text's ^1 through ^6 with the squad members' names; the
+/// name of a warrior who has fallen is replaced by the last one still standing.
 pub(crate) fn authored_text(text: &str, warriors: &[Warrior]) -> String {
     let mut text = text.to_owned();
     for index in 0..warriors.len() {
@@ -19,6 +21,7 @@ pub(crate) fn authored_text(text: &str, warriors: &[Warrior]) -> String {
     }
     text
 }
+/// Draws a labelled button, grey when it is not available, and adds its control.
 pub(super) fn button(
     assets: &Assets,
     controls: &mut Vec<Control>,
@@ -56,6 +59,7 @@ pub(super) fn button(
         enabled,
     });
 }
+/// A statistic's value as text, or "?" when the record cannot supply it.
 pub(super) fn field(value: Result<i16, ContentError>) -> String {
     value.map(|v| v.to_string()).unwrap_or_else(|_| "?".into())
 }

@@ -15,10 +15,10 @@ fn added_sounds(before: &Value, after: &Value) -> Vec<i16> {
 }
 use support::compare_party as assert_party;
 
-fn work(snapshot: &Value) -> WeaponWork {
+fn work(snapshot: &Value) -> WeaponTraits {
     let weapon = snapshot.bytes("weapon");
     let ammo = snapshot.bytes("ammo");
-    WeaponWork {
+    WeaponTraits {
         natural_attack_index: 0,
         sound: word(&weapon, 14).unwrap(),
         weapon_armor_filter: word(&weapon, 136).unwrap(),
@@ -36,7 +36,7 @@ fn state(fixture: &Value, snapshot: &Value) -> Session {
     state.crate_items = support::inventory(&snapshot.bytes("crate"));
     state.ammunition = stock(snapshot);
     state.random = random(snapshot);
-    state.native_work.weapon_work = work(snapshot);
+    state.globals.weapon_traits = work(snapshot);
     state
 }
 
@@ -109,15 +109,15 @@ fn earned_pair_profiles_and_serial_collection_wear_fit_match_complete_native_rec
         state.warriors[member] = fitted.warrior;
         state.ammunition = fitted.ammunition;
         state
-            .native_work
-            .weapon_work
+            .globals
+            .weapon_traits
             .load_ammunition(&content.items[201])
             .unwrap();
         assert_party(&state.warriors, &stage["fitted"]);
         assert_eq!(state.ammunition, stock(&stage["fitted"]));
         assert_eq!(state.random, random(&stage["fitted"]));
         assert_eq!(
-            support::psi_frame::captured_work(state.native_work.weapon_work),
+            support::psi_frame::captured_work(state.globals.weapon_traits),
             work(&stage["fitted"])
         );
         compare_receipts(&initial, &stage["fitted"], &stage["compacted"]);

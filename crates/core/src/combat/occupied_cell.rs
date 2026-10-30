@@ -1,9 +1,11 @@
-//! Occupied-cell reload continuation from combatchoice.
+//! Reloading when a warrior clicks a cell another body holds.
 use crate::combat::runtime;
 use crate::feedback::{ERROR_SOUND, OUT_OF_AMMUNITION_WARNING};
 use crate::{Event, RuleError, Session};
 use centurions_content::Content;
 
+/// Starts the active warrior's move against a cell held by a living foe, when the warrior has at
+/// least two attacks left. A friend, a dead body or anything else is not supported.
 pub(super) fn reload_at_occupied_cell(
     state: &mut Session,
     content: &Content,
@@ -27,10 +29,10 @@ pub(super) fn reload_at_occupied_cell(
     if member.record().stamina()? <= 0 {
         return Err(refuse("actor has no stamina"));
     }
-    if member.record().active_flag() != 1 {
+    if member.record().in_battle() != 1 {
         return Err(refuse("actor is not active"));
     }
-    if member.record().action_points()? < 2 {
+    if member.record().attacks()? < 2 {
         return Err(refuse("actor has fewer than two action points"));
     }
     let (faction, living) = if let Some(target) = usize::try_from(target)
@@ -39,15 +41,15 @@ pub(super) fn reload_at_occupied_cell(
     {
         (
             target.record().faction()?,
-            target.record().stamina()? > 0 && target.record().active_flag() != 0,
+            target.record().stamina()? > 0 && target.record().in_battle() != 0,
         )
-    } else if let Some(enemy) = usize::try_from(target - 10)
+    } else if let Some(monster) = usize::try_from(target - 10)
         .ok()
-        .and_then(|target| combat.enemies.records.get(target))
+        .and_then(|target| combat.roster.records.get(target))
     {
         (
-            enemy.record().faction()?,
-            !enemy.record().removed() && enemy.record().stamina()? > 0,
+            monster.record().faction()?,
+            !monster.record().removed() && monster.record().stamina()? > 0,
         )
     } else {
         return Err(refuse("no body at target"));
@@ -67,6 +69,9 @@ pub(super) fn reload_at_occupied_cell(
     )
 }
 
+/// Reloads or fires the equipped firearm against the occupied cell. A loaded weapon fires.
+/// Otherwise the weapon is prepared, the ammunition is refitted, and a warrior who cannot refit
+/// hears the error sound and is told the ammunition is out.
 pub(super) fn resume_reload(
     state: &mut Session,
     content: &Content,
@@ -96,38 +101,38 @@ pub(super) fn resume_reload(
     let equipped = state.warriors[actor]
         .inventory()?
         .iter()
-        .find(|item| item.id() == weapon_id && item.equipment_flag() == 1)
+        .find(|item| item.id() == weapon_id && item.equipped() == 1)
         .cloned()
         .ok_or_else(|| refuse("no equipped weapon"))?;
-    if !state.warriors[actor].record().firing_mode() {
+    if !state.warriors[actor].record().toggle() {
         return Err(refuse("actor is not in firing mode"));
     }
     let weapon = crate::ammunition::definition(content, weapon_id)?;
-    if equipped.quantity()?
+    if equipped.charge()?
         >= centurions_content::records::ItemDefinition(&weapon).rounds_per_shot()?
     {
         let mut effects = effects;
         effects.extend(runtime::player_shoot(state, content, target)?);
         return Ok(effects);
     }
-    state.native_work.attack_count = 0;
-    // prepattack14c7be returns before loading ammunition only for an empty
-    // magazine. A partial burst retains its prepared packet even on refusal.
-    if equipped.quantity()? != 0 {
+    state.globals.attack_count = 0;
+    // Only an empty magazine stops before ammunition loads; a partial burst keeps
+    // its prepared attack even when refused.
+    if equipped.charge()? != 0 {
         let ammunition = crate::ammunition::definition(content, equipped.ammunition_id()?)?;
         let prepared =
             crate::combat::firearm::prepare(&state.warriors[actor], &weapon, &ammunition, attacks)?;
         state
-            .native_work
-            .ammunition_work
+            .globals
+            .loaded_items
             .prepare_pair(&weapon, &ammunition)?;
-        combat.weapon_work.prepare(&weapon, &ammunition)?;
-        state.native_work.attack_count = prepared.shots;
-        state.native_work.attack_packet = prepared.packet.clone();
-        combat.attack_packet = prepared.packet;
+        combat.weapon_traits.prepare(&weapon, &ammunition)?;
+        state.globals.attack_count = prepared.shots;
+        state.globals.spell_info = prepared.packet.clone();
+        combat.spell_info = prepared.packet;
     } else {
-        combat.weapon_work.load_weapon(&weapon)?;
-        state.native_work.ammunition_work.weapon = Some(weapon);
+        combat.weapon_traits.load_weapon(&weapon)?;
+        state.globals.loaded_items.weapon = Some(weapon);
     }
     let refit = crate::ammunition::refit_with_record(
         &state.warriors[actor],
@@ -139,16 +144,16 @@ pub(super) fn resume_reload(
             silent: true,
             warnings: false,
         },
-        &state.native_work.ammunition_work,
+        &state.globals.loaded_items,
         &mut state.random,
-        Some(&state.native_work.inventory_record),
+        Some(&state.globals.inventory_record),
     )?;
     let completed = refit.completed_refit();
     effects.extend(crate::ammunition::commit_result(state, actor, refit)?);
     if !completed {
-        state.set_ready(0);
-        state.native_work.walking_confusion = 0;
-        state.warriors[actor].record_mut().set_automatic_mode(0);
+        state.set_in_spell(0);
+        state.globals.possessed = 0;
+        state.warriors[actor].record_mut().set_computer_control(0);
         effects.push(Event::Sound {
             resource_id: ERROR_SOUND,
         });

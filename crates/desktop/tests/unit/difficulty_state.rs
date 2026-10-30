@@ -103,7 +103,7 @@ fn scenario_selection_and_archive_children_use_the_application_handlers() {
     driver.act(ApplicationAction::CreatureItem(4));
     assert!(driver.app.creature.is_none());
     // beast103ebe copies the viewed record into MONSTER work.
-    before.native_work.monster_work = driver.state.native_work.monster_work.clone();
+    before.globals.monster_pick = driver.state.globals.monster_pick.clone();
     assert_eq!(driver.state, before);
     driver.state.exploration.as_mut().unwrap().presentation =
         Some(Presentation::Prologue { resource_id: 1000 });
@@ -126,20 +126,20 @@ fn scenario_selection_and_archive_children_use_the_application_handlers() {
         Some(Event::Sound { resource_id: 30005 })
     );
     assert!(ui.feedback_input(1.1, true));
-    assert!(!ui.feedback.is_empty());
+    assert!(!ui.feedback.queue.is_empty());
     assert!(ui.feedback_input(1.3, true));
-    assert!(ui.feedback.is_empty());
+    assert!(ui.feedback.queue.is_empty());
     let events = driver.command(Command::Continue);
     assert!(events.iter().any(|event| matches!(
         event,
-        Event::Feedback(centurions_core::feedback::NativeFeedback::Flash {
+        Event::Feedback(centurions_core::feedback::GameFeedback::Flash {
             address: 0x401c28,
             ..
         })
     )));
     let before = driver.state.clone();
     driver.act(ApplicationAction::Menu(200, 4));
-    assert!(driver.app.note.is_some());
+    assert!(driver.app.notes.open.is_some());
     driver.act(ApplicationAction::CloseNote);
     assert_eq!(driver.state, before);
 }
@@ -300,8 +300,9 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
         (21, 10, 5),
     ] {
         let (_, events) = driver.act(ApplicationAction::Menu(135, item));
+        let audio = &driver.app.audio;
         assert_eq!(
-            (driver.app.volume, driver.app.music_volume, driver.app.sound),
+            (audio.volume, audio.music_volume, audio.sound),
             (effects, music, effects != 0)
         );
         assert_eq!(
@@ -314,19 +315,20 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
         );
     }
     assert_eq!(driver.state, untouched);
-    let before = driver.app.native_preferences.clone();
+    let before = driver.app.preferences.clone();
     driver.act(ApplicationAction::Menu(137, 3));
     driver.act(ApplicationAction::PreferenceItem(15));
     driver.act(ApplicationAction::PreferenceCancel);
-    assert_eq!(driver.app.native_preferences, before);
+    assert_eq!(driver.app.preferences, before);
     driver.act(ApplicationAction::Menu(137, 3));
     for item in [12, 13, 14, 15, 16, 17, 21, 2] {
         driver.act(ApplicationAction::PreferenceItem(item));
     }
     let mut restored = Application::at(Screen::Title, 0.);
     restored.preferences(path.clone()).unwrap();
-    assert_eq!((restored.volume, restored.music_volume), (10, 5));
-    assert_eq!(restored.native_preferences, driver.app.native_preferences);
+    let audio = &restored.audio;
+    assert_eq!((audio.volume, audio.music_volume), (10, 5));
+    assert_eq!(restored.preferences, driver.app.preferences);
     assert!(matches!(
         driver.app.command(Command::Continue),
         Command::WithPreferences {
@@ -361,8 +363,8 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
     friendly.warriors[actor].bytes[0xca..0xcc].fill(0);
     let target = (actor + 1) % friendly.warriors.len();
     let combat = friendly.combat.as_mut().unwrap();
-    let (x, y) = combat.squad.positions[actor];
-    combat.squad.positions[target] = (x + 1, y);
+    let (x, y) = combat.squad.pos[actor];
+    combat.squad.pos[target] = (x + 1, y);
     let faction = friendly.warriors[actor].bytes[0x10..0x12].to_vec();
     friendly.warriors[target].bytes[0x10..0x12].copy_from_slice(&faction);
     driver.app.observe(&[Event::FriendAttackOffered {
@@ -376,7 +378,7 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
             &driver.content,
         )
         .unwrap();
-    assert!(driver.app.exchange_offer.is_none());
+    assert!(driver.app.questions.exchange_offer.is_none());
     let mut expected = friendly.clone();
     let expected_events = apply(
         Command::AttackFriend {
@@ -399,20 +401,17 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
         .unwrap();
     assert_eq!(friendly, expected);
     assert_eq!(events, expected_events);
-    assert!(driver.app.exchange_offer.is_none());
+    assert!(driver.app.questions.exchange_offer.is_none());
     driver.state.warriors[0].bytes[0x9de] = 1;
     let notices = driver.app.combat_notices(Some(-1), &driver.state);
     assert!(notices.iter().all(|e| matches!(
         e,
-        Event::Feedback(centurions_core::feedback::NativeFeedback::Sound { resource_id: -139 })
+        Event::Feedback(centurions_core::feedback::GameFeedback::Sound { resource_id: -139 })
     )));
-    restored.native_preferences.controls[4] = false;
-    restored.native_preferences.controls[5] = false;
-    assert!(
-        restored
-            .combat_notices(driver.state.combat.as_ref().map(|c| c.round), &driver.state)
-            .is_empty()
-    );
+    restored.preferences.controls[4] = false;
+    restored.preferences.controls[5] = false;
+    let round = driver.state.combat.as_ref().map(|c| c.combat_round);
+    assert!(restored.combat_notices(round, &driver.state).is_empty());
     let mut ui = UiState::default();
     let mut events: Vec<_> = (0..3).map(|_| Event::Sound { resource_id: -139 }).collect();
     events.push(Event::Sound { resource_id: 138 });
@@ -421,17 +420,17 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
     assert!(!events.iter().any(sound), "round audio would play twice");
     for event in events {
         if let Event::Feedback(feedback) = event {
-            ui.feedback.push_back(feedback);
+            ui.feedback.queue.push_back(feedback);
         }
     }
     for frame in 0..60 {
         if ui.feedback_sound(f64::from(frame)).is_some() {
-            ui.feedback_until = f64::from(frame) + 0.5;
+            ui.feedback.until = f64::from(frame) + 0.5;
         }
         ui.feedback_input(f64::from(frame), true);
     }
     assert!(
-        ui.feedback.is_empty() && ui.persistent_feedback.is_none(),
+        ui.feedback.queue.is_empty() && ui.feedback.persistent.is_none(),
         "round notice did not close"
     );
     let actor = driver.state.combat.as_ref().unwrap().active_body().unwrap() as usize;
@@ -440,16 +439,17 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
             .copy_from_slice(&value.to_be_bytes());
     }
     let random = driver.state.random.clone();
-    let turn = driver.state.combat.as_ref().unwrap().cursor;
+    let index = |state: &Session| state.combat.as_ref().unwrap().battle_order_index;
+    let turn = index(&driver.state);
     let events = driver.command(Command::AutomaticBandage);
     assert_eq!(driver.state.warriors[0].bytes[0x9de], 0);
     assert_eq!(word(&driver.state.warriors[actor].bytes, 0x40).unwrap(), 0);
     assert_eq!(driver.state.random, random);
-    assert_eq!(driver.state.combat.as_ref().unwrap().cursor, turn);
+    assert_eq!(index(&driver.state), turn);
     assert!(matches!(
         events.first(),
         Some(Event::Feedback(
-            centurions_core::feedback::NativeFeedback::Flash {
+            centurions_core::feedback::GameFeedback::Flash {
                 address: 0x403cd6,
                 ..
             }
@@ -492,9 +492,9 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     assert!(!driver.app.editing);
     driver.act(ApplicationAction::Menu(136, 8));
     let (_, events) = driver.act(ApplicationAction::EditorAnswer(true));
-    use centurions_core::feedback::NativeFeedback;
+    use centurions_core::feedback::GameFeedback;
     let expected = [0x40361a, 0x4035fa, 0x4035be].map(|address| {
-        Event::Feedback(NativeFeedback::Flash {
+        Event::Feedback(GameFeedback::Flash {
             address,
             x: 50,
             y: 50,
@@ -505,7 +505,7 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     assert_eq!(events, expected);
     inventory_reference::compare_editor_data(&driver.content, &root);
     let mut ui = crate::presentation::UiState::default();
-    ui.feedback.extend(expected.into_iter().map(|event| {
+    ui.feedback.queue.extend(expected.into_iter().map(|event| {
         let Event::Feedback(feedback) = event else {
             unreachable!()
         };
@@ -519,11 +519,11 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
         assert!(ui.feedback_input(time + 0.1, true));
         assert!(ui.feedback_input(time + 0.3, true));
     }
-    assert!(ui.feedback.is_empty());
+    assert!(ui.feedback.queue.is_empty());
     let (_, events) = driver.act(ApplicationAction::Menu(136, 8));
     assert_eq!(
         events,
-        [Event::Feedback(NativeFeedback::Flash {
+        [Event::Feedback(GameFeedback::Flash {
             address: 0x403686,
             x: 50,
             y: 50,
@@ -542,7 +542,7 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
         }
         driver.act(ApplicationAction::EditorItem(item));
         let mut scope = driver.state.clone();
-        scope.native_work = before.native_work.clone();
+        scope.globals = before.globals.clone();
         assert_eq!(scope, before);
         if matches!(item, 82 | 83) {
             assert_eq!(driver.editor().draft.warriors, before.warriors);
@@ -589,7 +589,7 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     assert_eq!(driver.state, before_scans);
     driver.act(ApplicationAction::EditorItem(4));
     assert_eq!(&driver.state.warriors[1].bytes[0x9f0..0x9f2], &[0, 1]);
-    let memory = |state: &Session| state.native_work.psi_memory.clone();
+    let memory = |state: &Session| state.globals.define_spells.clone();
     assert_eq!(
         memory(&driver.state)[80..160],
         driver.state.warriors[1].bytes[0xa76..0xac6]
@@ -680,9 +680,9 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     assert_eq!(word(&driver.state.warriors[1].bytes, 0x56).unwrap(), 9258);
     let unchanged = driver.state.clone();
     driver.act(ApplicationAction::Menu(145, 10));
-    assert_eq!(driver.app.music_request, Some(20128));
+    assert_eq!(driver.app.audio.music_request, Some(20128));
     driver.act(ApplicationAction::Playlist(0));
-    assert!(!driver.app.playlist[0]);
+    assert!(!driver.app.audio.playlist[0]);
     assert_eq!(driver.state, unchanged);
     let seed = driver.state.random.clone();
     driver.act(ApplicationAction::OpenInformation(0));
@@ -784,7 +784,7 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
         };
         apply(command, &mut state, &content).unwrap();
     }
-    assert_eq!(state.native_work.inventory_record, record);
+    assert_eq!(state.globals.inventory_record, record);
     let drag = ui.inventory.release(Some(vec2(500., 50.))).unwrap();
     let Some(Action::Command(command)) = ui
         .resolve_inventory(Some(Action::Inventory(drag)), &state, &content, 2.)

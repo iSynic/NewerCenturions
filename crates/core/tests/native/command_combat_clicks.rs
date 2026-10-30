@@ -1,7 +1,7 @@
 use crate::{prelude::*, support};
 use centurions_core::{
     combat::click_command,
-    feedback::{CombatRefusal, NativeFeedback},
+    feedback::{CombatRefusal, GameFeedback},
 };
 
 // Protects ordinary map-click routing and distinct native range, obstruction and ammunition refusals.
@@ -17,24 +17,24 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         let mut state = support::mission_session(&content);
         state.phase = Phase::Combat;
         state.warriors = vec![Warrior::read(&case.bytes("before")).unwrap(); 6];
-        let mut enemy = content.map(0).unwrap().combat.as_ref().unwrap().monsters
+        let mut monster = content.map(0).unwrap().combat.as_ref().unwrap().monsters
             [13 * MONSTER_BYTES..14 * MONSTER_BYTES]
             .to_vec();
-        enemy[14..16].copy_from_slice(
+        monster[14..16].copy_from_slice(
             &word(&state.warriors[0].bytes, 0x10)
                 .unwrap()
                 .wrapping_add(1)
                 .to_be_bytes(),
         );
-        enemy[0x110..0x112].copy_from_slice(&100_i16.to_be_bytes());
-        enemy[0xb0] = 0;
+        monster[0x110..0x112].copy_from_slice(&100_i16.to_be_bytes());
+        monster[0xb0] = 0;
         let target = (case.n::<i16>("target_x"), 20);
         let mut combat = support::battle();
-        combat.map.tiles = case.words("map_before");
-        combat.squad.positions = vec![(20, 20); 6];
-        combat.enemies.records = vec![MonsterRecord { bytes: enemy }];
-        combat.enemies.positions = vec![target];
-        combat.order[1..3].copy_from_slice(&[0, 10]);
+        combat.field.tiles = case.words("map_before");
+        combat.squad.pos = vec![(20, 20); 6];
+        combat.roster.records = vec![MonsterRecord { bytes: monster }];
+        combat.roster.mon_pos = vec![target];
+        combat.battle_order[1..3].copy_from_slice(&[0, 10]);
         state.combat = Some(combat);
         crate::native_common::source_victory_context(&mut state);
         let random = state.random.clone();
@@ -56,21 +56,21 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         let replay = serde_json::from_str(&serde_json::to_string(&command).unwrap()).unwrap();
         let events = apply(replay, &mut state, &content).unwrap();
         // The target key's firstt(76, 77) precedes its refusals (combatchoice 11b026).
-        let mut expected = vec![Event::Feedback(NativeFeedback::Tutorial {
+        let mut expected = vec![Event::Feedback(GameFeedback::Tutorial {
             first: 76,
             last: 77,
         })];
         if refusal == CombatRefusal::NotEnoughAmmo {
-            expected.push(Event::Feedback(NativeFeedback::Tutorial {
+            expected.push(Event::Feedback(GameFeedback::Tutorial {
                 first: 78,
                 last: 78,
             }));
         }
-        expected.push(Event::Feedback(NativeFeedback::Combat { kind: refusal }));
+        expected.push(Event::Feedback(GameFeedback::Combat { kind: refusal }));
         assert_eq!(events, expected, "{}", case.text("case"));
         assert_eq!(state.warriors[0].bytes, case.bytes("after"));
-        assert_eq!(current_combat(&state).map.tiles, case.words("map_after"));
-        assert_eq!(current_combat(&state).cursor, 1);
+        assert_eq!(current_combat(&state).field.tiles, case.words("map_after"));
+        assert_eq!(current_combat(&state).battle_order_index, 1);
         assert_eq!(state.random, random);
     }
     // Protects native burst and area shots, ammunition costs and party damage.
@@ -80,20 +80,20 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         state.phase = Phase::Combat;
         state.warriors = support::warriors(&case.bytes("before"));
         let mut arena = support::battle();
-        arena.order[1] = 0;
-        arena.squad.positions.fill((20, 20));
-        arena.squad.positions[1] = (21, 20);
-        arena.squad.positions[2] = (21, 21);
-        arena.map.tiles.fill(1155);
-        let mut enemy = MonsterRecord::read(
+        arena.battle_order[1] = 0;
+        arena.squad.pos.fill((20, 20));
+        arena.squad.pos[1] = (21, 20);
+        arena.squad.pos[2] = (21, 21);
+        arena.field.tiles.fill(1155);
+        let mut monster = MonsterRecord::read(
             &content.map(0).unwrap().combat.as_ref().unwrap().monsters,
             13,
         )
         .unwrap();
-        enemy.bytes[0x110..0x112].copy_from_slice(&1000_i16.to_be_bytes());
-        enemy.bytes[14..16].copy_from_slice(&1_i16.to_be_bytes());
-        arena.enemies.records.push(enemy);
-        arena.enemies.positions.push((40, 40));
+        monster.bytes[0x110..0x112].copy_from_slice(&1000_i16.to_be_bytes());
+        monster.bytes[14..16].copy_from_slice(&1_i16.to_be_bytes());
+        arena.roster.records.push(monster);
+        arena.roster.mon_pos.push((40, 40));
         state.combat = Some(arena);
         crate::native_common::source_victory_context(&mut state);
         let targets = case.n::<Vec<i16>>("targets");
@@ -115,9 +115,9 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         state.random = RandomState::new(case.n("seed_before"));
         if let Some(location) = case.get("location").and_then(|value| value.as_array()) {
             let c = state.combat.as_mut().unwrap();
-            c.map.tiles[25 * 90 + 25] = 0;
-            c.map.tiles[26 * 90 + 25] = 1;
-            c.map.tiles[26 * 90 + 26] = 2;
+            c.field.tiles[25 * 90 + 25] = 0;
+            c.field.tiles[26 * 90 + 25] = 1;
+            c.field.tiles[26 * 90 + 26] = 2;
             apply(
                 Command::ShootAt {
                     x: location[0].as_i64().unwrap() as i16,
@@ -137,7 +137,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
             apply(Command::FireSelectedTargets, &mut state, &content).unwrap();
         }
         assert_eq!(
-            current_combat(&state).attack_packet,
+            current_combat(&state).spell_info,
             case.bytes("packet")
         );
         support::compare_record_bytes(&state.warriors, &expected);
@@ -164,20 +164,20 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         state.warriors[actor].bytes[0x40..0x42].copy_from_slice(&5_i16.to_be_bytes());
         state.random = RandomState::new(case.n("seed_before"));
         let mut battle = support::battle();
-        battle.order[1] = actor as i16;
-        battle.squad.positions[0] = (20, 20);
-        battle.squad.positions[1] = (21, 20);
+        battle.battle_order[1] = actor as i16;
+        battle.squad.pos[0] = (20, 20);
+        battle.squad.pos[1] = (21, 20);
         let target = case.get("target").and_then(|v| v.as_i64()).unwrap_or(1) as i16;
-        battle.squad.positions[actor] = (20, 20);
+        battle.squad.pos[actor] = (20, 20);
         if target < 10 {
-            battle.squad.positions[target as usize] = (21, 20);
+            battle.squad.pos[target as usize] = (21, 20);
         }
         if case.get("enemy_before").is_some() {
-            battle.enemies.records = vec![MonsterRecord {
+            battle.roster.records = vec![MonsterRecord {
                 bytes: case.bytes("enemy_before"),
             }];
-            battle.enemies.positions = vec![(21, 20)];
-            battle.map.tiles[26 * 90 + 25] = 10;
+            battle.roster.mon_pos = vec![(21, 20)];
+            battle.field.tiles[26 * 90 + 25] = 10;
         }
         state.combat = Some(battle);
         crate::native_common::source_victory_context(&mut state);
@@ -226,7 +226,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         support::assert_rng(&state.random, &case["seed"], &case["draws"]);
         if target >= 10 {
             assert_eq!(
-                current_combat(&state).enemies.records[0].bytes,
+                current_combat(&state).roster.records[0].bytes,
                 case.bytes("enemy_after")
             );
         }
@@ -244,13 +244,13 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         state.random = RandomState::new(12);
         state.warriors = support::warriors(&case.bytes("before"));
         let mut combat = support::battle();
-        combat.map.tiles = case.words("map_before");
-        combat.squad.positions = (0..6)
+        combat.field.tiles = case.words("map_before");
+        combat.squad.pos = (0..6)
             .map(|i| if i == 0 { (20, 20) } else { (40 + i, 40) })
             .collect();
-        combat.enemies.records = support::monsters(&case.bytes("enemy"));
-        combat.enemies.positions = vec![(30, 20)];
-        combat.order[1] = 0;
+        combat.roster.records = support::monsters(&case.bytes("enemy"));
+        combat.roster.mon_pos = vec![(30, 20)];
+        combat.battle_order[1] = 0;
         state.combat = Some(combat);
         crate::native_common::source_victory_context(&mut state);
         let before = state.clone();
@@ -258,9 +258,9 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         assert_eq!(state, before);
         apply(Command::RunControlledTurn, &mut state, &content).unwrap();
         assert_eq!(support::record_bytes(&state.warriors), case.bytes("after"));
-        assert_eq!(current_combat(&state).map.tiles, case.words("map_after"));
+        assert_eq!(current_combat(&state).field.tiles, case.words("map_after"));
         assert_eq!(
-            current_combat(&state).squad.positions[0],
+            current_combat(&state).squad.pos[0],
             support::positions(&case.bytes("position"))[0]
         );
         support::assert_rng(&state.random, &case["seed"], &case["draws"]);
@@ -280,7 +280,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         assert!(matches!(
             events.first(),
             Some(Event::Feedback(
-                centurions_core::feedback::NativeFeedback::Flash {
+                centurions_core::feedback::GameFeedback::Flash {
                     address: 0x403c3a,
                     sound: 6000,
                     ..
@@ -293,12 +293,12 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
             assert!(events.contains(&Event::BattleEnded { victory: false }));
         } else {
             let c = current_combat(&state);
-            assert_eq!(c.map.tiles, case["after"].words("map"));
+            assert_eq!(c.field.tiles, case["after"].words("map"));
             support::native_expect! {
-                positions c.squad.positions => &case["after"].bytes("party_positions"), "native positions";
+                positions c.squad.pos => &case["after"].bytes("party_positions"), "native positions";
             };
-            assert_eq!(c.order, case["after"].words("order"));
-            assert_eq!(c.cursor, case["after"].n::<usize>("cursor"));
+            assert_eq!(c.battle_order, case["after"].words("order"));
+            assert_eq!(c.battle_order_index, case["after"].n::<usize>("cursor"));
         }
         let path =
             std::env::temp_dir().join(format!("centurions-edge-{}.json", std::process::id()));
@@ -349,14 +349,14 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         state.warriors = support::warriors(&case.bytes("party_before"));
         let positions = |key: &str| support::positions(&case[key]);
         let mut combat = support::battle();
-        combat.map.tiles = case.words("tiles_before");
-        combat.squad.positions = positions("positions_before");
-        combat.squad.under_tiles = case.words("terrain_before");
-        combat.enemies.records = vec![MonsterRecord {
+        combat.field.tiles = case.words("tiles_before");
+        combat.squad.pos = positions("positions_before");
+        combat.squad.char_under = case.words("terrain_before");
+        combat.roster.records = vec![MonsterRecord {
             bytes: case.bytes("monster_before"),
         }];
-        combat.enemies.positions = vec![(21, 20)];
-        combat.order[1] = 0;
+        combat.roster.mon_pos = vec![(21, 20)];
+        combat.battle_order[1] = 0;
         state.combat = Some(combat);
         crate::native_common::source_victory_context(&mut state);
         let before = state.random.clone();
@@ -372,15 +372,15 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
             case.bytes("party_after")
         );
         let combat = current_combat(&state);
-        assert_eq!(combat.map.tiles, case.words("tiles_after"));
-        assert_eq!(combat.squad.positions, positions("positions_after"));
-        assert_eq!(combat.squad.under_tiles, case.words("terrain_after"));
-        assert_eq!(combat.enemies.records[0].bytes, case.bytes("monster_after"));
+        assert_eq!(combat.field.tiles, case.words("tiles_after"));
+        assert_eq!(combat.squad.pos, positions("positions_after"));
+        assert_eq!(combat.squad.char_under, case.words("terrain_after"));
+        assert_eq!(combat.roster.records[0].bytes, case.bytes("monster_after"));
         assert_eq!(
-            combat.enemies.positions,
+            combat.roster.mon_pos,
             positions("monster_position_after")
         );
-        assert_eq!(combat.cursor, 1);
+        assert_eq!(combat.battle_order_index, 1);
         assert_eq!(state.random, before);
         let sounds = support::event_sounds(&events);
         support::expect_array(&sounds, &case["sounds"]);

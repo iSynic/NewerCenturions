@@ -39,13 +39,13 @@ fn learned_crystalize_matches_complete_native_cast_field_creation_cost_rng_and_a
         support::psi_frame::compare(&c, &w, cast, &label);
         support::native_expect! {
             bytes memory => &cast["memory"], &label;
-            scalar c.unavailable => &cast["unavailable"], &label;
-            words c.order => &cast["order"], &label;
-            scalar c.cursor => &cast["cursor"], &label;
-            scalar c.round => &cast["round"], &label;
+            scalar c.kill_party => &cast["unavailable"], &label;
+            words c.battle_order => &cast["order"], &label;
+            scalar c.battle_order_index => &cast["cursor"], &label;
+            scalar c.combat_round => &cast["round"], &label;
         }
-        assert_eq!(c.death_queue, original.death_queue);
-        assert_eq!(c.round_scripts, original.round_scripts);
+        assert_eq!(c.todo_queue, original.todo_queue);
+        assert_eq!(c.round_macros, original.round_macros);
         support::assert_rng(&random, &cast["seed"], &cast["draws"]);
         let sounds: Vec<_> = support::event_sounds(&events);
         assert_eq!(

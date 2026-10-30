@@ -60,18 +60,18 @@ fn enemy_chemical_firearms_match_original_whole_records_and_randomness() {
     let mut hits = 0;
     for (index, case) in fixtures.array("cases").iter().enumerate() {
         let mut warrior = Warrior::read(&case.bytes("input")).unwrap();
-        let mut enemy = MonsterRecord {
+        let mut monster = MonsterRecord {
             bytes: case.bytes("target"),
         };
-        let prepared = firearm::prepare_enemy(&mut enemy, &case.bytes("weapon"), &attacks).unwrap();
+        let prepared = firearm::prepare_enemy(&mut monster, &case.bytes("weapon"), &attacks).unwrap();
         assert_eq!(prepared.packet, case.bytes("packet"), "packet {index}");
         let mut random = RandomState::new(case.n::<u32>("initial_seed"));
         let result =
-            firearm::resolve_enemy(&mut warrior, &mut enemy, &prepared, &mut random, 0).unwrap();
+            firearm::resolve_enemy(&mut warrior, &mut monster, &prepared, &mut random, 0).unwrap();
         hits += usize::from(result.damage > 0);
         support::native_expect! {
             bytes warrior.bytes => &case["after"], "warrior {index}";
-            bytes enemy.bytes => &case["after_target"], "enemy {index}";
+            bytes monster.bytes => &case["after_target"], "enemy {index}";
             rng random => (&case["seed"], &case["draws"]), "binary_firearm";
         }
         let sounds: Vec<i16> = case.n::<Vec<i16>>("sounds");

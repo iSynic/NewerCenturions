@@ -1,5 +1,8 @@
-//! Enemy weapon melee against another enemy, including reflected natural effects.
-use crate::combat::ally_turns::{NpcMelee, Struck};
+//! A monster's armed melee against another monster, including reflected natural
+//! effects.
+use crate::combat::ally_turns::{MonsterMelee, Struck};
+use crate::combat::attack::melee_accuracy;
+use crate::combat::natural_conditions;
 use crate::{
     RandomState, RuleError,
     combat::{
@@ -8,9 +11,13 @@ use crate::{
     },
 };
 use attack::AttackResult;
+use centurions_content::ITEM_BYTES;
+use centurions_content::combat::MONSTER_BYTES;
 use centurions_content::records::{
-    AttackPacketMut, Condition, DamageTargetKind, EnemyRecord, EnemyRecordMut, ItemDefinition,
+    Condition, DamageTargetKind, EnemyRecord, EnemyRecordMut, ItemDefinition, SpellInfoRecordMut,
 };
+/// Resolves a monster's armed blow at another monster, committed only if the whole blow succeeds.
+/// Returns the result, the packet, and whether the blow was reflected.
 pub(super) fn resolve(
     combat: &mut Combat,
     random: &mut RandomState,
@@ -23,7 +30,7 @@ pub(super) fn resolve(
     let body_index = |body: i16| {
         usize::try_from(i32::from(body) - 10)
             .ok()
-            .filter(|index| *index < combat.enemies.records.len())
+            .filter(|index| *index < combat.roster.records.len())
             .ok_or_else(|| RuleError::Invalid("enemy melee body outside records".into()))
     };
     let (attacker_index, target_index, actor) = (
@@ -36,17 +43,17 @@ pub(super) fn resolve(
     );
     if attacker_index == target_index
         || index >= 6
-        || weapon.len() != 150
-        || combat.enemies.positions.len() <= attacker_index.max(target_index)
+        || weapon.len() != ITEM_BYTES
+        || combat.roster.mon_pos.len() <= attacker_index.max(target_index)
     {
         return Err(RuleError::Invalid("enemy melee body or definition".into()));
     }
-    let source = &combat.enemies.records[attacker_index].bytes;
-    let victim = &combat.enemies.records[target_index].bytes;
-    if source.len() != 288 || victim.len() != 288 {
+    let source = &combat.roster.records[attacker_index].bytes;
+    let victim = &combat.roster.records[target_index].bytes;
+    if source.len() != MONSTER_BYTES || victim.len() != MONSTER_BYTES {
         return Err(RuleError::Invalid("enemy melee record size".into()));
     }
-    if ItemDefinition(weapon).category()? != 2 {
+    if ItemDefinition(weapon).item_type()? != 2 {
         return Err(RuleError::Unsupported {
             action: "combat.enemy_melee",
             dependency: "nonphysical melee weapon definition",
@@ -55,19 +62,17 @@ pub(super) fn resolve(
     let mut next = combat.clone();
     let mut rng = random.clone();
     let (source, victim) = (source.clone(), victim.clone());
-    if EnemyRecord::from_bytes(&source).selected_item()? != 0 {
+    if EnemyRecord::from_bytes(&source).weapon()? != 0 {
         let id = EnemyRecord::from_bytes(&source).melee_weapon()?;
-        next.story_record_mut(actor)?
-            .record_mut()
-            .set_selected_item(id);
+        next.story_record_mut(actor)?.record_mut().set_weapon(id);
     }
     let positions = (
-        next.enemies.positions[attacker_index].0,
-        next.enemies.positions[target_index].0,
+        next.roster.mon_pos[attacker_index].0,
+        next.roster.mon_pos[target_index].0,
     );
     let mut records = [
-        next.enemies.records[attacker_index].bytes.clone(),
-        next.enemies.records[target_index].bytes.clone(),
+        next.roster.records[attacker_index].bytes.clone(),
+        next.roster.records[target_index].bytes.clone(),
     ];
     let outcome = weapon_core(
         (&source, &victim),
@@ -79,15 +84,17 @@ pub(super) fn resolve(
         &mut rng,
     )?;
     let [attacker_bytes, target_bytes] = records;
-    next.enemies.records[attacker_index].bytes = attacker_bytes;
-    next.enemies.records[target_index].bytes = target_bytes;
+    next.roster.records[attacker_index].bytes = attacker_bytes;
+    next.roster.records[target_index].bytes = target_bytes;
     *combat = next;
     *random = rng;
     Ok((outcome.result, outcome.packet, outcome.reflected))
 }
 
-/// attack2's NPC-target branch with a loaded melee weapon (or its unloaded natural
-/// fallback) over the attacker and target records; see `natural_core`.
+/// One monster's armed blow on another, or its natural fallback; see
+/// `natural_core`.
+///
+/// Original: attack2
 pub(crate) fn weapon_core(
     (source, victim): (&[u8], &[u8]),
     records: &mut [Vec<u8>; 2],
@@ -96,17 +103,17 @@ pub(crate) fn weapon_core(
     difficulty: i16,
     mut packet: Vec<u8>,
     rng: &mut RandomState,
-) -> Result<NpcMelee, RuleError> {
-    let loaded = EnemyRecord::from_bytes(source).selected_item()? != 0;
+) -> Result<MonsterMelee, RuleError> {
+    let loaded = EnemyRecord::from_bytes(source).weapon()? != 0;
     let bonus = EnemyRecord::from_bytes(source)
-        .melee_bonus()?
+        .damage_plus()?
         .wrapping_add(EnemyRecord::from_bytes(source).condition(Condition::BonusDamage));
     let condition = EnemyRecord::from_bytes(source)
         .natural_attack(index)
         .condition;
     let [attacker_bytes, target_bytes] = records;
     let weapon_condition = if loaded {
-        crate::combat::natural_conditions::admit_weapon_condition(
+        natural_conditions::admit_weapon_condition(
             weapon,
             target_bytes,
             DamageTargetKind::Enemy,
@@ -117,7 +124,7 @@ pub(crate) fn weapon_core(
         None
     };
     EnemyRecordMut::from_bytes(attacker_bytes).face_towards(attacker_x, target_x);
-    let hit = crate::combat::attack::melee_accuracy::enemy_against_enemy(
+    let hit = melee_accuracy::enemy_against_enemy(
         &EnemyRecord::from_bytes(source),
         &EnemyRecord::from_bytes(victim),
         if loaded {
@@ -154,9 +161,9 @@ pub(crate) fn weapon_core(
             recipient: attack::AttackRecipient::Attacker,
         });
         if loaded && matches!(immunity, -1 | -2) {
-            EnemyRecordMut::from_bytes(attacker_bytes).set_selected_item(0);
+            EnemyRecordMut::from_bytes(attacker_bytes).set_weapon(0);
         }
-        return Ok(NpcMelee {
+        return Ok(MonsterMelee {
             result: AttackResult {
                 icon: 0,
                 feedback,
@@ -182,8 +189,8 @@ pub(crate) fn weapon_core(
     };
     let mut icon = 0;
     let mut damage = if hit {
-        EnemyRecordMut::from_bytes(target).mark_damaged();
-        AttackPacketMut(&mut packet).set_damage_bounds(
+        EnemyRecordMut::from_bytes(target).mark_been_attacked();
+        SpellInfoRecordMut(&mut packet).set_damage_bounds(
             bonus.wrapping_add(1),
             bonus.wrapping_add(if loaded {
                 ItemDefinition(weapon).melee_damage()?
@@ -192,7 +199,7 @@ pub(crate) fn weapon_core(
             }),
         );
         for element in 0..7 {
-            AttackPacketMut(&mut packet).set_elemental_damage(
+            SpellInfoRecordMut(&mut packet).set_elemental_damage(
                 element,
                 if loaded {
                     ItemDefinition(weapon).elemental_damage(element)?
@@ -211,7 +218,7 @@ pub(crate) fn weapon_core(
                 rng,
             )?;
             let killed = result.killed.then_some(struck);
-            return Ok(NpcMelee {
+            return Ok(MonsterMelee {
                 result,
                 packet,
                 reflected: true,
@@ -248,9 +255,9 @@ pub(crate) fn weapon_core(
     let mut natural = None;
     if damage != 0 {
         if !loaded {
-            if let Some(mut effect) = crate::combat::natural_conditions::monster_attack_effect(
-                target, source, index, rng,
-            )? {
+            if let Some(mut effect) =
+                natural_conditions::monster_attack_effect(target, source, index, rng)?
+            {
                 feedback = effect.feedback.take();
                 damage = damage.wrapping_add(effect.extra_damage);
                 if effect.applied && condition == 5 {
@@ -262,13 +269,13 @@ pub(crate) fn weapon_core(
                 damage = 0;
             }
         } else if let Some(condition) = weapon_condition {
-            feedback = Some(crate::combat::natural_conditions::apply_weapon_condition(
+            feedback = Some(natural_conditions::apply_weapon_condition(
                 target,
                 DamageTargetKind::Enemy,
                 condition,
             )?);
         }
-        EnemyRecordMut::from_bytes(target).mark_damaged();
+        EnemyRecordMut::from_bytes(target).mark_been_attacked();
         let health = EnemyRecord::from_bytes(target)
             .stamina()?
             .wrapping_sub(damage);
@@ -286,9 +293,9 @@ pub(crate) fn weapon_core(
         effect.credit_attacker(attacker_bytes)?;
     }
     if clear_target {
-        EnemyRecordMut::from_bytes(attacker_bytes).set_target_body(-1);
+        EnemyRecordMut::from_bytes(attacker_bytes).set_target(-1);
     }
-    Ok(NpcMelee {
+    Ok(MonsterMelee {
         result,
         packet,
         reflected,

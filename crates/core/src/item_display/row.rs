@@ -1,18 +1,22 @@
-//! showitemstats (0x157758) row annotations. Composition is deliberately distinct
-//! from quickinfo: only positive elemental damage contributes to this maximum.
+//! Item row annotations. They differ from the detail panel on purpose: only
+//! positive elemental damage counts towards this maximum.
 use super::{
-    BTreeMap, Content, Draw, InventoryRecord, NativeText, PanelEffect, PascalString, RuleError,
+    BTreeMap, Content, Draw, GameText, InventoryRecord, PanelEffect, PascalString, RuleError,
     indexed_string,
 };
+use centurions_content::ITEM_BYTES;
 use centurions_content::records::{InventoryModifier as Modifier, ItemDefinition, ItemPanelRecord};
 
+/// The drawing of an inventory item's statistics line.
+///
+/// Original: showitemstats
 pub fn row(
     content: &Content,
     item: &InventoryRecord,
-    native: &NativeText,
+    game_text: &GameText,
     strings: &BTreeMap<i16, Vec<u8>>,
 ) -> Result<Vec<PanelEffect>, RuleError> {
-    native.bytes(0x400ef8, 140)?;
+    game_text.bytes(0x400ef8, 140)?;
     let definition = crate::ammunition::definition(content, item.id())?;
     let base = ItemDefinition(&definition);
     let panel = ItemPanelRecord(&definition);
@@ -24,7 +28,7 @@ pub fn row(
             .ok_or("display ammunition unavailable")?
             .as_slice()
     } else {
-        &[0; 150]
+        &[0; ITEM_BYTES]
     };
     let ammo = ItemDefinition(ammunition);
     let mut elements = [0_i16; 7];
@@ -50,7 +54,7 @@ pub fn row(
     let modifier = |field: Modifier| i16::from(field.read(item));
     let mut row = Row {
         effects: vec![],
-        native,
+        game_text,
     };
     row.draw(Draw::TextSize(10));
     row.draw(Draw::TextFont(10));
@@ -153,7 +157,7 @@ pub fn row(
             Some(0x400f72),
         )?;
     }
-    // Chemical reduction alone does not enable the original DRVs prefix.
+    // Chemical reduction alone does not show the DRVs prefix.
     if elements[1..].iter().any(|value| *value < 0) {
         row.draw(Draw::ForeColor(341));
         row.literal(0x400f14)?;
@@ -173,22 +177,27 @@ pub fn row(
     Ok(row.effects)
 }
 
+/// The drawing of one item row as it is built.
 struct Row<'a> {
     effects: Vec<PanelEffect>,
-    native: &'a NativeText,
+    game_text: &'a GameText,
 }
 
 impl Row<'_> {
+    /// Adds a drawing step to the row.
     fn draw(&mut self, effect: Draw) {
         self.effects.push(PanelEffect::Drawing(effect));
     }
+    /// Draws a fixed text of the game in the row.
     fn literal(&mut self, address: u32) -> Result<(), RuleError> {
-        let length = usize::from(self.native.bytes(address, 1)?[0]);
+        let length = usize::from(self.game_text.bytes(address, 1)?[0]);
         self.draw(Draw::DrawString(PascalString::from_raw(
-            self.native.bytes(address, length + 1)?,
+            self.game_text.bytes(address, length + 1)?,
         )?));
         Ok(())
     }
+    /// Draws a labelled figure of the row in a color: the prefix, the value (with a plus sign when
+    /// asked and positive) and an optional suffix.
     fn stat(
         &mut self,
         color: i32,

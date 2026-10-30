@@ -87,19 +87,19 @@ fn global_spell_masks_match_original_faction_and_living_body_rules() {
         let warriors = support::warriors(&case.bytes("warriors"));
         let enemies = support::monsters(&case.bytes("enemies_before"));
         let mut combat = support::battle();
-        combat.map.tiles.clear();
-        combat.squad.positions.clear();
-        combat.squad.under_tiles.clear();
-        combat.enemies.records = enemies;
-        combat.order.clear();
-        combat.cursor = 0;
+        combat.field.tiles.clear();
+        combat.squad.pos.clear();
+        combat.squad.char_under.clear();
+        combat.roster.records = enemies;
+        combat.battle_order.clear();
+        combat.battle_order_index = 0;
         let packet = case.bytes("packet");
         let result = global_targets(&combat, &warriors, 0, &packet).unwrap();
         let actual = support::word_bytes(&result.mask);
         support::native_expect! {
             bytes &actual => &case.bytes("mask"), &format!("global mask {index}");
         };
-        let mut actual = combat.enemies.records.clone();
+        let mut actual = combat.roster.records.clone();
         actual[0] = result.caster;
         let actual = support::record_bytes(&actual);
         support::native_expect! {

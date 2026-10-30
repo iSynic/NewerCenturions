@@ -2,23 +2,29 @@ use crate::combat::{Combat, attack, damage, firearm};
 use crate::{RandomState, RuleError};
 use attack::AttackResult;
 use damage::{DamageFlags, DamagePacket, resolve_damage, resolve_damage_with_amount};
+pub mod conditions;
+pub(crate) mod effects;
 mod packets;
 #[cfg(all(test, feature = "original-fixtures"))]
 #[path = "../../tests/unit/spells_restriction_tests.rs"]
 mod restriction_tests;
+pub(super) mod summon;
+pub(crate) use packets::{
+    FIRST_SPELL_DESCRIPTOR, spell_descriptor, spell_identity, spell_level,
+    wrapping_spell_descriptor,
+};
 pub use packets::{load_packet, select_packet};
 mod selection;
-use selection::position;
 pub(crate) use selection::{
-    SelectionView, select_firearm_from_view, select_firearm_targets_beside,
-    select_retained_from_view, select_spell_from_view, select_targets_beside,
+    SelectionView, select_firearm_from_view, select_firearm_targets_beside, select_spell_from_view,
+    select_spell_info_from_view, select_targets_beside,
 };
 pub use selection::{
-    SpellSelection, SpellTarget, select_firearm_targets, select_retained_targets, select_targets,
+    SpellSelection, SpellTarget, select_firearm_targets, select_spell_info_targets, select_targets,
 };
 mod restrictions;
 pub use restrictions::RestrictionMemoryView;
-pub(crate) use restrictions::{is_support, retained_item_alias};
+pub(crate) use restrictions::{is_support, loaded_item_restriction};
 use restrictions::{monster_race_is_excluded, race_is_excluded, validate_direct};
 mod results;
 pub use results::{BodySpellResult, SupportSpellResult, WarriorSpellResult};
@@ -31,7 +37,7 @@ mod support_rules;
 pub(crate) use support_rules::resolve_psi_drain;
 use support_rules::status_resisted;
 mod contexts;
-pub(crate) mod detached;
+pub(crate) mod out_of_combat;
 pub use contexts::{DirectSpell, FieldUsage, SpellContext, SpellMask};
 mod fields;
 pub use fields::{FieldCollision, collision_field, reset_used, tick_fields};

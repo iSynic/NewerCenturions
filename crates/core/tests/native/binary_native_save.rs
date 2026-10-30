@@ -12,7 +12,7 @@ fn native_writer_records_import_read_only_and_resume_as_versioned_saves() {
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("Data I1");
     let (original, info, native) = receipts::write(&directory, &content);
-    let imported = centurions_core::native_save::import(
+    let imported = centurions_core::original_save::import(
         &path,
         &content,
         &original.random,
@@ -27,10 +27,10 @@ fn native_writer_records_import_read_only_and_resume_as_versioned_saves() {
     assert_eq!(imported.ammunition, original.ammunition);
     assert_eq!(imported.crate_items, original.crate_items);
     assert_eq!(imported.flags, original.flags);
-    assert_eq!(imported.allies, original.allies);
+    assert_eq!(imported.holdover, original.holdover);
     assert_eq!(
-        imported.native_work.psi_memory,
-        original.native_work.psi_memory
+        imported.globals.define_spells,
+        original.globals.define_spells
     );
     assert_eq!(imported.random, original.random);
     assert_eq!(imported.mission_score, original.mission_score);
@@ -54,7 +54,7 @@ fn native_writer_records_import_read_only_and_resume_as_versioned_saves() {
             before.minute
         )
     );
-    assert_eq!(position.map_state().native_bytes().unwrap(), native);
+    assert_eq!(position.map_state().to_bytes().unwrap(), native);
     let reader = support::fixture("native-load.json");
     assert_eq!(reader["return"].as_i64().unwrap(), 1);
     assert_eq!(
@@ -65,9 +65,9 @@ fn native_writer_records_import_read_only_and_resume_as_versioned_saves() {
         .into_iter()
         .flat_map(|field| reader.bytes(field))
         .collect::<Vec<_>>();
-    assert_eq!(position.map_state().native_bytes().unwrap(), read_map);
+    assert_eq!(position.map_state().to_bytes().unwrap(), read_map);
     assert_eq!(
-        imported.selected_warrior,
+        imported.char_select_new,
         reader["selected"].as_u64().unwrap() as usize
     );
     let converted = directory.join("converted.json");
@@ -76,7 +76,7 @@ fn native_writer_records_import_read_only_and_resume_as_versioned_saves() {
     assert_eq!(std::fs::read(&path).unwrap(), info);
     std::fs::write(directory.join("Data F1"), [0]).unwrap();
     assert!(
-        centurions_core::native_save::import(&path, &content, &original.random, (1, 0)).is_err()
+        centurions_core::original_save::import(&path, &content, &original.random, (1, 0)).is_err()
     );
     assert_eq!(std::fs::read(&path).unwrap(), info);
     receipts::remove(&directory);

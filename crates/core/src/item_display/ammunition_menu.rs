@@ -1,6 +1,6 @@
-//! loadammoproc1300ec's MENU 1000 item text: SetItem for item 1, AppendMenu
-//! for the rest, each name from GetIndString(getselection(ID) + 1, ID - base + 1).
-use super::{BTreeMap, NativeText, RuleError, indexed_string};
+//! The text of the ammunition popup (MENU 1000). Each item name comes from the
+//! item's selection list in the `STR#` resources.
+use super::{BTreeMap, GameText, RuleError, indexed_string};
 use crate::items::AmmunitionEntry;
 
 /// One popup row: its text, whether it is enabled and checked, and whether
@@ -13,9 +13,10 @@ pub struct AmmunitionMenuItem {
     pub divider: bool,
 }
 
+/// The menu text of the ammunition popup, with each item named from its selection list.
 pub fn ammunition_menu_items(
     (item, entries): (i16, &[AmmunitionEntry]),
-    native: &NativeText,
+    game_text: &GameText,
     strings: &BTreeMap<i16, Vec<u8>>,
 ) -> Result<Vec<AmmunitionMenuItem>, RuleError> {
     let name = |id: i16| -> Result<String, RuleError> {
@@ -23,7 +24,7 @@ pub fn ammunition_menu_items(
         let text = indexed_string(strings, base.wrapping_add(1), id - base + 1)?;
         Ok(encoding_rs::MACINTOSH.decode(text.payload()).0.into_owned())
     };
-    let c = |address| -> Result<String, RuleError> { Ok(native.text(address, false)?) };
+    let c = |address| -> Result<String, RuleError> { Ok(game_text.text(address, false)?) };
     // Name, five spaces, NumToString of the LONG reserve, then " Rds" or " Units".
     let stock = |id, stock: i32, units: bool| -> Result<String, RuleError> {
         Ok(format!(
@@ -56,8 +57,8 @@ pub fn ammunition_menu_items(
                     stock: amount,
                     units,
                 } => stock(*description, *amount, *units)?,
-                AmmunitionEntry::Divider => native.text(0x40315e, true)?,
-                AmmunitionEntry::Heading(address) => native.text(*address, true)?,
+                AmmunitionEntry::Divider => game_text.text(0x40315e, true)?,
+                AmmunitionEntry::Heading(address) => game_text.text(*address, true)?,
             };
             Ok(AmmunitionMenuItem {
                 text,

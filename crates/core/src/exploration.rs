@@ -1,4 +1,4 @@
-//! Exploration entry points; movement, stories and presentation have separate owners.
+//! Exploring a land: movement, scripts and what they present.
 mod map_context;
 pub(crate) use map_context::active_map;
 use map_context::unsupported;
@@ -24,7 +24,7 @@ mod choices;
 pub(crate) use choices::finish_typed_selection;
 pub use choices::{cancel_menu, choose, choose_warrior, select_menu};
 mod menus;
-use menus::{present_menu, present_typed};
+use menus::{active_table, present_menu, present_typed};
 pub use menus::{submit_text, typed_record};
 mod loot;
 pub(crate) use loot::present_treasure;
@@ -32,7 +32,7 @@ use loot::present_treasure_record;
 pub use loot::{BootyTally, take_loot};
 mod script_return;
 use script_return::{abandon_script, finish_dispatch, finish_script};
-pub(crate) use script_return::{dialogue, retain_script_stamp, retain_turn_header};
+pub(crate) use script_return::{dialogue, store_script_stamp, store_turn_header};
 mod battle_entry;
 pub(crate) use battle_entry::{StoryBattle, begin_story_battle};
 mod script_execution;

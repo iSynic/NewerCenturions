@@ -1,8 +1,11 @@
-//! Movement for combat.
+//! Walking on the battle map.
 use crate::combat::{interaction, occupied_cell, runtime};
 use crate::{Event, RuleError, Session};
 use centurions_content::Content;
 
+/// Moves the active warrior one step. What the step does depends on what is there: it swaps with or
+/// passes a friend, attacks a foe in reach, reloads against an occupied cell, or walks onto open
+/// ground.
 pub fn move_warrior(
     state: &mut Session,
     content: &Content,
@@ -12,6 +15,7 @@ pub fn move_warrior(
     move_warrior_inner(state, content, dx, dy, false)
 }
 
+/// The same step for a warrior moving on its own turn under the computer's control.
 pub(crate) fn move_controlled(
     state: &mut Session,
     content: &Content,
@@ -21,6 +25,8 @@ pub(crate) fn move_controlled(
     move_warrior_inner(state, content, dx, dy, true)
 }
 
+/// Decides and begins the active warrior's step. Walking a warrior that is under the computer's
+/// control by hand is not supported.
 pub(super) fn move_warrior_inner(
     state: &mut Session,
     content: &Content,
@@ -51,12 +57,12 @@ pub(super) fn move_warrior_inner(
         state.exploration.as_ref(),
     )
     .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
-    let position = combat.squad.positions[body];
+    let position = combat.squad.pos[body];
     let destination = (
         position.0.wrapping_add(i16::from(dx)),
         position.1.wrapping_add(i16::from(dy)),
     );
-    let origin = (combat.map.shift.0 + 5, combat.map.shift.1 + 5);
+    let origin = (combat.field.map_shift.0 + 5, combat.field.map_shift.1 + 5);
     centurions_content::mission::OpeningMission::index(
         i32::from(position.0 + origin.0),
         i32::from(position.1 + origin.1),
@@ -65,7 +71,7 @@ pub(super) fn move_warrior_inner(
         i32::from(destination.0 + origin.0),
         i32::from(destination.1 + origin.1),
     )?;
-    let tile = combat.map.tiles[next_index].wrapping_abs();
+    let tile = combat.field.tiles[next_index].wrapping_abs();
     if tile <= 110 {
         if interaction::friendly_neighbor_parts(combat, &state.warriors, tile)? {
             let exchange = interaction::can_exchange_parts(combat, &state.warriors, tile)?;
@@ -82,7 +88,7 @@ pub(super) fn move_warrior_inner(
             );
         }
         if tile < 110
-            && !state.warriors[body].record().firing_mode()
+            && !state.warriors[body].record().toggle()
             && runtime::neighbors(combat, &state.warriors, body as i16)?.contains(&tile)
         {
             return runtime::player_attack(state, content, tile);
@@ -95,7 +101,7 @@ pub(super) fn move_warrior_inner(
             dependency: "non-terrain tactical marker",
         });
     }
-    if !automatic && state.warriors[body].record().automatic_mode()? != 0 {
+    if !automatic && state.warriors[body].record().computer_control()? != 0 {
         return Err(RuleError::Unsupported {
             action: "combat.move",
             dependency: "involuntary movement",

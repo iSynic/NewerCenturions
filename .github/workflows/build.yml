@@ -110,11 +110,52 @@ jobs:
               packages[0].rename(root / f'NewerCenturions-{tag}-{platform}{suffix}.zip')
           PY
           cat > release-notes.md <<'NOTES'
-          This beta brings combat presentation closer to the original. Enemy turns now play out step by step with the original movement delay, attack, cast and fire results show the original damage icons and text, spell and firearm flights and area effects animate, deaths play their frames, and Reveal Friends draws the edge lines for off-screen bodies. The party selection and booty screens are redrawn from the original routines, and firearm targeting follows more of the original fire-button rules. A combat initiative refusal when automatic warriors overflowed the living list is fixed. Registration checks are not reimplemented and always pass. The public source contains the maintained game only; the instruction-level reference stays private. This is not a claim that every original behavior has been verified.
+          This beta covers 186 changes since beta.11. Most of the work is rules: recovered gameplay from the original 1.3.2 code for combat, death handling, spells, firearms, rewards and calendars, so that battles, scripts and turn order continue the way the original does instead of stopping on an unsupported action. The rest is presentation: combat now plays out the way it does on the Mac, and several screens are redrawn from the original routines. Registration checks are not reimplemented and always pass. This is not a claim that every original behavior has been verified.
+
+          ### Combat presentation
+
+          - Enemy turns play out one step at a time with the original movement delay, followed by each attack, cast or shot in turn. The Speed preference controls the delay, and its default is now 5, as in the original.
+          - Hits show the original damage-type icons with the damage drawn on top in bold, plus the original result text and hit and miss lines. Health panels change as each hit plays rather than before it.
+          - Spell, item, medical and firearm flights animate from caster to target; rays walk to their target or blocker; area spells play their frames and flash each target.
+          - Deaths play their frames and removal delay for enemies and warriors.
+          - Reveal Friends draws the original coloured edge lines for bodies outside the visible part of the tactical map.
+          - Bodies are framed with the original sprite frames, the view recentres only when the action nears its edge, and spell and targeting information panels are shown for enemy casts and fire.
+          - Party members' tactical steps also play out.
+
+          ### Combat rules
+
+          - Death processing follows the original: death scripts, round and turn stories that run during it, child battles started from it, and the continuation of the round's health loop afterwards, including when a death story ends combat.
+          - Battles that return from scripts, child battles, reactions, guard attacks and walking now resume the original caller with its work intact, including Getup queues across rounds and battle teardown.
+          - Enemies use more of the original spell and firearm behaviour: targeted, area, ray, field, global and randomized spells and weapons; every NPC targeting mode; summons; and natural attacks past six.
+          - Player firearms fire in more modes, follow more of the original fire-button rules (eight-shot weapons, action points, loads, target lists and the fire key), and ray weapons walk to their target.
+          - Spell effects translated from the original include stamina, allegiance, condition clearing, stun, Psi movement, fatigue, attribute training, conversion, summon, drains and revival. Resistance rolls and negative saving-throw modes follow the original.
+          - Field collisions, combat item activation, boating and outdoor allied spell damage are supported.
+          - Entering a battle with warriors still on automatic no longer stops with an initiative error.
+
+          ### Rewards, stories and calendars
+
+          - Battle rewards, scripted clean-up rewards, treasure, wealth and storage loot return through the original callers, including when an encounter ends during a script or a child battle.
+          - Calendar destinations, nested calendar scans and calendar children under battle and hourly owners run as in the original.
+          - Custom terrain tables and scenario atlases load, and the battle land survives land changes during combat.
+
+          ### Screens and dialogs
+
+          - Party selection (squad rows, levels panel, restrictions, scrolling and condition icons) and booty (cell details, confiscation, credits, message and share strips) are drawn from the original routines.
+          - Item information opens from the Items info button, highlighted rows, owner switches, shop and user lists, loot and dragged items. The ammunition popup is added.
+          - The Upgrade screen opens as its own action, and the window keeps its last frame while it is not focused.
+
+          ### Scenario authoring coverage
+
+          - A new author capability map (`tools/capability_map.py`) lists 557 things a scenario author can use: story opcodes, record fields, spell effects, natural conditions and their combinations. Each is marked native-verified, source-ported or policy, and 43 are flagged as needing a warning because some operands or contexts still stop with a diagnostic. The scenario editor does not read this map yet.
+          - All 35 rule groups in the unsupported-behaviour backlog are closed. Every remaining diagnostic is either a proven invariant or attached to a row of the capability map.
+
+          ### Arithmetic
+
+          Exceptional floating-point results now follow modern IEEE-754 evaluation, as recompiled Realmz ports do: infinities and out-of-range conversions saturate, and NaN converts to zero. This is a compatibility policy, not emulation of the Mac FPU or SANE.
 
           ### Compatibility and verification
 
-          New saves use schema 62. Saves from earlier betas no longer load; original 1.3.2 imports are unchanged. Keep backups when switching builds. Compatibility with populated original Mac saves remains unverified.
+          New saves use schema 62. **Saves from earlier betas no longer load**; start a new game or import an original save. Original 1.3.2 saves import and continue, and this has been accepted with saves written by the original game's own save routine. Keep backups when switching builds.
 
           Local verification passed 399 executable Rust cases, 16 Python checks and six assisted campaign routes with unchanged state, events and save/resume results. Formatting, Clippy and release compilation passed. All 293 original files are unchanged, and the 420 native fixtures pass. Maintained test code is 7.99% of maintained production code; native comparison tests add another 34.71%.
 
@@ -124,11 +165,11 @@ jobs:
 
           ### Remaining live acceptance
 
-          Current-build user-operated checks remain open for named Save/Open and cancellation; fullscreen/window recovery; held movement, targeting and modal scheduling; inventory, trade and shops; sound/music and preferences; original visuals/help/text placement; and sustained desktop CPU, memory and responsiveness. Headless checks and assisted campaign replays do not close these live-acceptance groups.
+          User-operated checks remain open for Windows desktop workflows and original presentation (typography, styling and timing), live Linux and macOS sessions, graphics and cursor quality, and sound playback quality. Every graphics and sound resource the game data uses decodes headlessly; these checks are about how they look and sound in play. Headless checks and assisted campaign replays do not close them.
 
           ### Downloads and installation
 
-          Windows x86_64, Linux x86_64, macOS Apple Silicon and macOS Intel packages are included. Linux and macOS remain experimental; native CI validation is separate from live platform acceptance. macOS bundles use ad hoc signatures and are not Developer ID signed or notarized.
+          Windows x86_64, Linux x86_64, macOS Apple Silicon and macOS Intel packages are included. Linux and macOS remain experimental; native CI validation is separate from live platform acceptance. Earlier in this cycle the full test suite passed on Linux under WSL2 (Ubuntu 24.04), after a fix for how Linux reports a missing roster folder. macOS bundles use ad hoc signatures and are not Developer ID signed or notarized.
 
           Extract beside your existing New Centurions installation. Original game files and preserved resource forks are required and are not bundled. SHA256SUMS.txt records the verified archive hashes.
           NOTES

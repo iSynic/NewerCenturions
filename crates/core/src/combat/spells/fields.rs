@@ -1,8 +1,10 @@
-//! Fields for combat/spells.
-use super::{Combat, FieldUsage, RuleError, SpellTarget, load_packet, position};
+//! Spell fields: their duration ticks, usage reset and collisions.
+use super::{Combat, FieldUsage, RuleError, SpellTarget, load_packet};
 use centurions_content::Warrior;
-use centurions_content::records::{AttackPacketMut, SpellField, SpellFieldMut};
+use centurions_content::records::{SpellField, SpellFieldMut, SpellInfoRecordMut};
 
+/// Ages the spell fields: a field whose turn in the initiative order has come loses one round of
+/// duration.
 pub fn tick_fields(fields: &[u8], cursor: i16) -> Result<Vec<u8>, RuleError> {
     if fields.len() != 1200 {
         return Err(RuleError::Invalid("spell field table size".into()));
@@ -17,6 +19,7 @@ pub fn tick_fields(fields: &[u8], cursor: i16) -> Result<Vec<u8>, RuleError> {
     Ok(result)
 }
 
+/// Clears the usage marks of the 60 spell fields for a new turn.
 pub fn reset_used(used: &[u8]) -> Result<Vec<u8>, RuleError> {
     if used.len() != 128 {
         return Err(RuleError::Invalid("spell field usage size".into()));
@@ -26,6 +29,8 @@ pub fn reset_used(used: &[u8]) -> Result<Vec<u8>, RuleError> {
     Ok(result)
 }
 
+/// A spell field a body stands in: the spell, its power and level, its rotation, and the cell it is
+/// centered on.
 pub struct FieldCollision {
     pub rotation: u8,
     pub packet: Vec<u8>,
@@ -35,6 +40,9 @@ pub struct FieldCollision {
     pub target: SpellTarget,
 }
 
+/// The spell field a body is struck by, if any: the field must still last and not yet have struck
+/// this turn, and the body (counting the cells a large monster covers) must stand inside it. The
+/// field's spell is cast on the body.
 pub fn collision_field(
     combat: &Combat,
     warriors: &[Warrior],
@@ -51,7 +59,7 @@ pub fn collision_field(
             .get(body)
             .ok_or_else(|| RuleError::Invalid("spell collision warrior".into()))?
             .record()
-            .active_flag()
+            .in_battle()
             == 0
     {
         return Ok(None);
@@ -60,17 +68,15 @@ pub fn collision_field(
     if field.duration() == 0 || usage.used[usage.slot] != 0 {
         return Ok(None);
     }
-    let point = position(combat, body)
+    let point = combat
+        .get_body_position(body)
         .ok_or_else(|| RuleError::Invalid("spell collision body position".into()))?;
-    let point = (
-        point.0.wrapping_add(combat.map.shift.0).wrapping_add(5),
-        point.1.wrapping_add(combat.map.shift.1).wrapping_add(5),
-    );
+    let point = crate::combat::records::wrapping_grid_point(point, combat.field.map_shift);
     let size = if body < 10 {
         0
     } else {
         combat
-            .enemies
+            .roster
             .records
             .get(body - 10)
             .ok_or_else(|| RuleError::Invalid("spell collision monster".into()))?
@@ -94,17 +100,13 @@ pub fn collision_field(
     }
     let id = field.spell()?;
     let mut packet = load_packet(attacks, id)?;
-    AttackPacketMut(&mut packet).prepare_field_collision();
+    SpellInfoRecordMut(&mut packet).prepare_field_collision();
     Ok(Some(FieldCollision {
         rotation: field.rotation(),
         packet,
         id,
         count: field.power(),
         level: field.level(),
-        target: SpellTarget {
-            first: field.center().0,
-            second: field.center().1,
-            kind: 3,
-        },
+        target: SpellTarget::cell(field.center().0, field.center().1),
     }))
 }

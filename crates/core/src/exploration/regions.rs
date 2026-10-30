@@ -1,4 +1,4 @@
-//! Regions for maintained exploration.
+//! Land regions and the random battles they roll.
 #[cfg(all(test, feature = "original-fixtures"))]
 use super::unsupported;
 use super::{active_map, resume_movement, run_script};
@@ -6,6 +6,9 @@ use crate::{Event, Presentation, RandomState, RuleError, ScriptState, Session, r
 use centurions_content::Content;
 use centurions_content::records::{RegionTable, RegionTableMut};
 
+/// Rolls the random battle of the region the party stands in, if any, returning the battle and the
+/// advantage it starts with. A region that would run an event script or an avoidance question is
+/// not supported here.
 #[cfg(all(test, feature = "original-fixtures"))]
 pub fn regional_encounter(
     regions: &[u8],
@@ -22,6 +25,8 @@ pub fn regional_encounter(
     }
 }
 
+/// What a region's roll gives the party: nothing, a battle with its advantage, an event script, or
+/// an avoidance question for a region.
 pub(super) enum Regional {
     None,
     Battle(i16, i16),
@@ -29,6 +34,7 @@ pub(super) enum Regional {
     Avoidance(usize),
 }
 
+/// Rolls the regions under the party from the last toward the first.
 pub(super) fn regional_selection(
     regions: &mut [u8],
     position: (i16, i16),
@@ -38,6 +44,8 @@ pub(super) fn regional_selection(
     regional_selection_from(regions, position, 20, battles, random)
 }
 
+/// Rolls the regions before the given one, so a declined avoidance carries on with the regions
+/// beneath it.
 pub(super) fn regional_selection_from(
     regions: &mut [u8],
     position: (i16, i16),
@@ -48,14 +56,17 @@ pub(super) fn regional_selection_from(
     regional_selection_chance(regions, position, before, 1, battles, random)
 }
 
-/// timeclick 0x15eab8 rolls a regional battle only while the mind-shield word
-/// (party protection 7, WORD442570) is clear and BYTE402f42 is set; the region's
-/// event scripts still roll.
+/// A region rolls a random battle only while the party has no mind shield
+/// (party protection 7) and random battles are on; its event scripts still roll.
+///
+/// Original: timeclick
 pub(super) fn battles_allowed(state: &Session) -> Result<bool, RuleError> {
-    Ok(state.native_work.random_battles != 0
-        && !crate::combat::party_buffs::mind_shield(&state.party_buffs)?)
+    Ok(state.globals.random_battles != 0
+        && !crate::combat::party_buffs::mind_shield(&state.party_condition)?)
 }
 
+/// Checks the regions as time passes and starts what the roll gives: a battle, a script or an
+/// avoidance question.
 pub(crate) fn check_region(
     state: &mut Session,
     content: &Content,
@@ -77,6 +88,10 @@ pub(crate) fn check_region(
     apply_region(state, content, region)
 }
 
+/// Rolls the regions that cover the party's square, last region first. A roll from 1 to 10000 not
+/// above the region's chance divided by the divisor tries each of its events by the event's
+/// percent; if none is picked and random battles are allowed, the region gives its avoidance
+/// question or a battle. An exclusive region stops the search unless that roll picked something.
 pub(super) fn regional_selection_chance(
     regions: &mut [u8],
     position: (i16, i16),
@@ -126,6 +141,8 @@ pub(super) fn regional_selection_chance(
     Ok(Regional::None)
 }
 
+/// Starts what a region roll gave: the battle, the region's event script, or the avoidance question
+/// with its dialogue and sound.
 pub(super) fn apply_region(
     state: &mut Session,
     content: &Content,
@@ -160,6 +177,9 @@ pub(super) fn apply_region(
     }
 }
 
+/// Takes the player's answer to an avoidance question. Fighting starts a battle from the region's
+/// battle range with the party in advantage; declining carries on with the regions beneath, unless
+/// the region is exclusive.
 pub(super) fn choose_avoidance(
     state: &mut Session,
     content: &Content,
@@ -187,7 +207,7 @@ pub(super) fn choose_avoidance(
             &mut position.region_state,
             (position.x as i16, position.y as i16),
             region,
-            state.native_work.random_battles != 0,
+            state.globals.random_battles != 0,
             &mut state.random,
         )?
     };

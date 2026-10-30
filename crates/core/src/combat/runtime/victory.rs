@@ -1,4 +1,4 @@
-//! Victory in the original combat execution order.
+//! Winning a battle.
 use crate::{RandomState, RuleError, items};
 use centurions_content::combat::MonsterRecord;
 use centurions_content::{
@@ -6,6 +6,9 @@ use centurions_content::{
     records::{CharacterInformation, Condition, ItemDefinition},
 };
 
+/// Awards a won battle to the warriors and returns the share of experience each gets.
+///
+/// Original: booty
 pub fn victory_records(
     warriors: &mut [Warrior],
     enemies: &mut [MonsterRecord],
@@ -14,6 +17,13 @@ pub fn victory_records(
     Ok(victory_loot(warriors, enemies, random, None)?.0)
 }
 
+/// Awards a won battle. Each monster is worth experience by its level, flying, stamina and own
+/// experience; the total is divided among the standing warriors still in the battle, added to
+/// their upgrade points and taken from their remaining experience. Each item a monster carries
+/// drops by chance, always for item classes 23 to 25. The monsters' conditions are cleared and
+/// they are set to faction 1. Returns the share and the loot.
+///
+/// Original: booty
 pub fn victory_loot(
     warriors: &mut [Warrior],
     enemies: &mut [MonsterRecord],
@@ -22,11 +32,11 @@ pub fn victory_loot(
 ) -> Result<(i32, Vec<InventoryRecord>), RuleError> {
     let mut loot_ids = vec![];
     for w in warriors.iter_mut() {
-        crate::story_inventory::normalize_warrior_after_battle(w)?;
+        crate::story::inventory::normalize_warrior_after_battle(w)?;
     }
     let mut experience = 0_i32;
     for m in enemies.iter_mut() {
-        let level = m.record().level()?;
+        let level = m.record().hit_dice()?;
         if !matches!(level, 0..=3 | 7)
             || m.record().psi_points()? != 0
             || m.record().credit_drop_bound()? > 0
@@ -49,11 +59,11 @@ pub fn victory_loot(
         };
         experience = experience.wrapping_add(
             base + flying
-                + multiplier * i32::from(m.record().maximum_stamina()?)
-                + i32::from(m.record().experience_bonus()?),
+                + multiplier * i32::from(m.record().stamina_max()?)
+                + i32::from(m.record().experience()?),
         );
         for slot in 0..6 {
-            let id = m.record().loot_item(slot)?;
+            let id = m.record().item(slot)?;
             if id == 0 {
                 continue;
             }
@@ -65,11 +75,12 @@ pub fn victory_loot(
                 .items
                 .get(id.unsigned_abs() as usize)
                 .ok_or_else(|| RuleError::Invalid("monster loot outside item bands".into()))?;
-            if random.bound(150) < 70 || matches!(ItemDefinition(definition).category()?, 23..=25) {
+            if random.bound(150) < 70 || matches!(ItemDefinition(definition).item_type()?, 23..=25)
+            {
                 loot_ids.push(id);
             }
         }
-        // The older victory entry also clears DrainPsi; ordinary booty does not.
+        // This victory path also clears DrainPsi; ordinary booty does not.
         for condition in [
             Condition::Retreating,
             Condition::Helpless,
@@ -81,15 +92,15 @@ pub fn victory_loot(
         ] {
             m.record_mut().set_condition(condition, 0);
         }
-        m.record_mut().clear_damage_marker();
+        m.record_mut().clear_been_attacked();
         m.record_mut().set_faction(1);
     }
     let eligible = warriors
         .iter()
         .filter(|w| {
             w.stamina().unwrap_or(0) > 0
-                && w.record().automatic_mode().unwrap_or(-1) >= 0
-                && w.record().active_flag() != 0
+                && w.record().computer_control().unwrap_or(-1) >= 0
+                && w.record().in_battle() != 0
         })
         .count() as i32;
     let share = if eligible != 0 {
@@ -98,7 +109,7 @@ pub fn victory_loot(
         0
     };
     for w in warriors {
-        if w.stamina()? > 0 && w.record().automatic_mode()? >= 0 && w.record().active_flag() != 0 {
+        if w.stamina()? > 0 && w.record().computer_control()? >= 0 && w.record().in_battle() != 0 {
             let points = CharacterInformation(&w.bytes)
                 .upgrade_points()?
                 .wrapping_add(share);

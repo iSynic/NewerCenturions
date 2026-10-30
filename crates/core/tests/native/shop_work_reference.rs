@@ -1,6 +1,6 @@
 //! Original loadshop, moveicon stock slices and saveshop, with source command joins.
 //! Native stock slices do not qualify payment, inventory or original UI execution.
-use crate::shop::{self, ShopWork};
+use crate::shop::{self, TheShop};
 use crate::test_support::{bytes, content, fixture};
 use crate::{Command, Content, Session};
 use centurions_content::records::SHOP_BYTES;
@@ -32,11 +32,11 @@ fn session(captures: &Value, content: &Content) -> Session {
         state.shops.get_mut(&0).unwrap()[id * SHOP_BYTES..(id + 1) * SHOP_BYTES]
             .copy_from_slice(&bytes(&input["shop_record"]));
     }
-    state.native_work.shop_work.copy_file(&bytes(
+    state.globals.the_shop.copy_file(&bytes(
         &source(&captures["cases"][0])["before"]["current_shop_work"],
     ));
     state.party_currency = 1_000_000;
-    state.warriors[0].record_mut().set_carried_weight(0);
+    state.warriors[0].record_mut().set_load(0);
     state.warriors[0].record_mut().set_weight_capacity(i16::MAX);
     state
 }
@@ -45,7 +45,7 @@ fn session(captures: &Value, content: &Content) -> Session {
 fn retained_shop_matches_native_work_and_public_transaction_file_timing() {
     let captures = fixture("shop-work.json");
     let cases = captures["cases"].as_array().unwrap();
-    let mut work = ShopWork::default();
+    let mut work = TheShop::default();
     for case in cases {
         assert_eq!(case["status"], "completed");
         let input = source(case);
@@ -77,7 +77,7 @@ fn retained_shop_matches_native_work_and_public_transaction_file_timing() {
             source(case)["shop_id"].as_i64().unwrap() as i16,
         )
         .unwrap();
-        assert_eq!(state.native_work.shop_work.record(), work_after(case));
+        assert_eq!(state.globals.the_shop.record(), work_after(case));
         assert_eq!(state.shops, files, "loadshop changed its input file");
     }
     crate::apply(Command::OpenShop, &mut state, &content).unwrap();
@@ -95,7 +95,7 @@ fn retained_shop_matches_native_work_and_public_transaction_file_timing() {
         &content,
     )
     .unwrap();
-    assert_eq!(state.native_work.shop_work.record(), work_after(&cases[2]));
+    assert_eq!(state.globals.the_shop.record(), work_after(&cases[2]));
     let slot = state.warriors[0]
         .inventory()
         .unwrap()
@@ -103,7 +103,7 @@ fn retained_shop_matches_native_work_and_public_transaction_file_timing() {
         .rposition(|item| item.id() == 186)
         .unwrap();
     crate::apply(Command::SellItem { warrior: 0, slot }, &mut state, &content).unwrap();
-    assert_eq!(state.native_work.shop_work.record(), work_after(&cases[3]));
+    assert_eq!(state.globals.the_shop.record(), work_after(&cases[3]));
     assert_eq!(state.shops, files, "moveicon flushed stock before saveshop");
     crate::apply(Command::CloseShop, &mut state, &content).unwrap();
     let id = source(&cases[4])["shop_id"].as_u64().unwrap() as usize;
@@ -151,6 +151,6 @@ fn retained_shop_matches_native_work_and_public_transaction_file_timing() {
     );
     assert_eq!(
         &state.shops[&level][id * SHOP_BYTES..(id + 1) * SHOP_BYTES],
-        state.native_work.shop_work.record(),
+        state.globals.the_shop.record(),
     );
 }

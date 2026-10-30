@@ -29,9 +29,9 @@ fn boat_commands_match_original_condition_setters_and_question_writes() {
         let mut content = support::content();
         let mut state = support::mission_session(&content);
         state.random = RandomState::new(1);
-        state.native_work.boat = input("0x442748") as u8;
-        state.native_work.boat_facing = input("0x442740") as i8;
-        state.native_work.shore_attempts = input("0x437a86") as i16;
+        state.globals.boat = input("0x442748") as u8;
+        state.globals.boat_facing = input("0x442740") as i8;
+        state.globals.shore_attempts = input("0x437a86") as i16;
         let position = state.exploration.as_mut().unwrap();
         (position.x, position.y) = (2, 2);
         position.presentation = None;
@@ -69,7 +69,7 @@ fn boat_commands_match_original_condition_setters_and_question_writes() {
             let boarding = name.starts_with("boarding");
             let tile = if boarding { 147 } else { 35 };
             position.floor[183] = tile;
-            content.scenario.as_mut().unwrap().maps[0].tile_properties =
+            content.scenario.as_mut().unwrap().maps[0].map_stats =
                 support::data("Data Swamp BD")[64..12064].to_vec();
             let events = apply(Command::Move { dx: 0, dy: 1 }, &mut state, &content).unwrap();
             let question = case
@@ -84,7 +84,7 @@ fn boat_commands_match_original_condition_setters_and_question_writes() {
             if boarding {
                 // The capture stops before109a22's counter reset and decline walk.
                 assert_eq!(
-                    state.native_work.shore_attempts,
+                    state.globals.shore_attempts,
                     input("0x437a86") as i16
                 );
             }
@@ -101,7 +101,7 @@ fn boat_commands_match_original_condition_setters_and_question_writes() {
                 );
                 assert_eq!(
                     state
-                        .native_work
+                        .globals
                         .shore_attempts
                         .to_be_bytes()
                         .to_vec(),
@@ -125,19 +125,19 @@ fn boat_commands_match_original_condition_setters_and_question_writes() {
             assert_eq!(sounds.contains(&20005), question.is_some(), "{name}");
         }
         assert_eq!(
-            [state.native_work.boat],
+            [state.globals.boat],
             memory("boat").as_slice(),
             "{name}"
         );
         assert_eq!(
-            [state.native_work.boat_facing as u8],
+            [state.globals.boat_facing as u8],
             memory("facing").as_slice(),
             "{name}"
         );
         if name.starts_with("opcode103") {
             assert_eq!(
                 state
-                    .native_work
+                    .globals
                     .shore_attempts
                     .to_be_bytes()
                     .to_vec(),

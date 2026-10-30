@@ -9,15 +9,15 @@ fn ranged_to_natural_fallback_matches_original_full_records_and_randomness() {
         let mut party = case.bytes("warriors_before");
         let member = case.n::<usize>("member");
         let mut warrior = crate::support::warrior_at(&party, member);
-        let mut enemy = MonsterRecord {
+        let mut monster = MonsterRecord {
             bytes: case.bytes("enemy_before"),
         };
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
-        let result = natural_attack(&mut warrior, &mut enemy, 0, &mut random, 0).unwrap();
+        let result = natural_attack(&mut warrior, &mut monster, 0, &mut random, 0).unwrap();
         crate::support::put_warrior(&mut party, member, &warrior);
         support::native_expect! {
             bytes party => &case["warriors_after"], "case{index} party";
-            bytes enemy.bytes => &case["enemy_after"], "case{index} enemy";
+            bytes monster.bytes => &case["enemy_after"], "case{index} enemy";
             rng random => (&case["seed_after"], &case["rng_draws"]), "binary_required_weapon_fallback";
             scalar (result.sounds) => &case["sounds"], "binary_required_weapon_fallback";
         }

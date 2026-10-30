@@ -1,5 +1,5 @@
 use crate::{prelude::*, support};
-use centurions_core::{Event, feedback::NativeFeedback};
+use centurions_core::{Event, feedback::GameFeedback};
 
 #[test]
 fn mechanical_transactions_match_original_records_random_and_ordered_feedback() {
@@ -10,12 +10,12 @@ fn mechanical_transactions_match_original_records_random_and_ordered_feedback() 
             original_sha256: String::new(),
             bytes: case.bytes("warrior_before"),
         };
-        let mut enemy = centurions_content::combat::MonsterRecord {
+        let mut monster = centurions_content::combat::MonsterRecord {
             bytes: case.bytes("enemy_before"),
         };
         let mut random = RandomState::new(case.n("seed_before"));
         let effects =
-            centurions_core::combat::capture::resolve(&mut warrior, &mut enemy, &mut random)
+            centurions_core::combat::capture::resolve(&mut warrior, &mut monster, &mut random)
                 .unwrap();
         assert_eq!(
             warrior.bytes,
@@ -24,7 +24,7 @@ fn mechanical_transactions_match_original_records_random_and_ordered_feedback() 
             case.text("id")
         );
         assert_eq!(
-            enemy.bytes,
+            monster.bytes,
             case.bytes("enemy_after"),
             "{}",
             case.text("id")
@@ -37,11 +37,11 @@ fn mechanical_transactions_match_original_records_random_and_ordered_feedback() 
             .iter()
             .map(|effect| match effect {
                 Event::Sound { resource_id } => format!("sound:{resource_id}"),
-                Event::Feedback(NativeFeedback::Warning { index }) => format!("warning:{index}"),
-                Event::Feedback(NativeFeedback::Flash {
+                Event::Feedback(GameFeedback::Warning { index }) => format!("warning:{index}"),
+                Event::Feedback(GameFeedback::Flash {
                     address: 0x40250d, ..
                 }) => "exit".into(),
-                Event::Feedback(NativeFeedback::Flash { address, .. }) => {
+                Event::Feedback(GameFeedback::Flash { address, .. }) => {
                     format!("flash:{address:x}")
                 }
                 _ => panic!("unexpected capture effect"),

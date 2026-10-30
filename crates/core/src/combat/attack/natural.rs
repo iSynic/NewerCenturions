@@ -1,4 +1,4 @@
-//! Enemy natural melee (attack2 0x102038), including reflected conditions.
+//! A monster's natural attack on a warrior, including reflected conditions.
 use super::{AttackResult, melee_accuracy};
 use crate::{
     RandomState, RuleError,
@@ -10,9 +10,12 @@ use crate::{
 use centurions_content::{
     Warrior,
     combat::MonsterRecord,
-    records::{AttackPacketMut, Condition},
+    records::{Condition, SpellInfoRecordMut},
 };
 
+/// A monster's natural attack on a warrior: the monster's selected weapon is put away before the
+/// natural blow is resolved; a monster armed with anything other than the natural weapon cannot use
+/// it here.
 pub(super) fn resolve(
     defender: &mut Warrior,
     attacker: &mut MonsterRecord,
@@ -26,15 +29,13 @@ pub(super) fn resolve(
         return Err(RuleError::Invalid("natural attack outside record".into()));
     }
     let weapon = attacker.record().melee_weapon()?;
-    if !matches!(weapon, 0 | 9)
-        || (weapon == 9 && !matches!(attacker.record().selected_item()?, 0 | 9))
-    {
+    if !matches!(weapon, 0 | 9) || (weapon == 9 && !matches!(attacker.record().weapon()?, 0 | 9)) {
         return Err(RuleError::Unsupported {
             action: "combat.attack",
             dependency: "enemy weapon, attack condition, reflection or unconscious target",
         });
     }
-    attacker.record_mut().set_selected_item(0);
+    attacker.record_mut().set_weapon(0);
     resolve_prepared(
         defender,
         attacker,
@@ -47,7 +48,9 @@ pub(super) fn resolve(
     )
 }
 
-/// attack2 after its caller has loaded natural work and committed selection writers.
+/// A monster's natural attack on a warrior, once the caller has loaded it.
+///
+/// Original: attack2
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_prepared(
     defender: &mut Warrior,
@@ -59,8 +62,7 @@ pub(crate) fn resolve_prepared(
     difficulty: i16,
     fallback: bool,
 ) -> Result<(AttackResult, Vec<u8>, bool, i16), RuleError> {
-    // attack2 reads natural attack n at 0x93 + 4n of its 0x120-byte record copy, so
-    // n up to 34 stays inside the record.
+    // Natural attacks up to 34 lie inside the monster record.
     if attack_index >= 35 {
         return Err(RuleError::Invalid("natural attack outside record".into()));
     }
@@ -84,16 +86,17 @@ pub(crate) fn resolve_prepared(
     }
     let bonus = attacker
         .record()
-        .melee_bonus()?
+        .damage_plus()?
         .wrapping_add(attacker.record().condition(Condition::BonusDamage));
-    // Rejected default weapon 9 reloads weapon-zero damage, not natural bounds.
+    // A refused default weapon 9 reloads weapon zero's damage, not the natural
+    // attack's.
     let rejected_weapon = fallback;
-    AttackPacketMut(&mut packet).set_damage_bounds(
+    SpellInfoRecordMut(&mut packet).set_damage_bounds(
         bonus.wrapping_add(if rejected_weapon { 1 } else { natural.minimum }),
         bonus.wrapping_add(if rejected_weapon { 0 } else { natural.maximum }),
     );
     if !rejected_weapon {
-        AttackPacketMut(&mut packet).set_impact_sound(if natural.impact_sound == 0 {
+        SpellInfoRecordMut(&mut packet).set_impact_sound(if natural.impact_sound == 0 {
             100
         } else {
             natural.impact_sound
@@ -150,9 +153,9 @@ pub(crate) fn resolve_prepared(
     record.count_hit_received();
     record.set_stamina(health);
     if (-9..=0).contains(&health) {
-        record.set_bleeding_flag(1);
+        record.set_bleeding(1);
     }
-    record.mark_damaged();
+    record.mark_been_attacked();
     Ok((
         AttackResult {
             icon: resolved.sound,
@@ -167,6 +170,7 @@ pub(crate) fn resolve_prepared(
     ))
 }
 
+/// The outcome of a blow that did nothing.
 fn no_damage(packet: Vec<u8>, reflected: bool) -> (AttackResult, Vec<u8>, bool, i16) {
     (
         AttackResult {

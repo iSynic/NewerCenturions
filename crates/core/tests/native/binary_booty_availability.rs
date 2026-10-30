@@ -18,7 +18,7 @@ fn original_booty_recounts_unavailable_warriors_before_normalizing_and_preserves
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let result = rewards::prepare(&warriors, &enemies, &content, 0, 0, 37, &mut random)
             .unwrap_or_else(|error| panic!("case {index}: {error:?}"));
-        support::expect(result.unavailable, &case["unavailable_prepared"]);
+        support::expect(result.kill_party, &case["unavailable_prepared"]);
         let prepared = flatten(&result.warriors);
         assert_eq!(
             prepared,
@@ -42,7 +42,7 @@ fn original_booty_recounts_unavailable_warriors_before_normalizing_and_preserves
                 change[1].as_u64().unwrap() as u8;
         }
         assert_eq!(
-            support::record_bytes(&result.enemies),
+            support::record_bytes(&result.monsters),
             expected_enemy,
             "case {index}: enemy normalization"
         );
@@ -50,6 +50,6 @@ fn original_booty_recounts_unavailable_warriors_before_normalizing_and_preserves
         let closed = flatten(&rewards::close_without_promotion(&result.warriors).unwrap());
         assert_eq!(closed, case.bytes("after"), "case {index}: Close");
         assert_eq!(digest(&closed), case.text("after_sha256"));
-        support::expect(result.unavailable, &case["unavailable_after"]);
+        support::expect(result.kill_party, &case["unavailable_after"]);
     }
 }

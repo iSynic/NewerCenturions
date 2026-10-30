@@ -12,12 +12,12 @@ fn enemy_movement_matches_original_routine() {
             let mut random = RandomState::new(case.n::<u32>("initial_seed"));
             let result = move_enemy(&mut combat, &mission, 0, &mut random).unwrap();
             support::native_expect! {
-                bytes combat.enemies.records[0].bytes => &case["after"], "enemy case {index}";
+                bytes combat.roster.records[0].bytes => &case["after"], "enemy case {index}";
                 bytes support::word_bytes(&combat
-                            .map.tiles) => &case["tiles"], "map case {index}";
+                            .field.tiles) => &case["tiles"], "map case {index}";
             }
             assert_eq!(
-                combat.enemies.positions[0],
+                combat.roster.mon_pos[0],
                 (case.n::<i16>("x"), case.n::<i16>("y")),
                 "position case {index}"
             );

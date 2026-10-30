@@ -19,23 +19,23 @@ fn authored_large_allies_enter_battle_and_resume_their_turns() {
         text: map.dialogue(1025).unwrap(),
     });
     apply(Command::Continue, &mut state, &content).unwrap();
-    assert_eq!(state.ally_count, 7);
+    assert_eq!(state.held_over, 7);
     let position = state.exploration.as_mut().unwrap();
     position.script = Some(centurions_core::ScriptState::scheduled(
         content.map(9).unwrap().script(55).unwrap().to_vec(),
         0,
     ));
     apply(Command::Continue, &mut state, &content).unwrap();
-    assert_eq!(current_combat(&state).enemies.records.len(), 8);
-    state.combat.as_mut().unwrap().enemies.records[7].bytes[0x110..0x112]
+    assert_eq!(current_combat(&state).roster.records.len(), 8);
+    state.combat.as_mut().unwrap().roster.records[7].bytes[0x110..0x112]
         .copy_from_slice(&30000_i16.to_be_bytes());
     let mut resumed = support::checkpoint(&state, &content, "large-allies");
     for body in 10..17 {
         for candidate in [&mut state, &mut resumed] {
             let combat = candidate.combat.as_mut().unwrap();
-            combat.order[combat.cursor] = body;
+            combat.battle_order[combat.battle_order_index] = body;
             combat.turn_origin = None;
-            combat.enemies.records[(body - 10) as usize].bytes[0x109] = 2;
+            combat.roster.records[(body - 10) as usize].bytes[0x109] = 2;
         }
         support::replay_command(Command::RunEnemyTurn, &mut state, &mut resumed, &content);
     }

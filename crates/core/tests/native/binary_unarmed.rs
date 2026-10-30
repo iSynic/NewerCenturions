@@ -58,20 +58,20 @@ fn melee_weapon_branches_match_original_attack_and_attack2() {
         let context = format!("melee-weapon-branches case {index} {}", case["group"]);
         let weapon = case.bytes("weapon");
         let mut combat = support::battle();
-        combat.order[1] = case.n("order");
-        combat.enemies.records = vec![MonsterRecord {
+        combat.battle_order[1] = case.n("order");
+        combat.roster.records = vec![MonsterRecord {
             bytes: case.bytes("target"),
         }];
-        combat.enemies.positions = vec![(20, 20)];
+        combat.roster.mon_pos = vec![(20, 20)];
         let mut party = vec![Warrior::read(&case.bytes("input")).unwrap()];
         let defender: i16 = case.n("defender");
         match defender {
             1 => party.push(Warrior::read(&case.bytes("other")).unwrap()),
             11 => {
-                combat.enemies.records.push(MonsterRecord {
+                combat.roster.records.push(MonsterRecord {
                     bytes: case.bytes("other"),
                 });
-                combat.enemies.positions.push((21, 20));
+                combat.roster.mon_pos.push((21, 20));
             }
             _ => {}
         }
@@ -128,7 +128,7 @@ fn melee_weapon_branches_match_original_attack_and_attack2() {
         };
         support::native_expect! {
             bytes party[0].bytes => &case["after"], &context;
-            bytes combat.enemies.records[0].bytes => &case["after_target"], &context;
+            bytes combat.roster.records[0].bytes => &case["after_target"], &context;
             bytes packet => &case["packet"], &context;
             rng random => (&case["seed"], &case["draws"]), &context;
             scalar sounds => &case["sounds"], &context;
@@ -136,7 +136,7 @@ fn melee_weapon_branches_match_original_attack_and_attack2() {
         match defender {
             1 => support::assert_bytes(&party[1].bytes, &case.bytes("after_other"), &context),
             11 => support::assert_bytes(
-                &combat.enemies.records[1].bytes,
+                &combat.roster.records[1].bytes,
                 &case.bytes("after_other"),
                 &context,
             ),

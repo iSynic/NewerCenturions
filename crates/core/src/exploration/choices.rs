@@ -1,4 +1,4 @@
-//! Choices for maintained exploration.
+//! Choices the player makes while a script runs: picking members and menu entries.
 use super::{active_map, choose_avoidance, finish_dispatch, run_script, typed_record, unsupported};
 use crate::{
     Event, Exploration, Phase, Presentation, RuleError, Session, mission, story, typed_encounter,
@@ -7,6 +7,7 @@ use centurions_content::Content;
 use centurions_content::mission::OpeningMission;
 use centurions_content::records::{EventHeaderTableMut, ExtraTable, StoryRecordMut};
 
+/// Takes the player's choice of party member for a script that asked the party to pick someone.
 pub fn choose_warrior(
     state: &mut Session,
     content: &Content,
@@ -41,32 +42,35 @@ pub fn choose_warrior(
     let Some(Presentation::WarriorChoice { extra }) = position.presentation.as_ref() else {
         return Err(RuleError::Invalid("no warrior choice active".into()));
     };
-    let selected = crate::story_skill::single_warrior(&state.warriors, index)?;
-    state.native_work.party_mask = selected;
-    state.selected_warrior = index;
-    // Sessions saved before opcode 14 used the shared pick hold its single pick here.
+    let selected = crate::story::skill::single_warrior(&state.warriors, index)?;
+    state.globals.party_track = selected;
+    state.char_select_new = index;
+    // Saves made before party picks were held separately keep their one pick here.
     if *extra == -1 {
         position.presentation = None;
         return run_script(state, content);
     }
     let record = ExtraTable(&map.combat.as_ref().unwrap().encounters).record(*extra as usize)?;
-    state.native_work.extra_record = record.to_vec();
-    let plan = crate::story_skill::predicate(record, &state.warriors, &selected)?;
+    state.globals.extra_record = record.to_vec();
+    let plan = crate::story::skill::predicate(record, &state.warriors, &selected)?;
     let script = position
         .script
         .as_mut()
         .ok_or_else(|| RuleError::Invalid("choice script missing".into()))?;
-    if let crate::story_skill::SkillPlan::ReplaceScript { script: id, .. } = plan {
+    if let crate::story::skill::SkillPlan::ReplaceScript { script: id, .. } = plan {
         script.restart_from(&map.script(id)?);
     }
     position.presentation = None;
     run_script(state, content)
 }
 
-/// getchoice125112: an unpicked member takes the next countdown number (sound 141),
-/// a picked one is released and later picks move up (sound 144); dead members are
-/// refused (sound 6000) unless the pick allows them. The script resumes when the
-/// countdown is spent, after -14's inversion.
+/// Picks or releases a member. An unpicked member takes the next countdown
+/// number (sound 141); a picked one is released and later picks move up (sound
+/// 144). Dead members are refused (sound 6000) unless the pick allows them. The
+/// script resumes when the countdown is spent, after an inverted pick flips the
+/// mask.
+///
+/// Original: getchoice
 fn pick_member(
     state: &mut Session,
     content: &Content,
@@ -77,11 +81,11 @@ fn pick_member(
 ) -> Result<Vec<Event>, RuleError> {
     if !unconscious && state.warriors[index].stamina()? < 1 {
         return Err(RuleError::Refused {
-            feedback: vec![crate::feedback::NativeFeedback::Sound { resource_id: 6000 }],
+            feedback: vec![crate::feedback::GameFeedback::Sound { resource_id: 6000 }],
         });
     }
-    state.selected_warrior = index;
-    let mask = &mut state.native_work.party_mask;
+    state.char_select_new = index;
+    let mask = &mut state.globals.party_track;
     let (sound, remaining) = if mask[index] == 0 {
         mask[index] = remaining;
         (141, remaining - 1)
@@ -115,6 +119,8 @@ fn pick_member(
     Ok(events)
 }
 
+/// Answers a yes or no question put to the player: the boat question, an avoidance, a stage change
+/// or a scenario question.
 pub fn choose(
     state: &mut Session,
     content: &Content,
@@ -159,7 +165,7 @@ pub fn choose(
         return Err(RuleError::Invalid("no question active".into()));
     };
     let record = ExtraTable(&map.combat.as_ref().unwrap().encounters).record(*extra as usize)?;
-    state.native_work.extra_record = record.to_vec();
+    state.globals.extra_record = record.to_vec();
     match typed_encounter::question_plan(record, answer)? {
         typed_encounter::QuestionPlan::Continue => {}
         typed_encounter::QuestionPlan::MoveAway => {
@@ -186,14 +192,14 @@ pub fn choose(
                 .as_mut()
                 .ok_or_else(|| RuleError::Invalid("question script missing".into()))?;
             StoryRecordMut(&mut script.record).write_actions(&story::dispatch_menu_branch(
-                state.native_work.encounter_work.header(false),
+                state.globals.encounter_headers.header(false),
                 branch as i8 + 1,
             )?);
             script.cursor = 0;
         }
         typed_encounter::QuestionPlan::TypedBranch(branch) => {
             let script = position.script.as_mut().ok_or("question script missing")?;
-            let record = state.native_work.encounter_work.header(true);
+            let record = state.globals.encounter_headers.header(true);
             StoryRecordMut(&mut script.record)
                 .write_actions(&story::dispatch_menu_branch(record, branch as i8 + 1)?);
             script.cursor = 0;
@@ -204,10 +210,11 @@ pub fn choose(
     run_script(state, content)
 }
 
+/// Steps the party back out of the square it just entered.
 pub(super) fn back_out(position: &mut Exploration) -> Result<Event, RuleError> {
     let [dx, dy] = position.last_move;
     let forward = OpeningMission::index(position.x + i32::from(dx), position.y + i32::from(dy))?;
-    let undone = crate::story_move_away::move_away(
+    let undone = crate::story::move_away::move_away(
         position.x,
         position.y,
         dx,
@@ -224,6 +231,7 @@ pub(super) fn back_out(position: &mut Exploration) -> Result<Event, RuleError> {
     })
 }
 
+/// Backs out of a scenario menu or typed prompt.
 pub fn cancel_menu(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let position = state
         .exploration
@@ -250,7 +258,7 @@ pub fn cancel_menu(state: &mut Session, content: &Content) -> Result<Vec<Event>,
     }
     let position = state.exploration.as_mut().unwrap();
     let script = position.script.as_ref().unwrap();
-    // buttonchoice10a5a8 marks the manual caller; newland142cca skips its menu backstep.
+    // A menu chosen by hand skips the script's menu backstep.
     let backstep =
         matches!(position.presentation, Some(Presentation::Typed { .. })) || !script.item_return;
     let mut events =
@@ -267,6 +275,7 @@ pub fn cancel_menu(state: &mut Session, content: &Content) -> Result<Vec<Event>,
     Ok(events)
 }
 
+/// Takes the player's pick from a scenario menu and resumes the script with it.
 pub fn select_menu(
     state: &mut Session,
     content: &Content,
@@ -279,7 +288,7 @@ pub fn select_menu(
     let Some(Presentation::Menu { .. }) = position.presentation.as_ref() else {
         return Err(RuleError::Invalid("no menu active".into()));
     };
-    let record = state.native_work.encounter_work.record(false)?;
+    let record = state.globals.encounter_headers.record(false)?;
     let selection = story::select_menu_entry(&record, index)?;
     let script = position
         .script
@@ -297,6 +306,7 @@ pub fn select_menu(
     run_script(state, content)
 }
 
+/// Resumes the script with the entry the player picked for a typed prompt.
 pub(crate) fn finish_typed_selection(
     state: &mut Session,
     content: &Content,

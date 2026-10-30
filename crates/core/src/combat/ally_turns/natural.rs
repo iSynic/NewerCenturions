@@ -1,5 +1,6 @@
-//! Natural enemy-to-enemy attacks, including controlled allies and reflection.
-use super::position;
+//! Monsters attacking monsters with natural weapons, including controlled allies and
+//! reflection.
+use crate::combat::death_scripts::DeathProcessing;
 use crate::{
     RandomState, RuleError,
     combat::{
@@ -9,12 +10,15 @@ use crate::{
         lifecycle,
     },
 };
+use centurions_content::combat::MONSTER_BYTES;
 use centurions_content::{
     Warrior,
     combat::MonsterRecord,
-    records::{AttackPacketMut, Condition, EnemyRecord, EnemyRecordMut},
+    records::{Condition, EnemyRecord, EnemyRecordMut, SpellInfoRecordMut},
 };
 
+/// One monster's natural attack on another, with the default attack packet and the attacker as the
+/// acting body.
 pub fn natural_attack_enemy(
     combat: &mut Combat,
     warriors: &mut [Warrior],
@@ -31,12 +35,14 @@ pub fn natural_attack_enemy(
         target,
         index,
         attacker,
-        attack::default_attack_packet(),
+        attack::default_spell_info(),
         None,
     )?
     .0)
 }
 
+/// A monster's natural attack on another using the supplied attack table and attack packet; the
+/// attacker is the acting body.
 #[allow(clippy::too_many_arguments)]
 pub fn natural_attack_enemy_with_packet(
     combat: &mut Combat,
@@ -46,7 +52,7 @@ pub fn natural_attack_enemy_with_packet(
     target: i16,
     index: usize,
     attacks: &[u8],
-    retained: &[u8],
+    info: &[u8],
 ) -> Result<(AttackResult, Vec<u8>), RuleError> {
     natural_attack_enemy_with_actor(
         combat,
@@ -54,57 +60,56 @@ pub fn natural_attack_enemy_with_packet(
         random,
         (attacker, target, index, attacker),
         attacks,
-        retained,
+        info,
     )
 }
 
+/// A monster's natural attack on another where the body whose turn it is may differ from the
+/// attacker; returns the result and the packet.
 pub fn natural_attack_enemy_with_actor(
     combat: &mut Combat,
     warriors: &mut [Warrior],
     random: &mut RandomState,
     bodies: (i16, i16, usize, i16),
     attacks: &[u8],
-    retained: &[u8],
+    info: &[u8],
 ) -> Result<(AttackResult, Vec<u8>), RuleError> {
-    let (result, packet, _) = natural_attack_enemy_with_target(
-        combat,
-        warriors,
-        random,
-        bodies,
-        Some(attacks),
-        retained,
-    )?;
+    let (result, packet, _) =
+        natural_attack_enemy_with_target(combat, warriors, random, bodies, Some(attacks), info)?;
     Ok((result, packet))
 }
 
+/// As the actor form, also telling the caller whether the blow was reflected back.
 pub(crate) fn natural_attack_enemy_with_target(
     combat: &mut Combat,
     warriors: &mut [Warrior],
     random: &mut RandomState,
     bodies: (i16, i16, usize, i16),
     attacks: Option<&[u8]>,
-    retained: &[u8],
+    info: &[u8],
 ) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
-    natural_attack_enemy_with_processing(combat, warriors, random, bodies, attacks, retained, None)
+    natural_attack_enemy_with_processing(combat, warriors, random, bodies, attacks, info, None)
 }
 
+/// A monster's natural attack on another, committed only if the whole attack succeeds. The acting
+/// monster's selected weapon is cleared first, and a kill goes through the given death processing.
 pub(crate) fn natural_attack_enemy_with_processing(
     combat: &mut Combat,
     warriors: &mut [Warrior],
     random: &mut RandomState,
     bodies: (i16, i16, usize, i16),
     attacks: Option<&[u8]>,
-    retained: &[u8],
-    processing: Option<crate::combat::death_scripts::DeathProcessing>,
+    info: &[u8],
+    processing: Option<DeathProcessing>,
 ) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
-    let (attacker, target, index, retained_actor) = bodies;
-    if retained.len() != 58 {
+    let (attacker, target, index, turn_actor) = bodies;
+    if info.len() != 58 {
         return Err(RuleError::Invalid("retained attack packet size".into()));
     }
     let base = attacks
-        .map(attack::attack_packet)
+        .map(attack::spell_info)
         .transpose()?
-        .unwrap_or_else(attack::default_attack_packet);
+        .unwrap_or_else(attack::default_spell_info);
     let (mut next_combat, mut next_warriors, mut next_random) =
         (combat.clone(), warriors.to_vec(), random.clone());
     let result = natural_attack_enemy_inner(
@@ -114,7 +119,7 @@ pub(crate) fn natural_attack_enemy_with_processing(
         attacker,
         target,
         index,
-        retained_actor,
+        turn_actor,
         base,
         processing,
     )?;
@@ -124,6 +129,8 @@ pub(crate) fn natural_attack_enemy_with_processing(
     Ok(result)
 }
 
+/// Runs one monster-on-monster natural attack against the live battle: puts the attacker's and
+/// target's records through the attack, adjusts the hostile count and kills whichever body fell.
 #[allow(clippy::too_many_arguments)]
 fn natural_attack_enemy_inner(
     combat: &mut Combat,
@@ -132,9 +139,9 @@ fn natural_attack_enemy_inner(
     attacker: i16,
     target: i16,
     index: usize,
-    retained_actor: i16,
+    turn_actor: i16,
     packet: Vec<u8>,
-    processing: Option<crate::combat::death_scripts::DeathProcessing>,
+    processing: Option<DeathProcessing>,
 ) -> Result<(AttackResult, Vec<u8>, bool), RuleError> {
     if attacker < 10 || target < 10 || attacker == target || index >= 6 {
         return Err(RuleError::Invalid("invalid monster attack".into()));
@@ -142,14 +149,14 @@ fn natural_attack_enemy_inner(
     let attacker_index = (attacker - 10) as usize;
     let target_index = (target - 10) as usize;
     let source = combat
-        .enemies
+        .roster
         .records
         .get(attacker_index)
         .ok_or_else(|| RuleError::Invalid("attacker missing".into()))?
         .bytes
         .clone();
     let victim = &combat
-        .enemies
+        .roster
         .records
         .get(target_index)
         .ok_or_else(|| RuleError::Invalid("target missing".into()))?
@@ -163,17 +170,17 @@ fn natural_attack_enemy_inner(
             dependency: "monster weapon, attack condition, reflection or immunity",
         });
     }
-    if source_record.selected_item()? != 0 {
-        let retained_actor = usize::try_from(retained_actor - 10)
+    if source_record.weapon()? != 0 {
+        let turn_actor = usize::try_from(turn_actor - 10)
             .map_err(|_| RuleError::Invalid("invalid retained enemy actor".into()))?;
-        let record = combat.story_record_mut(retained_actor)?;
-        record.record_mut().set_selected_item(0);
+        let record = combat.story_record_mut(turn_actor)?;
+        record.record_mut().set_weapon(0);
     }
-    let origin = position(combat, attacker);
-    let destination = position(combat, target);
+    let origin = combat.body_position(attacker);
+    let destination = combat.body_position(target);
     let mut records = [
-        combat.enemies.records[attacker_index].bytes.clone(),
-        combat.enemies.records[target_index].bytes.clone(),
+        combat.roster.records[attacker_index].bytes.clone(),
+        combat.roster.records[target_index].bytes.clone(),
     ];
     let outcome = natural_core(
         (&source, victim),
@@ -185,9 +192,9 @@ fn natural_attack_enemy_inner(
         random,
     )?;
     let [attacker_bytes, target_bytes] = records;
-    combat.enemies.records[attacker_index].bytes = attacker_bytes;
-    combat.enemies.records[target_index].bytes = target_bytes;
-    combat.victory_work.add_total(outcome.victory_delta);
+    combat.roster.records[attacker_index].bytes = attacker_bytes;
+    combat.roster.records[target_index].bytes = target_bytes;
+    combat.kill_counts.add_num_enemy(outcome.victory_delta);
     if let Some(struck) = outcome.killed {
         let body = if struck == Struck::Attacker {
             attacker
@@ -199,30 +206,30 @@ fn natural_attack_enemy_inner(
     Ok((outcome.result, outcome.packet, outcome.reflected))
 }
 
-/// The record attack2's NPC-target branch strikes: its target, or the attacker
-/// after the reflection redirect.
+/// Who a monster's blow lands on: its target, or itself when reflected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Struck {
     Attacker,
     Target,
 }
 
-/// attack2's NPC-against-NPC branch over two NPC records.
-pub(crate) struct NpcMelee {
+/// One monster attacks another.
+pub(crate) struct MonsterMelee {
     pub result: AttackResult,
     pub packet: Vec<u8>,
     pub reflected: bool,
     /// Rand(100) admitted the hit, before the immunity test.
     pub hit: bool,
-    /// The target's weapon immunity refused the hit (feedback code); attack2 returns.
+    /// The target's weapon immunity refused the hit (feedback code); the attack ends.
     pub immune: Option<i16>,
-    /// The WORD4435c4 change the caller applies before killbody.
+    /// The change to the hostile count the caller applies before killbody.
     pub victory_delta: i16,
-    /// The live caller's killbody, after the victory change.
+    /// The body killbody takes, after the hostile count changes.
     pub killed: Option<Struck>,
 }
 
-impl NpcMelee {
+impl MonsterMelee {
+    /// A blow that dealt no damage.
     fn missed(packet: Vec<u8>, reflected: bool, hit: bool, immune: Option<i16>) -> Self {
         Self {
             result: AttackResult {
@@ -242,9 +249,11 @@ impl NpcMelee {
     }
 }
 
-/// `source` and `victim` are the records as attack2 found them; `records` holds the
-/// attacker and target records it writes. Facing, accuracy, immunity, reflection,
-/// damage and the NPC condition switch keep the live order and draws.
+/// One monster's natural attack on another. `source` and `victim` are the records
+/// as the attack found them; `records` holds the ones it writes. Facing, accuracy,
+/// immunity, reflection, damage and the condition follow in that order.
+///
+/// Original: attack2
 pub(crate) fn natural_core(
     (source, victim): (&[u8], &[u8]),
     records: &mut [Vec<u8>; 2],
@@ -253,7 +262,7 @@ pub(crate) fn natural_core(
     difficulty: i16,
     mut packet: Vec<u8>,
     random: &mut RandomState,
-) -> Result<NpcMelee, RuleError> {
+) -> Result<MonsterMelee, RuleError> {
     let source_record = EnemyRecord::from_bytes(source);
     let victim_record = EnemyRecord::from_bytes(victim);
     let natural = source_record.natural_attack(index);
@@ -268,22 +277,22 @@ pub(crate) fn natural_core(
         );
     let immunity = victim_record.weapon_immunity()?;
     if hit && !matches!(immunity, -2..=0 | -1024) {
-        return Ok(NpcMelee::missed(packet, false, true, Some(-45)));
+        return Ok(MonsterMelee::missed(packet, false, true, Some(-45)));
     }
     let reflected = victim_record.condition(Condition::PhysicalReflection) != 0
         && random.bound(100) < 34
         && source_record.weapon_immunity()? == 0;
     if !hit {
-        return Ok(NpcMelee::missed(packet, reflected, false, None));
+        return Ok(MonsterMelee::missed(packet, reflected, false, None));
     }
     let bonus = source_record
-        .melee_bonus()?
+        .damage_plus()?
         .wrapping_add(source_record.condition(Condition::BonusDamage));
-    AttackPacketMut(&mut packet).set_damage_bounds(
+    SpellInfoRecordMut(&mut packet).set_damage_bounds(
         bonus.wrapping_add(natural.minimum),
         bonus.wrapping_add(natural.maximum),
     );
-    AttackPacketMut(&mut packet).set_impact_sound(if natural.impact_sound == 0 {
+    SpellInfoRecordMut(&mut packet).set_impact_sound(if natural.impact_sound == 0 {
         100
     } else {
         natural.impact_sound
@@ -298,7 +307,7 @@ pub(crate) fn natural_core(
             random,
         )?;
         let killed = result.killed.then_some(Struck::Attacker);
-        return Ok(NpcMelee {
+        return Ok(MonsterMelee {
             result,
             packet,
             reflected: true,
@@ -335,7 +344,7 @@ pub(crate) fn natural_core(
             random,
         )?
         else {
-            return Ok(NpcMelee::missed(packet, false, true, None));
+            return Ok(MonsterMelee::missed(packet, false, true, None));
         };
         effect.credit_attacker(attacker_bytes)?;
         extra_damage = effect.extra_damage;
@@ -351,7 +360,7 @@ pub(crate) fn natural_core(
                     } else if prior_faction == 0 {
                         victory_delta = 1;
                     }
-                    EnemyRecordMut::from_bytes(attacker_bytes).set_target_body(-1);
+                    EnemyRecordMut::from_bytes(attacker_bytes).set_target(-1);
                 }
                 _ => {}
             }
@@ -363,9 +372,9 @@ pub(crate) fn natural_core(
         .wrapping_sub(extra_damage);
     if resolved.total != 0 {
         EnemyRecordMut::from_bytes(target_bytes).set_stamina(health);
-        EnemyRecordMut::from_bytes(target_bytes).mark_damaged();
+        EnemyRecordMut::from_bytes(target_bytes).mark_been_attacked();
     }
-    Ok(NpcMelee {
+    Ok(MonsterMelee {
         result: AttackResult {
             icon: resolved.sound,
             feedback,
@@ -382,14 +391,14 @@ pub(crate) fn natural_core(
     })
 }
 
-/// Select result audio from the retained attack index and loaded impact word.
+/// The result sound, from the attack index and the loaded impact sound.
 pub fn result_audio(
     attacker: &MonsterRecord,
     index: usize,
     damage: i16,
     loaded_impact: i16,
 ) -> Result<i16, RuleError> {
-    if attacker.bytes.len() != 288 || index >= 6 {
+    if attacker.bytes.len() != MONSTER_BYTES || index >= 6 {
         return Err(RuleError::Invalid(
             "monster result audio record or index".into(),
         ));
@@ -397,7 +406,7 @@ pub fn result_audio(
     if damage == 0 {
         return Ok(650);
     }
-    if attacker.record().selected_item()? != 0 {
+    if attacker.record().weapon()? != 0 {
         return Ok(loaded_impact);
     }
     Ok(attacker.record().natural_attack(index).impact_sound)

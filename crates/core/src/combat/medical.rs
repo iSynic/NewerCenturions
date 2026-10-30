@@ -1,26 +1,30 @@
-use crate::combat::{Combat, lifecycle, player_psi, spells, weapon_work};
+use crate::combat::spells::{spell_identity, spell_level};
+use crate::combat::{Combat, firearm::weapon_traits, lifecycle, player_psi, spells};
 use crate::{Event, Phase, RandomState, RuleError, Session};
 use crate::{MedicalContinuation, MedicalOrigin, MedicalTarget, equipment, items};
 use centurions_content::{Content, mission::OpeningMission};
 use centurions_content::{
     Warrior,
     records::{
-        AttackPacket, CharacterStatisticsMut, Condition, ItemDefinition, Statistic, WarriorRecord,
-        WarriorRecordMut,
+        CharacterStatisticsMut, Condition, ItemDefinition, SpellInfoRecord, Statistic,
+        WarriorRecord, WarriorRecordMut,
     },
 };
 
 pub(in crate::combat) mod preparation;
 use preparation::{prepared_packet, validate_packet};
 
+/// The warrior and inventory slot of the medicine item to use.
 pub struct BeginRequest {
     pub warrior: usize,
     pub slot: usize,
 }
 
+/// What using a medical item changes before its target is chosen: the warrior with the item spent,
+/// the weapon state, the attack packet, and the spell identity and power it casts with.
 pub struct BeginResult {
     pub warrior: Warrior,
-    pub weapon_work: weapon_work::WeaponWork,
+    pub weapon_traits: weapon_traits::WeaponTraits,
     pub loaded_item_field32: i16,
     pub packet: Vec<u8>,
     pub identity: [i16; 3],
@@ -28,6 +32,7 @@ pub struct BeginResult {
     pub events: Vec<Event>,
 }
 
+/// What the turn does after healing: finish the warrior's action, end the turn, or nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FollowUp {
     FinishPlayerAction,
@@ -35,11 +40,13 @@ pub enum FollowUp {
     None,
 }
 
+/// What healing did, and what the turn does next.
 pub struct MedicalResolution {
     pub events: Vec<Event>,
     pub follow_up: FollowUp,
 }
 
+/// Reports a healing case this build cannot yet run, without changing anything.
 fn unsupported(dependency: &'static str) -> RuleError {
     RuleError::Unsupported {
         action: "combat.medical",
@@ -47,6 +54,12 @@ fn unsupported(dependency: &'static str) -> RuleError {
     }
 }
 
+/// Starts a warrior using a medicine item: the warrior must hold the turn with an attack left, be
+/// able to use the item, and have a charge (unless the item supplies unlimited quantity). One
+/// charge is spent; the last charge of an item that is discarded when empty removes it, with a
+/// sound.
+///
+/// Original: combatchoice
 pub fn begin(
     state: &Session,
     content: &Content,
@@ -73,7 +86,7 @@ pub fn begin(
         .warriors
         .get(request.warrior)
         .ok_or_else(|| RuleError::Invalid("medical warrior missing".into()))?;
-    if warrior.record().action_points()? < 1 {
+    if warrior.record().attacks()? < 1 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
     let item = warrior
@@ -81,7 +94,7 @@ pub fn begin(
         .get(request.slot)
         .cloned()
         .ok_or_else(|| RuleError::Invalid("medical inventory slot missing".into()))?;
-    let quantity = item.quantity()?;
+    let quantity = item.charge()?;
     let mission = state
         .land(content)
         .ok_or_else(|| RuleError::Invalid("medical mission missing".into()))?;
@@ -108,25 +121,25 @@ pub fn begin(
             .set_inventory_quantity(request.slot, quantity.wrapping_sub(1));
         let weight = result
             .record()
-            .carried_weight()?
-            .wrapping_sub(ItemDefinition(definition).unit_weight()?);
-        result.record_mut().set_carried_weight(weight);
+            .load()?
+            .wrapping_sub(ItemDefinition(definition).charge_weight()?);
+        result.record_mut().set_load(weight);
         if quantity == 1 && ItemDefinition(definition).discarded_when_empty()? != 0 {
             items::remove_inventory_slot(&mut result, request.slot)?;
         }
     }
-    let mut work = combat.weapon_work;
-    work.prepare(definition, &content.items[0])?;
+    let mut traits = combat.weapon_traits;
+    traits.prepare(definition, &content.items[0])?;
     Ok(BeginResult {
         warrior: result,
-        weapon_work: work,
-        loaded_item_field32: ItemDefinition(definition).retained_field32()?,
+        weapon_traits: traits,
+        loaded_item_field32: ItemDefinition(definition).ammunition_caliber()?,
         packet,
         identity: {
             let spell = ItemDefinition(definition).spell()?;
-            [spell / 1000 - 1, spell % 1000 / 100 - 1, spell % 100 - 1]
+            spell_identity(spell)
         },
-        // Combatchoice1190b8 replaces the outdoor power with the weapon burst count.
+        // In battle the weapon's burst count replaces the item's power.
         count: ItemDefinition(definition).attack_count()?,
         events: if quantity == 1 && ItemDefinition(definition).discarded_when_empty()? != 0 {
             vec![Event::Sound { resource_id: 655 }]
@@ -136,6 +149,8 @@ pub fn begin(
     })
 }
 
+/// Starts a warrior casting the learned Heal spell at power 1 to 7. The warrior must be able to
+/// cast, know Heal and have the psi; the psi is spent and the cast counted.
 pub fn begin_learned_heal(
     state: &Session,
     content: &Content,
@@ -184,13 +199,13 @@ pub fn begin_learned_heal(
             "insufficient psi for learned Heal".into(),
         ));
     }
-    combat.weapon_work.armor_filter();
+    combat.weapon_traits.armor_filter();
     let mut result = warrior.clone();
     let remaining = result.record().psi_points()?.wrapping_sub(cost);
     result.record_mut().set_psi_points(remaining);
     CharacterStatisticsMut(&mut result.bytes).add(Statistic::ScansCast, 1);
-    let counter = result.record().scans_used()?.wrapping_add(1);
-    result.record_mut().set_scans_used(counter);
+    let counter = result.record().spells_so_far()?.wrapping_add(1);
+    result.record_mut().set_spells_so_far(counter);
     let mut events = vec![
         Event::Sound { resource_id: 141 },
         Event::Sound { resource_id: 20002 },
@@ -201,8 +216,8 @@ pub fn begin_learned_heal(
     }
     Ok(BeginResult {
         warrior: result,
-        weapon_work: combat.weapon_work,
-        loaded_item_field32: state.native_work.loaded_item_field32,
+        weapon_traits: combat.weapon_traits,
+        loaded_item_field32: state.globals.loaded_item_field32,
         packet,
         identity: [0, 0, 0],
         count: power,
@@ -210,6 +225,7 @@ pub fn begin_learned_heal(
     })
 }
 
+/// The attack packet of a learned healing spell, which must target one warrior and have effect 57.
 fn learned_packet(mission: &OpeningMission, spell: i16) -> Result<Vec<u8>, RuleError> {
     let attacks = &mission
         .combat
@@ -217,12 +233,14 @@ fn learned_packet(mission: &OpeningMission, spell: i16) -> Result<Vec<u8>, RuleE
         .ok_or("learned healing content missing")?
         .attacks;
     let packet = spells::load_packet(attacks, spell)?;
-    if AttackPacket(&packet).targeting_mode() != 1 || AttackPacket(&packet).effect()? != 57 {
+    if SpellInfoRecord(&packet).target_type() != 1 || SpellInfoRecord(&packet).effect()? != 57 {
         return Err(unsupported("scan has no original portrait healing handler"));
     }
     Ok(packet)
 }
 
+/// Applies the chosen healing target. The result is all or nothing: on an error the battle, the
+/// warriors and the random stream are left as they were.
 pub fn resolve(
     combat: &mut Combat,
     warriors: &mut [Warrior],
@@ -238,32 +256,27 @@ pub fn resolve(
     {
         return Err(unsupported("other medical continuation"));
     }
-    let packet = &combat.attack_packet;
+    let packet = &combat.spell_info;
     match pending.origin {
         MedicalOrigin::OwnedNeedle => {
             if !(700..=703).contains(&pending.item)
                 || pending.spell != 1401
                 || pending.power != 1
-                || combat.attack_identity != [0, 3, 0]
+                || combat.cast_identity != [0, 3, 0]
             {
                 return Err(unsupported("other owned medical continuation"));
             }
             validate_packet(packet)?;
-            if combat.weapon_work.sound() != 430 {
+            if combat.weapon_traits.sound() != 430 {
                 return Err(unsupported("other retained medical weapon sound"));
             }
         }
         MedicalOrigin::OwnedItem => {
             if pending.item <= 0
                 || pending.spell <= 1100
-                || combat.attack_identity
-                    != [
-                        pending.spell / 1000 - 1,
-                        pending.spell % 1000 / 100 - 1,
-                        pending.spell % 100 - 1,
-                    ]
-                || AttackPacket(packet).targeting_mode() != 1
-                || AttackPacket(packet).effect()? != 57
+                || combat.cast_identity != spell_identity(pending.spell)
+                || SpellInfoRecord(packet).target_type() != 1
+                || SpellInfoRecord(packet).effect()? != 57
             {
                 return Err("invalid owned item healing continuation".into());
             }
@@ -272,12 +285,7 @@ pub fn resolve(
         MedicalOrigin::LearnedHeal => {
             if pending.item != 0
                 || !matches!(pending.power, 1..=7)
-                || combat.attack_identity
-                    != [
-                        pending.spell / 1000 - 1,
-                        pending.spell % 1000 / 100 - 1,
-                        pending.spell % 100 - 1,
-                    ]
+                || combat.cast_identity != spell_identity(pending.spell)
             {
                 return Err(unsupported("other learned medical continuation"));
             }
@@ -308,6 +316,9 @@ pub fn resolve(
     Ok(result)
 }
 
+/// Applies the chosen target. Cancelling costs the warrior three movement and refunds a learned
+/// Heal's psi. A fallen warrior's portrait, or a living warrior in range and in sight, is healed; a
+/// revived warrior returns to the map. Healing through a portrait ends the turn.
 fn resolve_inner(
     combat: &mut Combat,
     warriors: &mut [Warrior],
@@ -319,21 +330,23 @@ fn resolve_inner(
     let mut flights = vec![];
     let (member, portrait, mut events) = match *target {
         MedicalTarget::ConfirmedCancel => {
-            combat.ready = 0;
+            combat.in_spell = 0;
             let w = &mut warriors[pending.actor].bytes;
             let movement = WarriorRecord::from_bytes(w)
-                .movement_points()?
+                .movement()?
                 .wrapping_sub(3)
                 .max(0);
-            WarriorRecordMut::from_bytes(w).set_movement_points(movement);
+            WarriorRecordMut::from_bytes(w).set_movement(movement);
             if pending.origin == MedicalOrigin::LearnedHeal {
                 let refund = pending.power.wrapping_mul(4).wrapping_sub(1);
                 let points = WarriorRecord::from_bytes(w)
                     .psi_points()?
                     .wrapping_add(refund);
-                let counter = WarriorRecord::from_bytes(w).scans_used()?.wrapping_sub(1);
+                let counter = WarriorRecord::from_bytes(w)
+                    .spells_so_far()?
+                    .wrapping_sub(1);
                 WarriorRecordMut::from_bytes(w).set_psi_points(points);
-                WarriorRecordMut::from_bytes(w).set_scans_used(counter);
+                WarriorRecordMut::from_bytes(w).set_spells_so_far(counter);
             }
             return Ok(MedicalResolution {
                 events: vec![
@@ -350,38 +363,35 @@ fn resolve_inner(
                 .bytes;
             if !(-9..=0).contains(&WarriorRecord::from_bytes(w).stamina()?) {
                 return Err(RuleError::Refused {
-                    feedback: vec![crate::feedback::NativeFeedback::Sound { resource_id: 143 }],
+                    feedback: vec![crate::feedback::GameFeedback::Sound { resource_id: 143 }],
                 });
             }
             (warrior, true, vec![Event::Sound { resource_id: -141 }])
         }
         MedicalTarget::LivingPoint { x, y } => {
-            if warriors[pending.actor].record().action_points()? < 1 {
+            if warriors[pending.actor].record().attacks()? < 1 {
                 return Err(RuleError::Invalid(
                     "medical continuation has no action point".into(),
                 ));
             }
-            let from = combat.squad.positions[pending.actor];
-            let packet = &combat.attack_packet;
+            let from = combat.squad.pos[pending.actor];
+            let packet = &combat.spell_info;
             if !player_psi::in_range(from, (x, y), player_psi::range(packet, pending.power)?) {
                 return Err(RuleError::Refused {
-                    feedback: vec![crate::feedback::NativeFeedback::Combat {
+                    feedback: vec![crate::feedback::GameFeedback::Combat {
                         kind: crate::feedback::CombatRefusal::OutOfRange,
                     }],
                 });
             }
             if !lifecycle::can_see(combat, mission, from, (x, y), 0)? {
                 return Err(RuleError::Refused {
-                    feedback: vec![crate::feedback::NativeFeedback::Combat {
+                    feedback: vec![crate::feedback::GameFeedback::Combat {
                         kind: crate::feedback::CombatRefusal::Blocked,
                     }],
                 });
             }
-            let cell = OpeningMission::index(
-                i32::from(x) + i32::from(combat.map.shift.0) + 5,
-                i32::from(y) + i32::from(combat.map.shift.1) + 5,
-            )?;
-            let body = combat.map.tiles[cell].wrapping_abs();
+            let cell = crate::combat::records::grid_index((x, y), combat.field.map_shift)?;
+            let body = combat.field.tiles[cell].wrapping_abs();
             if !(0..warriors.len() as i16).contains(&body)
                 || warriors[body as usize].record().stamina()? <= 0
             {
@@ -389,22 +399,13 @@ fn resolve_inner(
                     "medical point requires a living warrior".into(),
                 ));
             }
-            let w = &mut warriors[pending.actor].bytes;
-            let movement = WarriorRecord::from_bytes(w)
-                .movement_points()?
-                .wrapping_sub(3)
-                .max(0);
-            let ap = WarriorRecord::from_bytes(w)
-                .action_points()?
-                .wrapping_sub(2);
-            WarriorRecordMut::from_bytes(w).set_movement_points(movement);
-            WarriorRecordMut::from_bytes(w).set_action_points(ap);
-            // combatchoice 0x11af6c calls cast with the clicked warrior's triple:
-            // its launch sound, then the flight's draws before the body resolves.
+            crate::combat::records::spend_attack_action(&mut warriors[pending.actor])?;
+            // The launch sound plays, then the flight's draws come before the
+            // warrior is treated.
             let launch = Event::Sound {
-                resource_id: AttackPacket(&combat.attack_packet).launch_sound()?,
+                resource_id: SpellInfoRecord(&combat.spell_info).launch_sound()?,
             };
-            let jitter = spells::flight_jitter(&combat.attack_packet, random);
+            let jitter = spells::flight_jitter(&combat.spell_info, random);
             let triple = spells::SpellTarget {
                 first: body,
                 second: 0,
@@ -416,7 +417,7 @@ fn resolve_inner(
                     combat,
                     pending.actor as i16,
                     &triple,
-                    &combat.attack_packet,
+                    &combat.spell_info,
                     1,
                     jitter,
                 ),
@@ -429,33 +430,33 @@ fn resolve_inner(
         }
     };
     let mut mask = [0; 110];
-    combat.inactive_rounds = 0;
+    combat.blank_round = 0;
     mask[member] = 1;
-    combat.ready = i16::from(!portrait);
+    combat.in_spell = i16::from(!portrait);
     let result = spells::resolve_support_with_context(
         warriors,
-        &combat.enemies.records,
+        &combat.roster.records,
         &mask,
         pending.spell,
         &spells::DirectSpell {
-            packet: &combat.attack_packet,
-            level: pending.spell % 1000 / 100 - 1,
+            packet: &combat.spell_info,
+            level: spell_level(pending.spell),
             count: pending.power,
-            armor_filter: combat.weapon_work.armor_filter(),
+            armor_filter: combat.weapon_traits.armor_filter(),
             weapon_sound: 0,
         },
         random,
     )?;
-    combat.ready = 0;
+    combat.in_spell = 0;
     warriors.clone_from_slice(&result.warriors);
-    combat.victory_work.add_total(result.total_delta);
-    combat.enemies.records = result.enemies;
-    combat.unavailable = combat.unavailable.wrapping_sub(result.recovered as i8);
+    combat.kill_counts.add_num_enemy(result.total_delta);
+    combat.roster.records = result.enemies;
+    combat.kill_party = combat.kill_party.wrapping_sub(result.recovered as i8);
     if result.healed {
-        combat.attack_packet[18] = 4;
+        combat.spell_info[18] = 4;
     }
     if !portrait && !result.targets.is_empty() {
-        combat.field_used[0] = 1;
+        combat.collide_check[0] = 1;
     }
     events.extend(
         result
@@ -496,30 +497,32 @@ fn resolve_inner(
     })
 }
 
+/// Puts a revived warrior back on the map, searching outward from the warrior's place in the
+/// starting formation for an open cell.
 fn restore_portrait(
     combat: &mut Combat,
     warriors: &mut [Warrior],
     mission: &OpeningMission,
     member: usize,
 ) -> Result<(), RuleError> {
-    let q = (member as i16 / 3).wrapping_abs();
-    let r = (member as i16).wrapping_sub(q.wrapping_mul(3));
+    let row = (member as i16 / 3).wrapping_abs();
+    let column = (member as i16).wrapping_sub(row.wrapping_mul(3));
     let origin = (
-        combat.map.shift.0.wrapping_add(5),
-        combat.map.shift.1.wrapping_add(5),
+        combat.field.map_shift.0.wrapping_add(5),
+        combat.field.map_shift.1.wrapping_add(5),
     );
     let mut placement = None;
-    // The original widens the square without limit; past this radius every
-    // in-window cell has been tried, so finding none means it never ends.
+    // The search widens without limit; past this radius every cell has been
+    // tried, so finding none means the game never returns.
     let reach = |center: i32| (center - 7).max(83 - center).max(1);
-    let last = reach(i32::from(q.wrapping_add(r)) + 5 + i32::from(origin.0))
-        .max(reach(i32::from(q) + 5 + i32::from(origin.1)));
+    let last = reach(i32::from(row.wrapping_add(column)) + 5 + i32::from(origin.0))
+        .max(reach(i32::from(row) + 5 + i32::from(origin.1)));
     for radius in 1..=last.min(i32::from(i16::MAX)) as i16 {
         for dy in -radius..radius {
             for dx in -radius..radius {
                 let position = (
-                    q.wrapping_add(r).wrapping_add(dx).wrapping_add(5),
-                    q.wrapping_add(dy).wrapping_add(5),
+                    row.wrapping_add(column).wrapping_add(dx).wrapping_add(5),
+                    row.wrapping_add(dy).wrapping_add(5),
                 );
                 let map = (
                     i32::from(position.0) + i32::from(origin.0),
@@ -529,7 +532,7 @@ fn restore_portrait(
                     continue;
                 }
                 let cell = OpeningMission::index(map.0, map.1)?;
-                let terrain = combat.map.tiles[cell];
+                let terrain = combat.field.tiles[cell];
                 if terrain > 999 && mission.tile_word(terrain.wrapping_sub(1000), 4)? == 0 {
                     placement = Some((position, cell, terrain));
                     break;
@@ -549,24 +552,24 @@ fn restore_portrait(
     // Slots 1..109 outnumber the 106 possible bodies, so one is always empty.
     let initiative = (1..110)
         .rev()
-        .find(|index| combat.order[*index] == -1)
+        .find(|index| combat.battle_order[*index] == -1)
         .ok_or_else(|| RuleError::Invalid("initiative order has no empty slot".into()))?;
-    combat.squad.positions[member] = position;
-    combat.squad.under_tiles[member] = terrain;
-    combat.map.tiles[cell] = member as i16;
-    combat.order[initiative] = member as i16;
+    combat.squad.pos[member] = position;
+    combat.squad.char_under[member] = terrain;
+    combat.field.tiles[cell] = member as i16;
+    combat.battle_order[initiative] = member as i16;
     let w = &mut warriors[member].bytes;
     if WarriorRecord::from_bytes(w).condition(Condition::MovingSlowly)? >= 0 {
         WarriorRecordMut::from_bytes(w).set_condition(Condition::MovingSlowly, 3);
     }
-    WarriorRecordMut::from_bytes(w).set_bleeding_flag(0);
+    WarriorRecordMut::from_bytes(w).set_bleeding(0);
     WarriorRecordMut::from_bytes(w).set_faction(0);
-    WarriorRecordMut::from_bytes(w).set_target_body(-1);
-    WarriorRecordMut::from_bytes(w).set_active_flag(1);
-    WarriorRecordMut::from_bytes(w).set_damage_marker(1);
+    WarriorRecordMut::from_bytes(w).set_target(-1);
+    WarriorRecordMut::from_bytes(w).set_in_battle(1);
+    WarriorRecordMut::from_bytes(w).set_been_attacked(1);
     if WarriorRecord::from_bytes(w).condition(Condition::ScanBlocked)? >= 0 {
         WarriorRecordMut::from_bytes(w).set_condition(Condition::ScanBlocked, 2);
     }
-    WarriorRecordMut::from_bytes(w).set_defeated_marker(initiative as i16);
+    WarriorRecordMut::from_bytes(w).set_position(initiative as i16);
     Ok(())
 }

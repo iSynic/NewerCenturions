@@ -20,31 +20,31 @@ fn projected(before: &Session, fixture: &Value, snapshot: &Value, baseline: &Val
     );
     snapshots::carried_items(&mut expected, &read);
     if snapshot["draws"] != baseline["draws"] {
-        expected.native_work.ammunition_work.item = Some(bytes(fixture, &snapshot["item_work"]));
+        expected.globals.loaded_items.item = Some(bytes(fixture, &snapshot["item_work"]));
     }
     expected.psi_disabled = number(snapshot, "psi_disabled") as u8;
     expected.enemy_spell_disabled = number(snapshot, "enemy_spell_disabled") as u8;
     let combat = expected.combat.as_mut().unwrap();
-    let previous = (combat.cursor, combat.round);
+    let previous = (combat.battle_order_index, combat.combat_round);
     snapshots::records(combat, &|key| bytes(fixture, &snapshot[key]));
     // Preserve the command's viewport while comparing original absolute rule coordinates.
     let delta = snapshots::viewport_delta(snapshot, baseline);
     snapshots::geometry(combat, &|key| bytes(fixture, &snapshot[key]), delta);
-    combat.cursor = number(snapshot, "cursor") as usize;
-    combat.round = current_combat(before).round.wrapping_add(
+    combat.battle_order_index = number(snapshot, "cursor") as usize;
+    combat.combat_round = current_combat(before).combat_round.wrapping_add(
         number(snapshot, "round_script_counter")
             .wrapping_sub(number(baseline, "round_script_counter")),
     );
     snapshots::turn_origin(combat, previous);
-    combat.round_scripts.counter = number(snapshot, "round_script_counter") as i8;
-    combat.round_scripts.slots = words(fixture, &snapshot["round_slots"]).try_into().unwrap();
+    combat.round_macros.counter = number(snapshot, "round_script_counter") as i8;
+    combat.round_macros.slots = words(fixture, &snapshot["round_slots"]).try_into().unwrap();
     snapshots::spell_work(combat, &|key| bytes(fixture, &snapshot[key]));
-    combat.unavailable = number(snapshot, "unavailable") as i8;
+    combat.kill_party = number(snapshot, "unavailable") as i8;
 
-    combat.weapon_work = snapshots::weapon_work(&read);
-    expected.native_work.attack_packet = combat.attack_packet.clone();
-    expected.native_work.attack_identity = combat.attack_identity;
-    expected.native_work.weapon_work = combat.weapon_work;
+    combat.weapon_traits = snapshots::weapon_traits(&read);
+    expected.globals.spell_info = combat.spell_info.clone();
+    expected.globals.cast_identity = combat.cast_identity;
+    expected.globals.weapon_traits = combat.weapon_traits;
     snapshots::health(&mut expected, snapshot, &read);
     snapshots::actor_work(&mut expected, snapshot);
     expected
@@ -55,12 +55,12 @@ use support::same_session as same;
 fn full_native_slots(state: &Session, fixture: &Value, snapshot: &Value, baseline: &Value) {
     let combat = current_combat(state);
     let mut records = bytes(fixture, &baseline["all_records"]);
-    for (index, record) in combat.enemies.records.iter().enumerate() {
+    for (index, record) in combat.roster.records.iter().enumerate() {
         records[index * MONSTER_BYTES..(index + 1) * MONSTER_BYTES].copy_from_slice(&record.bytes);
     }
     assert_eq!(records, bytes(fixture, &snapshot["all_records"]));
     let mut positions = words(fixture, &baseline["all_monster_positions"]);
-    for (index, point) in combat.enemies.positions.iter().enumerate() {
+    for (index, point) in combat.roster.mon_pos.iter().enumerate() {
         positions[index * 2..index * 2 + 2].copy_from_slice(&[point.0, point.1]);
     }
     let delta = (
@@ -75,7 +75,7 @@ fn full_native_slots(state: &Session, fixture: &Value, snapshot: &Value, baselin
     assert_eq!(positions, normalized);
     assert_eq!(
         combat
-            .death_queue
+            .todo_queue
             .entries
             .iter()
             .flat_map(|entry| entry.bytes())
@@ -83,7 +83,7 @@ fn full_native_slots(state: &Session, fixture: &Value, snapshot: &Value, baselin
         bytes(fixture, &snapshot["death_queue"])
     );
     assert_eq!(
-        combat.death_queue.count,
+        combat.todo_queue.count,
         number(snapshot, "death_queue_count") as usize
     );
 }
@@ -157,7 +157,7 @@ fn native_events(fixture: &Value, case: &Value) -> Vec<Event> {
         .combat
         .as_ref()
         .unwrap()
-        .round
+        .combat_round
         .wrapping_add(
             number(after, "round_script_counter")
                 .wrapping_sub(number(&case["before"], "round_script_counter")),
@@ -261,7 +261,7 @@ fn current_seed12_target_selection_matches_the_original_count_and_ordered_target
     // Controlled command linkage, not an earned route or a full native-turn receipt.
     for spell in [2205_i16, 3602] {
         let mut rotated = state.clone();
-        let caster = &mut rotated.combat.as_mut().unwrap().enemies.records[6].bytes;
+        let caster = &mut rotated.combat.as_mut().unwrap().roster.records[6].bytes;
         for slot in caster[0x12..0x26].as_chunks_mut::<2>().0 {
             *slot = spell.to_be_bytes();
         }
@@ -280,7 +280,7 @@ fn current_seed12_target_selection_matches_the_original_count_and_ordered_target
         if spell == 2205 {
             assert!(
                 current_combat(&rotated)
-                    .spell_fields
+                    .spell_queue
                     .as_chunks::<20>()
                     .0
                     .iter()
@@ -315,12 +315,12 @@ fn each_captured_resolution_matches_native_targets_damage_and_rng_interval() {
                 }
                 assert_eq!(random.bound(number(draw, "bound")), number(draw, "result"));
             }
-            let native_work = case
+            let globals = case
                 .array("current_native_events")
                 .iter()
                 .rfind(|event| event.n::<u64>("draws") <= random.draws)
                 .unwrap();
-            let snapshot = &native_work["snapshot"];
+            let snapshot = &globals["snapshot"];
             let weapon = bytes(&fixture, &snapshot["weapon_work"]);
             let ammo = bytes(&fixture, &snapshot["ammo_work"]);
             let item = bytes(&fixture, &snapshot["item_work"]);
@@ -400,7 +400,7 @@ fn each_captured_resolution_matches_native_targets_damage_and_rng_interval() {
 fn npc_mode7_indexed_duration_writes_its_information_owner_or_commits_nothing() {
     let fixture = support::fixture("current-terrain-restricted-npc-spell.json");
     let mut state = initial(&fixture, &fixture["cases"][0]);
-    let caster = &mut state.combat.as_mut().unwrap().enemies.records[6].bytes;
+    let caster = &mut state.combat.as_mut().unwrap().roster.records[6].bytes;
     for slot in caster[0x12..0x26].as_chunks_mut::<2>().0 {
         *slot = 2205_i16.to_be_bytes();
     }

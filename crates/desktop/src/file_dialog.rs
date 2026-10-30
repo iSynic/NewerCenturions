@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+/// Asks the player, with the Windows Open or Save dialog, for a file starting at
+/// `initial`; `None` if the player cancels.
 #[cfg(windows)]
 pub fn choose(saving: bool, initial: &Path, title: &str) -> std::io::Result<Option<PathBuf>> {
     use std::{
@@ -7,6 +9,7 @@ pub fn choose(saving: bool, initial: &Path, title: &str) -> std::io::Result<Opti
         os::windows::ffi::{OsStrExt, OsStringExt},
     };
     // OPENFILENAMEW from the Windows SDK commdlg.h; no additional runtime dependency.
+    /// The Windows OPENFILENAMEW options for the file dialog.
     #[repr(C)]
     struct OpenFileName {
         size: u32,
@@ -35,12 +38,16 @@ pub fn choose(saving: bool, initial: &Path, title: &str) -> std::io::Result<Opti
     }
     #[link(name = "comdlg32")]
     unsafe extern "system" {
+        /// Shows the Windows Open dialog; nonzero when a file was chosen.
         fn GetOpenFileNameW(options: *mut OpenFileName) -> i32;
+        /// Shows the Windows Save dialog; nonzero when a file was chosen.
         fn GetSaveFileNameW(options: *mut OpenFileName) -> i32;
+        /// The reason a Windows file dialog failed.
         fn CommDlgExtendedError() -> u32;
     }
     #[link(name = "user32")]
     unsafe extern "system" {
+        /// The window that owns the file dialog.
         fn GetActiveWindow() -> *mut c_void;
     }
     let directory = initial.parent().unwrap_or(Path::new("."));
@@ -106,6 +113,8 @@ pub fn choose(saving: bool, initial: &Path, title: &str) -> std::io::Result<Opti
     Ok(Some(std::ffi::OsString::from_wide(&file[..end]).into()))
 }
 
+/// Asks the player, with the system file chooser, for a file starting at
+/// `initial`; `None` if the player cancels.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn choose(saving: bool, initial: &Path, title: &str) -> std::io::Result<Option<PathBuf>> {
     let directory = initial.parent().unwrap_or(Path::new("."));
@@ -116,9 +125,11 @@ pub fn choose(saving: bool, initial: &Path, title: &str) -> std::io::Result<Opti
     platform_choose(saving, &initial, title)
 }
 
+/// Shows the macOS file chooser through a script.
 #[cfg(target_os = "macos")]
 fn platform_choose(saving: bool, initial: &Path, title: &str) -> std::io::Result<Option<PathBuf>> {
     // Arguments remain separate from the script, including filenames containing quotes.
+    /// The script that shows the macOS Open or Save chooser.
     const SCRIPT: &str = r#"function run(args) {
         var app = Application.currentApplication();
         app.includeStandardAdditions = true;
@@ -155,6 +166,7 @@ fn platform_choose(saving: bool, initial: &Path, title: &str) -> std::io::Result
         .map_err(std::io::Error::other)
 }
 
+/// Shows the zenity file chooser.
 #[cfg(target_os = "linux")]
 fn platform_choose(saving: bool, initial: &Path, title: &str) -> std::io::Result<Option<PathBuf>> {
     let mut zenity = std::process::Command::new("zenity");
@@ -186,6 +198,8 @@ fn platform_choose(saving: bool, initial: &Path, title: &str) -> std::io::Result
     linux_selection(output.status.code(), &output.stdout, &output.stderr)
 }
 
+/// The chosen file from zenity's result: none if the player cancelled, an error
+/// if the chooser failed.
 #[cfg(any(target_os = "linux", test))]
 fn linux_selection(
     code: Option<i32>,
@@ -223,6 +237,7 @@ fn linux_selection(
     }
 }
 
+/// Reports that file dialogs are unavailable on this platform.
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub fn choose(_saving: bool, _initial: &Path, _title: &str) -> std::io::Result<Option<PathBuf>> {
     Err(std::io::Error::other(

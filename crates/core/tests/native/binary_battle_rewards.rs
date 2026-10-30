@@ -39,7 +39,7 @@ fn complete_original_reward_table_cash_drops_and_ordinary_close() {
             scalar result.currency => &case["currency_after"], "binary_battle_rewards";
         }
         assert_eq!(
-            support::record_bytes(&result.enemies),
+            support::record_bytes(&result.monsters),
             patched(enemy_bytes, &case["enemy_changes"]),
             "{name} enemies"
         );

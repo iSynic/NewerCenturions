@@ -1,32 +1,62 @@
 use crate::RuleError;
 use centurions_content::{span, word};
 
-mod encounter_work;
-pub use encounter_work::EncounterWork;
+mod encounter_headers;
+pub use encounter_headers::EncounterHeaders;
+pub(crate) use encounter_headers::header_bytes as encounter_header_bytes;
 mod menu_mutation;
 pub use menu_mutation::replace_encounter_branch;
+pub mod actor;
+pub mod allies;
+pub mod cleanup;
+pub mod clock;
+pub mod collection;
+pub(crate) mod combat;
+pub mod delay;
+pub mod destination;
+pub mod health;
+pub mod inventory;
+pub mod item_use;
+pub mod manual_encounter;
+pub mod map_picture;
+pub mod move_away;
+pub mod npc_battle;
+pub mod party;
+pub mod promotion;
+pub mod reduce;
+pub mod remove_allies;
+pub mod schedule;
+pub mod skill;
+pub(crate) mod spell;
+pub mod treasure;
+pub mod variables;
 
+/// Size of one encounter menu record.
 pub const MENU_RECORD_BYTES: usize = 426;
 
+/// The entry the player picked from an encounter menu: its place in the menu, its branch selector
+/// and the script body it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MenuSelection {
-    pub native_item: u8,
+    pub menu_item: u8,
     pub selector: i8,
     pub script_body: [u8; 32],
 }
 
-/// Select an enabled displayed item, preserving the original signed branch selector.
+/// Selects an enabled menu entry; the branch selector is signed.
 pub fn select_menu_entry(menu: &[u8], index: usize) -> Result<MenuSelection, RuleError> {
     let menu = span(menu, 0, MENU_RECORD_BYTES)?;
-    let (native_item, selector) = menu_selector(menu, index)?;
+    let (menu_item, selector) = menu_selector(menu, index)?;
     let script_body = dispatch_menu_branch(menu, selector)?;
     Ok(MenuSelection {
-        native_item,
+        menu_item,
         selector,
         script_body,
     })
 }
 
+/// The 32-byte script body of one of an encounter menu's four branches, chosen by a selector of 1
+/// to 4.
 pub fn dispatch_menu_branch(menu: &[u8], selector: i8) -> Result<[u8; 32], RuleError> {
     let menu = span(menu, 0, 96)?;
     if !(1..=4).contains(&selector) {
@@ -46,17 +76,19 @@ pub fn dispatch_menu_branch(menu: &[u8], selector: i8) -> Result<[u8; 32], RuleE
     Ok(script_body)
 }
 
+/// The place and branch selector of the nth enabled entry of an encounter menu.
 pub fn menu_selector(menu: &[u8], index: usize) -> Result<(u8, i8), RuleError> {
     let menu = span(menu, 0, 100)?;
-    let native_slot = (0..4)
+    let menu_slot = (0..4)
         .filter(|slot| menu[96 + *slot] != 0)
         .nth(index)
         .ok_or_else(|| RuleError::Invalid("menu entry is unavailable".into()))?;
-    let selector = menu[96 + native_slot] as i8;
-    Ok((native_slot as u8 + 1, selector))
+    let selector = menu[96 + menu_slot] as i8;
+    Ok((menu_slot as u8 + 1, selector))
 }
 
-/// The encounter caller replaces actions and parameters while retaining its event header.
+/// The encounter replaces the script's actions and parameters but keeps its event
+/// header.
 pub fn replace_menu_branch(
     script_record: &[u8],
     selection: &MenuSelection,
@@ -66,6 +98,8 @@ pub fn replace_menu_branch(
     Ok(record)
 }
 
+/// Sets or clears a mission flag: the parameter's magnitude names the flag and a positive parameter
+/// sets it.
 pub fn set_mission_flag(flags: &[u8], parameter: i16) -> Result<Vec<u8>, RuleError> {
     let index = usize::from(parameter.unsigned_abs());
     if index >= flags.len() {
@@ -78,6 +112,8 @@ pub fn set_mission_flag(flags: &[u8], parameter: i16) -> Result<Vec<u8>, RuleErr
     Ok(result)
 }
 
+/// Where a tested condition sends the script: to another script, to a menu or typed branch, to the
+/// end of the menu, or to the last action.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConditionalJump {
     ReplaceScript(i16),
@@ -87,6 +123,8 @@ pub enum ConditionalJump {
     LastAction,
 }
 
+/// Tests a mission flag against the state the extra asks for (clear, set or either), and gives the
+/// jump the extra names when it matches.
 pub fn flag_condition_jump(
     flags: &[u8],
     extra: &[u8],
@@ -109,6 +147,8 @@ pub fn flag_condition_jump(
     condition_jump(extra)
 }
 
+/// The jump an extra names: the last action, another script, a branch of the menu or typed prompt,
+/// or the end of the menu.
 pub fn condition_jump(extra: &[u8]) -> Result<Option<ConditionalJump>, RuleError> {
     Ok(match word(extra, 4)? {
         -1 => Some(ConditionalJump::LastAction),
@@ -139,15 +179,17 @@ pub fn condition_jump(extra: &[u8]) -> Result<Option<ConditionalJump>, RuleError
     })
 }
 
-pub fn disable_menu_entry(menu: &[u8], native_item: i16) -> Result<Vec<u8>, RuleError> {
-    if !(1..=4).contains(&native_item) {
+/// Disables one of an encounter menu's four entries.
+pub fn disable_menu_entry(menu: &[u8], menu_item: i16) -> Result<Vec<u8>, RuleError> {
+    if !(1..=4).contains(&menu_item) {
         return Err(RuleError::Invalid("native menu item is unavailable".into()));
     }
     let mut result = span(menu, 0, MENU_RECORD_BYTES)?.to_vec();
-    result[96 + native_item as usize - 1] = 0;
+    result[96 + menu_item as usize - 1] = 0;
     Ok(result)
 }
 
+/// Adds to the mission's score.
 pub fn add_mission_score(score: i16, parameter: i16) -> i16 {
     score.wrapping_add(parameter)
 }

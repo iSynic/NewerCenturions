@@ -10,13 +10,13 @@ fn genetic_enemy_setup_matches_original_complete_records_placement_and_rng() {
     let content = content();
     let mut mission = content.map(0).unwrap().clone();
     let properties = fixture.bytes("properties");
-    mission.tile_properties = properties[64..12064].to_vec();
+    mission.map_stats = properties[64..12064].to_vec();
     mission.default_tile = word(&properties, 0).unwrap();
     let definitions = fixture.bytes("definitions");
     for case in fixture.array("cases") {
-        let mut map = TacticalMap {
+        let mut map = CombatField {
             tiles: words(fixture.text("map")),
-            shift: (-39, -15),
+            map_shift: (-39, -15),
             edge_word: 0,
         };
         let battle = BattleRecord::read(&case.bytes("battle"), 0).unwrap();
@@ -36,7 +36,7 @@ fn genetic_enemy_setup_matches_original_complete_records_placement_and_rng() {
             scalar enemies.records.len() => &case["count"], "binary_genetic_rewards";
             records &enemies.records => &case["records"], &context;
             words &(enemies
-                        .positions
+                        .mon_pos
                         .iter()
                         .flat_map(|(x, y)| [*x, *y])
                         .collect::<Vec<_>>()) => &case["positions"], "binary_genetic_rewards";

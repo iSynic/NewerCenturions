@@ -56,10 +56,10 @@ fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands(
             warrior.bytes[0x9df] = 1;
         }
         let mut arena = support::battle();
-        arena.enemies.records = support::monsters(&case.bytes("records_before"));
-        arena.enemies.positions = (0..7).map(|i| (40 + i, 40)).collect();
-        arena.squad.positions = (0..6).map(|i| (20 + i, 20)).collect();
-        arena.order[1] = 0;
+        arena.roster.records = support::monsters(&case.bytes("records_before"));
+        arena.roster.mon_pos = (0..7).map(|i| (40 + i, 40)).collect();
+        arena.squad.pos = (0..6).map(|i| (20 + i, 20)).collect();
+        arena.battle_order[1] = 0;
         state.combat = Some(arena);
         crate::native_common::source_victory_context(&mut state);
         let position = state.exploration.as_mut().unwrap();
@@ -68,13 +68,13 @@ fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands(
         let command = if retained {
             let arena = state.combat.take().unwrap();
             state.phase = Phase::Exploration;
-            state.native_work.npc_backing.active_count = arena.enemies.records.len() as i16;
-            for (index, record) in arena.enemies.records.into_iter().enumerate() {
-                state.native_work.npc_backing.slots[index] = Some(centurions_core::combat::retained::NpcSlot {
+            state.globals.monsters.num_mon = arena.roster.records.len() as i16;
+            for (index, record) in arena.roster.records.into_iter().enumerate() {
+                state.globals.monsters.slots[index] = Some(centurions_core::combat::globals::MonsterSlot {
                     record, position: Some((0, 0)),
                 });
             }
-            state.native_work.treasure_record = vec![0; 88];
+            state.globals.treasure = vec![0; 88];
             let mut script = vec![0; 42];
             script[9] = 100;
             script[25] = 2;
@@ -116,7 +116,7 @@ fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands(
             .iter()
             .filter_map(|event| match event {
                 Event::Sound { resource_id } => Some(serde_json::json!(["sound", resource_id])),
-                Event::Feedback(centurions_core::feedback::NativeFeedback::DialogText {
+                Event::Feedback(centurions_core::feedback::GameFeedback::DialogText {
                     item,
                     address,
                     ..
@@ -134,8 +134,8 @@ fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands(
         assert_eq!(observed, expected);
         let mut records: Vec<_> = (0..7).map(|index| state.survivor_record(index).unwrap().clone()).collect();
         let copied = centurions_core::combat::allies::commit_survivors(
-            &state.allies,
-            state.ally_count,
+            &state.holdover,
+            state.held_over,
             &mut records,
             state.survivors.as_ref(),
         )
@@ -143,8 +143,8 @@ fn survivor_controls_match_native_capacity_warnings_copyback_and_saved_commands(
         assert_eq!(support::record_bytes(&records), case.bytes("records_after"));
         assert_eq!(copied.menu, case.bytes("menu_after"));
         replay_command(Command::Continue, &mut state, &mut resumed, &content);
-        assert_eq!(state.allies, copied.menu);
-        assert_eq!(state.ally_count, case.n::<usize>("count_after"));
+        assert_eq!(state.holdover, copied.menu);
+        assert_eq!(state.held_over, case.n::<usize>("count_after"));
         assert!(state.survivors.is_none());
         }
     }

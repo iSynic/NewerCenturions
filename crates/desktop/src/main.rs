@@ -4,6 +4,7 @@
 #[path = "../../core/tests/hex.rs"]
 mod fixture_hex;
 
+mod acting;
 mod appearance;
 mod application;
 mod assets;
@@ -18,6 +19,8 @@ mod creature;
 mod editor;
 mod feedback;
 mod file_dialog;
+mod frame;
+mod game_strings;
 mod help;
 mod information;
 mod input;
@@ -43,11 +46,12 @@ mod view_actions;
 use centurions_core::Command;
 use macroquad::prelude::*;
 use presentation::Action;
-use std::io::Write;
 
-/// delay 0x1205f8 counts TickCount ticks, sixty a second; no preference changes it.
+/// delay counts TickCount ticks, sixty a second; no preference changes it.
 const TICKS_PER_SECOND: f64 = 60.;
 
+/// Starts the game: reads the command line, loads the content, sound and
+/// preferences, then runs the frames until the player quits.
 #[macroquad::main(config)]
 async fn main() {
     let startup::Ready {
@@ -95,11 +99,7 @@ async fn main() {
         if display_shortcut {
             while get_char_pressed().is_some() {}
         }
-        let minimum = if application.native_preferences.enabled(22) {
-            vec2(800., 600.)
-        } else {
-            vec2(640., 480.)
-        };
+        let minimum = frame::minimum_window(&application);
         if !window_mode.fullscreen && (screen_width() < minimum.x || screen_height() < minimum.y) {
             request_new_screen_size(
                 screen_width().max(minimum.x),
@@ -109,46 +109,25 @@ async fn main() {
         let canvas = layout::Canvas::new(screen_width(), screen_height());
         let mouse = mouse_position();
         let pointer = canvas.pointer(vec2(mouse.0, mouse.1));
-        if let Some(path) = &input_log {
-            let keys = get_keys_pressed();
-            if !keys.is_empty()
-                && let Ok(mut file) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-            {
-                let _ = writeln!(file, "pressed: {keys:?}");
-            }
-        }
+        frame::log_pressed_keys(&input_log);
         set_camera(&camera);
         if let (Ok(content), Some(state), Some(Ok(assets))) = (&loaded, &mut state, &mut assets) {
-            let key = (state.mission.clone(), state.scenario_level);
-            if render_context
-                .as_ref()
-                .is_none_or(|(selected, _)| *selected != key)
-            {
-                match content.context(key.0.as_deref(), key.1) {
-                    Ok(std::borrow::Cow::Owned(selected)) => {
-                        if let Err(error) = assets.select_content(&selected, &resource_root) {
-                            ui.error(error.to_string());
-                        }
-                        render_context = Some((key, selected));
-                    }
-                    Ok(std::borrow::Cow::Borrowed(_)) => {
-                        if render_context.take().is_some()
-                            && let Err(error) = assets.select_content(content, &resource_root)
-                        {
-                            ui.error(error.to_string());
-                        }
-                    }
-                    Err(error) => ui.error(error.to_string()),
-                }
-            }
+            frame::select_render_context(
+                content,
+                state,
+                &mut render_context,
+                assets,
+                &resource_root,
+                &mut ui,
+            );
             let content = render_context
                 .as_ref()
                 .map_or(content, |(_, selected)| selected);
-            ui.preferences = application.native_preferences.clone();
-            assets.set_artistic_font(ui.preferences.enabled(21));
+            ui.preferences = application.preferences.clone();
+            assets.set_artistic_font(
+                ui.preferences
+                    .enabled(crate::preferences::pref::TERMINATOR_FONT),
+            );
             ui.selected = ui.selected.min(state.warriors.len().saturating_sub(1));
             while ui
                 .effects
@@ -157,19 +136,7 @@ async fn main() {
             {
                 ui.effects.pop_front();
             }
-            if let Some(playback) = ui.playback.as_mut() {
-                let idle = ui.feedback.is_empty() && get_time() >= ui.delay_until;
-                match playback.advance(get_time(), idle) {
-                    combat_playback::Advance::Waiting => {}
-                    combat_playback::Advance::Step(events) => {
-                        ui.events(&events);
-                        if let Ok(audio) = &audio {
-                            audio.play(events.iter());
-                        }
-                    }
-                    combat_playback::Advance::Finished => ui.playback = None,
-                }
-            }
+            frame::advance_playback(&mut ui, audio.as_ref().ok());
             let before = (cfg!(debug_assertions) || audit_log.is_some()).then(|| state.clone());
             if let Err(error) = application.sync(state, capture.is_none()) {
                 if !sync_error {
@@ -182,15 +149,15 @@ async fn main() {
             if capture.is_none()
                 && let Ok(audio) = &audio
             {
-                audio.set_volumes(application.volume, application.music_volume);
+                audio.set_volumes(application.audio.volume, application.audio.music_volume);
                 audio.tick_sounds(get_time());
                 audio.music(
-                    application.music_enabled,
-                    application.music_request.take(),
-                    &application.playlist,
+                    application.audio.music_enabled,
+                    application.audio.music_request.take(),
+                    &application.audio.playlist,
                     get_time(),
                 );
-                application.current_music = audio.current_resource();
+                application.audio.current_music = audio.current_resource();
             }
             if let Err(error) = application.prepare_information(state, assets) {
                 ui.failure(error);
@@ -213,24 +180,7 @@ async fn main() {
                 ui.prepare_capture_prompt(state);
                 ui.prepare_script_pause(state)
             };
-            if ui.technical_error.is_none()
-                && application.help.page.is_none()
-                && let Some(event) = ui.feedback_sound(get_time())
-                && let Ok(audio) = &audio
-                && let Some(resource_id) = event.sound()
-            {
-                ui.feedback_until = get_time()
-                    + if application.sound && application.volume != 0 {
-                        audio.duration(resource_id)
-                    } else if resource_id < 0 {
-                        20. / 60.
-                    } else {
-                        0.
-                    };
-                if application.sound {
-                    audio.play(&[event]);
-                }
-            }
+            frame::play_feedback_sound(&application, &mut ui, audio.as_ref().ok());
             if application.help.page.is_none() || ui.technical_error.is_some() {
                 ui.draw_feedback(assets, application.warning_origin());
             }
@@ -253,7 +203,7 @@ async fn main() {
             {
                 ui.error(error);
             }
-            let mut action = if script_pause && feedback_blocked && ui.feedback.is_empty() {
+            let mut action = if script_pause && feedback_blocked && ui.feedback.queue.is_empty() {
                 Some(Action::Command(Command::Continue))
             } else if status_popup::active(&ui)
                 && !feedback_blocked
@@ -309,38 +259,16 @@ async fn main() {
             }
             if let Some(Action::Application(command)) = action.clone() {
                 blocked = true;
-                action = None;
                 let label = format!("UI {command:?}");
-                let previous_preferences = application.native_preferences.clone();
-                match application.handle(command, state, content) {
-                    Ok((next, events)) => {
-                        action = next;
-                        ui.events(&events);
-                        if application.sound
-                            && let Ok(audio) = &audio
-                        {
-                            audio.set_volumes(application.volume, application.music_volume);
-                            audio.play(&events);
-                        }
-                        if let Ok(audio) = &audio {
-                            audio.set_volumes(application.volume, application.music_volume);
-                        }
-                    }
-                    Err(e) => ui.failure(e),
-                }
-                let size = (previous_preferences.enabled(22)
-                    != application.native_preferences.enabled(22))
-                .then(|| {
-                    if application.native_preferences.enabled(22) {
-                        (800, 600)
-                    } else {
-                        (640, 480)
-                    }
-                });
-                window::apply(window_mode.change(application.native_preferences.enabled(20), size));
-                if application.native_preferences.enabled(20) != window_mode.fullscreen {
-                    application.window_mode(window_mode.fullscreen);
-                }
+                action = frame::run_application_command(
+                    command,
+                    state,
+                    content,
+                    &mut application,
+                    &mut ui,
+                    audio.as_ref().ok(),
+                    &mut window_mode,
+                );
                 audit(&audit_log, &label, before.as_ref(), state, canvas);
             }
             if action.is_none()
@@ -356,33 +284,14 @@ async fn main() {
                 && !enemy_error
                 && get_time() >= next_enemy
                 && capture.is_none()
-                && let Some(arena) = state.combat.as_ref()
+                && state.combat.is_some()
             {
-                if arena.selection_pending {
-                    action = Some(Action::Command(Command::ResumeCombatSelection));
-                } else if let Some(body) = arena.active_body() {
-                    if body >= 10 {
-                        action = Some(Action::Command(Command::RunEnemyTurn));
-                    } else if let Some(warrior) = state.warriors.get(body as usize) {
-                        if !application.native_preferences.enabled(16)
-                            && centurions_content::word(&warrior.bytes, 0x90).unwrap_or(0) > 0
-                            && warrior.record().faction().unwrap_or(0) == 0
-                            && centurions_content::word(&warrior.bytes, 0x5e).unwrap_or(0) == 0
-                            && state.warriors.iter().any(|w| w.bytes[0x9de] != 0)
-                        {
-                            action = Some(Action::Command(Command::AutomaticBandage));
-                        } else if centurions_core::combat::runtime::controlled_warrior(state)
-                            .is_some()
-                        {
-                            action = Some(Action::Command(Command::RunControlledTurn));
-                        } else if warrior.record().action_points().unwrap_or(0) < 2 {
-                            action = Some(Action::Command(Command::EndTurn));
-                        }
-                    }
-                }
+                action = frame::automatic_combat_action(state, &application);
                 automatic_turn = action.is_some();
             }
-            ui.inventory.quick_info = application.native_preferences.enabled(22);
+            ui.inventory.quick_info = application
+                .preferences
+                .enabled(crate::preferences::pref::SCREEN_800_X_600);
             action = match ui.resolve_inventory(action, state, content, get_time()) {
                 Ok(next) => next,
                 Err(error) => {
@@ -390,40 +299,9 @@ async fn main() {
                     None
                 }
             };
-            if let Some(Action::Drop(warrior, slot)) = action {
-                action = (!application.native_preferences.enabled(12)
-                    || application::command_modifier())
-                .then_some(Action::Command(Command::DropItem { warrior, slot }));
-            }
+            action = frame::protect_drop(action, &application);
             if let Some(action) = action {
-                let label = match &action {
-                    Action::Application(_) => unreachable!(),
-                    Action::Inventory(_) | Action::Collection(_) => unreachable!(),
-                    Action::Command(command) => format!("{command:?}"),
-                    Action::Save => "Save".into(),
-                    Action::FastSave => "Fast save".into(),
-                    Action::Load => "Reload session".into(),
-                    Action::Select(i) => format!("Select warrior {i}"),
-                    Action::Open(_) => "Open inspection".into(),
-                    Action::InformationInspection(member, _) => {
-                        format!("Information child {member}")
-                    }
-                    Action::Close => "Close inspection".into(),
-                    Action::CombatView(view) => format!("Combat view {view:?}"),
-                    Action::PanCombat(x, y) => format!("Combat view {x},{y}"),
-                    Action::Page(n) => format!("Inspection page {n}"),
-                    Action::ChoosePsi(spell) => format!("Choose psi {spell}"),
-                    Action::PsiPower(power) => format!("Psi power {power}"),
-                    Action::RotatePsi => "Rotate psi target".into(),
-                    Action::TargetQuantity(increase) => {
-                        format!("Target quantity increase {increase}")
-                    }
-                    Action::MedicalCancel => "Confirm medical cancellation".into(),
-                    Action::TextEntry(open) => format!("Text entry {open}"),
-                    Action::PreviewPsi(spell) => format!("Preview Psi {spell}"),
-                    Action::KeepMedicalTarget => "Keep choosing medical target".into(),
-                    Action::Drop(_, _) => unreachable!(),
-                };
+                let label = frame::action_label(&action);
                 match action {
                     Action::Application(_) => unreachable!(),
                     Action::Drop(_, _) => unreachable!(),
@@ -441,54 +319,20 @@ async fn main() {
                             get_time() + (application.speed.saturating_sub(1) * 5) as f64 / 60.;
                     }
                     action @ (Action::Save | Action::FastSave | Action::Load) => {
-                        let saving = !matches!(action, Action::Load);
-                        let title = &assets.menus[&129].items[if saving { 2 } else { 0 }].text;
-                        match saves.perform(&action, state, content, |saving, initial| {
-                            file_dialog::choose(saving, initial, title)
-                        }) {
-                            Ok(true) if saving => {
-                                if application.end_after_save
-                                    && let Err(error) = application.handle(
-                                        application::ApplicationAction::EndSaved,
-                                        state,
-                                        content,
-                                    )
-                                {
-                                    ui.failure(error);
-                                }
-                                if application.quit_after_save {
-                                    application.quit = true;
-                                }
-                            }
-                            Ok(true) => {
-                                application.screen = application::Screen::Game;
-                                ui.selected = 0;
-                                ui.feedback.clear();
-                                ui.persistent_feedback = None;
-                                if let Ok(audio) = &audio {
-                                    audio.clear_pending();
-                                }
-                                ui.feedback_started = None;
-                                ui.feedback_until = 0.;
-                                ui.help_request = None;
-                                ui.effects.clear();
-                                ui.playback = None;
-                                ui.delay_until = 0.;
-                                ui.movement = Default::default();
-                                ui.inspection = None;
-                                ui.psi_pending = None;
-                                ui.psi_choice = None;
-                                ui.medical_cancel = false;
-                                ui.page = 0;
-                                enemy_error = false;
-                                sync_error = false;
-                                next_enemy = get_time() + 0.45;
-                            }
-                            Ok(false) => {}
-                            Err(e) => ui.error(e.to_string()),
+                        if frame::perform_file_action(
+                            action,
+                            state,
+                            content,
+                            assets,
+                            &mut saves,
+                            &mut application,
+                            &mut ui,
+                            audio.as_ref().ok(),
+                        ) {
+                            enemy_error = false;
+                            sync_error = false;
+                            next_enemy = get_time() + 0.45;
                         }
-                        application.quit_after_save = false;
-                        application.end_after_save = false;
                     }
                     action => {
                         if !view_actions::handle(

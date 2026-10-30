@@ -35,8 +35,8 @@ pub(super) fn compare_hourly() {
             let mut state = calendar_state(&content, &case.input, 12, 55);
             state.exploration.as_mut().unwrap().fatigue = case.fatigue_before;
             if let Some(extra) = &case.extra {
-                state.allies = decode(&case.allies_before);
-                state.ally_count = 6;
+                state.holdover = decode(&case.allies_before);
+                state.held_over = 6;
                 let tables = std::sync::Arc::make_mut(
                     &mut content.scenario.as_mut().unwrap().maps[0].shared,
                 );
@@ -75,7 +75,7 @@ pub(super) fn compare_hourly() {
                 );
                 assert_eq!(state, restored);
                 fs::remove_file(path).unwrap();
-                assert_eq!(state.allies, decode(&case.allies_after));
+                assert_eq!(state.holdover, decode(&case.allies_after));
             } else {
                 advance(&mut state, &content, 1, 5).unwrap();
             }

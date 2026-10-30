@@ -17,9 +17,9 @@ fn ally_placement_matches_original_records_positions_and_map() {
         .chain(large.array("cases"))
         .filter(|v| v["kind"] == "placement")
     {
-        let mut map = TacticalMap {
+        let mut map = CombatField {
             tiles: words(&case.bytes("map_before")),
-            shift: (-39, -15),
+            map_shift: (-39, -15),
             edge_word: 0,
         };
         let menu = case.bytes("menu_before");
@@ -38,13 +38,13 @@ fn ally_placement_matches_original_records_positions_and_map() {
             records &result.records => &case["records_after"], "ally placement";
             words map.tiles => &case["map_after"], "ally placement";
             scalar result.records.len() => &case["enemy_count"], "ally placement";
-            positions result.positions => &case.bytes("positions"), "native positions";
+            positions result.mon_pos => &case.bytes("positions"), "native positions";
         };
         assert_eq!(random, RandomState::new(12));
     }
-    let mut map = TacticalMap {
+    let mut map = CombatField {
         tiles: vec![0; 8100],
-        shift: (-5, -5),
+        map_shift: (-5, -5),
         edge_word: 0,
     };
     map.tiles[37 + 37 * 90] = 1155;
@@ -109,14 +109,14 @@ fn adjacent_faction_targets_match_original_warrior_scientist_and_hostile_lists()
         .filter(|v| v["kind"] == "targets")
     {
         let mut combat = support::battle();
-        combat.map.tiles = case.words("map");
-        combat.map.shift = (-5, -5);
-        combat.squad.positions = vec![(25, 25)];
-        combat.squad.under_tiles = vec![1155];
-        combat.enemies.records = records(&case.bytes("records_before"));
-        combat.enemies.positions = vec![(24, 25), (25, 24)];
-        combat.order.clear();
-        combat.cursor = 0;
+        combat.field.tiles = case.words("map");
+        combat.field.map_shift = (-5, -5);
+        combat.squad.pos = vec![(25, 25)];
+        combat.squad.char_under = vec![1155];
+        combat.roster.records = records(&case.bytes("records_before"));
+        combat.roster.mon_pos = vec![(24, 25), (25, 24)];
+        combat.battle_order.clear();
+        combat.battle_order_index = 0;
         let warriors = vec![Warrior {
             name: "fixture".into(),
             original_sha256: String::new(),

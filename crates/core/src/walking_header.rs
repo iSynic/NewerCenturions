@@ -1,20 +1,23 @@
 use crate::{RandomState, RuleError};
 use centurions_content::mission::long;
 
+/// A walking event the party has triggered: its slot in the header table and its record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WalkingHeader {
     pub slot: usize,
     pub record: Vec<u8>,
 }
 
-/// newland 0x1402a8..0x1402de copies a matching header into DOOR and writes its row
-/// to WORD4427c2 before the chance test, so a failed chance still reports the row.
+/// A walking event's matching header and its row, recorded before the chance
+/// test, so a failed chance still reports the row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeaderLookup {
     pub matched: Option<usize>,
     pub header: Option<WalkingHeader>,
 }
 
+/// Looks for a walking event at a square. The first matching header's slot is reported even when
+/// its chance fails. An event runs only with a chance above zero and a roll of 100 not above it.
 pub fn lookup(
     headers: &[u8],
     map: i32,

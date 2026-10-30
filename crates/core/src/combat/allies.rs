@@ -1,29 +1,37 @@
-use crate::combat::{EnemySetup, TacticalMap, footprint};
+use crate::combat::{CombatField, EnemySetup, footprint};
+use crate::story::allies::{ALLY_BYTES, ALLY_CAPACITY};
 use crate::{Event, RandomState, RuleError};
+use centurions_content::combat::MONSTER_BYTES;
 use centurions_content::combat::MonsterRecord;
 use centurions_content::mission::OpeningMission;
 use centurions_content::records::{Condition, EnemyRecord, EnemyRecordMut};
 
+/// Places the allies carried over from the last battle around the first warrior, each on the first
+/// passable cell found searching outward ring by ring. The map changes only if every ally is
+/// placed.
 pub fn place_allies(
     menu: &[u8],
     count: usize,
-    map: &mut TacticalMap,
+    map: &mut CombatField,
     mission: &OpeningMission,
     first: (i16, i16),
     bounds: (i16, i16, i16, i16),
     _random: &mut RandomState,
 ) -> Result<EnemySetup, RuleError> {
-    if menu.len() != 20 * 288 || count > 20 || map.tiles.len() != 8100 {
+    if menu.len() != ALLY_CAPACITY * ALLY_BYTES
+        || count > ALLY_CAPACITY
+        || map.tiles.len() != crate::combat::MAP_CELLS
+    {
         return Err(RuleError::Invalid("invalid ally placement input".into()));
     }
     let mut staged = map.clone();
     let mut result = EnemySetup {
         records: vec![],
-        positions: vec![],
+        mon_pos: vec![],
     };
     for index in 0..count {
-        let mut bytes = menu[index * 288..(index + 1) * 288].to_vec();
-        EnemyRecordMut::from_bytes(&mut bytes).set_target_body(-1);
+        let mut bytes = menu[index * ALLY_BYTES..(index + 1) * ALLY_BYTES].to_vec();
+        EnemyRecordMut::from_bytes(&mut bytes).set_target(-1);
         EnemyRecordMut::from_bytes(&mut bytes).set_target_scan_excluded(false);
         EnemyRecordMut::from_bytes(&mut bytes).set_reaction_ready(false);
         let mut found = None;
@@ -43,10 +51,7 @@ pub fn place_allies(
                         continue;
                     }
                     // Rejected ally cells leave the map and RNG unchanged.
-                    let cell = OpeningMission::index(
-                        i32::from(position.0) + i32::from(staged.shift.0) + 5,
-                        i32::from(position.1) + i32::from(staged.shift.1) + 5,
-                    )?;
+                    let cell = crate::combat::records::grid_index(position, staged.map_shift)?;
                     if std::mem::replace(&mut attempted[cell], true) {
                         continue;
                     }
@@ -69,12 +74,14 @@ pub fn place_allies(
             found.ok_or_else(|| RuleError::Invalid("no free ally placement cell".into()))?;
         staged = placed.map;
         result.records.push(placed.monster);
-        result.positions.push(placed.position);
+        result.mon_pos.push(placed.position);
     }
     *map = staged;
     Ok(result)
 }
 
+/// The ally menu after the battle, with the survivors who stay and the sounds played while they are
+/// chosen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AllySynchronization {
     pub menu: Vec<u8>,
@@ -83,6 +90,8 @@ pub struct AllySynchronization {
     pub sounds: Vec<i16>,
 }
 
+/// The survivor dialog: which surviving friendly monsters may stay, which are ticked, and how many
+/// the player may tick.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct SurvivorSelection {
     pub eligible: Vec<usize>,
@@ -91,6 +100,8 @@ pub struct SurvivorSelection {
 }
 
 impl SurvivorSelection {
+    /// Checks that the list is a valid dialog: surviving friendly monsters only, no repeats, and no
+    /// more ticks than the limit.
     pub fn validate(&self, records: &[MonsterRecord]) -> Result<(), RuleError> {
         if self.eligible.is_empty()
             || self.eligible.len() > 32
@@ -111,6 +122,8 @@ impl SurvivorSelection {
         Ok(())
     }
 
+    /// Ticks or unticks one survivor row. Ticking past the limit warns and leaves the row as it
+    /// was; unticking a survivor who must stay unticks the row and then warns.
     pub fn toggle(
         &mut self,
         row: usize,
@@ -135,7 +148,7 @@ impl SurvivorSelection {
         };
         if let Some(address) = warning {
             events.extend([
-                Event::Feedback(crate::feedback::NativeFeedback::DialogText {
+                Event::Feedback(crate::feedback::GameFeedback::DialogText {
                     dialog: 173,
                     item: 41,
                     address,
@@ -152,10 +165,18 @@ impl SurvivorSelection {
     }
 }
 
+/// Readies the monsters that outlast the battle: a captured machine is revived on the party's side,
+/// and the fight conditions are cleared. Returns the dialog of surviving friends, highest stamina
+/// first with the ones who must stay moved ahead. The ones who must stay are ticked, then the first
+/// ten rows are ticked up to the limit. None when nobody qualifies.
 pub fn prepare_survivors(
     records: &mut [MonsterRecord],
 ) -> Result<Option<SurvivorSelection>, RuleError> {
-    if records.len() > 100 || records.iter().any(|record| record.bytes.len() != 288) {
+    if records.len() > 100
+        || records
+            .iter()
+            .any(|record| record.bytes.len() != MONSTER_BYTES)
+    {
         return Err(RuleError::Invalid("invalid survivor roster".into()));
     }
     let mut eligible = vec![];
@@ -177,7 +198,7 @@ pub fn prepare_survivors(
         ] {
             EnemyRecordMut::from_bytes(bytes).set_condition(condition, 0);
         }
-        EnemyRecordMut::from_bytes(bytes).clear_damage_marker();
+        EnemyRecordMut::from_bytes(bytes).clear_been_attacked();
         if EnemyRecord::from_bytes(bytes).survivor_marker()? < 0 {
             EnemyRecordMut::from_bytes(bytes).set_faction(0);
         }
@@ -226,13 +247,15 @@ pub fn prepare_survivors(
     }))
 }
 
+/// Settles who stays with the party after a battle. When there are survivors, one dialog sound is
+/// drawn at random; then the survivors ticked by default are kept.
 pub fn synchronize(
     menu: &[u8],
     count: usize,
     records: &mut [MonsterRecord],
     random: &mut RandomState,
 ) -> Result<AllySynchronization, RuleError> {
-    if menu.len() != 20 * 288 || count > 20 {
+    if menu.len() != ALLY_CAPACITY * ALLY_BYTES || count > ALLY_CAPACITY {
         return Err(RuleError::Invalid(
             "invalid ally synchronization input".into(),
         ));
@@ -248,16 +271,21 @@ pub fn synchronize(
     Ok(result)
 }
 
+/// Moves the ticked survivors into the ally menu with their condition durations cleared, clears
+/// their rewards on the monster record, and sets every monster's stamina to zero. Without a dialog
+/// the existing allies are only reset.
 pub fn commit_survivors(
     menu: &[u8],
     count: usize,
     records: &mut [MonsterRecord],
     selection: Option<&SurvivorSelection>,
 ) -> Result<AllySynchronization, RuleError> {
-    if menu.len() != 20 * 288
-        || count > 20
+    if menu.len() != ALLY_CAPACITY * ALLY_BYTES
+        || count > ALLY_CAPACITY
         || records.len() > 100
-        || records.iter().any(|record| record.bytes.len() != 288)
+        || records
+            .iter()
+            .any(|record| record.bytes.len() != MONSTER_BYTES)
     {
         return Err(RuleError::Invalid(
             "invalid ally synchronization input".into(),
@@ -283,7 +311,7 @@ pub fn commit_survivors(
         }
         selected_count -= 1;
         let bytes = &mut records[index].bytes;
-        let destination = &mut menu[selected_count * 288..(selected_count + 1) * 288];
+        let destination = &mut menu[selected_count * ALLY_BYTES..(selected_count + 1) * ALLY_BYTES];
         destination.copy_from_slice(bytes);
         for condition in 0..4 {
             if EnemyRecord::from_bytes(destination).condition_duration(condition) > 0 {
@@ -305,10 +333,11 @@ pub fn commit_survivors(
     })
 }
 
+/// Gives every ally on the menu a clean start: no target and not yet attacked.
 fn normalize_menu(menu: &mut [u8], count: usize) {
     for index in 0..count {
-        let bytes = &mut menu[index * 288..(index + 1) * 288];
-        EnemyRecordMut::from_bytes(bytes).set_target_body(0);
-        EnemyRecordMut::from_bytes(bytes).clear_damage_marker();
+        let bytes = &mut menu[index * ALLY_BYTES..(index + 1) * ALLY_BYTES];
+        EnemyRecordMut::from_bytes(bytes).set_target(0);
+        EnemyRecordMut::from_bytes(bytes).clear_been_attacked();
     }
 }

@@ -6,6 +6,12 @@ use crate::{
 use centurions_core::{Session, character_display::Fields};
 use macroquad::prelude::*;
 
+/// Detailed statistics (DITL 177) control that returns to the summary: item 58.
+pub const DETAILED_SUMMARY: usize = 58;
+/// Summary statistics (DITL 138) control that closes the window: item 72.
+pub const SUMMARY_CLOSE: usize = 72;
+
+/// A warrior's statistics window, as a summary or in detail.
 pub struct WarriorInformation {
     pub member: usize,
     pub fields: Option<Fields>,
@@ -13,6 +19,7 @@ pub struct WarriorInformation {
     pub detailed: bool,
 }
 impl WarriorInformation {
+    /// Opens the window on squad member `member`, showing the summary.
     pub fn new(member: usize) -> Self {
         Self {
             member,
@@ -22,6 +29,8 @@ impl WarriorInformation {
         }
     }
 
+    /// Draws the warrior's summary (DITL 138), or the detailed statistics when they
+    /// are chosen.
     pub fn draw(&self, state: &Session, assets: &Assets, controls: &mut Vec<Control>) {
         if self.detailed {
             self.draw_statistics(state, assets, controls);
@@ -91,9 +100,7 @@ impl WarriorInformation {
                 ),
                 (
                     90 + index,
-                    assets
-                        .icons
-                        .get(&member.record().tactical_icon().unwrap_or(0)),
+                    assets.icons.get(&member.record().icon().unwrap_or(0)),
                 ),
             ] {
                 if let Some(image) = image {
@@ -108,10 +115,7 @@ impl WarriorInformation {
         {
             self.image(assets, 68, image);
         }
-        if let Some(image) = assets
-            .icons
-            .get(&member.record().tactical_icon().unwrap_or(0))
-        {
+        if let Some(image) = assets.icons.get(&member.record().icon().unwrap_or(0)) {
             self.image(assets, 80, image);
         }
         if let Some(fields) = &self.fields {
@@ -131,6 +135,7 @@ impl WarriorInformation {
             }
         }
     }
+    /// Draws the warrior's detailed statistics (DITL 177) and the squad's portraits.
     fn draw_statistics(&self, state: &Session, assets: &Assets, controls: &mut Vec<Control>) {
         assets.draw_dialog(177);
         for (item, (text, size)) in
@@ -165,12 +170,7 @@ impl WarriorInformation {
                     .portraits
                     .get(&warrior.record().portrait().unwrap_or(0)),
             ),
-            (
-                87,
-                assets
-                    .icons
-                    .get(&warrior.record().tactical_icon().unwrap_or(0)),
-            ),
+            (87, assets.icons.get(&warrior.record().icon().unwrap_or(0))),
         ] {
             if let Some(image) = image {
                 Self::dialog_image(assets.dialog_rect(177, item), image);
@@ -179,32 +179,24 @@ impl WarriorInformation {
         controls.push(Control {
             rect: assets.dialog_rect(177, 58),
             enabled: true,
-            action: Action::Application(ApplicationAction::InformationItem(58)),
+            action: Action::Application(ApplicationAction::InformationItem(DETAILED_SUMMARY)),
         });
     }
+    /// Draws `image` scaled into `rect`.
     fn dialog_image(rect: Rect, image: &Texture2D) {
-        draw_texture_ex(
-            image,
-            rect.x,
-            rect.y,
-            WHITE,
-            DrawTextureParams {
-                dest_size: Some(rect.size()),
-                ..Default::default()
-            },
-        );
+        crate::assets::texture_in(image, rect);
     }
+    /// Draws `image` in item `number` of the summary dialog.
     fn image(&self, assets: &Assets, number: usize, image: &Texture2D) {
         let [top, left, bottom, right] = assets.information_dialog[number - 1].rect;
-        draw_texture_ex(
+        crate::assets::texture_in(
             image,
-            f32::from(left),
-            f32::from(top) + 20.,
-            WHITE,
-            DrawTextureParams {
-                dest_size: Some(vec2(f32::from(right - left), f32::from(bottom - top))),
-                ..Default::default()
-            },
+            Rect::new(
+                f32::from(left),
+                f32::from(top) + 20.,
+                f32::from(right - left),
+                f32::from(bottom - top),
+            ),
         );
     }
 }

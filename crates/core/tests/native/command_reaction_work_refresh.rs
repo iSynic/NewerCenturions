@@ -1,6 +1,6 @@
 use crate::{native_common, prelude::*, snapshots, support};
 
-use centurions_core::ammunition::WorkBuffers;
+use centurions_core::ammunition::LoadedItems;
 
 use support::buffer as bytes;
 
@@ -18,37 +18,37 @@ fn initial(fixture: &Value, case: &Value) -> Session {
     for key in ["item_work", "weapon_work", "ammo_work"] {
         assert_eq!(bytes(fixture, &snapshot[key]), vec![0; 150]);
     }
-    state.native_work.ammunition_work = WorkBuffers::default();
-    state.native_work.weapon_work = WeaponWork {
+    state.globals.loaded_items = LoadedItems::default();
+    state.globals.weapon_traits = WeaponTraits {
         natural_attack_index: 0,
         sound: 0,
         weapon_armor_filter: 0,
         ammunition_armor_filter: 0,
     };
-    state.native_work.loaded_item_field32 = fixture["foundation"].n::<i16>("item_context");
+    state.globals.loaded_item_field32 = fixture["foundation"].n::<i16>("item_context");
     let combat = state.combat.as_mut().unwrap();
     let npcs = bytes(fixture, &snapshot["npcs"]);
     assert_eq!(npcs.len(), 100 * MONSTER_BYTES);
     assert!(npcs[MONSTER_BYTES..].iter().all(|byte| *byte == 0));
     let positions = words(fixture, &snapshot["npc_positions"]);
     assert!(positions[2..].iter().all(|word| *word == 0));
-    combat.enemies.records = vec![MonsterRecord {
+    combat.roster.records = vec![MonsterRecord {
         bytes: npcs[..288].to_vec(),
     }];
-    combat.enemies.positions = vec![(positions[0], positions[1])];
-    combat.squad.under_tiles = combat
+    combat.roster.mon_pos = vec![(positions[0], positions[1])];
+    combat.squad.char_under = combat
         .squad
-        .positions
+        .pos
         .iter()
         .map(|(x, y)| {
-            let index = (*x as usize + 5 + combat.map.shift.0 as usize) * 90
+            let index = (*x as usize + 5 + combat.field.map_shift.0 as usize) * 90
                 + *y as usize
                 + 5
-                + combat.map.shift.1 as usize;
-            combat.map.tiles[index]
+                + combat.field.map_shift.1 as usize;
+            combat.field.tiles[index]
         })
         .collect();
-    combat.weapon_work = state.native_work.weapon_work;
+    combat.weapon_traits = state.globals.weapon_traits;
     native_common::source_victory_context(&mut state);
     state
 }
@@ -103,14 +103,14 @@ fn compose_reaction(state: &Session, fixture: &Value, case: &Value, content: &Co
         bytes(fixture, &case["after"]["party"])
     );
     let combat = expected.combat.as_mut().unwrap();
-    assert_eq!(word(&combat.enemies.records[0].bytes, 0x4e).unwrap(), 0);
+    assert_eq!(word(&combat.roster.records[0].bytes, 0x4e).unwrap(), 0);
     assert_eq!(
-        combat.enemies.records[0].bytes[0x104],
+        combat.roster.records[0].bytes[0x104],
         if mode == 0 { 1 } else { 0 }
     );
-    combat.enemies.records[0].bytes[0x104] = 0;
+    combat.roster.records[0].bytes[0x104] = 0;
     let mut npcs = vec![0; 100 * MONSTER_BYTES];
-    npcs[..288].copy_from_slice(&combat.enemies.records[0].bytes);
+    npcs[..288].copy_from_slice(&combat.roster.records[0].bytes);
     assert_eq!(npcs, bytes(fixture, &case["after"]["npcs"]));
     // Natural helper136398 establishes all three definitions before the miss;
     // active-party refresh1115a8 subsequently replaces only ITEM with ID1.
@@ -120,19 +120,19 @@ fn compose_reaction(state: &Session, fixture: &Value, case: &Value, content: &Co
     assert_eq!(natural, bytes(fixture, &case["after"]["weapon_work"]));
     assert_eq!(natural, bytes(fixture, &case["after"]["ammo_work"]));
     assert_eq!(item, bytes(fixture, &case["after"]["item_work"]));
-    expected.native_work.ammunition_work = WorkBuffers {
+    expected.globals.loaded_items = LoadedItems {
         item: Some(item.clone()),
         weapon: Some(natural.clone()),
         ammo: Some(natural.clone()),
     };
-    expected.native_work.loaded_item_field32 = word(&item, 32).unwrap();
-    expected.native_work.weapon_work = WeaponWork {
+    expected.globals.loaded_item_field32 = word(&item, 32).unwrap();
+    expected.globals.weapon_traits = WeaponTraits {
         natural_attack_index: 0,
         sound: word(&natural, 14).unwrap(),
         weapon_armor_filter: word(&natural, 136).unwrap(),
         ammunition_armor_filter: word(&natural, 136).unwrap(),
     };
-    combat.weapon_work = expected.native_work.weapon_work;
+    combat.weapon_traits = expected.globals.weapon_traits;
     let attacks = &content
         .map(state.exploration.as_ref().unwrap().map)
         .unwrap()
@@ -142,11 +142,11 @@ fn compose_reaction(state: &Session, fixture: &Value, case: &Value, content: &Co
         .attacks;
     let packet = attacks[0x21c2..0x21c2 + 58].to_vec();
     assert_eq!(packet, bytes(fixture, &case["after"]["packet"]));
-    combat.attack_packet = packet.clone();
-    expected.native_work.attack_packet = packet.clone();
-    expected.native_work.health_context.effect = packet[18] as i8;
+    combat.spell_info = packet.clone();
+    expected.globals.spell_info = packet.clone();
+    expected.globals.health_context.effect = packet[18] as i8;
     assert_eq!(
-        expected.native_work.health_context.effect,
+        expected.globals.health_context.effect,
         number(&case["after"], "health_effect") as i8
     );
 
@@ -159,7 +159,7 @@ fn compose_reaction(state: &Session, fixture: &Value, case: &Value, content: &Co
 }
 
 fn cell(state: &Session, x: i16, y: i16) -> usize {
-    let shift = current_combat(state).map.shift;
+    let shift = current_combat(state).field.map_shift;
     (usize::try_from(x + shift.0 + 5).unwrap() * 90) + usize::try_from(y + shift.1 + 5).unwrap()
 }
 use support::checkpoint;
@@ -173,8 +173,8 @@ fn public_moves_match_native_reactions_and_source_composed_outer_effects() {
     for (index, case) in fixture.array("cases").iter().enumerate() {
         assert_eq!(number(case, "mode"), [0, 2][index]);
         let mut state = initial(&fixture, case);
-        assert_eq!(current_combat(&state).squad.positions[0], (20, 20));
-        assert_eq!(current_combat(&state).enemies.positions, vec![(21, 20)]);
+        assert_eq!(current_combat(&state).squad.pos[0], (20, 20));
+        assert_eq!(current_combat(&state).roster.mon_pos, vec![(21, 20)]);
         let old_cell = cell(&state, 20, 20);
         let next_cell = cell(&state, 19, 20);
         let mission = content
@@ -188,7 +188,7 @@ fn public_moves_match_native_reactions_and_source_composed_outer_effects() {
             assert_ne!(mission.tile_word(61, 4).unwrap(), 0);
             // Declared blocking destination does not change native adjacency,
             // the miss roll, or any helper's retained rule writer inputs.
-            state.combat.as_mut().unwrap().map.tiles[next_cell] = tile;
+            state.combat.as_mut().unwrap().field.tiles[next_cell] = tile;
         }
         state.validate(&content).unwrap();
         let mut expected = compose_reaction(&state, &fixture, case, &content);
@@ -235,10 +235,10 @@ fn public_moves_match_native_reactions_and_source_composed_outer_effects() {
                 .wrapping_sub(cost);
             expected.warriors[0].bytes[0x3c..0x3e].copy_from_slice(&remaining.to_be_bytes());
             let combat = expected.combat.as_mut().unwrap();
-            combat.map.tiles[old_cell] = combat.squad.under_tiles[0];
-            combat.squad.under_tiles[0] = tile;
-            combat.map.tiles[next_cell] = 0;
-            combat.squad.positions[0] = (19, 20);
+            combat.field.tiles[old_cell] = combat.squad.char_under[0];
+            combat.squad.char_under[0] = tile;
+            combat.field.tiles[next_cell] = 0;
+            combat.squad.pos[0] = (19, 20);
             events.extend([
                 Event::TacticalMoved {
                     body: 0,

@@ -1,27 +1,25 @@
 use crate::{RandomState, RuleError};
+use centurions_content::WARRIOR_BYTES;
 use centurions_content::{Warrior, span};
 
+/// The warriors, after being dealt into the battle order, and the order itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartyOrder {
     pub warriors: Vec<Warrior>,
     pub order: Vec<i16>,
 }
 
-/// getbattleorder124d9e. It inserts (party - 1) - unavailable442739 + marked + 1
-/// living warriors, where marked counts living warriors whose WORD 0x90 is nonzero
-/// (124e06..124e0e); the same count widens the Rand bound (124ebc). partyselect
-/// and load count those warriors in 442739, so the terms normally cancel.
-/// When the counter undercounts them, 124ede..124eea keeps reading below the
-/// living list's first byte: frame byte -7 is the marked count, -8 is never
-/// written, -9 and -10 are the zero WORD stored at 124dd0, and lower bytes are
-/// saved registers. A read that names a squad warrior inserts that warrior, even a
-/// second time; undefined bytes and indices outside the squad are taken as 0xff,
-/// which keeps the native draws but leaves the drawn row empty.
+/// Deals the living warriors into random battle-order slots. A warrior on
+/// automatic adds a slot, which `killparty` normally cancels. When `killparty`
+/// undercounts, the draw runs past the living list and may place a warrior twice
+/// or leave a drawn slot empty (see docs/source-notes/combat.md).
+///
+/// Original: getbattleorder
 pub fn initiative(
     warriors: &[Warrior],
     enemy_speeds: &[i16],
     surprise: i16,
-    unavailable: i8,
+    kill_party: i8,
     random: &mut RandomState,
 ) -> Result<PartyOrder, RuleError> {
     if !(1..=6).contains(&warriors.len())
@@ -36,18 +34,18 @@ pub fn initiative(
     let mut speeds = Vec::new();
     let mut marked = 0_i8;
     for (index, warrior) in warriors.iter().enumerate() {
-        span(&warrior.bytes, 0, 3138)?;
+        span(&warrior.bytes, 0, WARRIOR_BYTES)?;
         speeds.push(warrior.record().quickness()?);
         if warrior.stamina()? > 0 {
             living.push(index as i16);
-            marked += i8::from(warrior.record().automatic_mode()? != 0);
+            marked += i8::from(warrior.record().computer_control()? != 0);
         }
     }
-    let bound = warriors.len() as i16 - i16::from(unavailable)
+    let bound = warriors.len() as i16 - i16::from(kill_party)
         + enemy_speeds.len() as i16
         + i16::from(marked);
     let inserted = (warriors.len() as i8 - 1)
-        .wrapping_sub(unavailable)
+        .wrapping_sub(kill_party)
         .wrapping_add(marked)
         .wrapping_add(1) as u8 as usize;
     if !(1..110).contains(&bound) {
@@ -69,7 +67,7 @@ pub fn initiative(
             -1
         }
     };
-    let mut order = vec![-1; 110];
+    let mut order = vec![-1; super::BODY_SLOTS];
     match surprise {
         1 => {
             for (index, body) in living.iter().enumerate() {
@@ -139,7 +137,7 @@ pub fn initiative(
         if (0..6).contains(body) {
             next_warriors[*body as usize]
                 .record_mut()
-                .set_defeated_marker(slot as i16);
+                .set_position(slot as i16);
         }
     }
     *random = next_random;

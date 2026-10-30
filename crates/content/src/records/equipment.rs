@@ -1,8 +1,10 @@
-//! Fields used by wear (0x164a0e) and removeitem (0x14ef76).
-//! Indexed effects retain the original signed selector, including native aliases.
+//! Warrior and item fields changed when equipment is worn or removed.
+//! Indexed effects keep their signed selector, so a selector outside the named
+//! statistics reaches the neighbouring field just as it does in the game.
 use super::put_word;
 use crate::{ContentError, InventoryRecord, Warrior, word};
 
+/// A warrior field that worn equipment changes.
 #[derive(Clone, Copy)]
 pub enum EquipmentStat {
     MissileAccuracy,
@@ -34,6 +36,7 @@ pub enum EquipmentStat {
 }
 
 impl EquipmentStat {
+    /// Locates the field in the warrior record.
     fn offset(self) -> usize {
         match self {
             Self::MissileAccuracy => 4,
@@ -64,9 +67,11 @@ impl EquipmentStat {
             Self::LoadedAmmunition => 0x126,
         }
     }
+    /// Reads the field from the warrior.
     pub fn read(self, warrior: &Warrior) -> Result<i16, ContentError> {
         word(&warrior.bytes, self.offset())
     }
+    /// Sets the field; a warrior record too short for it is refused.
     pub fn write(self, warrior: &mut Warrior, value: i16) -> Result<(), ContentError> {
         self.read(warrior)?;
         put_word(&mut warrior.bytes, self.offset(), value);
@@ -74,8 +79,9 @@ impl EquipmentStat {
     }
 }
 
-/// Definition and retained-instance modifiers are deliberately separate. Wear
-/// reads the caller's retained instance, which need not be the inventory slot.
+/// The modifiers an item applies when worn. Definition and instance modifiers
+/// stay separate: wearing reads the instance the caller holds, which need not
+/// be the one in the inventory slot.
 pub struct EquipmentModifiers {
     pub kind: i16,
     pub id: i16,
@@ -104,6 +110,7 @@ pub struct EquipmentModifiers {
 }
 
 impl EquipmentModifiers {
+    /// Reads the modifiers from an item definition.
     pub fn read(definition: &[u8]) -> Result<Self, ContentError> {
         crate::span(definition, 0, 150)?;
         let signed = |offset| i16::from(definition[offset] as i8);
@@ -137,7 +144,8 @@ impl EquipmentModifiers {
     }
 }
 
-pub struct RetainedEquipmentModifiers {
+/// The modifiers carried by one item a warrior holds, apart from its definition.
+pub struct InstanceModifiers {
     pub shield_chance: i16,
     pub shield_cost: i16,
     pub accuracy: i16,
@@ -148,7 +156,8 @@ pub struct RetainedEquipmentModifiers {
     pub range: i16,
 }
 
-impl RetainedEquipmentModifiers {
+impl InstanceModifiers {
+    /// Reads the modifiers carried by the item `record`.
     pub fn read(record: &InventoryRecord) -> Self {
         let signed = |offset| i16::from(record.0[offset] as i8);
         Self {
@@ -164,7 +173,8 @@ impl RetainedEquipmentModifiers {
     }
 }
 
-/// Instance BYTE modifiers shared by upgrade, random generation and editing.
+/// The modifier bytes of an item instance, set by upgrading, random items and
+/// the item editor.
 #[derive(Clone, Copy)]
 pub enum InventoryModifier {
     MeleeAccuracy = 11,
@@ -180,17 +190,21 @@ pub enum InventoryModifier {
 }
 
 impl InventoryModifier {
+    /// Reads the modifier from the item `record`.
     pub fn read(self, record: &InventoryRecord) -> i8 {
         record.0[self as usize] as i8
     }
+    /// Sets the modifier.
     pub fn write(self, record: &mut InventoryRecord, value: i8) {
         record.0[self as usize] = value as u8;
     }
+    /// Adds `amount` to the modifier, wrapping.
     pub fn add(self, record: &mut InventoryRecord, amount: i8) {
         self.write(record, self.read(record).wrapping_add(amount));
     }
 }
 
+/// What an upgrade item (class 27) adds to the equipped item it upgrades.
 pub struct ItemUpgrade {
     pub capacity_percent: i16,
     pub shield_chance: i8,
@@ -205,6 +219,7 @@ pub struct ItemUpgrade {
 }
 
 impl ItemUpgrade {
+    /// Reads the upgrade from the upgrade item's definition.
     pub fn read(definition: &[u8]) -> Result<Self, ContentError> {
         crate::span(definition, 0, 150)?;
         Ok(Self {

@@ -11,9 +11,12 @@ use macroquad::prelude::*;
 
 /// The button's place in the Items strip and its PICT 6 source.
 pub(super) const BUTTON: Rect = Rect::new(287., 411., 71., 39.);
+/// The Ammo button's part of PICT 6.
 const SOURCE: Rect = Rect::new(142., 0., 71., 39.);
+/// The height of a row in the ammunition popup.
 const ROW: f32 = 18.;
 
+/// The ammunition popup (MENU 1000) open for a weapon: its choices and scrolling.
 pub(super) struct Popup {
     warrior: usize,
     scroll: usize,
@@ -23,6 +26,8 @@ pub(super) struct Popup {
 }
 
 impl Inventory {
+    /// Carries out a choice in the ammunition popup: opening it, choosing an
+    /// ammunition, or closing it.
     pub(super) fn handle_ammunition(
         &mut self,
         action: InventoryAction,
@@ -48,7 +53,7 @@ impl Inventory {
                         });
                         None
                     }
-                    // The core command reports the caller's warning 3.
+                    // The rules report the caller's warning 3.
                     Err(_) => Some(Action::Command(Command::ChooseAmmunition {
                         warrior,
                         scroll,
@@ -79,6 +84,7 @@ impl Inventory {
         }
     }
 
+    /// Draws the Ammo button (CNTL 176) on the Items screen.
     pub(super) fn draw_ammunition_button(&self, assets: &Assets, controls: &mut Vec<Control>) {
         assets.panel_part(6, SOURCE, BUTTON);
         controls.push(Control {
@@ -88,13 +94,14 @@ impl Inventory {
         });
     }
 
+    /// Draws the ammunition popup (MENU 1000) for the weapon in the selected row.
     pub(super) fn draw_ammunition(&self, assets: &Assets, controls: &mut Vec<Control>) {
         let Some(popup) = &self.ammunition else {
             return;
         };
         let items = match centurions_core::item_display::ammunition_menu_items(
             (popup.item, &popup.entries),
-            &assets.native_text,
+            &assets.game_text,
             &assets.character_strings,
         ) {
             Ok(items) => items,

@@ -1,13 +1,18 @@
-//! Rounds in the original combat execution order.
+//! Round order: who acts next, and what happens between rounds.
 use super::{
     RoundContext, finish_action, finish_battle_wrapper, reduce_round_with_fields,
     select_turn_bounded,
 };
+use crate::combat::round_stories::RoundCaller;
+use crate::combat::round_stories::RoundDispatch;
+use crate::combat::spells;
 use crate::{Event, Presentation, RuleError, ScriptState, Session};
 use centurions_content::Content;
 use serde::{Deserialize, Serialize};
 
-/// getup's NPC health loop suspended at a direct killbody; newland returns here.
+/// getup's monster health loop, paused at a death until its story returns.
+///
+/// Original: getup
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RoundReturn {
     cursor: super::enemy_round::EnemyRoundCursor,
@@ -15,6 +20,7 @@ pub struct RoundReturn {
 }
 
 impl RoundReturn {
+    /// Refuses a saved round return whose monster, step or pass count is out of range.
     pub(super) fn validate(&self) -> Result<(), RuleError> {
         if self.cursor.index >= 100
             || self.remaining_wraps > 2
@@ -26,6 +32,9 @@ impl RoundReturn {
     }
 }
 
+/// Ends a round: the round scripts run, with their sounds, messages and monsters added or removed,
+/// and a script that starts a story or a battle pauses the round. When they are done the round's
+/// health changes are applied and the next round begins.
 pub(super) fn advance_round(
     state: &mut Session,
     content: &Content,
@@ -38,30 +47,30 @@ pub(super) fn advance_round(
         )
         .ok_or("round content missing")?;
     let tables = mission.combat.as_ref().ok_or("round tables missing")?;
-    let c = state.combat.as_mut().ok_or("round combat missing")?;
-    let mut scripts = c.round_scripts.clone();
+    let combat = state.combat.as_mut().ok_or("round combat missing")?;
+    let mut scripts = combat.round_macros.clone();
     let outcome = crate::combat::round_stories::advance_for_session(
-        c,
+        combat,
         &mut scripts,
         mission,
         &tables.monsters,
         &tables.encounters,
-        crate::combat::round_stories::RoundCaller {
-            active_enemy: c.script_enemy,
-            last_defeated: Some(state.native_work.health_context.last_body),
-            party_positions: state.native_work.tactical_work.positions,
+        RoundCaller {
+            active_enemy: combat.macro_monster,
+            last_defeated: Some(state.globals.health_context.last_body),
+            party_positions: state.globals.battlefield.pos,
         },
         &mut state.random,
     )?;
     if let Some(record) = outcome.extra_record {
-        state.native_work.extra_record = record;
+        state.globals.extra_record = record;
     }
     let paused = scripts.pending.is_some();
-    state.native_work.round_work.processing = Some(u8::from(paused));
-    state.native_work.round_work.slot =
+    state.globals.round_scripts.processing = Some(u8::from(paused));
+    state.globals.round_scripts.slot =
         Some(scripts.pending.as_ref().map_or(5, |p| i16::from(p.slot)));
-    c.round_scripts = scripts;
-    state.retain_monster_work();
+    combat.round_macros = scripts;
+    state.store_monster_pick();
     let mut events = vec![];
     for effect in outcome.effects {
         use crate::combat::round_stories::RoundEffect;
@@ -80,7 +89,7 @@ pub(super) fn advance_round(
             }),
             RoundEffect::Removed(body) => events.push(Event::CombatantRemoved { body }),
             RoundEffect::Dispatch { script, cursor } => {
-                let death_depth = crate::combat::round_stories::RoundDispatch::death_depth(state);
+                let death_depth = RoundDispatch::death_depth(state);
                 let mut record = mission.script(script)?.to_vec();
                 if state
                     .exploration
@@ -90,13 +99,13 @@ pub(super) fn advance_round(
                         .turn_dispatch
                         .as_ref()
                         .filter(|frame| frame.returning)
-                        .and_then(|frame| frame.work.clone())
+                        .and_then(|frame| frame.script_record.clone())
                 {
                     centurions_content::records::StoryRecordMut(&mut shared).replace_body(&record);
                     record = shared;
                 }
                 let position = state.exploration.as_mut().ok_or("round map missing")?;
-                state.round_dispatch = Some(crate::combat::round_stories::RoundDispatch {
+                state.round_dispatch = Some(RoundDispatch {
                     suspended_script: position.script.take(),
                     parent: state.round_dispatch.take().map(Box::new),
                     death_depth: Some(death_depth),
@@ -115,6 +124,7 @@ pub(super) fn advance_round(
     Ok(events)
 }
 
+/// Resumes the round after the dialogue of a round script has been read.
 pub(crate) fn continue_round(
     state: &mut Session,
     content: &Content,
@@ -122,7 +132,7 @@ pub(crate) fn continue_round(
     let program = state
         .combat
         .as_mut()
-        .and_then(|c| c.round_scripts.pending.as_mut())
+        .and_then(|c| c.round_macros.pending.as_mut())
         .ok_or("round continuation missing")?;
     let id = program.text.take().ok_or("round dialogue missing")?;
     if !matches!(state.exploration.as_ref().and_then(|p| p.presentation.as_ref()), Some(Presentation::Dialogue { id: current, .. }) if *current == id)
@@ -135,6 +145,8 @@ pub(crate) fn continue_round(
     advance_round(state, content, 2)
 }
 
+/// Returns from a script a round started. A child battle must have ended; the interrupted turn, the
+/// battle's rewards or the cleanup and the end of the battle follow.
 pub(crate) fn finish_round_dispatch(
     state: &mut Session,
     content: &Content,
@@ -154,8 +166,8 @@ pub(crate) fn finish_round_dispatch(
         .as_mut()
         .ok_or("round map missing")?
         .script = frame.suspended_script;
-    state.native_work.round_work.processing = Some(0);
-    if frame.retained {
+    state.globals.round_scripts.processing = Some(0);
+    if frame.out_of_combat {
         // A battle entered while this frame is topmost marks it child_battle, and a
         // turn child resumes only after combat clears, so no owner returns early.
         if state.combat.is_some() {
@@ -167,7 +179,7 @@ pub(crate) fn finish_round_dispatch(
     }
     if let Some(arena) = state.combat.as_mut() {
         let program = arena
-            .round_scripts
+            .round_macros
             .pending
             .as_mut()
             .ok_or("round program missing")?;
@@ -183,7 +195,7 @@ pub(crate) fn finish_round_dispatch(
         state.selected_battle_treasure = outer.selected;
         state.battle_group_script = outer.group;
         state.battle_npc = outer.npc;
-        if super::npc_return::owns_pending_return(state) {
+        if super::monster_return::owns_pending_return(state) {
             return Ok(vec![]);
         }
         state.exploration.as_mut().unwrap().presentation = Some(Presentation::Loot);
@@ -199,7 +211,7 @@ pub(crate) fn finish_round_dispatch(
         events.extend(finish_battle_wrapper(state, content)?);
         return Ok(events);
     }
-    if super::npc_return::owns_pending_return(state) {
+    if super::monster_return::owns_pending_return(state) {
         return Ok(vec![]);
     }
     if state.ordinary_battle_rewards.is_some() {
@@ -232,8 +244,8 @@ pub(crate) fn finish_round_dispatch(
         script.cursor = start
             .restore(&mut script.record, false)?
             .ok_or("cleanup caller cursor missing")? as u8;
-        crate::story_npc_battle::finish(
-            crate::story_npc_battle::NpcBattleReturn::Reward,
+        crate::story::npc_battle::finish(
+            crate::story::npc_battle::NpcBattleReturn::Reward,
             &mut state.warriors,
             [0; 2],
         )?;
@@ -256,6 +268,11 @@ pub(crate) fn finish_round_dispatch(
     Ok(events)
 }
 
+/// Starts the next round: ten rounds in which nobody fights end the battle as a retreat. Otherwise
+/// the battle order restarts, party buffs run down, the end-of-round effects of the warriors and
+/// monsters are applied and the round goes on.
+///
+/// Original: getup
 pub(super) fn reduce_and_resume_round(
     state: &mut Session,
     content: &Content,
@@ -267,39 +284,39 @@ pub(super) fn reduce_and_resume_round(
             state.exploration.as_ref().ok_or("round map missing")?.map,
         )
         .ok_or("round content missing")?;
-    let c = state.combat.as_mut().ok_or("round combat missing")?;
-    if c.inactive_rounds == 9 {
-        c.victory_work.finish();
-        state.native_work.early_booty = 1;
+    let combat = state.combat.as_mut().ok_or("round combat missing")?;
+    if combat.blank_round == 9 {
+        combat.kill_counts.finish();
+        state.globals.coward = 1;
         return crate::combat::retreat::finish(state, content);
     }
-    c.inactive_rounds += 1;
-    c.cursor = 0;
+    combat.blank_round += 1;
+    combat.battle_order_index = 0;
     let events = vec![];
-    crate::combat::party_buffs::reduce(&mut state.party_buffs)?;
+    crate::combat::party_buffs::reduce(&mut state.party_condition)?;
     let outcome = reduce_round_with_fields(
-        c,
+        combat,
         &mut state.warriors,
         &mut state.random,
         Some(mission),
-        &mut state.native_work.attack_count,
-        &mut state.native_work.party_mask,
+        &mut state.globals.attack_count,
+        &mut state.globals.party_track,
         RoundContext {
             audio: true,
-            selected_warrior: state.selected_warrior,
+            char_select_new: state.char_select_new,
             energy_recovery_disabled: state.energy_recovery_disabled,
-            item_work_alias: crate::combat::spells::retained_item_alias(
-                &state.native_work.ammunition_work,
-            )?,
-            processing: Some(state.native_work.death_processing),
+            item_restriction: spells::loaded_item_restriction(&state.globals.loaded_items)?,
+            processing: Some(state.globals.death_processing),
             movement_gate: &mut state.bandage_ready,
-            items: Some((&content.items, &mut state.native_work.ammunition_work)),
+            items: Some((&content.items, &mut state.globals.loaded_items)),
         },
     )?;
     after_health(state, content, outcome, remaining_wraps, events)
 }
 
-/// The death story of a direct getup killbody has returned to the NPC health loop.
+/// Resumes getup's monster health loop once a death story returns.
+///
+/// Original: getup
 pub(super) fn resume_round(
     state: &mut Session,
     content: &Content,
@@ -312,12 +329,12 @@ pub(super) fn resume_round(
             state.exploration.as_ref().ok_or("round map missing")?.map,
         )
         .ok_or("round content missing")?;
-    let alias = crate::combat::spells::retained_item_alias(&state.native_work.ammunition_work)?;
-    let processing = state.native_work.death_processing;
-    // A death story that ended combat leaves getup's loop iterating the static
-    // records; the detached reduction continues it and the retained scan follows.
+    let alias = spells::loaded_item_restriction(&state.globals.loaded_items)?;
+    let processing = state.globals.death_processing;
+    // A death story that ended the battle leaves getup's loop running over the
+    // remaining records, then scanning for the next actor.
     if state.combat.is_none() {
-        let outcome = super::retained_turn::reduction::resume_npcs(
+        let outcome = super::out_of_combat_getup::reduction::resume_monsters(
             state,
             content,
             (frame.cursor.index, frame.cursor.stage),
@@ -326,24 +343,28 @@ pub(super) fn resume_round(
         if outcome.flow == super::TurnFlow::Terminated {
             return Ok(outcome.events);
         }
-        return super::retained_turn::continue_after_reduction(state, content, outcome.events);
+        return super::out_of_combat_getup::continue_after_reduction(
+            state,
+            content,
+            outcome.events,
+        );
     }
-    let c = state.combat.as_mut().ok_or("round combat missing")?;
-    if frame.cursor.index >= c.enemies.records.len() {
+    let combat = state.combat.as_mut().ok_or("round combat missing")?;
+    if frame.cursor.index >= combat.roster.records.len() {
         return Err("saved round health return outside the roster".into());
     }
     let outcome = super::reduce_enemy_round_impl(
-        c,
+        combat,
         &mut state.warriors,
         &mut state.random,
         Some(mission),
-        &mut state.native_work.attack_count,
-        &mut state.native_work.party_mask,
+        &mut state.globals.attack_count,
+        &mut state.globals.party_track,
         (
-            state.selected_warrior,
+            state.char_select_new,
             alias,
             &mut state.bandage_ready,
-            Some((&content.items, &mut state.native_work.ammunition_work)),
+            Some((&content.items, &mut state.globals.loaded_items)),
         ),
         frame.cursor,
         Some(processing),
@@ -351,6 +372,8 @@ pub(super) fn resume_round(
     after_health(state, content, outcome, frame.remaining_wraps, vec![])
 }
 
+/// Takes the outcome of the monsters' round start. The last monster to fall is remembered, and a
+/// death that starts a story suspends the round until it returns.
 fn after_health(
     state: &mut Session,
     content: &Content,
@@ -359,11 +382,11 @@ fn after_health(
     mut events: Vec<Event>,
 ) -> Result<Vec<Event>, RuleError> {
     if let Some(body) = outcome.last_defeated_body {
-        state.native_work.health_context.last_body = body;
+        state.globals.health_context.last_body = body;
     }
     events.extend(outcome.events);
     if let Some(cursor) = outcome.suspended {
-        let actor = state.selected_warrior as i16;
+        let actor = state.char_select_new as i16;
         events.extend(super::death::suspend_reaction(
             state,
             content,
@@ -375,11 +398,11 @@ fn after_health(
         )?);
         return Ok(events);
     }
-    let c = state.combat.as_mut().ok_or("round combat missing")?;
+    let combat = state.combat.as_mut().ok_or("round combat missing")?;
     if state
         .warriors
         .iter()
-        .any(|warrior| warrior.record().bleeding_flag() != 0)
+        .any(|warrior| warrior.record().bleeding() != 0)
     {
         events.push(Event::Sound { resource_id: 10122 });
     }
@@ -391,11 +414,11 @@ fn after_health(
         events.push(Event::Sound { resource_id: -139 });
     }
 
-    if c.death_queue.count > 0 || !c.victory_work.has_remaining() {
+    if combat.todo_queue.count > 0 || !combat.kill_counts.has_remaining() {
         events.extend(finish_action(
             state,
             content,
-            state.selected_warrior as i16,
+            state.char_select_new as i16,
             true,
         )?);
     } else {

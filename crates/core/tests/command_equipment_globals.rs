@@ -25,7 +25,7 @@ fn equipment_globals_apply_known_words_and_reject_unknown_priors_atomically() {
         match selector {
             40 => assert_eq!(state.difficulty, before.difficulty.wrapping_sub(1)),
             // Selector 30 is party duration 0; removal clears its owner directly.
-            30 => assert_eq!(restored(&state).party_buffs[..2], [0, 0]),
+            30 => assert_eq!(restored(&state).party_condition[..2], [0, 0]),
             // WORD442598 is story flag BYTEs 12..13.
             57 => assert_eq!(flag(&state), flag(&before).wrapping_sub(1)),
             _ => assert!(result.is_err() && state == before),

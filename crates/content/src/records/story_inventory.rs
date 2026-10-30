@@ -5,9 +5,11 @@ use crate::{ContentError, span, word};
 pub struct ItemPrerequisiteExtra<'a>(pub &'a [u8]);
 
 impl<'a> ItemPrerequisiteExtra<'a> {
+    /// Views an EXTRA record, which must hold all ten bytes.
     pub fn new(extra: &'a [u8]) -> Result<Self, ContentError> {
         span(extra, 0, 10).map(Self)
     }
+    /// The item to look for.
     pub fn item(&self) -> Result<i16, ContentError> {
         word(self.0, 0)
     }
@@ -17,16 +19,19 @@ impl<'a> ItemPrerequisiteExtra<'a> {
     }
 }
 
-/// EXTRA record for opcode 22 party item consumption (newland 0x14666e).
+/// EXTRA record for opcode 22 party item consumption.
 pub struct ItemConsumptionExtra<'a>(pub &'a [u8]);
 
 impl<'a> ItemConsumptionExtra<'a> {
+    /// Views an EXTRA record, which must hold all ten bytes.
     pub fn new(extra: &'a [u8]) -> Result<Self, ContentError> {
         span(extra, 0, 10).map(Self)
     }
+    /// The item to change.
     pub fn item(&self) -> Result<i16, ContentError> {
         word(self.0, 0)
     }
+    /// How many of the item to affect.
     pub fn maximum(&self) -> Result<i16, ContentError> {
         word(self.0, 2)
     }
@@ -34,9 +39,11 @@ impl<'a> ItemConsumptionExtra<'a> {
     pub fn mode(&self) -> Result<i16, ContentError> {
         word(self.0, 4)
     }
+    /// Charges to add; negative drains them.
     pub fn quantity_change(&self) -> Result<i16, ContentError> {
         word(self.0, 6)
     }
+    /// The item that replaces it.
     pub fn replacement(&self) -> Result<i16, ContentError> {
         word(self.0, 8)
     }

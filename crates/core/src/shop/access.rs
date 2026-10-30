@@ -1,4 +1,4 @@
-//! Access for shop.
+//! Entering, loading and saving shops.
 use super::RECORD;
 use crate::{Command, Event, Phase, Presentation, RuleError, Session};
 use centurions_content::mission::OpeningMission;
@@ -7,24 +7,34 @@ use centurions_content::span;
 use centurions_content::{Content, word};
 use serde::{Deserialize, Serialize};
 
+/// The shop the party is visiting: its level and number, and for a shop that stocks enhanced items
+/// the enhancement and how many items the party may still take.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Access {
+    /// The scenario level of the shop.
     pub level: u8,
+    /// The shop's number on its level.
     pub id: u8,
+    /// The enhancement level of the stock the shop generates, the number of improvement rounds
+    /// each item gets; zero for an ordinary shop.
     #[serde(default)]
     pub enhancement: i16,
+    /// How many items the party may still take from a limited shop; an ordinary shop leaves it
+    /// zero.
     #[serde(default)]
     pub remaining: i16,
 }
 
+/// The refusal given with a shop warning.
 pub(super) fn refused(warning: i16) -> RuleError {
     RuleError::Refused {
-        feedback: vec![crate::feedback::NativeFeedback::Warning { index: warning }],
+        feedback: vec![crate::feedback::GameFeedback::Warning { index: warning }],
     }
 }
 
+/// Checks the shop being visited and every shop's saved record against the scenario's shops.
 pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleError> {
-    state.native_work.shop_work.validate()?;
+    state.globals.the_shop.validate()?;
     for (level, records) in &state.shops {
         let context = content.context(state.mission.as_deref(), *level)?;
         let authored = context.map(0).ok_or("shop level unavailable")?;
@@ -61,7 +71,10 @@ pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleErr
     Ok(())
 }
 
-/// newland opcode 6, 0x142fae; positive parameters register later inventory access.
+/// The shop script operation opens a shop; a positive parameter also lets the
+/// party reach its inventory later.
+///
+/// Original: newland
 pub(crate) fn visit(
     state: &mut Session,
     content: &Content,
@@ -85,10 +98,12 @@ pub(crate) fn visit(
     }
 }
 
+/// The saved shop records of a level, taken from an imported game or the scenario when the party
+/// has not visited them.
 fn file_rows<'a>(state: &'a mut Session, map: &OpeningMission, level: u8) -> &'a mut [u8] {
     state.shops.entry(level).or_insert_with(|| {
         state
-            .native_import
+            .imported
             .as_ref()
             .and_then(|imported| imported.scenario_records.get(&level))
             .cloned()
@@ -96,17 +111,21 @@ fn file_rows<'a>(state: &'a mut Session, map: &OpeningMission, level: u8) -> &'a
     })
 }
 
-/// loadshop 0x12fe54: the level's shop record with each ID family compacted in order.
+/// Loads the level's shop record, compacting each ID family in order.
+///
+/// Original: loadshop
 fn load_shop(state: &mut Session, map: &OpeningMission, id: u8) -> Result<(), RuleError> {
     span(&map.shops, id as usize * RECORD, RECORD)?;
     let level = state.scenario_level;
     let record = span(file_rows(state, map, level), id as usize * RECORD, RECORD)?.to_vec();
-    state.native_work.shop_work.load(&record)
+    state.globals.the_shop.load(&record)
 }
 
-/// saveshop writes the whole retained buffer, including loadshop's stale tails.
-fn save_work(state: &mut Session, content: &Content, level: u8, id: u8) -> Result<(), RuleError> {
-    let record = state.native_work.shop_work.record();
+/// Saves the whole shop record, including rows a load left stale.
+///
+/// Original: saveshop
+fn save_shop(state: &mut Session, content: &Content, level: u8, id: u8) -> Result<(), RuleError> {
+    let record = state.globals.the_shop.record();
     let context = content.context(state.mission.as_deref(), level)?;
     let map = context.map(0).ok_or("shop level unavailable")?;
     span(&map.shops, id as usize * RECORD, RECORD)?;
@@ -117,9 +136,11 @@ fn save_work(state: &mut Session, content: &Content, level: u8, id: u8) -> Resul
     Ok(())
 }
 
-/// newland51 0x145870: the shop's price percent changes by e2 and every slot holding
-/// item e3 changes by e4's low byte as a signed count, floored at zero. Shop zero
-/// (loadshop's current shop) and negative shop bytes are refused.
+/// The alter-shop script operation changes the shop's price percent by e2, and
+/// every slot holding item e3 by e4's low byte as a signed count, floored at
+/// zero. Shop zero (the current shop) and negative shops are refused.
+///
+/// Original: newland
 pub(crate) fn alter(state: &mut Session, content: &Content, extra: &[u8]) -> Result<(), RuleError> {
     let id = word(extra, 0)? as i8;
     if id <= 0 {
@@ -131,11 +152,11 @@ pub(crate) fn alter(state: &mut Session, content: &Content, extra: &[u8]) -> Res
     let map = state.map(content, 0).ok_or("shop scenario unavailable")?;
     load_shop(state, map, id as u8)?;
     state
-        .native_work
-        .shop_work
+        .globals
+        .the_shop
         .alter(word(extra, 2)?, word(extra, 4)?, word(extra, 6)? as i8)?;
-    save_work(state, content, state.scenario_level, id as u8)?;
-    // loadshop leaves the altered shop current.
+    save_shop(state, content, state.scenario_level, id as u8)?;
+    // The altered shop becomes the current shop.
     if let Some(access) = state.shop_access.as_mut() {
         access.level = state.scenario_level;
         access.id = id as u8;
@@ -143,6 +164,8 @@ pub(crate) fn alter(state: &mut Session, content: &Content, extra: &[u8]) -> Res
     Ok(())
 }
 
+/// Visits a shop that sells only a limited number of enhanced items: the extra gives the
+/// enhancement level (stored one higher) and how many items the party may take.
 pub(crate) fn visit_restricted(
     state: &mut Session,
     content: &Content,
@@ -155,6 +178,7 @@ pub(crate) fn visit_restricted(
     Ok(())
 }
 
+/// Puts the shop window up after pooling the party's money.
 pub(super) fn show(state: &mut Session) -> Result<(), RuleError> {
     crate::party::pool_credits(&mut state.warriors, &mut state.party_currency)?;
     state
@@ -165,6 +189,7 @@ pub(super) fn show(state: &mut Session) -> Result<(), RuleError> {
     Ok(())
 }
 
+/// Opens the shop window for the shop the party is visiting.
 pub(crate) fn open(state: &mut Session) -> Result<Vec<Event>, RuleError> {
     if state.phase != Phase::Exploration
         || state
@@ -182,9 +207,10 @@ pub(crate) fn open(state: &mut Session) -> Result<Vec<Event>, RuleError> {
     Ok(vec![Event::StoryPresented])
 }
 
+/// Closes the shop: its stock is saved and the script that sent the party there carries on.
 pub(crate) fn close(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let access = active(state)?.clone();
-    save_work(state, content, access.level, access.id)?;
+    save_shop(state, content, access.level, access.id)?;
     state.exploration.as_mut().unwrap().presentation = None;
     if state.exploration.as_ref().unwrap().script.is_some() {
         crate::exploration::run_script(state, content)
@@ -193,6 +219,7 @@ pub(crate) fn close(state: &mut Session, content: &Content) -> Result<Vec<Event>
     }
 }
 
+/// The shop being visited; refused unless the shop window is showing.
 pub(super) fn active(state: &Session) -> Result<&Access, RuleError> {
     if state.phase != Phase::Exploration
         || state
@@ -209,6 +236,7 @@ pub(super) fn active(state: &Session) -> Result<&Access, RuleError> {
         .ok_or_else(|| "no active shop records".into())
 }
 
+/// Whether a command may be given while the shop window is open.
 pub(crate) fn command_allowed(command: &Command) -> bool {
     matches!(
         command,
@@ -225,8 +253,8 @@ pub(crate) fn command_allowed(command: &Command) -> bool {
     )
 }
 
-/// Access selects the workflow; current stock does not require a file overlay.
-pub(super) fn current_work(state: &Session) -> Result<&super::ShopWork, RuleError> {
+/// The open shop's stock, which needs no file overlay.
+pub(super) fn current_shop(state: &Session) -> Result<&super::TheShop, RuleError> {
     state.shop_access.as_ref().ok_or("shop unavailable")?;
-    Ok(&state.native_work.shop_work)
+    Ok(&state.globals.the_shop)
 }

@@ -1,12 +1,15 @@
-//! newland7's menu and typed-encounter file updates (14320c..1433f8).
+//! Replace Map Event's updates to the simple and typed encounter files.
 use crate::{RuleError, story::MENU_RECORD_BYTES, typed_encounter};
 use centurions_content::{
     records::{EventReplacementExtra, StoryRecord},
     span,
 };
 
+/// Size of the header at the start of a simple encounter record.
 const MENU_RECORD_HEADER: usize = 106;
 
+/// Replaces the actions and parameters of one branch of a simple (map -1) or typed (map -2)
+/// encounter in the scenario's encounter table.
 pub fn replace_encounter_branch(
     table: &[u8],
     extra: &[u8],
@@ -22,9 +25,8 @@ pub fn replace_encounter_branch(
             ));
         }
     };
-    // Opcodes go to work + 8 * branch and parameters to work + 32 + 16 * branch, in the
-    // header work 0x443396 (typed, 156 bytes) or 0x443432 (menu, 106 bytes); only the
-    // header is written back. Typed branches 4..6 stay inside it.
+    // Each branch's actions and parameters are written into the loaded header,
+    // and only the header is written back. Typed branches 4..6 stay inside it.
     let branch = extra.branch()?;
     if branch < 0 {
         return Err(RuleError::Unsupported {
@@ -54,7 +56,8 @@ pub fn replace_encounter_branch(
         let offset = 32 + branch as usize * 16 + action * 2;
         record[offset..offset + 2].copy_from_slice(&parameter.to_be_bytes());
     }
-    // The typed caller reads at 516-byte strides but seeks with 426 for its write.
+    // Typed encounters are read at 516-byte strides but written at 426-byte
+    // strides, an original quirk kept as is.
     let write = index * MENU_RECORD_BYTES;
     span(table, write, header)?;
     let mut result = table.to_vec();

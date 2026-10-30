@@ -1,11 +1,14 @@
 //! One selected body: damage channels, spelllist, then health.
+use crate::combat::attack::AttackResult;
 use crate::combat::{
     damage::{DamageFlags, DamagePacket, resolve_damage_with_amount},
     spells::{DirectSpell, RestrictionMemoryView, SupportSpellResult},
 };
 use crate::{RandomState, RuleError};
-use centurions_content::records::AttackPacket;
+use centurions_content::records::SpellInfoRecord;
 
+/// Resolves the spell on one body: its damage and conditions, then its health change. A conversion
+/// that kills inside the spell is credited and followed by a second kill.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn resolve(
     result: &mut SupportSpellResult,
@@ -21,12 +24,12 @@ pub(super) fn resolve(
     let (total, sounds, _, icon) = damage_and_conditions(
         result, body, context, effect, duration, amount, caller, random,
     )?;
-    // spelllist 15c10a kills inside the call, after the shield sounds; resolvespell
-    // 151c80..151d78 then subtracts the damage from the dead body, credits it and calls
-    // killbody again. Each entry is one killbody for the caller.
+    // Conversion kills inside spelllist, after the shield sounds; the damage is then
+    // still subtracted from the dead body, credited and followed by a second killbody.
+    // Each entry is one killbody for the caller.
     let repeated = total != 0 && result.forced_kills.len() != kills;
     let sounds = if repeated {
-        let spelllist = crate::combat::attack::AttackResult {
+        let spelllist = AttackResult {
             icon: 0,
             feedback: None,
             damage: 0,
@@ -45,6 +48,8 @@ pub(super) fn resolve(
     Ok(())
 }
 
+/// Rolls the spell's damage on one body through its shield, armor and saves, then applies its
+/// conditions.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::combat::spells) fn damage_and_conditions(
     result: &mut SupportSpellResult,
@@ -56,11 +61,7 @@ pub(in crate::combat::spells) fn damage_and_conditions(
     caller: (Option<i16>, Option<RestrictionMemoryView<'_>>),
     random: &mut RandomState,
 ) -> Result<(i16, Vec<i16>, bool, i16), RuleError> {
-    let record = if body < 10 {
-        &mut result.warriors[body].bytes
-    } else {
-        &mut result.enemies[body - 10].bytes
-    };
+    let record = result.body_bytes_mut(body);
     let damage = resolve_damage_with_amount(
         record,
         body >= 10,
@@ -94,8 +95,8 @@ pub(in crate::combat::spells) fn damage_and_conditions(
         vec![]
     };
     if reported && total == 0 {
-        sounds.push(AttackPacket(context.packet).impact_sound()?);
+        sounds.push(SpellInfoRecord(context.packet).impact_sound()?);
     }
-    // The fourth value is WORD 0x41f710 for resolvespell's showresults 0x151dba.
+    // The fourth value is the damage icon showresults displays.
     Ok((total, sounds, reported, damage.sound))
 }

@@ -1,21 +1,28 @@
-//! BD tile-property files. loadland 0x13107a calls loadpixmap 0x131182 with the land's
-//! tile-set byte (region-table offset 520); when it differs from the loaded set, loadpixmap
-//! reads the file's default tile and tick flag, 60 further bytes, and up to 16000 bytes of
-//! 40-byte tile properties. Supplied sets hold 300 records (12064 bytes); a shorter read
-//! leaves the rest of the native buffer as an earlier land left it.
+//! BD tile-property files. Entering a land loads the tile set its region table
+//! names when that differs from the set already loaded: the default tile, the
+//! tick flag, 60 further bytes, then up to 16000 bytes of 40-byte tile
+//! properties. Supplied sets hold 300 records (12064 bytes); a shorter file
+//! leaves the rest of the table as an earlier land left it.
 use crate::{ContentError, span, word};
 
 /// The installation-wide standard sets. Custom sets belong to a scenario level.
 pub const TILE_SETS: usize = 9;
 
+/// One BD tile-property file as a land uses it.
 #[derive(Clone, Debug)]
 pub struct TileSet {
+    /// The terrain number that names the file: 1 to 9 for the standard sets, 15 to 19
+    /// for a scenario's own.
     pub terrain: u8,
+    /// The 40-byte tile property records, up to 16000 bytes.
     pub properties: Vec<u8>,
+    /// The tile that fills a map cell no tile is placed on.
     pub default_tile: i16,
+    /// Game minutes a step on this terrain takes: 1, or 5 when the tick flag is clear.
     pub minutes_per_tick: i16,
 }
 
+/// The name of the BD file for `terrain`, or none when no tile set has that number.
 pub fn file_name(terrain: u8) -> Option<&'static str> {
     Some(match terrain {
         1 => "Data P BD",
@@ -32,6 +39,9 @@ pub fn file_name(terrain: u8) -> Option<&'static str> {
     })
 }
 
+/// Reads one tile set's BD file.
+///
+/// Original: loadpixmap
 pub fn read(
     read: &mut impl FnMut(&str) -> Result<Vec<u8>, ContentError>,
     terrain: u8,
@@ -53,7 +63,8 @@ pub fn read(
     })
 }
 
-/// loadpixmap asks GetPicture for the terrain WORD plus299.
+/// The tile set whose terrain picture is `id`: a land's terrain picture is PICT
+/// terrain + 299.
 pub fn picture_terrain(id: i16) -> Option<u8> {
     let terrain = u8::try_from(id.checked_sub(299)?).ok()?;
     file_name(terrain).map(|_| terrain)

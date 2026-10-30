@@ -1,16 +1,18 @@
-//! Original combat estimate panel, expressed as drawing commands rather than
-//! emulated stack and global-memory writes. No session state or RNG is changed.
+//! The combat estimate panel, as drawing commands. It changes no game state and
+//! draws no random numbers.
 use super::{
-    BTreeMap, BodyRect, Content, Draw, NativeText, PanelEffect, PanelPlan, PascalString, RuleError,
+    BTreeMap, BodyRect, Content, Draw, GameText, PanelEffect, PanelPlan, PascalString, RuleError,
     output::ArithmeticQualification,
 };
 use centurions_content::records::ItemDefinition;
 
+/// Draws the attack estimate panel for the warrior whose turn it is. It changes nothing in the game
+/// and draws no random numbers.
 pub fn attack_estimate(
     state: &crate::Session,
     content: &Content,
     body: i16,
-    native: &NativeText,
+    game_text: &GameText,
     _strings: &BTreeMap<i16, Vec<u8>>,
 ) -> Result<PanelPlan, RuleError> {
     let combat = state.combat.as_ref().ok_or("estimate combat missing")?;
@@ -18,25 +20,25 @@ pub fn attack_estimate(
         .active_body()
         .filter(|body| (0..state.warriors.len() as i16).contains(body))
         .ok_or("estimate warrior missing")?;
-    let font = i16::from_be_bytes(native.bytes(0x402f3c, 2)?.try_into().unwrap());
+    let font = i16::from_be_bytes(game_text.bytes(0x402f3c, 2)?.try_into().unwrap());
     let warrior = &state.warriors[actor as usize];
     let record = warrior.record();
-    let equipped = record.displayed_weapon(record.firing_mode())?;
+    let equipped = record.displayed_weapon(record.toggle())?;
     if equipped != 0
         && !warrior
             .inventory()?
             .iter()
-            .any(|item| item.id() == equipped && item.equipment_flag() != 0)
+            .any(|item| item.id() == equipped && item.equipped() != 0)
     {
         return Err("estimate requires the original equipped-instance multiplier".into());
     }
-    if record.firing_mode() && equipped == 0 {
+    if record.toggle() && equipped == 0 {
         return Err("estimate requires the original retained firearm damage context".into());
     }
     let target = if body >= 10 {
         Some(
             combat
-                .enemies
+                .roster
                 .records
                 .get((body - 10) as usize)
                 .ok_or("estimate target missing")?,
@@ -44,7 +46,7 @@ pub fn attack_estimate(
     } else {
         None
     };
-    // Keep the existing admission checks even when the panel has no target.
+    // The weapons must exist even when the panel has no target.
     for id in [
         record.equipped_weapon()?,
         record.melee_weapon()?,
@@ -60,7 +62,7 @@ pub fn attack_estimate(
     let mut plan = PanelPlan {
         effects: vec![],
         arithmetic: None,
-        retained_definitions: None,
+        loaded_items: None,
     };
     let panel = BodyRect {
         top: 300,
@@ -76,24 +78,24 @@ pub fn attack_estimate(
         },
     );
     let Some(target) = target else {
-        plan.retained_definitions = Some(state.native_work.ammunition_work.clone());
+        plan.loaded_items = Some(state.globals.loaded_items.clone());
         return Ok(plan);
     };
-    let enemy = target.record();
+    let monster = target.record();
     let mut icon_bounds = BodyRect {
         top: 309,
         left: 487,
         bottom: 373,
         right: 551,
     };
-    match enemy.size()? {
+    match monster.size()? {
         0 => inset(&mut icon_bounds, 16, 16),
         1 => inset(&mut icon_bounds, 16, 0),
         2 => inset(&mut icon_bounds, 0, 16),
         _ => (),
     }
-    let mut icon = enemy.tactical_icon()?;
-    if enemy.size()? != -3 && enemy.facing_flag() == 1 {
+    let mut icon = monster.icon()?;
+    if monster.size()? != -3 && monster.facing_left() == 1 {
         icon = icon.wrapping_add(1000);
     }
     draw(
@@ -103,19 +105,19 @@ pub fn attack_estimate(
             rect: icon_bounds,
         },
     );
-    let weapon = if record.firing_mode() {
+    let weapon = if record.toggle() {
         Some(record.equipped_weapon()?)
     } else if record.melee_weapon()? != 0 {
         Some(record.melee_weapon()?)
     } else {
         None
     };
-    let mut work = state.native_work.ammunition_work.clone();
+    let mut loaded = state.globals.loaded_items.clone();
     let icon = match weapon {
         Some(id) => {
             let definition = crate::ammunition::definition(content, id)?;
             let icon = ItemDefinition(&definition).icon()?;
-            work.item = Some(definition);
+            loaded.item = Some(definition);
             icon
         }
         None => 7002,
@@ -136,7 +138,7 @@ pub fn attack_estimate(
         warrior,
         &target.bytes,
         combat.difficulty,
-        &work,
+        &loaded,
         content,
     )?;
     draw(&mut plan, Draw::TextSize(12));
@@ -164,15 +166,17 @@ pub fn attack_estimate(
         });
         draw(&mut plan, Draw::DrawString(text));
     }
-    plan.retained_definitions = Some(estimate.work);
+    plan.loaded_items = Some(estimate.loaded);
     plan.arithmetic = Some(ArithmeticQualification::SourceDerivedBinary32);
     Ok(plan)
 }
 
+/// Adds a drawing step to the estimate.
 fn draw(plan: &mut PanelPlan, drawing: Draw) {
     plan.effects.push(PanelEffect::Drawing(drawing));
 }
 
+/// Shrinks a rectangle by the given amounts on each side.
 fn inset(rect: &mut BodyRect, horizontal: i16, vertical: i16) {
     rect.top += vertical;
     rect.bottom -= vertical;

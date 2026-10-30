@@ -1,9 +1,11 @@
-//! Inspection for equipment.
+//! Inspecting equipment in the shop window.
 use crate::{Event, RuleError, Session};
-use centurions_content::span;
+use centurions_content::records::InventorySlots;
 use centurions_content::{Content, InventoryRecord};
 
-/// Display copies all nine visible rows; updateshop20 then copies a selected owned row.
+/// Shows all nine visible rows, then the selected owned row.
+///
+/// Original: updateshop
 pub(crate) fn inspect(
     state: &mut Session,
     content: &Content,
@@ -46,11 +48,7 @@ pub(crate) fn inspect(
             .checked_add(8)
             .filter(|row| *row < 100)
             .ok_or("inventory scroll outside native rows")?;
-        let record = InventoryRecord(
-            span(&warrior.bytes, 0x132 + row * 22, 22)?
-                .try_into()
-                .unwrap(),
-        );
+        let record = InventorySlots(&warrior.bytes).slot(row)?;
         display_owned_row(state, content, record)?;
     }
     if let Some((side, slot)) = selected {
@@ -79,7 +77,9 @@ pub(crate) fn inspect(
     Ok(vec![])
 }
 
-/// ploticon14a074 loads the raw definition and clears an empty owned row's icon.
+/// Loads the item's definition as stored and clears the icon of an empty owned row.
+///
+/// Original: ploticon
 fn display_owned_row(
     state: &mut Session,
     content: &Content,
@@ -93,8 +93,8 @@ fn display_owned_row(
     if record.id() == 0 {
         definition[10..12].fill(0);
     }
-    state.native_work.loaded_item_field32 = centurions_content::word(&definition, 32)?;
-    state.native_work.ammunition_work.item = Some(definition);
-    state.native_work.inventory_record = record;
+    state.globals.loaded_item_field32 = centurions_content::word(&definition, 32)?;
+    state.globals.loaded_items.item = Some(definition);
+    state.globals.inventory_record = record;
     Ok(())
 }

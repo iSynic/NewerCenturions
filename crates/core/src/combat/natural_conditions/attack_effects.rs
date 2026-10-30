@@ -1,7 +1,8 @@
-//! attack2 (0x1028a4) applies natural effects after physical damage. These rules
-//! preserve its different warrior/enemy admission and duration behavior.
-//! Unlisted selectors keep the strength draw and take the native switch default.
+//! Natural attack effects, applied after physical damage. Warriors and monsters
+//! take them under different rules. An unlisted effect still draws its strength
+//! and then does nothing.
 use crate::{RandomState, RuleError, combat::attack::AttackFeedback};
+use centurions_content::combat::MONSTER_BYTES;
 use centurions_content::{
     records::{
         Condition, ConditionTarget, DamageTargetKind, EnemyRecord, EnemyRecordMut, ItemDefinition,
@@ -10,15 +11,18 @@ use centurions_content::{
     span,
 };
 
+/// What a natural attack's effect did: the extra damage, whether it took hold, the message to show,
+/// and the psi it drained.
 pub(crate) struct NaturalEffect {
     pub extra_damage: i16,
     pub applied: bool,
     pub feedback: Option<AttackFeedback>,
-    /// Psi taken by condition 7, which attack2 adds to the attacker's live record.
+    /// Psi taken by condition 7, added to the attacker.
     pub drained_psi: i16,
 }
 
 impl NaturalEffect {
+    /// An effect that did nothing.
     fn none() -> Self {
         Self {
             extra_damage: 0,
@@ -27,12 +31,14 @@ impl NaturalEffect {
             drained_psi: 0,
         }
     }
-    /// A reflected attack credits the record it drained, as attack2's aliased bodies do.
+    /// Credits the drained psi to the attacker; a reflected attack credits the record
+    /// it drained.
     pub fn credit_attacker(&self, attacker: &mut [u8]) -> Result<(), RuleError> {
         let psi = EnemyRecord::from_bytes(attacker).psi_points()?;
         EnemyRecordMut::from_bytes(attacker).set_psi_points(psi.wrapping_add(self.drained_psi));
         Ok(())
     }
+    /// Sets the message to show for the condition, when the effect took hold.
     fn set_feedback(&mut self, condition: u8) {
         if self.applied {
             self.feedback = result_code(condition)
@@ -41,6 +47,7 @@ impl NaturalEffect {
     }
 }
 
+/// The result code the attack reports for each condition, if it has one.
 fn result_code(condition: u8) -> Option<i16> {
     Some(match condition {
         1 => -33,
@@ -73,8 +80,8 @@ pub(crate) fn monster_attack_effect(
     random: &mut RandomState,
 ) -> Result<Option<NaturalEffect>, RuleError> {
     let mut target = ConditionTarget::new(target, DamageTargetKind::Enemy)?;
-    span(source, 0, 288)?;
-    // Indexes up to 34 read inside attack2's 0x120-byte record copy.
+    span(source, 0, MONSTER_BYTES)?;
+    // Natural attacks up to 34 lie inside the monster record.
     if index >= 35 {
         return Err(RuleError::Invalid("natural attack index".into()));
     }
@@ -85,7 +92,9 @@ pub(crate) fn monster_attack_effect(
     if condition == 0 {
         return Ok(Some(result));
     }
-    let strength = random.range(source.level()? / 2, source.level()?).max(1);
+    let strength = random
+        .range(source.hit_dice()? / 2, source.hit_dice()?)
+        .max(1);
     if target.magic_immunity()? > 100 {
         return Ok(None);
     }
@@ -95,13 +104,13 @@ pub(crate) fn monster_attack_effect(
             target.halve_remaining_turn()?;
         }
     } else if condition == 7 {
-        drain_psi(&mut target, source.level()?, &mut result, random)?;
+        drain_psi(&mut target, source.hit_dice()?, &mut result, random)?;
     } else if condition == 8 {
-        // attack2 has no NPC-target arm for condition 8.
+        // Condition 8 does nothing to a monster.
     } else if condition == 19 {
         result.applied = blind(&mut target, random)?;
     } else if condition == 10 {
-        let threshold = target.saving_throw(SavingThrow::Mental)?;
+        let threshold = target.save(SavingThrow::Mental)?;
         if random.bound(100) > threshold && threshold <= 99 {
             target.set_faction(source.faction()?);
             result.applied = true;
@@ -114,7 +123,9 @@ pub(crate) fn monster_attack_effect(
     Ok(Some(result))
 }
 
-/// Called only when attack2 retained no physical weapon on entry.
+/// A natural attack's effect on a warrior, when the monster has no weapon.
+///
+/// Original: attack2
 pub(crate) fn warrior_attack_effect(
     target: &mut [u8],
     source: &[u8],
@@ -123,8 +134,8 @@ pub(crate) fn warrior_attack_effect(
     random: &mut RandomState,
 ) -> Result<NaturalEffect, RuleError> {
     let mut target = ConditionTarget::new(target, DamageTargetKind::Warrior)?;
-    span(source, 0, 288)?;
-    // Indexes up to 34 read inside attack2's 0x120-byte record copy.
+    span(source, 0, MONSTER_BYTES)?;
+    // Natural attacks up to 34 lie inside the monster record.
     if index >= 35 {
         return Err(RuleError::Invalid("natural attack index".into()));
     }
@@ -136,18 +147,20 @@ pub(crate) fn warrior_attack_effect(
     if condition == 0 {
         return Ok(result);
     }
-    let strength = random.range(source.level()? / 2, source.level()?).max(1);
+    let strength = random
+        .range(source.hit_dice()? / 2, source.hit_dice()?)
+        .max(1);
     if matches!(condition, 1..=6 | 9) {
         result.applied = apply_duration(&mut target, condition, strength, mind_shield, random)?;
         if result.applied && condition == 4 {
             target.halve_remaining_turn()?;
         }
     } else if condition == 7 {
-        drain_psi(&mut target, source.level()?, &mut result, random)?;
+        drain_psi(&mut target, source.hit_dice()?, &mut result, random)?;
     } else if condition == 8 {
-        // attack2 0x102d68: twenty per attacker maximum stamina, as a sign-extended word.
+        // Twenty per point of the attacker's maximum stamina, as a signed word.
         if !saves(&target, SavingThrow::Entanglement, random)? {
-            let amount = source.maximum_stamina()?.wrapping_mul(20);
+            let amount = source.stamina_max()?.wrapping_mul(20);
             target.shift_experience(i32::from(amount))?;
             result.applied = true;
         }
@@ -155,7 +168,7 @@ pub(crate) fn warrior_attack_effect(
         result.applied = blind(&mut target, random)?;
     } else if condition == 10 {
         let threshold = target
-            .saving_throw(SavingThrow::Mental)?
+            .save(SavingThrow::Mental)?
             .wrapping_add(if mind_shield { 50 } else { 0 });
         let saved = random.bound(100) <= threshold;
         if !saved && !target.is_cyborg()? {
@@ -163,8 +176,8 @@ pub(crate) fn warrior_attack_effect(
             result.applied = true;
         }
     } else if (11..=17).contains(&condition) {
-        // attack2 0x1028a4: warrior cases 11-17 share one shape; heat, cold, psionic and
-        // atomic (12, 13, 15, 16) are compared by natural-elements.json.
+        // Cases 11-17 share one shape; heat, cold, psionic and atomic (12, 13, 15,
+        // 16) are checked against the reference in natural-elements.json.
         result.extra_damage = extra_damage(&target, condition, attack.effect_maximum, random)?;
         result.applied = result.extra_damage != 0;
     }
@@ -174,17 +187,22 @@ pub(crate) fn warrior_attack_effect(
     Ok(result)
 }
 
-/// savevs: one Rand(100) against the threshold; NPC thresholds above 99 always save.
+/// A saving throw: one draw of 100 against the threshold; a monster's threshold
+/// above 99 always saves.
+///
+/// Original: savevs
 fn saves(
     target: &ConditionTarget<'_>,
     save: SavingThrow,
     random: &mut RandomState,
 ) -> Result<bool, RuleError> {
-    let threshold = target.saving_throw(save)?;
+    let threshold = target.save(save)?;
     Ok(random.bound(100) <= threshold || (target.is_enemy() && threshold > 99))
 }
 
-/// attack2 0x102cd0: three Psi per attacker level, capped by the target's Psi.
+/// Drains three psi per attacker level, no more than the target has.
+///
+/// Original: attack2
 fn drain_psi(
     target: &mut ConditionTarget<'_>,
     level: i16,
@@ -209,9 +227,11 @@ fn blind(target: &mut ConditionTarget<'_>, random: &mut RandomState) -> Result<b
     Ok(true)
 }
 
-/// attack and attack2 roll a selector -10 weapon's condition when the weapon loads,
-/// before the hit roll: mode 1 admits it on a failed save, mode 2 on Rand(100) at
-/// most the threshold, any other mode always.
+/// A weapon's condition is rolled when the weapon loads, before the hit: mode 1
+/// admits it on a failed save, mode 2 on a draw of 100 at most the threshold, any
+/// other mode always.
+///
+/// Original: attack, attack2
 pub(crate) fn admit_weapon_condition(
     weapon: &[u8],
     target: &mut [u8],
@@ -233,7 +253,7 @@ pub(crate) fn admit_weapon_condition(
     let admitted = match condition.mode {
         1 => {
             let save = SavingThrow::from_index(condition.threshold).ok_or_else(unsupported)?;
-            let threshold = target.saving_throw(save)?.wrapping_add(
+            let threshold = target.save(save)?.wrapping_add(
                 if !target.is_enemy() && save == SavingThrow::Mental && mind_shield {
                     50
                 } else {
@@ -281,7 +301,7 @@ fn apply_duration(
         9 => (SavingThrow::Biological, Condition::Diseased, true),
         _ => return Err(RuleError::Invalid("natural duration condition".into())),
     };
-    let threshold = target.saving_throw(save)?.wrapping_add(
+    let threshold = target.save(save)?.wrapping_add(
         if !target.is_enemy() && save == SavingThrow::Mental && mind_shield {
             50
         } else {

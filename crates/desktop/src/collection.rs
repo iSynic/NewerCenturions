@@ -1,5 +1,6 @@
-//! booty105f6c: seven columns, four rows, party recipients and quickinfo.
-//! Each cell is booty 0x106604..0x106798: a white cell, the item cicn and showp.
+//! The booty screen after a battle, also used for a crate: seven columns and
+//! four rows of loot, the party as recipients, and quickinfo for the item under
+//! the pointer. Each cell is a white box with the item's cicn and showp's text.
 use crate::{
     assets::Assets,
     presentation::{Action, Control, Inspection, UiState},
@@ -8,6 +9,17 @@ use centurions_content::{Content, InventoryRecord, word};
 use centurions_core::{Command, Presentation, Session};
 use macroquad::prelude::*;
 
+/// The booty cell the player has picked up and the member whose drop menu is open.
+#[derive(Default)]
+pub struct Selection {
+    pub slot: Option<usize>,
+    pub drag: bool,
+    pub drop: Option<usize>,
+    pub drop_scroll: usize,
+}
+
+/// What the player does on the booty or crate screen: pick up an item, hand it to
+/// a recipient, store it, open a member's drop menu, or ask about an item.
 #[derive(Clone, Debug)]
 pub enum CollectionAction {
     Item(usize),
@@ -20,6 +32,8 @@ pub enum CollectionAction {
     Information(usize),
 }
 
+/// Whether the booty screen is up: after a battle's loot, or when a crate is
+/// opened.
 pub fn active(state: &Session, ui: &UiState) -> bool {
     ui.inspection == Some(Inspection::Crate)
         || state
@@ -28,14 +42,17 @@ pub fn active(state: &Session, ui: &UiState) -> bool {
             .is_some_and(|position| position.presentation == Some(Presentation::Loot))
 }
 
+/// The items in the cells: the crate's contents, or the battle's booty.
 fn records<'a>(state: &'a Session, ui: &UiState) -> &'a [InventoryRecord] {
     if ui.inspection == Some(Inspection::Crate) {
         &state.crate_items
     } else {
-        &state.booty_items
+        &state.booty_list
     }
 }
 
+/// Carries out a click on the booty screen: selects the item, hands it to a
+/// warrior, stores it, or opens and closes the drop menu.
 pub fn resolve(
     action: CollectionAction,
     state: &Session,
@@ -48,39 +65,40 @@ pub fn resolve(
             if id == 0 || ui.inspection == Some(Inspection::Crate) {
                 return None;
             }
-            // booty105748 picks up a 200..400 reserve item instead.
+            // booty picks up a 200..400 reserve item instead.
             let definition = content.items.get(id as usize)?;
             let reserve = centurions_content::records::ItemDefinition(definition)
                 .reserve_ammunition_kind()
                 .ok()?;
             if !((200..=400).contains(&id) && reserve != 0) {
-                let owner = state.native_work.health_context.selected_warrior;
+                let owner = state.globals.health_context.char_select_new;
                 ui.inventory.open_loot_information(owner, id);
             }
             Some(Action::Command(Command::ShowLootItemInformation { slot }))
         }
         CollectionAction::DropMenu(member) => {
-            ui.collection_drop = Some(member);
-            ui.collection_drop_scroll = 0;
+            ui.collection.drop = Some(member);
+            ui.collection.drop_scroll = 0;
             None
         }
         CollectionAction::DropItem(slot) => ui
-            .collection_drop
+            .collection
+            .drop
             .take()
             .map(|member| Action::Drop(member, slot)),
         CollectionAction::CloseDrop => {
-            ui.collection_drop = None;
+            ui.collection.drop = None;
             None
         }
         CollectionAction::Item(slot) => {
-            ui.collection_slot = Some(slot);
-            ui.collection_drag = true;
+            ui.collection.slot = Some(slot);
+            ui.collection.drag = true;
             None
         }
         CollectionAction::Recipient(warrior) => {
             ui.selected = warrior;
-            ui.collection_drag = false;
-            let slot = ui.collection_slot?;
+            ui.collection.drag = false;
+            let slot = ui.collection.slot?;
             records(state, ui).get(slot).filter(|item| item.id() != 0)?;
             Some(Action::Command(
                 if ui.inspection == Some(Inspection::Crate) {
@@ -91,27 +109,30 @@ pub fn resolve(
             ))
         }
         CollectionAction::Store(slot) => {
-            ui.collection_drag = false;
+            ui.collection.drag = false;
             (ui.inspection != Some(Inspection::Crate))
                 .then_some(Action::Command(Command::StoreLoot { slot }))
         }
     }
 }
 
+/// Handles the booty screen's mouse wheel, drag and drop onto a recipient, and
+/// keys: Escape closes a crate or menu, Return gives the item to the selected warrior or, with
+/// nothing left to take, leaves the screen.
 pub fn input(state: &Session, ui: &mut UiState, pointer: Option<Vec2>) -> Option<Action> {
     if ui.inventory.loot_information_open() {
         return is_key_pressed(KeyCode::Escape).then_some(Action::Inventory(
             crate::inventory::InventoryAction::CloseInformation,
         ));
     }
-    if let Some(member) = ui.collection_drop {
+    if let Some(member) = ui.collection.drop {
         let count = state
             .warriors
             .get(member)
             .and_then(|w| w.inventory().ok())
             .map_or(0, |items| items.len());
         let delta = -mouse_wheel().1.signum() as i32;
-        ui.collection_drop_scroll = (ui.collection_drop_scroll as i32 + delta)
+        ui.collection.drop_scroll = (ui.collection.drop_scroll as i32 + delta)
             .clamp(0, count.saturating_sub(24) as i32) as usize;
         return is_key_pressed(KeyCode::Escape)
             .then_some(Action::Collection(CollectionAction::CloseDrop));
@@ -123,8 +144,8 @@ pub fn input(state: &Session, ui: &mut UiState, pointer: Option<Vec2>) -> Option
     let pages = count.saturating_sub(28).div_ceil(7);
     let wheel = -mouse_wheel().1.signum() as i32;
     ui.page = (ui.page as i32 + wheel).clamp(0, pages as i32) as usize;
-    if ui.collection_drag && is_mouse_button_released(MouseButton::Left) {
-        ui.collection_drag = false;
+    if ui.collection.drag && is_mouse_button_released(MouseButton::Left) {
+        ui.collection.drag = false;
         if let Some(point) = pointer.filter(|p| p.x >= 480. && p.y >= 20.) {
             let warrior = ((point.y - 20.) / 50.) as usize;
             if warrior < state.warriors.len() {
@@ -145,6 +166,8 @@ pub fn input(state: &Session, ui: &mut UiState, pointer: Option<Vec2>) -> Option
     None
 }
 
+/// The action that leaves the screen: closing a crate, or continuing after the
+/// battle (through promotion if a warrior is to choose spells).
 fn done(state: &Session, ui: &UiState) -> Action {
     if ui.inspection == Some(Inspection::Crate) {
         Action::Close
@@ -157,6 +180,10 @@ fn done(state: &Session, ui: &UiState) -> Action {
     }
 }
 
+/// Draws the loot grid, the recipients, the message box, the share, credits and
+/// the item under the pointer.
+///
+/// Original: booty
 pub fn draw(
     content: &Content,
     state: &Session,
@@ -181,7 +208,7 @@ pub fn draw(
             64.,
             100.,
         );
-        // booty 0x106714: PenMode srcCopy, ForeColor whiteColor, PaintRect over the cell.
+        // PenMode srcCopy, ForeColor whiteColor, PaintRect over the cell.
         draw_rectangle(rect.x, rect.y, rect.w, rect.h, WHITE);
         let definition = content.items.get(item.id().unsigned_abs() as usize);
         let icon_rect = Rect::new(rect.x + 4., rect.y + 11., 32., 32.);
@@ -194,16 +221,7 @@ pub fn draw(
             .and_then(|id| assets.icons.get(&id))
             .or_else(|| assets.icons.get(&6520))
         {
-            draw_texture_ex(
-                icon,
-                icon_rect.x,
-                icon_rect.y,
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(icon_rect.size()),
-                    ..Default::default()
-                },
-            );
+            crate::assets::texture_in(icon, icon_rect);
         }
         if let Some(cell) = definition.and_then(|definition| {
             centurions_content::records::loot_cell::loot_cell(definition, item).ok()
@@ -212,14 +230,14 @@ pub fn draw(
         }
         if ui.inspection != Some(Inspection::Crate) {
             let quality = state
-                .native_work
+                .globals
                 .loot_quality
                 .as_ref()
                 .and_then(|quality| quality.get(*slot))
                 .map_or(0, |value| *value as i8);
             draw_quality(assets, quality, icon_rect);
         }
-        if ui.collection_slot == Some(*slot) {
+        if ui.collection.slot == Some(*slot) {
             draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1., YELLOW);
         }
         controls.push(Control {
@@ -231,15 +249,14 @@ pub fn draw(
     for (member, warrior) in state.warriors.iter().enumerate() {
         let y = 20. + member as f32 * 50.;
         assets.panel(184, Rect::new(540., y, 260., 50.));
-        // booty 0x1068b6 calls updatepictbox 0x161b80 in mode 1: the 32-pixel
-        // box at the row's left + 10, inset by 9.
-        // booty's window (0x438790) is not one plotportrait gives condition cicns.
+        // updatepictbox in mode 1: the 32-pixel box at the row's left + 10,
+        // inset by 9. plotportrait gives no condition cicns in booty's window.
         crate::portrait::draw(
             assets,
             warrior,
             vec2(499., y + 9.),
             crate::portrait::Marks {
-                class_label: ui.preferences.enabled(17),
+                class_label: ui.preferences.enabled(crate::preferences::pref::APPEND_MOS),
                 conditions_left: None,
                 automatic: false,
             },
@@ -281,21 +298,24 @@ pub fn draw(
     }
     assets.panel(198, Rect::new(480., 320., 320., 110.));
     let crate_view = ui.inspection == Some(Inspection::Crate);
-    // WORD 0x439582 is preference item 22.
-    let wide = i16::from(ui.preferences.enabled(22));
+    // The 800 x 600 preference widens the grid.
+    let wide = i16::from(
+        ui.preferences
+            .enabled(crate::preferences::pref::SCREEN_800_X_600),
+    );
     let tally = state.booty_tally;
     let message = if crate_view {
         assets.warnings.get(151).cloned()
     } else if state.battle_after_message != 0 {
-        // 0x106a72: textbox with list -1 shows scenario text WORD 0x443314.
+        // textbox with list -1 shows the scenario's after-battle text.
         state
             .exploration
             .as_ref()
             .and_then(|position| content.map(position.map))
             .and_then(|map| map.dialogue(state.battle_after_message).ok())
     } else {
-        // 0x106a0c: STR# 3 string 0x47, 0x23 with items or credits, 0x24 when
-        // that also has experience, otherwise 0x22 with experience.
+        // STR# 3 string 0x47, 0x23 with items or credits, 0x24 when that also
+        // has experience, otherwise 0x22 with experience.
         let mut id = 0x47;
         if !items.is_empty() || tally.credits != 0 {
             id = 0x23;
@@ -306,15 +326,15 @@ pub fn draw(
         assets.warnings.get(id - 1).cloned()
     };
     if let Some(message) = message {
-        assets.wrapped_color(&message, Rect::new(492., 355., 298., 64.), 12, 14., YELLOW);
+        assets.dialog_text(&message, Rect::new(492., 355., 298., 64.));
     }
-    // 0x106a9c: a nonzero share draws PICT 0xe8 - WORD 0x439582 with the share.
+    // A nonzero share draws PICT 0xe8 (0xe7 at 800 x 600) with the share.
     if !crate_view && tally.share != 0 {
         assets.panel(0xe8 - wide, Rect::new(0., 459., 480., 21.));
         assets.text(&tally.share.to_string(), 125., 475., 12, YELLOW);
     }
     if crate_view {
-        // 0x106c42: PICT 0xe6 - WORD 0x439582, then the first and last visible
+        // PICT 0xe6 (0xe5 at 800 x 600), then the first and last visible
         // numbers and the count, size 12, unclamped.
         assets.panel(0xe6 - wide, Rect::new(0., 460., 480., 20.));
         let columns = wide * 2 + 5;
@@ -350,9 +370,9 @@ pub fn draw(
             });
         }
     }
-    // updatebootymoney 0x1056d4 draws PICT 163 from 50 right of Done, or of the
-    // scroll arrows (0x106c2e), 640 wide and clipped by the window, then booty's
-    // register a3 in yellow at its left + 20, top + 46.
+    // updatebootymoney draws PICT 163 from 50 right of Done, or of the scroll
+    // arrows, 640 wide and clipped by the window, then the credits in yellow at
+    // its left + 20, top + 46.
     let left = if scrolls { 580. } else { 530. };
     assets.panel_part(
         163,
@@ -360,9 +380,9 @@ pub fn draw(
         Rect::new(left, 430., 800. - left, 50.),
     );
     assets.text(&tally.credits.to_string(), left + 20., 476., 12, YELLOW);
-    // With WORD 0x439582 set, booty's first draw shows quickinfo for record 0
-    // (0x106da2); pointing at a cell shows that cell's (0x107134).
-    let shown = ui.collection_slot.or((wide != 0).then_some(0));
+    // At 800 x 600, booty's first draw shows quickinfo for record 0; pointing
+    // at a cell shows that cell's.
+    let shown = ui.collection.slot.or((wide != 0).then_some(0));
     if let Some(item) = shown
         .and_then(|slot| records(state, ui).get(slot))
         .filter(|item| item.id() != 0)
@@ -373,24 +393,20 @@ pub fn draw(
     {
         ui.inventory.detail(content, map, item, false, assets);
     }
-    if let Some(member) = ui.collection_drop {
+    if let Some(member) = ui.collection.drop {
         draw_drop_menu(state, assets, ui, member, controls);
     }
 }
 
-/// showp 0x12dc58 text, in the classic QuickDraw colors it selects.
+/// A loot cell's text, in the classic QuickDraw colors showp selects.
+///
+/// Original: showp
 fn draw_cell(assets: &Assets, cell: &centurions_content::records::loot_cell::LootCell, icon: Rect) {
     use centurions_content::records::loot_cell::{CellAnchor, CellColor};
     if let Some(texture) = cell.caliber_icon.and_then(|id| assets.icons.get(&id)) {
-        draw_texture_ex(
+        crate::assets::texture_in(
             texture,
-            icon.right() + 1.,
-            icon.y + 14.,
-            WHITE,
-            DrawTextureParams {
-                dest_size: Some(vec2(16., 16.)),
-                ..Default::default()
-            },
+            Rect::new(icon.right() + 1., icon.y + 14., 16., 16.),
         );
     }
     for text in &cell.texts {
@@ -417,7 +433,7 @@ fn draw_cell(assets: &Assets, cell: &centurions_content::records::loot_cell::Loo
         strings.extend(
             text.labels
                 .iter()
-                .filter_map(|address| assets.native_text.text(*address, true).ok()),
+                .filter_map(|address| assets.game_text.text(*address, true).ok()),
         );
         for string in strings {
             assets.text(&string, x, y, size, color);
@@ -426,7 +442,9 @@ fn draw_cell(assets: &Assets, cell: &centurions_content::records::loot_cell::Loo
     }
 }
 
-/// showp 0x12e442: one 8x8 cicn 208 per loot-quality step, seven to a line.
+/// One 8x8 cicn 208 per loot-quality step, seven to a line.
+///
+/// Original: showp
 fn draw_quality(assets: &Assets, quality: i8, icon: Rect) {
     let Some(texture) = assets
         .icons
@@ -436,19 +454,15 @@ fn draw_quality(assets: &Assets, quality: i8, icon: Rect) {
     };
     for step in 0..quality.max(0) as usize {
         let (x, y) = centurions_content::records::loot_cell::quality_position(step);
-        draw_texture_ex(
+        crate::assets::texture_in(
             texture,
-            icon.x + f32::from(x),
-            icon.y + f32::from(y),
-            WHITE,
-            DrawTextureParams {
-                dest_size: Some(vec2(8., 8.)),
-                ..Default::default()
-            },
+            Rect::new(icon.x + f32::from(x), icon.y + f32::from(y), 8., 8.),
         );
     }
 }
 
+/// Draws the menu of a member's items to choose one to drop, with a check mark
+/// on equipped items.
 fn draw_drop_menu(
     state: &Session,
     assets: &Assets,
@@ -491,7 +505,7 @@ fn draw_drop_menu(
     for (row, (slot, item)) in items
         .iter()
         .enumerate()
-        .skip(ui.collection_drop_scroll)
+        .skip(ui.collection.drop_scroll)
         .take(24)
         .enumerate()
     {
@@ -508,7 +522,7 @@ fn draw_drop_menu(
             12,
             BLACK,
         );
-        if item.equipment_flag() != 0 {
+        if item.equipped() != 0 {
             assets.menu_text("✓", rect.x + 4., rect.y + 13., 12, BLACK);
         }
         controls.push(Control {

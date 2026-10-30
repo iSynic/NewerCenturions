@@ -1,9 +1,11 @@
-//! Characters workflow ownership.
+//! Generating a new warrior and choosing its scans.
 use super::{Application, ApplicationAction, HandleOutcome, Screen};
 use centurions_content::Content;
 use centurions_core::{Command, Event, Phase, Session, apply};
 
 impl Application {
+    /// Carries out the choices on the warrior editor, appearance picker, item
+    /// editor, scan picker and new warrior creation screens.
     pub(super) fn handle_characters(
         &mut self,
         action: ApplicationAction,
@@ -120,7 +122,7 @@ impl Application {
                 if answer {
                     for address in [0x40361a, 0x4035fa, 0x4035be] {
                         events.push(Event::Feedback(
-                            centurions_core::feedback::NativeFeedback::Flash {
+                            centurions_core::feedback::GameFeedback::Flash {
                                 address,
                                 x: 50,
                                 y: 50,
@@ -194,6 +196,8 @@ impl Application {
         Ok(HandleOutcome::Complete(next, events))
     }
 
+    /// Completes a new warrior's creation once its scans are chosen, taking the
+    /// edited draft into the session.
     pub(super) fn finish_creation_scans(
         &mut self,
         state: &mut Session,

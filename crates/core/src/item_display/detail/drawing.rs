@@ -1,27 +1,29 @@
-//! Original panel coordinates and text formatting. Addresses in compatibility
-//! effects identify output receipts only; they are never read as machine state.
-use super::{
-    BTreeMap, BodyRect, Draw, NativeText, PanelEffect, PanelPlan, PascalString, RuleError,
-};
+//! Panel coordinates and text formatting. Addresses in the effects name the
+//! original text for comparison; they are never read as game state.
+use super::{BTreeMap, BodyRect, Draw, GameText, PanelEffect, PanelPlan, PascalString, RuleError};
 
+/// The Items detail panel as it is being drawn: the drawing steps so far and the texts the panel
+/// reads.
 pub(super) struct Panel<'a> {
     pub plan: PanelPlan,
-    native: &'a NativeText,
+    game_text: &'a GameText,
     strings: &'a BTreeMap<i16, Vec<u8>>,
 }
 
 impl<'a> Panel<'a> {
-    pub fn new(native: &'a NativeText, strings: &'a BTreeMap<i16, Vec<u8>>) -> Self {
+    /// Starts an empty panel.
+    pub fn new(game_text: &'a GameText, strings: &'a BTreeMap<i16, Vec<u8>>) -> Self {
         Self {
-            native,
+            game_text,
             strings,
             plan: PanelPlan {
                 effects: vec![],
                 arithmetic: None,
-                retained_definitions: None,
+                loaded_items: None,
             },
         }
     }
+    /// Starts the panel: the port and text settings are set and the background picture drawn.
     pub fn start(&mut self, font: i16) {
         self.draw(Draw::SetPort(0));
         self.draw(Draw::BackPixelPattern(0));
@@ -41,6 +43,7 @@ impl<'a> Panel<'a> {
             },
         });
     }
+    /// Ends the panel by putting the colors back to black.
     pub fn finish(&mut self) {
         self.draw(Draw::SetPort(0));
         self.plan.effects.push(PanelEffect::RgbBackColor {
@@ -52,15 +55,18 @@ impl<'a> Panel<'a> {
             bytes: [0; 6],
         });
     }
+    /// Adds a drawing step to the panel.
     pub fn draw(&mut self, drawing: Draw) {
         self.plan.effects.push(PanelEffect::Drawing(drawing));
     }
+    /// Moves the pen to a position of the panel.
     pub fn move_to(&mut self, horizontal: i16, vertical: i16) {
         self.draw(Draw::MoveTo {
             horizontal,
             vertical,
         });
     }
+    /// Turns a number into its text, noting the conversion.
     pub fn convert_number(&mut self, value: i16) -> Result<PascalString, RuleError> {
         let result = PascalString::from_payload(value.to_string().as_bytes())?;
         self.plan.effects.push(PanelEffect::NumberToString {
@@ -70,6 +76,8 @@ impl<'a> Panel<'a> {
         });
         Ok(result)
     }
+    /// Draws a figure at a position only when it is positive, with a plus sign in front if asked
+    /// for; zero and negative figures draw nothing, though the number is still converted.
     pub fn number_at(&mut self, x: i16, y: i16, value: i16, plus: bool) -> Result<(), RuleError> {
         self.move_to(x, y);
         let text = self.convert_number(value)?;
@@ -81,20 +89,23 @@ impl<'a> Panel<'a> {
         }
         Ok(())
     }
+    /// A string of a STR# resource by its index.
     pub fn indexed(&mut self, resource: i16, index: i16) -> Result<PascalString, RuleError> {
         super::super::indexed_string(self.strings, resource, index)
     }
+    /// Draws a fixed text of the game.
     pub fn literal(&mut self, address: u32) -> Result<(), RuleError> {
-        let length = usize::from(self.native.bytes(address, 1)?[0]);
+        let length = usize::from(self.game_text.bytes(address, 1)?[0]);
         self.draw(Draw::DrawString(PascalString::from_raw(
-            self.native.bytes(address, length + 1)?,
+            self.game_text.bytes(address, length + 1)?,
         )?));
         Ok(())
     }
-    pub fn native_c(&self, address: u32) -> Result<Vec<u8>, RuleError> {
+    /// Reads a zero-terminated text of the game, which must end within 256 bytes.
+    pub fn c_string(&self, address: u32) -> Result<Vec<u8>, RuleError> {
         let mut bytes = vec![];
         for index in 0..256 {
-            let byte = self.native.bytes(address + index, 1)?[0];
+            let byte = self.game_text.bytes(address + index, 1)?[0];
             bytes.push(byte);
             if byte == 0 {
                 return Ok(bytes);
@@ -102,6 +113,7 @@ impl<'a> Panel<'a> {
         }
         Err("unterminated item detail text".into())
     }
+    /// Shows the item's description in its text box of the panel.
     pub fn description(&mut self, text: &mut Vec<u8>) -> Result<(), RuleError> {
         let length = text.iter().position(|b| *b == 0).unwrap_or(text.len());
         let encoded = PascalString::from_payload(&text[..length])?;
@@ -119,6 +131,7 @@ impl<'a> Panel<'a> {
         text.push(0);
         Ok(())
     }
+    /// Draws text in a box of the panel.
     pub fn text_box(&mut self, pointer: u32, bytes: Vec<u8>, rectangle: BodyRect) {
         self.plan.effects.push(PanelEffect::TextBox {
             pointer,
@@ -129,6 +142,7 @@ impl<'a> Panel<'a> {
             alignment: 0,
         });
     }
+    /// Draws an icon of the panel in a 32-pixel square at the left position given.
     pub fn icon(&mut self, id: i16, left: i16) {
         self.draw(Draw::GetColorIcon(id));
         let handle = u32::from(id as u16);

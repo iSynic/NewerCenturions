@@ -8,7 +8,7 @@ use support::monsters as records;
 fn mission(f: &serde_json::Value, content: &centurions_content::Content) -> OpeningMission {
     let p = f.bytes("properties");
     let mut m = content.map(0).unwrap().clone();
-    m.tile_properties = p[64..12064].to_vec();
+    m.map_stats = p[64..12064].to_vec();
     m.terrain = 2;
     m.default_tile = 155;
     m
@@ -16,33 +16,33 @@ fn mission(f: &serde_json::Value, content: &centurions_content::Content) -> Open
 fn combat(case: &serde_json::Value, distance: i16) -> Combat {
     let mut combat = support::battle();
     combat.battle = 8;
-    combat.map.tiles = if case["map_before"].is_string() {
+    combat.field.tiles = if case["map_before"].is_string() {
         case.words("map_before")
     } else {
         vec![1155; 8100]
     };
-    combat.squad.positions = (0..6).map(|i| (40 + i, 40)).collect();
-    combat.enemies.records = records(&case.bytes("records_before"));
-    combat.enemies.positions = vec![(20, 20), (20 + distance, 20)];
+    combat.squad.pos = (0..6).map(|i| (40 + i, 40)).collect();
+    combat.roster.records = records(&case.bytes("records_before"));
+    combat.roster.mon_pos = vec![(20, 20), (20 + distance, 20)];
     // The original oracle starts from the captured zero NPC backing array.
-    combat.retained_npcs = Session::new(&support::fixture_content("native backing"))
-        .native_work
-        .npc_backing;
-    combat.retained_npcs.origin = (5, 5);
-    for slot in combat.retained_npcs.slots.iter_mut().flatten() {
+    combat.monsters = Session::new(&support::fixture_content("native backing"))
+        .globals
+        .monsters;
+    combat.monsters.origin = (5, 5);
+    for slot in combat.monsters.slots.iter_mut().flatten() {
         slot.position = Some((5, 5));
     }
     if let Some(position) = case.get("retained_slot99") {
         let [x, y]: [i32; 2] = serde_json::from_value(position.clone()).unwrap();
-        combat.retained_npcs.slots[99].as_mut().unwrap().position = Some((x + 5, y + 5));
+        combat.monsters.slots[99].as_mut().unwrap().position = Some((x + 5, y + 5));
     }
     if let Some(target) = case.get("retained_target") {
         let [x, y]: [i32; 2] = target.n("position");
-        let slot = combat.retained_npcs.slots[98].as_mut().unwrap();
+        let slot = combat.monsters.slots[98].as_mut().unwrap();
         slot.record.bytes = target.bytes("record");
         slot.position = Some((x + 5, y + 5));
     }
-    combat.order = vec![-1, 10];
+    combat.battle_order = vec![-1, 10];
     combat
 }
 use support::event_sounds as sounds;
@@ -84,12 +84,12 @@ fn scientist_turn_matches_original_records_map_and_rng() {
         )
         .unwrap();
         support::native_expect! {
-            records &c.enemies.records => &case["records_after"], &label;
+            records &c.roster.records => &case["records_after"], &label;
             records &w => &case["warriors_after"], "rifle party";
-            words c.map.tiles => &case["map_after"], "rifle map";
+            words c.field.tiles => &case["map_after"], "rifle map";
             rng rng => (&case["seed_after"], &case["rng_draws"]), "rifle RNG";
             scalar sounds(&events) => &case["sounds"], "rifle sounds";
-            positions c.enemies.positions => &case["positions"], "native positions";
+            positions c.roster.mon_pos => &case["positions"], "native positions";
         };
         if case.get("monster_id").is_none() {
             continue;
@@ -97,9 +97,9 @@ fn scientist_turn_matches_original_records_map_and_rng() {
         let mut state = support::mission_session(&content);
         state.exploration.as_mut().unwrap().presentation = None;
         state.exploration.as_mut().unwrap().script = None;
-        state.native_work.loaded_item_field32 = case.n("item_context");
+        state.globals.loaded_item_field32 = case.n("item_context");
         // The capture records field32, not the ITEM work record it came from.
-        state.native_work.ammunition_work.item = None;
+        state.globals.loaded_items.item = None;
         // Controlled original turn frame after Modify Squad / Done, without
         // an intervening inventory inspection that could hide lost item work.
         support::saved_command(
@@ -110,15 +110,15 @@ fn scientist_turn_matches_original_records_map_and_rng() {
             &content,
         );
         let mut command_combat = combat(case, case.n("distance"));
-        command_combat.order.resize(110, -1);
-        command_combat.order[2] = 0;
+        command_combat.battle_order.resize(110, -1);
+        command_combat.battle_order[2] = 0;
         state.combat = Some(command_combat);
         crate::native_common::source_victory_context(&mut state);
         state.phase = centurions_core::Phase::Combat;
         state.random = RandomState::new(12);
         if case["mode"] == 3 {
             let mut legacy = state.clone();
-            legacy.combat.as_mut().unwrap().retained_npcs.slots[99] = None;
+            legacy.combat.as_mut().unwrap().monsters.slots[99] = None;
             support::reject_command(&legacy, &content, Command::RunEnemyTurn);
         }
         let command_events = support::saved_command(Command::RunEnemyTurn, &mut state, &content);
@@ -126,18 +126,18 @@ fn scientist_turn_matches_original_records_map_and_rng() {
         let expected = &outer["cases"][index - f.array("turn_cases").len()];
         assert_eq!(case["map_before"], expected["map_before"]);
         support::native_expect! {
-            records &actual.enemies.records => &expected["records_after"], "rifle command NPCs";
+            records &actual.roster.records => &expected["records_after"], "rifle command NPCs";
             records &state.warriors => &expected["warriors_after"], "rifle Getup party";
-            bytes state.native_work.ammunition_work.item.as_ref().unwrap() => &expected["item_after"], "rifle item work";
-            bytes state.native_work.ammunition_work.weapon.as_ref().unwrap() => &expected["weapon_after"], "rifle weapon work";
-            bytes state.native_work.ammunition_work.ammo.as_ref().unwrap() => &expected["ammo_after"], "rifle ammo work";
-            bytes state.native_work.attack_packet => &expected["packet_after"], "rifle packet";
-            scalar state.native_work.attack_count => &expected["count_after"], "rifle count";
-            scalar actual.cursor => &expected["cursor_after"], "rifle next turn";
-            scalar state.selected_warrior => &expected["selected_after"], "rifle selected warrior";
-            positions actual.enemies.positions => &expected["positions"], "rifle final positions";
+            bytes state.globals.loaded_items.item.as_ref().unwrap() => &expected["item_after"], "rifle item work";
+            bytes state.globals.loaded_items.weapon.as_ref().unwrap() => &expected["weapon_after"], "rifle weapon work";
+            bytes state.globals.loaded_items.ammo.as_ref().unwrap() => &expected["ammo_after"], "rifle ammo work";
+            bytes state.globals.spell_info => &expected["packet_after"], "rifle packet";
+            scalar state.globals.attack_count => &expected["count_after"], "rifle count";
+            scalar actual.battle_order_index => &expected["cursor_after"], "rifle next turn";
+            scalar state.char_select_new => &expected["selected_after"], "rifle selected warrior";
+            positions actual.roster.mon_pos => &expected["positions"], "rifle final positions";
             scalar sounds(&command_events) => &expected["sounds"], "rifle ordered sounds";
-            words actual.map.tiles => &expected["map_after"], "rifle outer map";
+            words actual.field.tiles => &expected["map_after"], "rifle outer map";
             rng state.random => (&expected["seed_after"], &expected["rng_draws"]), "rifle outer RNG";
         };
     }
@@ -147,7 +147,7 @@ fn monster_natural_attack_matches_original_scientist_damage() {
     let f = support::fixture("ally-turns.json");
     for (index, case) in f.array("attack_cases").iter().enumerate() {
         let mut c = combat(case, 0);
-        c.enemies.positions = vec![(0, 0); 2];
+        c.roster.mon_pos = vec![(0, 0); 2];
         let mut w: Vec<Warrior> = support::warriors(&case.bytes("warriors_before"));
         let mut random = RandomState::new(case.n::<u32>("seed_before"));
         let result = natural_attack_enemy(
@@ -160,17 +160,17 @@ fn monster_natural_attack_matches_original_scientist_damage() {
         )
         .unwrap();
         support::native_expect! {
-            records &c.enemies.records => &case["records_after"], format!("records{index}");
+            records &c.roster.records => &case["records_after"], format!("records{index}");
             records &w => &case["warriors_after"], format!("party{index}");
-            words c.map.tiles => &case["map_after"], format!("map{index}");
+            words c.field.tiles => &case["map_after"], format!("map{index}");
             scalar i16::from(result.killed) => &case["result"], "binary_ally_turns";
             scalar random.draws => &case["rng_draws"], "binary_ally_turns";
             scalar random.seed => &case["seed_after"], "binary_ally_turns";
-            positions c.enemies.positions => &case.bytes("positions"), "positions{index}";
+            positions c.roster.mon_pos => &case.bytes("positions"), "positions{index}";
         };
         let mut observed_sounds = result.sounds;
         // The direct native probe leaves the result-audio index word at zero.
-        observed_sounds.push(result_audio(&c.enemies.records[0], 0, result.damage, 0).unwrap());
+        observed_sounds.push(result_audio(&c.roster.records[0], 0, result.damage, 0).unwrap());
         support::expect_array(&(observed_sounds), &case["sounds"]);
     }
 }

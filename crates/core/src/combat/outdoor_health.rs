@@ -1,47 +1,51 @@
-//! Warrior-indexed stamina reads made by outdoor killbody at 0x12e4e4.
+//! The stamina killbody reads outside battle, where every body indexes the warrior
+//! table.
 use super::warrior_alias::{self, Alias, Owners};
 use crate::{RuleError, Session, state::WarriorTable};
 use centurions_content::{Content, Warrior, word};
 
-const STAMINA: usize = 0x50;
+use centurions_content::records::warrior_layout::STAMINA;
 
-/// Combat mode zero does not redirect NPC bodies to the NPC record array.
-/// Resolve only the actual WORD owner; a missing owner is required only here.
+/// A body's stamina outside battle. Monster bodies still index the warrior table,
+/// so they read whatever lies past it.
+///
+/// Original: killbody
 pub(crate) fn health(state: &Session, content: &Content, body: i16) -> Result<i16, RuleError> {
     View::new(
         content,
         state.mission.as_deref(),
         state.scenario_level,
-        state.native_work.ammunition_work.item.as_deref(),
-        &state.native_work.shop_work,
+        state.globals.loaded_items.item.as_deref(),
+        &state.globals.the_shop,
         state
             .exploration
             .as_ref()
             .map(|position| position.event_headers.as_slice()),
-        (&state.warriors, &state.native_work.warrior_table),
+        (&state.warriors, &state.globals.warrior_table),
     )
     .health(body)
 }
 
-/// A lazy view over the disjoint retained owners used by NPC status reads.
+/// The records past the warrior table that a monster body's reads land in.
 #[derive(Clone, Copy)]
 pub(crate) struct View<'a> {
     content: &'a Content,
     mission: Option<&'a str>,
     level: u8,
-    item_work: Option<&'a [u8]>,
-    shop_work: &'a crate::shop::ShopWork,
+    loaded_item: Option<&'a [u8]>,
+    the_shop: &'a crate::shop::TheShop,
     header: Option<&'a [u8]>,
     table: (&'a [Warrior], &'a WarriorTable),
 }
 
 impl<'a> View<'a> {
+    /// Gathers the records a body's stamina can land in.
     pub(crate) fn new(
         content: &'a Content,
         mission: Option<&'a str>,
         level: u8,
-        item_work: Option<&'a [u8]>,
-        shop_work: &'a crate::shop::ShopWork,
+        loaded_item: Option<&'a [u8]>,
+        the_shop: &'a crate::shop::TheShop,
         header: Option<&'a [u8]>,
         table: (&'a [Warrior], &'a WarriorTable),
     ) -> Self {
@@ -49,15 +53,15 @@ impl<'a> View<'a> {
             content,
             mission,
             level,
-            item_work,
-            shop_work,
+            loaded_item,
+            the_shop,
             header,
             table,
         }
     }
 
     /// The warrior table record of a body past the squad, zero when nothing wrote it.
-    pub(crate) fn held_record(self, body: usize) -> Option<Warrior> {
+    pub(crate) fn scratch_character(self, body: usize) -> Option<Warrior> {
         self.table.1.bytes(body).map(|bytes| Warrior {
             name: String::new(),
             original_sha256: String::new(),
@@ -65,6 +69,7 @@ impl<'a> View<'a> {
         })
     }
 
+    /// The stamina of a body outside battle, from whichever record its index lands in.
     pub(crate) fn health(self, body: i16) -> Result<i16, RuleError> {
         let alias = usize::try_from(body)
             .ok()
@@ -80,14 +85,14 @@ impl<'a> View<'a> {
             }
             .read(alias)
             .ok_or_else(|| RuleError::from("warrior table stamina alias missing")),
-            Alias::ItemWork(offset) => read_alias_word(
-                self.item_work
+            Alias::LoadedItem(offset) => read_alias_word(
+                self.loaded_item
                     .ok_or_else(|| RuleError::from("ITEM work missing"))?,
                 offset,
                 "outdoor death ITEM stamina alias",
             ),
             Alias::Definition { item, offset } => self.definition_health(item, offset),
-            Alias::ShopWork(offset) => self.shop_work.read_word(offset),
+            Alias::TheShop(offset) => self.the_shop.read_word(offset),
             Alias::MapHeader(offset) => read_alias_word(
                 self.header
                     .ok_or_else(|| RuleError::from("outdoor death outside a mission"))?,
@@ -103,6 +108,7 @@ impl<'a> View<'a> {
         }
     }
 
+    /// The stamina read from an item definition record.
     fn definition_health(self, item: usize, offset: usize) -> Result<i16, RuleError> {
         if item >= 800 {
             let mission = self
@@ -118,12 +124,15 @@ impl<'a> View<'a> {
     }
 }
 
+/// The word at the offset of an item definition; a definition the scenario did not load is not
+/// supported.
 fn definition_word(content: &Content, item: usize, offset: usize) -> Result<i16, RuleError> {
     read_alias_word(
         content
             .items
             .get(item)
-            // The 800..999 bank keeps rows a shorter scenario item file leaves unwritten.
+            // Item definitions 800..999 keep rows a shorter scenario item file
+            // leaves unwritten.
             .ok_or_else(|| {
                 unavailable("outdoor death alias past the scenario's loaded item records")
             })?,
@@ -132,6 +141,7 @@ fn definition_word(content: &Content, item: usize, offset: usize) -> Result<i16,
     )
 }
 
+/// Reads a word from a record, or reports it as unavailable.
 fn read_alias_word(
     bytes: &[u8],
     offset: usize,
@@ -143,6 +153,7 @@ fn read_alias_word(
     })
 }
 
+/// Reports a stamina this build cannot read, without changing anything.
 fn unavailable(dependency: &'static str) -> RuleError {
     RuleError::Unsupported {
         action: "combat.outdoor_health",

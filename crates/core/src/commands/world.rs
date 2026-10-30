@@ -4,6 +4,8 @@ use crate::{
 };
 use centurions_content::Content;
 
+/// Runs the commands of play outside battle: field and clinic controls, viewing creatures and
+/// notes, missions and difficulty, walking, scenario menus and text, encounters and promotion.
 pub(super) fn execute(
     command: Command,
     state: &mut Session,
@@ -14,8 +16,8 @@ pub(super) fn execute(
         Command::ClinicControl { item } => clinic::control(state, content, item),
         Command::ViewCreature { index, ally } => {
             let events = reference_views::view(state, content, index, ally)?;
-            // beast103ebe copies definition/live bytes into440dbc.
-            state.invalidate_monster_work();
+            // Viewing a creature loads it into the current monster record.
+            state.invalidate_monster_pick();
             Ok(events)
         }
         Command::ViewNote { index } => reference_views::note(state, content, index),
@@ -47,29 +49,29 @@ pub(super) fn execute(
             let opening = content
                 .map(scenario.opening_map)
                 .ok_or_else(|| RuleError::Invalid("opening content unavailable".into()))?;
-            state.native_work.encounter_work.reset_scenario(scenario)?;
-            state.native_work.shop_work.reset_scenario(scenario);
+            state.globals.encounter_headers.reset_scenario(scenario)?;
+            state.globals.the_shop.reset_scenario(scenario);
             state.phase = Phase::Exploration;
-            // setupnewgame re-enables random-rectangle battles and camping for each mission.
-            state.native_work.ready = 0;
-            state.native_work.recovery_work.held_money = 0;
+            // A new mission re-enables random battles and camping.
+            state.globals.in_spell = 0;
+            state.globals.storage.wealth_store = 0;
             state.party_currency = 0;
-            state.native_work.npc_backing.active_count = 0;
-            // setupnewgame1538ba clears44257c, leaving the menu record bytes.
-            state.ally_count = 0;
+            state.globals.monsters.num_mon = 0;
+            // The ally count is cleared; the ally menu records stay.
+            state.held_over = 0;
             if let Some(saved) = state.confiscated.as_mut() {
                 saved.active = false;
                 saved.money = 0;
             }
-            state.native_work.random_battles = 1;
-            state.native_work.boat = 0;
-            state.native_work.camp_disabled = false;
-            let health = &mut state.native_work.health_context;
-            health.unavailable = 0;
+            state.globals.random_battles = 1;
+            state.globals.boat = 0;
+            state.globals.camp_disabled = false;
+            let health = &mut state.globals.health_context;
+            health.kill_party = 0;
             state.mission = Some(name);
             state.scenario_level = scenario.level;
             state.exploration = Some(Exploration::authored(scenario.opening_map, opening));
-            // setupnewgame1538ba rebuilds the bestiary through135bb2.
+            // A new game rebuilds the bestiary menu.
             state.update_monster_menu(content);
             Ok(vec![Event::MissionEntered {
                 title: opening.name.clone(),
@@ -86,7 +88,7 @@ pub(super) fn execute(
         }
         Command::Continue => {
             if state.combat.as_ref().is_some_and(|c| {
-                c.round_scripts
+                c.round_macros
                     .pending
                     .as_ref()
                     .is_some_and(|program| !program.delegated)
@@ -111,12 +113,12 @@ pub(super) fn execute(
                 if matches!(
                     state.scripted_cleanup,
                     Some(
-                        story_cleanup::Stage::RetainedSurvivors { .. }
-                            | story_cleanup::Stage::RetainedSelectedSurvivors { .. }
-                            | story_cleanup::Stage::RetainedGetupSurvivors { .. }
+                        story_cleanup::Stage::OutOfCombatSurvivors { .. }
+                            | story_cleanup::Stage::OutOfCombatSelectedSurvivors { .. }
+                            | story_cleanup::Stage::OutOfCombatGetupSurvivors { .. }
                     )
                 ) {
-                    return combat::runtime::confirm_retained_rewards(state, content);
+                    return combat::runtime::confirm_out_of_combat_rewards(state, content);
                 }
                 if state.scripted_cleanup == Some(story_cleanup::Stage::OrdinarySurvivors) {
                     return story_cleanup::confirm(state, content);

@@ -1,7 +1,7 @@
 use centurions_content::records::SHOP_BYTES as RECORD;
 mod access;
-mod work;
-pub use work::ShopWork;
+mod the_shop;
+pub use the_shop::TheShop;
 mod generated_stock;
 pub use access::Access;
 use access::{active, refused};

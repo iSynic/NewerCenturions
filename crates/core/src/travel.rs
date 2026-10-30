@@ -5,12 +5,14 @@ use centurions_content::records::{
 };
 use centurions_content::{Warrior, mission::MAP_CELLS, mission::OpeningMission, span};
 
+/// The part of a land a tile change writes to: its floor or its objects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TileLayer {
     Floor,
     Object,
 }
 
+/// A change of one tile of one land: the map, the square, the layer and the new value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TileMutation {
     pub map: i16,
@@ -19,6 +21,8 @@ pub struct TileMutation {
     pub value: i16,
 }
 
+/// Reads the tile change an extra asks for: layer 2 is the objects and any other is the floor. An
+/// object value above 22999 has 23000 taken off.
 pub fn tile_mutation(extra: &[u8]) -> Result<TileMutation, RuleError> {
     let extra = TileMutationExtra(span(extra, 0, TileMutationExtra::BYTES)?);
     let map = extra.map()?;
@@ -45,6 +49,7 @@ pub fn tile_mutation(extra: &[u8]) -> Result<TileMutation, RuleError> {
     })
 }
 
+/// A layer with one tile replaced.
 pub fn apply_tile(layer: &[i16], mutation: &TileMutation) -> Result<Vec<i16>, RuleError> {
     if layer.len() != MAP_CELLS || mutation.index >= MAP_CELLS {
         return Err(RuleError::Invalid(
@@ -56,8 +61,10 @@ pub fn apply_tile(layer: &[i16], mutation: &TileMutation) -> Result<Vec<i16>, Ru
     Ok(result)
 }
 
-/// newland -12 at 143730 writes WORDs from objects40c500 into the following
-/// LONG event layer410448. Authored extra618 includes column90; do not clip it.
+/// Clear Objects writes past the object layer into the event layer that follows
+/// it. Authored extras include column 90; do not clip it.
+///
+/// Original: newland
 pub(crate) fn clear_object_rectangle(
     objects: &mut [i16],
     events: &mut [i32],
@@ -70,8 +77,8 @@ pub(crate) fn clear_object_rectangle(
     if first.0 > last.0 || first.1 > last.1 {
         return Ok(());
     }
-    // D3 is unsigned for MULU; D6 is a signed WORD index. ADDQ.W at the
-    // signed maximum would wrap and keep the original inclusive loop running.
+    // The row is unsigned and the index a signed word; at the signed maximum the
+    // inclusive loop would wrap and keep running.
     let start = i64::from(first.0) * 90 + i64::from(first.1);
     let end = i64::from(last.0) * 90 + i64::from(last.1);
     if first.0 < 0
@@ -105,6 +112,7 @@ pub(crate) fn clear_object_rectangle(
     Ok(())
 }
 
+/// A change of an event's script: the map, the event slot and the script.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EventReplacement {
     pub map: i16,
@@ -112,6 +120,8 @@ pub struct EventReplacement {
     pub script: i16,
 }
 
+/// Reads the event replacement an extra asks for; replacing an encounter menu branch or an NPC is
+/// not supported here.
 pub fn event_replacement(extra: &[u8]) -> Result<EventReplacement, RuleError> {
     let extra = EventReplacementExtra(span(extra, 0, EventReplacementExtra::BYTES)?);
     let map = extra.map()?;
@@ -134,6 +144,7 @@ pub fn event_replacement(extra: &[u8]) -> Result<EventReplacement, RuleError> {
     })
 }
 
+/// The event headers with the script of one slot replaced.
 pub fn replace_event_script(
     headers: &[u8],
     slot: usize,
@@ -150,6 +161,7 @@ pub fn replace_event_script(
     Ok(result)
 }
 
+/// Sets the chance that events trigger for a single slot and/or a range of slots.
 pub fn set_event_chances(headers: &[u8], extra: &[u8]) -> Result<Vec<u8>, RuleError> {
     let extra = EventChanceExtra(span(extra, 0, EventChanceExtra::BYTES)?);
     let mut slots = Vec::new();
@@ -181,6 +193,8 @@ pub fn set_event_chances(headers: &[u8], extra: &[u8]) -> Result<Vec<u8>, RuleEr
     Ok(result)
 }
 
+/// The party's skill at finding secrets: the average over the warriors of their fifth specialty
+/// with its bonus.
 pub fn secret_search_skill(warriors: &[Warrior]) -> Result<i16, RuleError> {
     if warriors.is_empty() || warriors.len() > 6 {
         return Err(RuleError::Invalid(
@@ -190,21 +204,20 @@ pub fn secret_search_skill(warriors: &[Warrior]) -> Result<i16, RuleError> {
     let mut sum = 0_i16;
     for warrior in warriors {
         let record = warrior.record();
-        sum = sum.wrapping_add(
-            record
-                .special_skill(4)?
-                .wrapping_add(record.special_skill_bonus(4)?),
-        );
+        sum = sum.wrapping_add(record.spec(4)?.wrapping_add(record.special_skill_bonus(4)?));
     }
     Ok(sum / warriors.len() as i16)
 }
 
+/// A secret found: the square and its place in the nine squares searched.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SecretDiscovery {
     pub index: usize,
     pub ordinal: u8,
 }
 
+/// What a search for secrets found: the floor afterward, the secrets found, and whether the party's
+/// own square was revealed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SecretSearch {
     pub floor: Vec<i16>,
@@ -212,6 +225,9 @@ pub struct SecretSearch {
     pub center_revealed: bool,
 }
 
+/// Searches the nine squares around the party for secret tiles (magnitude above 2999). A roll of
+/// 100 not above the skill reveals a tile by moving it 1000 toward zero, and revealing the tile
+/// under the party ends the search.
 pub fn discover_secrets(
     floor: &[i16],
     position: (i16, i16),

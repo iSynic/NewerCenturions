@@ -1,12 +1,17 @@
 use crate::{ContentError, span, word};
 
+/// A decoded picture.
 #[derive(Debug)]
 pub struct Image {
+    /// Width in pixels.
     pub width: u16,
+    /// Height in pixels.
     pub height: u16,
+    /// Four bytes a pixel (red, green, blue, alpha), row by row.
     pub rgba: Vec<u8>,
 }
 
+/// Decodes a colour pixel pattern (`ppat`) into an image.
 pub fn decode_pattern(bytes: &[u8]) -> Result<Image, ContentError> {
     if word(bytes, 0)? != 1 {
         return Err(ContentError::Invalid(
@@ -77,6 +82,8 @@ pub fn decode_pattern(bytes: &[u8]) -> Result<Image, ContentError> {
     })
 }
 
+/// The width and height of a Toolbox rectangle (top, left, bottom, right) stored at
+/// `offset`, or an error when it is empty or over 1024 pixels.
 fn bounds(bytes: &[u8], offset: usize) -> Result<(usize, usize), ContentError> {
     let top = i32::from(word(bytes, offset)?);
     let left = i32::from(word(bytes, offset + 2)?);
@@ -90,7 +97,8 @@ fn bounds(bytes: &[u8], offset: usize) -> Result<(usize, usize), ContentError> {
     Ok(((right - left) as usize, (bottom - top) as usize))
 }
 
-/// The original targeting overlay copies the cicn monochrome bitmap with srcXor.
+/// Decodes the monochrome bitmap of a colour icon (`cicn`): set bits become opaque white and
+/// clear bits transparent. The targeting overlay uses these as its fill patterns.
 pub fn decode_cicn_bitmap(bytes: &[u8]) -> Result<Image, ContentError> {
     span(bytes, 0, 82)?;
     let (width, height) = bounds(bytes, 70)?;
@@ -118,6 +126,7 @@ pub fn decode_cicn_bitmap(bytes: &[u8]) -> Result<Image, ContentError> {
     })
 }
 
+/// Decodes a colour icon (`cicn`), its mask applied as transparency.
 pub fn decode_cicn(bytes: &[u8]) -> Result<Image, ContentError> {
     span(bytes, 0, 82)?;
     let (width, height) = bounds(bytes, 6)?;
@@ -196,7 +205,9 @@ pub fn decode_cicn(bytes: &[u8]) -> Result<Image, ContentError> {
     })
 }
 
-/// Indexed terrain and interface pictures, and planar RGB interface pictures.
+/// Decodes a version 2 `PICT` holding one pixel map: indexed with 4 or 8 bits a pixel, or
+/// 32-bit direct colour stored as packed red, green and blue rows. Other drawing operations
+/// are refused.
 pub fn decode_pict(bytes: &[u8]) -> Result<Image, ContentError> {
     let (width, height) = bounds(bytes, 2)?;
     if span(bytes, 10, 4)? != [0, 0x11, 2, 0xff] {
@@ -416,6 +427,7 @@ pub fn decode_pict(bytes: &[u8]) -> Result<Image, ContentError> {
     }
 }
 
+/// Expands one PackBits row to `expected` bytes.
 fn unpack_bits(packed: &[u8], expected: usize) -> Result<Vec<u8>, ContentError> {
     let mut cursor = 0;
     let mut output = Vec::with_capacity(expected);
@@ -448,13 +460,15 @@ fn unpack_bits(packed: &[u8], expected: usize) -> Result<Vec<u8>, ContentError> 
 /// A colour cursor ('crsr', type 0x8001) with its hotspot as (h, v).
 #[derive(Debug)]
 pub struct Cursor {
+    /// The cursor's picture.
     pub image: Image,
+    /// The point of the picture that marks where the cursor points.
     pub hotspot: (i16, i16),
 }
 
 /// Decodes a 16x16 colour cursor: CCrsr header, PixMap, indexed pixels and colour
 /// table. Pixels outside the mask are transparent; where the 1-bit data is set
-/// outside the mask, the original inverts the screen, which is drawn black here.
+/// outside the mask, the game inverts the screen, which is drawn black here.
 pub fn decode_crsr(bytes: &[u8]) -> Result<Cursor, ContentError> {
     span(bytes, 0, 96)?;
     if word(bytes, 0)? as u16 != 0x8001 {

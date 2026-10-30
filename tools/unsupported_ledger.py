@@ -2,11 +2,10 @@
 import argparse
 from collections import Counter
 import json
-from pathlib import Path
 
 import engine_inventory
+from repository import ROOT
 
-ROOT = Path(__file__).resolve().parent.parent
 LEDGER = ROOT / 'evidence/unsupported-ledger.json'
 REPORT = ROOT / 'docs/unsupported-scope.md'
 STATUSES = {'open', 'in_progress', 'partial', 'closed', 'blocked', 'frozen'}

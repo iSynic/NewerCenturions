@@ -1,49 +1,65 @@
-//! Display fields read by ShowStats (0x159a96) and viewcharacter (0x164174).
-//! This is a borrowed record codec, not a replacement save representation.
-use crate::{ContentError, mission::long, span, word};
+//! Warrior record fields shown on the character screens, and the fixed fields
+//! a new warrior receives.
+use super::warrior_layout::{NAME, REMAINING_EXPERIENCE, UPGRADE_POINTS};
+use crate::bytes::{long, put_long};
+use crate::{ContentError, span, word};
 
+/// The warrior fields the character screens show.
 pub struct CharacterInformation<'a>(pub &'a [u8]);
 
 impl CharacterInformation<'_> {
+    /// Attribute `index`: Brawn, Knowledge, Judgement, Quickness, Coordination, Vitality, Psionics.
     pub fn attribute(&self, index: usize) -> Result<i16, ContentError> {
         word(self.0, 0x9e2 + index * 2)
     }
+    /// The warrior's age in days.
     pub fn age_days(&self) -> Result<i32, ContentError> {
         long(self.0, 0x9ca)
     }
+    /// Experience still to earn for the next level.
     pub fn experience(&self) -> Result<i32, ContentError> {
-        long(self.0, 0x9ce)
+        long(self.0, REMAINING_EXPERIENCE)
     }
+    /// Experience the warrior has earned and can spend on upgrades.
     pub fn upgrade_points(&self) -> Result<i32, ContentError> {
-        long(self.0, 0x9d2)
+        long(self.0, UPGRADE_POINTS)
     }
+    /// Credits the warrior carries.
     pub fn carried_credits(&self) -> Result<u16, ContentError> {
         Ok(word(self.0, 0x9da)? as u16)
     }
+    /// The warrior's gender.
     pub fn gender(&self) -> Result<i16, ContentError> {
         word(self.0, 0x38)
     }
+    /// Most charge the warrior's power shield holds.
     pub fn shield_capacity(&self) -> Result<i16, ContentError> {
         word(self.0, 0x28)
     }
+    /// Charge the power shield spends for each point of damage it stops.
     pub fn shield_cost(&self) -> Result<i16, ContentError> {
         word(self.0, 0x2a)
     }
+    /// Movement the warrior gets each round.
     pub fn movement_rate(&self) -> Result<i16, ContentError> {
         word(self.0, 0x3e)
     }
-    /// The displayed lower bound is independent of attack's constant minimum.
+    /// The warrior's bare-hand damage minimum, as the character screen shows it.
     pub fn displayed_damage_minimum(&self) -> Result<i16, ContentError> {
         word(self.0, 0xe)
     }
+    /// Resistance to scans: the base word plus the bonus the warrior's attributes give.
     pub fn psionic_resistance(&self) -> Result<i16, ContentError> {
         Ok(word(self.0, 0x22)?.wrapping_add(word(self.0, 0xb60)?))
     }
+    /// Saving throw against damage kind `index`: the base word plus the bonus the warrior's
+    /// attributes give.
     pub fn damage_resistance(&self, index: usize) -> Result<i16, ContentError> {
         Ok(word(self.0, 0x112 + index * 2)?.wrapping_add(word(self.0, 0xb48 + index * 2)?))
     }
+    /// The name as stored, without its terminator.
     pub fn name_bytes(&self) -> Result<&[u8], ContentError> {
-        let tail = span(self.0, 0xa21, self.0.len().saturating_sub(0xa21))?;
+        let tail = span(self.0, NAME, self.0.len().saturating_sub(NAME))?;
         let length =
             tail.iter().take(255).position(|b| *b == 0).ok_or_else(|| {
                 ContentError::Invalid("unterminated character dialog text".into())
@@ -52,12 +68,14 @@ impl CharacterInformation<'_> {
     }
 }
 
-/// NewCharacter's fixed metadata writes. Name encoding and eligibility belong
-/// to the caller; this codec only installs already validated bytes.
+/// The identity a new warrior receives. The caller encodes and validates the
+/// name.
 pub struct CharacterIdentityMut<'a>(pub &'a mut [u8]);
 impl CharacterIdentityMut<'_> {
-    /// savecharacter 0x1374bc stamps three wrapping WORD checksums. The first
-    /// includes an unidentified saved WORD; these are format receipts, not stats.
+    /// Stamps the three wrapping checksums a saved warrior carries. The first
+    /// sums a field whose meaning is unknown; none of them is a statistic.
+    ///
+    /// Original: savecharacter
     pub fn refresh_save_checksums(&mut self) -> Result<(), ContentError> {
         for (destination, fields) in [
             (2, &[0x3a, 0x52, 0x1e][..]),
@@ -72,6 +90,10 @@ impl CharacterIdentityMut<'_> {
         Ok(())
     }
 
+    /// Gives a new warrior its race, profession, gender, portrait, map icon and name,
+    /// at level 1.
+    ///
+    /// Original: NewCharacter
     pub fn initialize(
         &mut self,
         race: i16,
@@ -91,12 +113,15 @@ impl CharacterIdentityMut<'_> {
         ] {
             super::put_word(self.0, offset, value);
         }
-        self.0[0xa21..0xa21 + name.len()].copy_from_slice(name);
+        self.0[NAME..NAME + name.len()].copy_from_slice(name);
     }
+    /// Sets the warrior's age in days.
     pub fn set_age_days(&mut self, days: i32) {
-        self.0[0x9ca..0x9ce].copy_from_slice(&days.to_be_bytes());
+        put_long(self.0, 0x9ca, days);
     }
-    /// NewCharacter sets this WORD to one. Its wider meaning is unconfirmed.
+    /// A new warrior's creation marker is one; its wider meaning is unknown.
+    ///
+    /// Original: NewCharacter
     pub fn set_creation_marker(&mut self) {
         super::put_word(self.0, 0, 1);
     }

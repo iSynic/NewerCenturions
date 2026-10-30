@@ -1,6 +1,6 @@
 //! Inventory presentation from named item fields and original text/resources.
 use crate::RuleError;
-use centurions_content::{Content, InventoryRecord, native_text::NativeText, ui};
+use centurions_content::{Content, InventoryRecord, game_text::GameText, ui};
 use output::{BodyRect, Draw, PanelEffect, PanelPlan, PascalString};
 use std::collections::BTreeMap;
 mod ammunition_menu;

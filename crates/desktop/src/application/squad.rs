@@ -1,4 +1,5 @@
-//! Squad workflow ownership.
+//! The Modify Squad screen: the roster, the squad's rows, the mission's levels
+//! and the difficulty choices.
 use super::{Application, ApplicationAction, HandleOutcome, Screen};
 use crate::{
     assets::Assets,
@@ -8,7 +9,14 @@ use centurions_content::Content;
 use centurions_core::{Command, Event, Phase, Session, apply};
 use macroquad::prelude::*;
 
+/// Squad dialog (DITL 145) control that moves the roster list five rows up: item 17.
+const ROSTER_UP: usize = 17;
+/// Squad dialog (DITL 145) control that moves the roster list five rows down: item 18.
+const ROSTER_DOWN: usize = 18;
+
 impl Application {
+    /// Carries out the Modify Squad choices: add and remove warriors, marching
+    /// order, roster scrolling, difficulty and ending the mission.
     pub(super) fn handle_squad(
         &mut self,
         action: ApplicationAction,
@@ -107,7 +115,7 @@ impl Application {
                     }
                     self.squad.push(i);
                     self.selection.member = Some(self.squad.len() - 1);
-                    // 0x148ece: the roster selection clears once minus blanks its row.
+                    // The roster selection clears once minus blanks its row.
                     self.selection.selected = None;
                     events.push(Event::Sound { resource_id: 141 });
                 }
@@ -115,11 +123,11 @@ impl Application {
             ApplicationAction::Remove => {
                 // Item 15 drops the marked member, member 0 until another is picked.
                 let i = self.selection.member.take().unwrap_or(0);
-                // 0x1487ec clears the mark first; modifying a one-member squad
-                // then warns 0x43 and keeps it (0x1487f2..0x14882e).
+                // The mark clears first; modifying a one-member squad then warns
+                // with message 0x43 and keeps the member.
                 if self.selection.modify_squad && self.squad.len() == 1 {
                     return Err(centurions_core::RuleError::Refused {
-                        feedback: vec![centurions_core::feedback::NativeFeedback::Warning {
+                        feedback: vec![centurions_core::feedback::GameFeedback::Warning {
                             index: 0x43,
                         }],
                     });
@@ -143,9 +151,9 @@ impl Application {
                     dependency: "warrior file import",
                 });
             }
-            // Item 33 runs viewrestrictions 0x148f9e, DLOG -7931.
-            // 0x147ef6: item 17 subtracts five from the first listed slot and item
-            // 18 adds five, then a negative result becomes zero.
+            // Item 33 runs viewrestrictions, DLOG -7931.
+            // Item 17 subtracts five from the first listed slot and item 18 adds
+            // five, then a negative result becomes zero.
             ApplicationAction::RosterScroll(down) => {
                 self.selection.roster_top = if down {
                     self.selection.roster_top + 5
@@ -184,7 +192,7 @@ impl Application {
                 if self.selection.modify_squad {
                     if warriors.is_empty() {
                         return Err(centurions_core::RuleError::Refused {
-                            feedback: vec![centurions_core::feedback::NativeFeedback::Sound {
+                            feedback: vec![centurions_core::feedback::GameFeedback::Sound {
                                 resource_id: 6000,
                             }],
                         });
@@ -236,6 +244,7 @@ impl Application {
         Ok(HandleOutcome::Complete(next, events))
     }
 
+    /// Opens the roster file at `path` for the Modify Squad screen.
     pub fn load_roster(
         &mut self,
         path: &std::path::Path,
@@ -243,14 +252,16 @@ impl Application {
     ) -> Result<(), centurions_core::RuleError> {
         self.scenario_names = content.scenario_names();
         if let Some(map) = content.map(0) {
-            self.note_labels = map.note_labels.clone();
-            self.unknown_note_labels = map.unknown_note_labels.clone();
+            self.notes.labels = map.note_labels.clone();
+            self.notes.unknown_labels = map.unknown_note_labels.clone();
         }
         self.archives =
             centurions_core::reference_views::archive_entries(&Session::new(content), content)?;
         self.roster = Some(centurions_core::roster::Roster::open(path, content)?);
         Ok(())
     }
+    /// The warriors the squad may be chosen from: the roster's if one is open,
+    /// otherwise the scenario's supplied warriors.
     pub(super) fn warriors<'a>(
         &'a self,
         content: &'a Content,
@@ -259,6 +270,8 @@ impl Application {
             .as_ref()
             .map_or(&content.warriors, |r| &r.warriors)
     }
+    /// Ends the mission, stores the squad's records in the roster and returns to the
+    /// title.
     pub(super) fn finish_mission(
         &mut self,
         state: &mut Session,
@@ -277,8 +290,8 @@ impl Application {
         Ok(())
     }
 
-    /// The party records partyselect 0x1476cc shows: the live squad while
-    /// modifying it, otherwise the roster records.
+    /// The party records partyselect shows: the live squad while modifying it,
+    /// otherwise the roster records.
     fn squad_record<'a>(
         &'a self,
         content: &'a Content,
@@ -317,6 +330,10 @@ impl Application {
         .and_then(|(name, level)| content.scenario.as_ref()?.selection(&name, level))
     }
 
+    /// Draws the Modify Squad screen (DITL 145): the roster, the squad's rows, the
+    /// mission's levels and the difficulty choices.
+    ///
+    /// Original: partyselect
     pub(super) fn draw_squad(
         &self,
         content: &Content,
@@ -326,7 +343,6 @@ impl Application {
     ) {
         clear_background(BLACK);
         let origin = vec2(80., 80.);
-        let item = |number: usize| assets.dialog_rect_at(145, number, origin);
         assets.panel(203, Rect::new(origin.x, origin.y, 640., 460.));
         assets.text(
             &assets.squad_text[69],
@@ -335,8 +351,25 @@ impl Application {
             12,
             WHITE,
         );
-        // Each added warrior is blanked from the index by minus 0x14aa22, so its
-        // row stays empty until plus 0x14a918 returns it.
+        self.roster_list(content, assets, origin, controls);
+        let levels = self.member_rows(content, state, assets, origin, controls);
+        self.button_column(assets, origin, controls);
+        self.level_block(content, state, assets, origin, levels, controls);
+        self.difficulty_block(assets, origin, controls);
+    }
+
+    /// The roster of warriors not in the squad, thirteen rows from the top.
+    ///
+    /// Original: partyselect
+    fn roster_list(
+        &self,
+        content: &Content,
+        assets: &Assets,
+        origin: Vec2,
+        controls: &mut Vec<Control>,
+    ) {
+        // Each added warrior is blanked from the index by minus, so its row
+        // stays empty until plus returns it.
         for (i, warrior) in self
             .warriors(content)
             .iter()
@@ -348,11 +381,11 @@ impl Application {
             let rect = Rect::new(origin.x + 12., origin.y + 30. + row as f32 * 20., 155., 14.);
             let listed = !self.squad.contains(&i);
             if listed {
-                // 0x147c36: yellowColor for the selection, cyanColor otherwise.
+                // yellowColor for the selection, cyanColor otherwise.
                 let color = if self.selection.selected == Some(i) {
                     YELLOW
                 } else {
-                    Color::from_rgba(0x02, 0xab, 0xea, 255)
+                    crate::layout::CYAN
                 };
                 assets.text(&warrior.name, rect.x, rect.y + 12., 12, color);
                 assets.text(
@@ -369,6 +402,20 @@ impl Application {
                 action: Action::Application(ApplicationAction::Warrior(i)),
             });
         }
+    }
+
+    /// One row per squad member; returns the sum of their levels.
+    ///
+    /// Original: partyselect
+    fn member_rows(
+        &self,
+        content: &Content,
+        state: &Session,
+        assets: &Assets,
+        origin: Vec2,
+        controls: &mut Vec<Control>,
+    ) -> i16 {
+        let item = |number: usize| assets.dialog_rect_at(145, number, origin);
         let member = self.selection.member.unwrap_or(0);
         let mut levels = 0_i16;
         for (i, warrior) in self.squad.iter().enumerate() {
@@ -378,48 +425,44 @@ impl Application {
             let record = warrior.record();
             let top = origin.y + 50. * i as f32;
             levels = levels.wrapping_add(record.level().unwrap_or(0));
-            // DialogNum item 54 + member (0x147ac0).
-            assets.wrapped_color(
-                &record.level().unwrap_or(0).to_string(),
-                item(54 + i),
-                12,
-                14.,
-                YELLOW,
-            );
-            // An add draws PICT 1 over the bar and portrait box (0x148f10), then
-            // updatechar mode 5 (0x148f24) puts PICT 189 behind the row.
+            // DialogNum item 54 + member.
+            assets.dialog_text(&record.level().unwrap_or(0).to_string(), item(54 + i));
+            // An add draws PICT 1 over the bar and portrait box, then updatechar
+            // mode 5 puts PICT 189 behind the row.
             assets.panel(1, Rect::new(origin.x + 321., top, 60., 50.));
             assets.panel(189, Rect::new(origin.x + 380., top, 260., 50.));
-            // Item 34 + selected member takes PICT 403 (0x147a9e).
+            // Item 34 + selected member takes PICT 403.
             if i == member {
                 assets.panel(403, item(34 + i));
             }
-            // updatepictbox 0x161b80 mode 1: the 32-pixel box at the row's left + 10, inset 9.
-            // In the partyselect dialog (0x4394d0) plotportrait places condition
-            // cicns left of 573 (0x14a52c).
+            // updatepictbox mode 1: the 32-pixel box at the row's left + 10, inset 9.
+            // In the partyselect dialog plotportrait places condition cicns left
+            // of 573.
             crate::portrait::draw(
                 assets,
                 warrior,
                 vec2(origin.x + 339., top + 9.),
                 crate::portrait::Marks {
-                    class_label: self.native_preferences.enabled(17),
+                    class_label: self
+                        .preferences
+                        .enabled(crate::preferences::pref::APPEND_MOS),
                     conditions_left: Some(origin.x + 573.),
                     automatic: state
                         .combat
                         .as_ref()
-                        .is_some_and(|combat| combat.automatic.get(i).copied().unwrap_or(false)),
+                        .is_some_and(|combat| combat.do_auto.get(i).copied().unwrap_or(false)),
                 },
             );
             assets.text(&warrior.name, origin.x + 420., top + 22., 12, YELLOW);
             assets.text(
-                &record.actions_per_round().unwrap_or(0).to_string(),
+                &record.normal_attacks().unwrap_or(0).to_string(),
                 origin.x + 610.,
                 top + 22.,
                 12,
                 YELLOW,
             );
-            // 0x15f84e: maximum Psi zero draws " ---" (0x400a76).
-            let maximum_psi = record.maximum_psi().unwrap_or(0);
+            // A maximum Psi of zero draws " ---".
+            let maximum_psi = record.psi_points_max().unwrap_or(0);
             if maximum_psi != 0 {
                 pool(
                     assets,
@@ -429,7 +472,10 @@ impl Application {
                 );
             } else {
                 assets.text(
-                    &assets.native_text.text(0x400a76, true).unwrap_or_default(),
+                    &assets
+                        .game_text
+                        .text(crate::game_strings::NO_PSI, true)
+                        .unwrap_or_default(),
                     origin.x + 466.,
                     top + 44.,
                     12,
@@ -439,13 +485,13 @@ impl Application {
             pool(
                 assets,
                 record.stamina().unwrap_or(0),
-                record.maximum_stamina().unwrap_or(0),
+                record.stamina_max().unwrap_or(0),
                 vec2(origin.x + 427., top + 44.),
             );
             for (value, x) in [
                 (record.shield_chance(), 524.),
                 (record.shield_points(), 563.),
-                (record.armor(), 609.),
+                (record.ac(), 609.),
             ] {
                 assets.text(
                     &value.unwrap_or(0).to_string(),
@@ -461,13 +507,21 @@ impl Application {
                 action: Action::Application(ApplicationAction::Member(i)),
             });
         }
+        levels
+    }
+
+    /// Add, Remove, Erase, Done and Import, the roster arrows and the Edit picture.
+    ///
+    /// Original: partyselect
+    fn button_column(&self, assets: &Assets, origin: Vec2, controls: &mut Vec<Control>) {
+        let item = |number: usize| assets.dialog_rect_at(145, number, origin);
         let add = self
             .selection
             .selected
             .is_some_and(|i| !self.squad.contains(&i))
             && self.squad.len() < 6;
-        // Edit (item 16) acts on a selected roster warrior (0x147f46); Import
-        // (item 20) has no precondition (0x14802e).
+        // Edit (item 16) acts on a selected roster warrior; Import (item 20)
+        // has no precondition.
         for (id, y, enabled, action) in [
             (160, 22., add, ApplicationAction::Add),
             (7, 72., !self.squad.is_empty(), ApplicationAction::Remove),
@@ -493,31 +547,37 @@ impl Application {
                 action: Action::Application(action),
             });
         }
-        for (number, down) in [(17, false), (18, true)] {
+        for (number, down) in [(ROSTER_UP, false), (ROSTER_DOWN, true)] {
             controls.push(Control {
                 rect: item(number),
                 enabled: true,
                 action: Action::Application(ApplicationAction::RosterScroll(down)),
             });
         }
-        // 0x147a0e: a full squad marks Add with cicn 2019.
+        // A full squad marks Add with cicn 2019.
         if self.squad.len() >= 6
             && let Some(icon) = assets.icons.get(&2019)
         {
-            draw_texture_ex(
-                icon,
-                origin.x + 221.,
-                origin.y + 22.,
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(vec2(50., 50.)),
-                    ..Default::default()
-                },
-            );
+            crate::assets::texture_in(icon, Rect::new(origin.x + 221., origin.y + 22., 50., 50.));
         }
         assets.panel(132, Rect::new(origin.x + 221., origin.y + 172., 50., 50.));
+    }
+
+    /// The recommended and total levels and the View Restrictions button.
+    ///
+    /// Original: partyselect
+    fn level_block(
+        &self,
+        content: &Content,
+        state: &Session,
+        assets: &Assets,
+        origin: Vec2,
+        levels: i16,
+        controls: &mut Vec<Control>,
+    ) {
+        let item = |number: usize| assets.dialog_rect_at(145, number, origin);
         let scenario = self.squad_level(content, state);
-        // Items 60/61 with DialogNumLong 65 and DialogNum 66 (0x147b12..0x147b2a).
+        // Items 60/61 with DialogNumLong 65 and DialogNum 66.
         for (number, text) in [
             (60, assets.squad_text[59].clone()),
             (61, assets.squad_text[60].clone()),
@@ -530,18 +590,24 @@ impl Application {
             ),
             (66, levels.to_string()),
         ] {
-            assets.wrapped_color(&text, item(number), 12, 14., YELLOW);
+            assets.dialog_text(&text, item(number));
         }
-        // View Restrictions (item 33, PICT 216) exists with the level's Data RI (0x147d28).
+        // View Restrictions (item 33, PICT 216) appears when the level has a Data RI.
         if scenario.is_some_and(|s| s.restrictions.is_some()) {
             let rect = item(33);
-            assets.panel(216, rect);
-            controls.push(Control {
+            crate::presentation::push_panel_control(
+                assets,
+                controls,
+                216,
                 rect,
-                enabled: true,
-                action: Action::Application(ApplicationAction::ViewRestrictions),
-            });
+                true,
+                Action::Application(ApplicationAction::ViewRestrictions),
+            );
         }
+    }
+
+    /// The difficulty choices, their check box and the squad notes.
+    fn difficulty_block(&self, assets: &Assets, origin: Vec2, controls: &mut Vec<Control>) {
         assets.text(
             assets.squad_text[66].trim_end(),
             origin.x + 233.,
@@ -582,11 +648,13 @@ impl Application {
     }
 }
 
-/// updatechar 0x15f66c: a pool below its maximum is drawn in RGB 0x3800/0xb300/0xf900
-/// (0x44337a), and values above 999 at size 10.
+/// A pool below its maximum is drawn in RGB 0x3800/0xb300/0xf900, and values
+/// above 999 at size 10.
+///
+/// Original: updatechar
 fn pool(assets: &Assets, value: i16, maximum: i16, at: Vec2) {
     let color = if value < maximum {
-        Color::from_rgba(0x38, 0xb3, 0xf9, 255)
+        crate::layout::POOL_BELOW_MAXIMUM
     } else {
         YELLOW
     };

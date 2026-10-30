@@ -1,28 +1,39 @@
-//! NewCharacter 0x13f684 record initialization, separated from its dialogs.
+//! A new character's record, apart from the creation dialogs.
 use crate::{Content, RandomState, RuleError, character, combat, story_promotion};
 use centurions_content::{
     WARRIOR_BYTES, Warrior,
-    native_text::NativeText,
+    game_text::GameText,
     records::{
         ATTRIBUTES, Attribute, CharacterIdentityMut, CharacterStatisticsMut,
         DevelopmentField as Field, InventorySlotsMut, ItemDefinition, ProfessionProfile,
-        RaceProfile, Statistic, WarriorRecordMut,
+        ProfileTable, RaceProfile, Statistic, WarriorRecordMut,
     },
-    span, word,
+    word,
 };
 use serde::{Deserialize, Serialize};
 
+/// The choices made in the creation dialog for a new warrior.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
+    /// The race chosen.
     pub race: i16,
+    /// The profession chosen.
     pub mos: i16,
+    /// The gender chosen.
     pub gender: i16,
+    /// The starting level chosen.
     pub level: i16,
+    /// The warrior's name.
     pub name: String,
+    /// The portrait chosen.
     pub portrait: i16,
+    /// The icon chosen.
     pub icon: i16,
 }
 
+/// Builds a new warrior's record from the dialog's choices: race and profession profiles, rolled
+/// attributes, starting skills, resistances and conditions. Starting items are given separately
+/// by `initial_items`.
 pub fn generate(
     request: &Request,
     content: &Content,
@@ -42,8 +53,9 @@ pub fn generate(
             "invalid warrior creation selection".into(),
         ));
     }
-    let race = RaceProfile(span(&map.races, (request.race as usize - 1) * 408, 408)?);
-    let mos = ProfessionProfile(span(&map.profiles, (request.mos as usize - 1) * 576, 576)?);
+    let race = RaceProfile(ProfileTable::races(&map.races).row(request.race as usize - 1)?);
+    let mos =
+        ProfessionProfile(ProfileTable::professions(&map.profiles).row(request.mos as usize - 1)?);
     if !race.accepts_profession(request.mos)? {
         return Err(RuleError::Invalid("race and MOS are incompatible".into()));
     }
@@ -67,7 +79,7 @@ pub fn generate(
             ));
         }
     }
-    let native = NativeText::load(content, std::path::Path::new("."))?;
+    let game_text = GameText::load(content, std::path::Path::new("."))?;
     let mut b = vec![0; WARRIOR_BYTES];
     CharacterIdentityMut(&mut b).initialize(
         request.race,
@@ -88,7 +100,9 @@ pub fn generate(
     for i in 0..100 {
         WarriorRecordMut::from_bytes(&mut b).set_inventory_slot(
             i,
-            &centurions_content::InventoryRecord(native.bytes(0x41fc32, 22)?.try_into().unwrap()),
+            &centurions_content::InventoryRecord(
+                game_text.bytes(0x41fc32, 22)?.try_into().unwrap(),
+            ),
         );
     }
     Field::MeleeSound.write(
@@ -116,12 +130,12 @@ pub fn generate(
     for i in 0..8 {
         Field::CreatureBonus(i).write(&mut b, race.creature_bonus(i)?);
     }
-    WarriorRecordMut::from_bytes(&mut b).set_active_flag(1);
+    WarriorRecordMut::from_bytes(&mut b).set_in_battle(1);
     let power = race
         .action_points()?
         .wrapping_add(2)
         .wrapping_add(mos.action_points()?);
-    WarriorRecordMut::from_bytes(&mut b).set_action_points(power);
+    WarriorRecordMut::from_bytes(&mut b).set_attacks(power);
     Field::ActionsPerRound.write(&mut b, power);
     let experience = story_promotion::experience_threshold(request.level)?;
     WarriorRecordMut::from_bytes(&mut b).set_remaining_experience(experience);
@@ -209,7 +223,7 @@ pub fn generate(
         }
     }
     Field::MovementBonus.write(&mut b, mos.movement_bonus()?);
-    specialties(&mut b, &race, &mos, &native)?;
+    specialties(&mut b, &race, &mos, &game_text)?;
     let mut warrior = Warrior::read(&b)?;
     combat::calculate_movement(&mut warrior, race.movement_adjustment())?;
     character::calculate_statistics(&mut warrior)?;
@@ -219,12 +233,12 @@ pub fn generate(
         .read(&warrior.bytes)?
         .wrapping_add(Field::StaminaBonus.read(&warrior.bytes)?);
     warrior.record_mut().set_stamina(stamina);
-    warrior.record_mut().set_maximum_stamina(stamina);
+    warrior.record_mut().set_stamina_max(stamina);
     let psi = Field::BasePsi
         .read(&warrior.bytes)?
         .wrapping_add(Field::PsiBonus.read(&warrior.bytes)?);
     warrior.record_mut().set_psi_points(psi);
-    warrior.record_mut().set_maximum_psi(psi);
+    warrior.record_mut().set_psi_points_max(psi);
     let mut library = story_promotion::LibraryRandom {
         seed: *library_seed,
         draws: *library_draws,
@@ -237,7 +251,10 @@ pub fn generate(
     warrior.original_sha256 = centurions_content::digest(&warrior.bytes);
     Ok(warrior)
 }
-/// addinitialitems 0x13f52c uses MOS items, native installation, eligibility and equipment.
+/// Gives a new character its profession's starting items, installs and checks
+/// each one, and wears what it can.
+///
+/// Original: addinitialitems
 pub fn initial_items(
     state: &mut crate::Session,
     content: &Content,
@@ -250,11 +267,10 @@ pub fn initial_items(
     if !warrior.inventory()?.is_empty() {
         return Err("creation equipment already installed".into());
     }
-    let mos = ProfessionProfile(span(
-        &mission.profiles,
-        (warrior.record().profession()? as usize - 1) * 576,
-        576,
-    )?);
+    let mos = ProfessionProfile(
+        ProfileTable::professions(&mission.profiles)
+            .row(warrior.record().profession()? as usize - 1)?,
+    );
     let mut candidate = warrior.clone();
     let mut count = 0_u16;
     for index in 0..20 {
@@ -268,10 +284,10 @@ pub fn initial_items(
             .ok_or("creation item definition missing")?;
         let weight = ItemDefinition(definition)
             .supplied_quantity()?
-            .wrapping_mul(ItemDefinition(definition).unit_weight()?)
-            .wrapping_add(warrior.record().carried_weight()?)
-            .wrapping_add(ItemDefinition(definition).base_weight()?);
-        if weight as u16 > warrior.record().weight_capacity()? as u16
+            .wrapping_mul(ItemDefinition(definition).charge_weight()?)
+            .wrapping_add(warrior.record().load()?)
+            .wrapping_add(ItemDefinition(definition).weight()?);
+        if weight as u16 > warrior.record().load_max()? as u16
             || !crate::equipment::can_use(warrior, definition, mission)?
         {
             continue;
@@ -297,20 +313,22 @@ pub fn initial_items(
     warrior
         .record_mut()
         .set_carried_credits(mos.starting_credits()?);
-    // This caller supplies wearitem's zero feedback gate.
+    // Starting items are worn without feedback.
     Ok(vec![])
 }
 
+/// Sets the starting special skills: race plus profession for each skill the profession has,
+/// then adjustments from the brawn and quickness-and-coordination tables.
 fn specialties(
     b: &mut [u8],
     race: &RaceProfile<'_>,
     mos: &ProfessionProfile<'_>,
-    native: &NativeText,
+    game_text: &GameText,
 ) -> Result<(), RuleError> {
-    let mut tables = native.bytes(0x400634, 576)?.to_vec();
-    tables.extend(native.bytes(0x4008a4, 456)?);
-    // NewCharacter's reachable specialty overread WORDs are zero caller locals.
-    // The nonzero return-address WORD occurs only at quickness 3; supplied profiles start at 4.
+    let mut tables = game_text.bytes(0x400634, 576)?.to_vec();
+    tables.extend(game_text.bytes(0x4008a4, 456)?);
+    // The specialty table is read past its end into values that are zero for
+    // every supplied profile: an original overread (see docs/source-notes/rules.md).
     tables.extend([0; 96]);
     for i in 0..15 {
         Field::SpecialSkill(i).write(
@@ -322,7 +340,7 @@ fn specialties(
             },
         );
     }
-    let thresholds = native.bytes(0x400874, 48)?;
+    let thresholds = game_text.bytes(0x400874, 48)?;
     let strength = Field::Attribute(Attribute::Brawn).read(b)? as u16;
     let quickness = (Field::Attribute(Attribute::Quickness).read(b)? as u16)
         .wrapping_add(Field::Attribute(Attribute::Coordination).read(b)? as u16)
@@ -346,6 +364,8 @@ fn specialties(
     Ok(())
 }
 
+/// Holds special skills to -99..999, and accuracy, dodge, psi resistance and bare-hand damage to
+/// 0..999, after creation or development.
 pub(crate) fn clamp_development_fields(bytes: &mut [u8]) -> Result<(), RuleError> {
     for index in 0..12 {
         let field = Field::SpecialSkill(index);

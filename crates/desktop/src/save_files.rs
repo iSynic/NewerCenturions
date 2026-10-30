@@ -3,6 +3,9 @@ use centurions_content::Content;
 use centurions_core::{RuleError, Session, load, save};
 use std::path::{Path, PathBuf};
 
+/// The paths for saving and loading: the current game, the default, the one
+/// named on the command line and the original game folders that are never
+/// written.
 pub struct SaveFiles {
     pub current: Option<PathBuf>,
     pub default: PathBuf,
@@ -11,6 +14,10 @@ pub struct SaveFiles {
 }
 
 impl SaveFiles {
+    /// Saves or loads the game, asking the player for a path unless one is already
+    /// known. Saving never writes inside an original game folder or over a file that
+    /// is not a saved game; an original Data I1 file or folder is imported when
+    /// loading. Returns whether a game was saved or loaded.
     pub fn perform(
         &mut self,
         action: &Action,
@@ -58,7 +65,7 @@ impl SaveFiles {
             save(&path, state, content)?;
         } else {
             if path.file_name().is_some_and(|name| name == "Data I1") || path.is_dir() {
-                let imported = centurions_core::native_save::import(
+                let imported = centurions_core::original_save::import(
                     &path,
                     content,
                     &state.random,

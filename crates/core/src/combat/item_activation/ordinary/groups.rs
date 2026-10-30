@@ -1,8 +1,11 @@
-//! Combatchoice119258..119588 resolves faction groups without entering cast.
+//! Items that affect a whole side at once, without a cast.
 use crate::combat::{player_psi, runtime, spells};
 use crate::{Content, Event, RuleError, Session};
-use centurions_content::records::AttackPacket;
+use centurions_content::records::SpellInfoRecord;
 
+/// Marks every standing body on the side the item names (everyone for mode 12, the user's own side
+/// for mode 9, the other side otherwise) as a target, spends the user's attack action and casts the
+/// item at them.
 pub(super) fn resolve(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let pending = state
         .psi_selection
@@ -12,31 +15,28 @@ pub(super) fn resolve(state: &mut Session, content: &Content) -> Result<Vec<Even
         .combat
         .as_ref()
         .ok_or("prepared item combat missing")?;
-    let packet = combat.attack_packet.clone();
-    let mode = AttackPacket(&packet).targeting_mode();
+    let packet = combat.spell_info.clone();
+    let mode = SpellInfoRecord(&packet).target_type();
     let mut mask = [0; 110];
     for (body, warrior) in state.warriors.iter().enumerate() {
-        if warrior.record().active_flag() != 0
+        if warrior.record().in_battle() != 0
             && (mode == 12 || (warrior.record().faction()? == 0) == (mode == 9))
         {
             mask[body] = 1;
         }
     }
-    for (index, enemy) in combat.enemies.records.iter().enumerate() {
-        if enemy.record().stamina()? > 0
-            && (mode == 12 || (enemy.record().faction()? == 0) == (mode == 9))
+    for (index, monster) in combat.roster.records.iter().enumerate() {
+        if monster.record().stamina()? > 0
+            && (mode == 12 || (monster.record().faction()? == 0) == (mode == 9))
         {
             mask[index + 10] = 1;
         }
     }
     state.publish_spell_targets(&mask);
-    state.set_ready(1);
+    state.set_in_spell(1);
     let actor = &mut state.warriors[pending.actor];
-    let movement = actor.record().movement_points()?.wrapping_sub(3).max(0);
-    let actions = actor.record().action_points()?.wrapping_sub(2);
-    actor.record_mut().set_movement_points(movement);
-    actor.record_mut().set_action_points(actions);
-    let alias = spells::retained_item_alias(&state.native_work.ammunition_work)?;
+    crate::combat::records::spend_attack_action(actor)?;
+    let alias = spells::loaded_item_restriction(&state.globals.loaded_items)?;
     let map = state.land(content).ok_or("prepared item map missing")?;
     let combat = state.combat.as_mut().unwrap();
     let previous = combat.item_condition_caller;
@@ -57,23 +57,15 @@ pub(super) fn resolve(state: &mut Session, content: &Content) -> Result<Vec<Even
         &mask,
         (
             alias,
-            crate::combat::warrior_alias::Owners::new(
-                None,
-                &state.native_work.shop_work,
-                state
-                    .exploration
-                    .as_ref()
-                    .map(|position| position.event_headers.as_slice()),
-            )
-            .with_backup(&state.native_work.warrior_table),
-            Some((&content.items, &mut state.native_work.ammunition_work)),
+            crate::combat::warrior_alias::backup_owners!(state),
+            Some((&content.items, &mut state.globals.loaded_items)),
         ),
     );
     state.combat.as_mut().unwrap().item_condition_caller = previous;
     let mut events = result?;
     state.commit_alias_writes()?;
     state.clear_targets();
-    state.set_ready(0);
+    state.set_in_spell(0);
     events.extend(runtime::finish_player_action(
         state,
         content,

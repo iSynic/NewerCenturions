@@ -12,24 +12,24 @@ fn authored_terminal_choice_matches_native_records_and_resumes() {
     state.flags = fixture.bytes("flags_before");
     state.mission_stage = 5;
     state.mission_score = 17;
-    state.allies = fixture.bytes("menu_before");
-    state.ally_count = fixture.n::<usize>("menu_count_before");
-    state.native_work.health_context = centurions_core::story_health::context(
+    state.holdover = fixture.bytes("menu_before");
+    state.held_over = fixture.n::<usize>("menu_count_before");
+    state.globals.health_context = centurions_core::story_health::context(
         &state.warriors,
         0,
         None,
     );
     assert_eq!(
         state
-            .native_work
+            .globals
             .health_context
-            .unavailable,
+            .kill_party,
         1
     );
     let position = state.exploration.as_mut().unwrap();
     position.restore_map(
         9,
-        MapState::from_native(&fixture.bytes("map_before")).unwrap(),
+        MapState::from_bytes(&fixture.bytes("map_before")).unwrap(),
     );
     position.x = 40;
     position.y = 80;
@@ -76,14 +76,14 @@ fn authored_terminal_choice_matches_native_records_and_resumes() {
     assert_eq!(state.random, random);
     support::native_expect! {
         bytes state.flags => &fixture["flags_after"], "binary_terminal_stage";
-        bytes state.allies => &fixture["menu_after"], "binary_terminal_stage";
+        bytes state.holdover => &fixture["menu_after"], "binary_terminal_stage";
     }
-    assert_eq!(state.ally_count, 0);
+    assert_eq!(state.held_over, 0);
     assert_eq!(
         state
-            .native_work
+            .globals
             .health_context
-            .unavailable,
+            .kill_party,
         1
     );
     assert_eq!(
@@ -97,8 +97,8 @@ fn authored_terminal_choice_matches_native_records_and_resumes() {
         Some(Presentation::Prologue { resource_id: 1000 })
     );
     support::native_expect! {
-        bytes position.map_state().native_bytes().unwrap() => &fixture["map_after"], "binary_terminal_stage";
-        bytes state.visited_maps[&9].native_bytes().unwrap() => &fixture["saved_origin"], "binary_terminal_stage";
+        bytes position.map_state().to_bytes().unwrap() => &fixture["map_after"], "binary_terminal_stage";
+        bytes state.visited_maps[&9].to_bytes().unwrap() => &fixture["saved_origin"], "binary_terminal_stage";
     }
     std::fs::remove_file(checkpoint).unwrap();
 }

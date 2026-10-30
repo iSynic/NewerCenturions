@@ -1,7 +1,6 @@
 """Capture independent FFmpeg MACE3 PCM references from the extracted sound corpus."""
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import random
@@ -9,9 +8,7 @@ import struct
 import subprocess
 import tempfile
 
-
-def digest(data):
-    return hashlib.sha256(data).hexdigest()
+from repository import data_digest as digest
 
 
 def chunk(tag, data):

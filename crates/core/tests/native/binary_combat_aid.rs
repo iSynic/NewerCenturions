@@ -40,15 +40,15 @@ fn actual_owned_needle_consumption_and_preparation_match_native_complete_records
             word(&case["used"].bytes("item_work"), 32).unwrap()
         );
         assert_eq!(
-            result.weapon_work.sound(),
+            result.weapon_traits.sound(),
             word(&case["prepared"].bytes("weapon_work"), 14).unwrap()
         );
         assert_eq!(
-            result.weapon_work.weapon_armor_filter,
+            result.weapon_traits.weapon_armor_filter,
             word(&case["prepared"].bytes("weapon_work"), 136).unwrap()
         );
         assert_eq!(
-            result.weapon_work.ammunition_armor_filter,
+            result.weapon_traits.ammunition_armor_filter,
             word(&case["prepared"].bytes("ammo_work"), 136).unwrap()
         );
         assert_eq!(sounds(&result.events), vec![655]);
@@ -77,7 +77,7 @@ fn four_native_target_continuations_match_at_the_medical_boundary() {
             0 => MedicalTarget::Portrait { warrior: 3 },
             1 => MedicalTarget::Portrait { warrior: 5 },
             2 => {
-                let position = current_combat(&state).squad.positions[2];
+                let position = current_combat(&state).squad.pos[2];
                 MedicalTarget::LivingPoint {
                     x: position.0,
                     y: position.1,
@@ -132,44 +132,44 @@ fn four_native_target_continuations_match_at_the_medical_boundary() {
         assert_eq!(state.random, native_random);
         let actual = current_combat(&state);
         let before = current_combat(&original);
-        assert_eq!(actual.enemies, before.enemies);
-        assert_eq!(actual.spell_fields, before.spell_fields);
-        assert_eq!(actual.weapon_work, before.weapon_work);
-        assert_eq!(actual.death_queue, before.death_queue);
-        assert_eq!(actual.attack_identity, [0, 3, 0]);
+        assert_eq!(actual.roster, before.roster);
+        assert_eq!(actual.spell_queue, before.spell_queue);
+        assert_eq!(actual.weapon_traits, before.weapon_traits);
+        assert_eq!(actual.todo_queue, before.todo_queue);
+        assert_eq!(actual.cast_identity, [0, 3, 0]);
         let mut packet = case["prepared"].bytes("packet");
         if index == 1 || index == 2 {
             packet[18] = 4;
         }
-        assert_eq!(actual.attack_packet, packet);
+        assert_eq!(actual.spell_info, packet);
         if index == 1 {
             support::native_expect! {
-            positions actual.squad.positions => &case["after"]["party_positions"], "native positions";
-            words actual.squad.under_tiles => &case["after"]["under_tiles"], "binary_combat_aid";
-            words actual.map.tiles => &case["after"]["map"], "binary_combat_aid";
-            words actual.order => &case["after"]["order"], "binary_combat_aid";
+            positions actual.squad.pos => &case["after"]["party_positions"], "native positions";
+            words actual.squad.char_under => &case["after"]["under_tiles"], "binary_combat_aid";
+            words actual.field.tiles => &case["after"]["map"], "binary_combat_aid";
+            words actual.battle_order => &case["after"]["order"], "binary_combat_aid";
                 }
-            assert_eq!(actual.squad.positions[5], (9, 23));
-            assert_eq!(actual.unavailable, before.unavailable.wrapping_sub(1));
+            assert_eq!(actual.squad.pos[5], (9, 23));
+            assert_eq!(actual.kill_party, before.kill_party.wrapping_sub(1));
         } else {
             assert_eq!(actual.squad, before.squad);
-            assert_eq!(actual.map, before.map);
-            assert_eq!(actual.order, before.order);
-            assert_eq!(actual.unavailable, before.unavailable);
+            assert_eq!(actual.field, before.field);
+            assert_eq!(actual.battle_order, before.battle_order);
+            assert_eq!(actual.kill_party, before.kill_party);
         }
-        let mut used = before.field_used.clone();
+        let mut used = before.collide_check.clone();
         if index == 2 {
             used[0] = 1;
         }
-        assert_eq!(actual.field_used, used);
-        assert_eq!(actual.cursor, before.cursor);
-        assert_eq!(actual.round, before.round);
+        assert_eq!(actual.collide_check, used);
+        assert_eq!(actual.battle_order_index, before.battle_order_index);
+        assert_eq!(actual.combat_round, before.combat_round);
         assert_eq!(state.ammunition, original.ammunition);
         assert_eq!(state.crate_items, original.crate_items);
-        assert_eq!(state.booty_items, original.booty_items);
+        assert_eq!(state.booty_list, original.booty_list);
         assert_eq!(
-            state.native_work.psi_memory,
-            original.native_work.psi_memory
+            state.globals.define_spells,
+            original.globals.define_spells
         );
     }
 }

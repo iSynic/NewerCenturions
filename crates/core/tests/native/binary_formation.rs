@@ -26,9 +26,9 @@ fn formation_matches_whole_warriors_and_tactical_map() {
         };
         for case in fixture.array("cases") {
             let mut warriors = support::warriors(&fixture["input"]);
-            let mut map = TacticalMap {
+            let mut map = CombatField {
                 tiles: fixture.words("map"),
-                shift: (-39, -15),
+                map_shift: (-39, -15),
                 edge_word: 0,
             };
             let actual = place_squad(
@@ -44,8 +44,8 @@ fn formation_matches_whole_warriors_and_tactical_map() {
             support::native_expect! {
                 records &warriors => &case["warriors"], format!("direction{}", case["direction"]);
                 words map.tiles => &case["tiles"], "formation map";
-                words actual.under_tiles => &case["under"], "formation under-tiles";
-                positions actual.positions => &case.bytes("positions"), "native positions";
+                words actual.char_under => &case["under"], "formation under-tiles";
+                positions actual.pos => &case.bytes("positions"), "native positions";
             };
         }
     }

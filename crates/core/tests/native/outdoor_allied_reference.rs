@@ -1,6 +1,6 @@
 //! Independent buttonchoice ally-copy and combat-zero spell suffix captures.
 use super::outdoor_deaths::{prepare, verify};
-use crate::combat::retained::InitiativeWork;
+use crate::combat::globals::BattleOrder;
 use crate::combat::runtime::TurnFlow;
 use crate::test_support::{bytes, fixture};
 use serde_json::{Value, json};
@@ -31,31 +31,31 @@ fn outdoor_allied_suffix_matches_native_copies_damage_and_terminal_returns() {
         let mut party_input = source.clone();
         party_input["before"]["mask"] = before["mask"].as_str().unwrap()[..24].into();
         let (mut state, content) = prepare(&party_input);
-        state.allies = bytes(&before["allies"]);
-        state.ally_count = scalar(&before["ally_count"]) as usize;
-        state.party_buffs = bytes(&before["buffs"]);
-        state.native_work.psi_memory = bytes(&before["psi_memory"]);
+        state.holdover = bytes(&before["allies"]);
+        state.held_over = scalar(&before["ally_count"]) as usize;
+        state.party_condition = bytes(&before["buffs"]);
+        state.globals.define_spells = bytes(&before["psi_memory"]);
         let mask = words(&before["mask"]);
-        state.native_work.party_mask.copy_from_slice(&mask[..6]);
-        state.native_work.spell_target_tail = mask[6..].to_vec();
-        state.native_work.npc_backing.active_count = scalar(&before["npc_count"]);
-        state.native_work.attack_packet = bytes(&before["packet"]);
-        state.native_work.attack_identity = words(&before["identity"]).try_into().unwrap();
-        state.native_work.attack_count = scalar(&before["attack_count"]);
-        state.native_work.ready = scalar(&before["ready"]);
-        state.native_work.initiative_work = InitiativeWork {
+        state.globals.party_track.copy_from_slice(&mask[..6]);
+        state.globals.track_tail = mask[6..].to_vec();
+        state.globals.monsters.num_mon = scalar(&before["npc_count"]);
+        state.globals.spell_info = bytes(&before["packet"]);
+        state.globals.cast_identity = words(&before["identity"]).try_into().unwrap();
+        state.globals.attack_count = scalar(&before["attack_count"]);
+        state.globals.in_spell = scalar(&before["ready"]);
+        state.globals.battle_order = BattleOrder {
             order: words(&before["order"]),
-            cursor: scalar(&before["cursor"]) as usize,
+            index: scalar(&before["cursor"]) as usize,
         };
-        let health = &mut state.native_work.health_context;
-        health.selected_warrior = scalar(&before["health_selected"]) as usize;
-        health.unavailable = scalar(&before["health_unavailable"]) as i8;
+        let health = &mut state.globals.health_context;
+        health.char_select_new = scalar(&before["health_selected"]) as usize;
+        health.kill_party = scalar(&before["health_unavailable"]) as i8;
         health.last_body = scalar(&before["health_last_body"]);
-        let identity = state.native_work.attack_identity;
+        let identity = state.globals.cast_identity;
         let id = (identity[0] + 1) * 1000 + (identity[1] + 1) * 100 + identity[2] + 1;
-        let count = state.native_work.attack_count;
+        let count = state.globals.attack_count;
         let packet = bytes(&source["packet_before"]);
-        let initial_menu = state.allies.clone();
+        let initial_menu = state.holdover.clone();
         let path = std::env::temp_dir().join(format!(
             "centurions-native-outdoor-allies-{}-{}.json",
             std::process::id(),
@@ -87,21 +87,21 @@ fn outdoor_allied_suffix_matches_native_copies_damage_and_terminal_returns() {
             // selection bytes remain in the capture; the ally menu stays owned.
             projection["comparison"]["excluded_record_owners"] = json!(["warriors", "direction"]);
             projection["comparison"]["excluded_work_owners"] = json!(["selected_warrior"]);
-            assert_eq!(state.allies, initial_menu);
+            assert_eq!(state.holdover, initial_menu);
         }
         verify(&state, &content, &outcome.events, &projection);
         for (name, actual) in [
-            ("allies", state.allies.clone()),
-            ("psi_memory", state.native_work.psi_memory.clone()),
-            ("buffs", state.party_buffs.clone()),
-            ("packet", state.native_work.attack_packet.clone()),
+            ("allies", state.holdover.clone()),
+            ("psi_memory", state.globals.define_spells.clone()),
+            ("buffs", state.party_condition.clone()),
+            ("packet", state.globals.spell_info.clone()),
             (
                 "mask",
                 state
-                    .native_work
-                    .party_mask
+                    .globals
+                    .party_track
                     .iter()
-                    .chain(&state.native_work.spell_target_tail)
+                    .chain(&state.globals.track_tail)
                     .flat_map(|value| value.to_be_bytes())
                     .collect(),
             ),
@@ -114,11 +114,11 @@ fn outdoor_allied_suffix_matches_native_copies_damage_and_terminal_returns() {
             );
         }
         assert_eq!(
-            state.ally_count as i16,
+            state.held_over as i16,
             scalar(&raw["memory"]["ally_count"]["hex"])
         );
         assert_eq!(
-            state.native_work.npc_backing.active_count,
+            state.globals.monsters.num_mon,
             scalar(&raw["memory"]["npc_count"]["hex"])
         );
         assert_eq!(

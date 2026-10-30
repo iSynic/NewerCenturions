@@ -3,12 +3,22 @@ use centurions_content::{Content, word};
 use centurions_core::Session;
 use macroquad::prelude::*;
 
+/// The note the player is reading and the labels the notes menu lists for this map.
+#[derive(Default)]
+pub struct Notes {
+    pub open: Option<Note>,
+    pub labels: Vec<String>,
+    pub unknown_labels: Vec<String>,
+}
+
+/// A note the player opened from the Maps and Notes menu, with its scroll.
 pub struct Note {
     pub record: Vec<u8>,
     pub text: String,
     pub scroll: f32,
 }
 impl Note {
+    /// Draws the note: its picture or map, and its text, scrolled.
     pub fn draw(&self, state: &Session, content: &Content, assets: &Assets) {
         draw_rectangle(0., 20., 640., 460., BLACK);
         let picture = word(&self.record, 66).unwrap_or(0);
@@ -49,12 +59,6 @@ impl Note {
                 }
             }
         }
-        assets.wrapped_color(
-            &self.text,
-            Rect::new(40., 405. - self.scroll, 560., 70.),
-            12,
-            14.,
-            YELLOW,
-        );
+        assets.dialog_text(&self.text, Rect::new(40., 405. - self.scroll, 560., 70.));
     }
 }

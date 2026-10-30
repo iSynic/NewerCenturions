@@ -8,10 +8,10 @@ use centurions_content::{
 /// Record-only compatibility callers omit the literal victory work.
 /// Session movement reads VictoryWork instead.
 pub(crate) fn hostiles_remain(combat: &Combat) -> bool {
-    combat.enemies.records.iter().any(|enemy| {
-        enemy.stamina().unwrap_or(0) > 0
-            && enemy.record().mechanical_state() != 255
-            && enemy.record().faction().unwrap_or(1) != 0
+    combat.roster.records.iter().any(|monster| {
+        monster.stamina().unwrap_or(0) > 0
+            && monster.record().mechanical_state() != 255
+            && monster.record().faction().unwrap_or(1) != 0
     })
 }
 
@@ -30,37 +30,37 @@ pub(crate) fn kill_body_with_processing(
     processing: Option<super::death_scripts::DeathProcessing>,
 ) -> Result<(), RuleError> {
     combat.pending_last_defeated = Some(body);
-    combat.neighbor_work.departure = 0;
+    combat.neighbors.departure = 0;
     let (position, under) = if (0..6).contains(&body) {
         let warrior = &mut warriors[body as usize];
         if warrior.record().faction()? != 0 {
-            combat.victory_work.add_defeated(1);
+            combat.kill_counts.add_kill_mon(1);
         }
-        if warrior.record().faction()? == 0 && warrior.record().automatic_mode()? < 1 {
-            combat.unavailable = combat.unavailable.wrapping_add(1);
+        if warrior.record().faction()? == 0 && warrior.record().computer_control()? < 1 {
+            combat.kill_party = combat.kill_party.wrapping_add(1);
         }
-        warrior.record_mut().set_active_flag(0);
+        warrior.record_mut().set_in_battle(0);
         let statistic = if warrior.record().stamina()? < -9 {
             Statistic::Deaths
         } else {
-            warrior.record_mut().set_bleeding_flag(1);
+            warrior.record_mut().set_bleeding(1);
             Statistic::Knockouts
         };
         CharacterStatisticsMut(&mut warrior.bytes).add(statistic, 1);
-        warrior.record_mut().set_defeated_marker(-1);
-        warrior.record_mut().set_automatic_mode(0);
+        warrior.record_mut().set_position(-1);
+        warrior.record_mut().set_computer_control(0);
         warrior.record_mut().clear_temporary_conditions()?;
         (
-            combat.squad.positions[body as usize],
-            combat.squad.under_tiles[body as usize],
+            combat.squad.pos[body as usize],
+            combat.squad.char_under[body as usize],
         )
     } else if body >= 10 {
         let cleanup = super::death_scripts::cleanup_enemy_before_story(combat, warriors, body)?;
         let direct = if cleanup.entry.is_some() {
             if let Some(processing) = processing {
-                processing.immediate(combat.ready)
+                processing.immediate(combat.in_spell)
             } else {
-                combat.direct_deaths && !combat.death_queue.processing
+                combat.direct_deaths && !combat.todo_queue.processing
             }
         } else {
             false
@@ -80,7 +80,7 @@ pub(crate) fn kill_body_with_processing(
                 }
                 combat.direct_death = Some((body, entry));
             } else {
-                combat.death_queue.enqueue(entry)?;
+                combat.todo_queue.enqueue(entry)?;
             }
         }
         if !direct || processing.is_none() {
@@ -91,11 +91,11 @@ pub(crate) fn kill_body_with_processing(
         return Err(RuleError::Invalid("invalid defeated body".into()));
     };
     let tile = centurions_content::mission::OpeningMission::index(
-        i32::from(position.0 + combat.map.shift.0 + 5),
-        i32::from(position.1 + combat.map.shift.1 + 5),
+        i32::from(position.0 + combat.field.map_shift.0 + 5),
+        i32::from(position.1 + combat.field.map_shift.1 + 5),
     )?;
-    combat.map.tiles[tile] = under;
-    for entry in combat.order.iter_mut().skip(1) {
+    combat.field.tiles[tile] = under;
+    for entry in combat.battle_order.iter_mut().skip(1) {
         if *entry == body {
             *entry = -1;
         }
@@ -105,13 +105,13 @@ pub(crate) fn kill_body_with_processing(
         combat.turn_origin = None;
     }
     for warrior in &mut *warriors {
-        if warrior.record().target_body()? == body {
-            warrior.record_mut().set_target_body(-1);
+        if warrior.record().target()? == body {
+            warrior.record_mut().set_target(-1);
         }
     }
-    for monster in &mut combat.enemies.records {
-        if monster.record().target_body()? == body {
-            monster.record_mut().set_target_body(-1);
+    for monster in &mut combat.roster.records {
+        if monster.record().target()? == body {
+            monster.record_mut().set_target(-1);
         }
     }
     finish_if_party_unavailable(combat, warriors);
@@ -121,12 +121,12 @@ pub(crate) fn kill_body_with_processing(
 pub(crate) fn finish_if_party_unavailable(combat: &mut Combat, warriors: &[Warrior]) {
     if !warriors.iter().any(|warrior| {
         let record = warrior.record();
-        record.defeated_marker().unwrap_or(-1) != -1
+        record.position().unwrap_or(-1) != -1
             && record.stamina().unwrap_or(0) > 0
             && record.faction().unwrap_or(1) == 0
-            && record.automatic_mode().unwrap_or(-1) >= 0
+            && record.computer_control().unwrap_or(-1) >= 0
     }) {
-        combat.victory_work.finish();
+        combat.kill_counts.finish();
     }
 }
 
@@ -151,10 +151,10 @@ pub fn can_see(
     let mut integer = start;
     for _ in 0..128 {
         let index = centurions_content::mission::OpeningMission::index(
-            i32::from(integer.0.wrapping_add(16) / 32 + combat.map.shift.0 + 5),
-            i32::from(integer.1.wrapping_add(16) / 32 + combat.map.shift.1 + 5),
+            i32::from(integer.0.wrapping_add(16) / 32 + combat.field.map_shift.0 + 5),
+            i32::from(integer.1.wrapping_add(16) / 32 + combat.field.map_shift.1 + 5),
         )?;
-        let tile = combat.map.tiles[index];
+        let tile = combat.field.tiles[index];
         if tile > 999 && mission.tile_word(tile - 1000, 12)? != 0 {
             return Ok(false);
         }
@@ -165,41 +165,41 @@ pub fn can_see(
     Ok(true)
 }
 
-pub fn destroy_enemy(c: &mut Combat, index: usize) -> Result<(), RuleError> {
+pub fn destroy_monster(c: &mut Combat, index: usize) -> Result<(), RuleError> {
     // destroymonster 0x12063c indexes the 100 NPC records 0x439d3c and positions
     // 0x446f0a; records past the battle roster are the retained NPC slots.
-    let (p, monster) = if index < c.enemies.records.len() {
+    let (p, monster) = if index < c.roster.records.len() {
         let p = *c
-            .enemies
-            .positions
+            .roster
+            .mon_pos
             .get(index)
             .ok_or_else(|| RuleError::Invalid("destroyed enemy position unavailable".into()))?;
-        (p, c.enemies.records[index].clone())
+        (p, c.roster.records[index].clone())
     } else {
         (c.story_position(index)?, c.story_record(index)?.clone())
     };
-    for record in &c.enemies.records {
+    for record in &c.roster.records {
         centurions_content::span(&record.bytes, 0, 288)?;
     }
     // destroymonster calls bodyfield for every supported footprint, including signed sizes.
-    let restored = super::footprint::restore(&c.map, &monster, p)?;
+    let restored = super::footprint::restore(&c.field, &monster, p)?;
     if monster.record().faction()? != 0 && monster.record().mechanical_state() != 255 {
-        c.victory_work.add_defeated(1);
+        c.kill_counts.add_kill_mon(1);
     }
-    let mut enemy = c.story_record_mut(index)?.record_mut();
-    enemy.set_stamina(0);
-    enemy.set_faction(0);
-    enemy.set_movement_points(0);
-    enemy.clear_conditions();
-    c.map = restored;
-    for entry in c.order.iter_mut().skip(1) {
+    let mut monster = c.story_record_mut(index)?.record_mut();
+    monster.set_stamina(0);
+    monster.set_faction(0);
+    monster.set_movement(0);
+    monster.clear_conditions();
+    c.field = restored;
+    for entry in c.battle_order.iter_mut().skip(1) {
         if *entry == index as i16 + 10 {
             *entry = -1;
         }
     }
-    for m in &mut c.enemies.records {
-        if m.record().target_body()? == index as i16 {
-            m.record_mut().set_target_body(-1);
+    for m in &mut c.roster.records {
+        if m.record().target()? == index as i16 {
+            m.record_mut().set_target(-1);
         }
     }
     Ok(())

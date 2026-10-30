@@ -19,9 +19,9 @@ fn enemy_setup_matches_whole_records_positions_map_and_randomness() {
         };
         let battle = BattleRecord::read(&fixture.bytes("battle"), 0).unwrap();
         for case in fixture.array("cases") {
-            let mut map = TacticalMap {
+            let mut map = CombatField {
                 tiles: fixture.words("map"),
-                shift: (-39, -15),
+                map_shift: (-39, -15),
                 edge_word: 0,
             };
             let mut random = RandomState::new(case.n("seed"));
@@ -42,7 +42,7 @@ fn enemy_setup_matches_whole_records_positions_map_and_randomness() {
                 records &result.records => &case["records"], "enemy setup records";
                 words map.tiles => &case["tiles"], "enemy setup map";
                 rng random => (&case["after_seed"], &case["draws"]), "enemy setup seed";
-                positions result.positions => &case.bytes("positions"), "native positions";
+                positions result.mon_pos => &case.bytes("positions"), "native positions";
             };
         }
     }

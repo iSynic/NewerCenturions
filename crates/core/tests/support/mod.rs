@@ -184,20 +184,20 @@ impl NativeCase for Value {
 }
 
 pub fn battle() -> centurions_core::combat::Combat {
-    use centurions_core::combat::{Combat, EnemySetup, SquadPlacement, TacticalMap};
+    use centurions_core::combat::{Combat, CombatField, EnemySetup, SquadPlacement};
     Combat::from_records(
-        TacticalMap {
+        CombatField {
             tiles: vec![0; 8100],
-            shift: (0, 0),
+            map_shift: (0, 0),
             edge_word: 0,
         },
         SquadPlacement {
-            positions: vec![(-1, -1); 6],
-            under_tiles: vec![1155; 6],
+            pos: vec![(-1, -1); 6],
+            char_under: vec![1155; 6],
         },
         EnemySetup {
             records: vec![],
-            positions: vec![],
+            mon_pos: vec![],
         },
     )
 }
@@ -238,7 +238,7 @@ pub fn inventory<T: BinaryInput + ?Sized>(value: &T) -> Vec<InventoryRecord> {
 
 pub fn terrain_mission(fixture: &Value) -> centurions_content::mission::OpeningMission {
     centurions_content::mission::OpeningMission {
-        tile_properties: fixture.bytes("properties")[64..12064].to_vec(),
+        map_stats: fixture.bytes("properties")[64..12064].to_vec(),
         ..mission()
     }
 }
@@ -251,7 +251,7 @@ pub fn mission() -> centurions_content::mission::OpeningMission {
         floor: vec![],
         objects: vec![],
         events: vec![],
-        tile_properties: vec![],
+        map_stats: vec![],
         terrain: 2,
         default_tile: 155,
         minutes_per_tick: 5,
@@ -325,7 +325,7 @@ pub fn refuse_command(
     state: &Session,
     content: &Content,
     command: Command,
-    feedback: Vec<centurions_core::feedback::NativeFeedback>,
+    feedback: Vec<centurions_core::feedback::GameFeedback>,
 ) {
     let mut candidate = state.clone();
     let events = match apply(command, &mut candidate, content) {

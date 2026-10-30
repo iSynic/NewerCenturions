@@ -1,5 +1,5 @@
 use crate::combat::runtime;
-use crate::feedback::NativeFeedback;
+use crate::feedback::GameFeedback;
 use crate::{Event, Phase, Presentation, RuleError, ScriptState, Session};
 use centurions_content::mission::OpeningMission;
 use centurions_content::{
@@ -7,7 +7,10 @@ use centurions_content::{
     records::{CharacterStatisticsMut, Statistic},
 };
 
-/// combatchoice11bdce..11bfb8 removes an escaped warrior without death cleanup.
+/// A warrior who leaves by the map edge is gone from the battle, without death
+/// cleanup.
+///
+/// Original: combatchoice
 pub(crate) fn leave_edge(
     state: &mut Session,
     content: &Content,
@@ -16,28 +19,31 @@ pub(crate) fn leave_edge(
     leave(state, content, member, true)
 }
 
+/// Removes a warrior from the battle: the cell is cleared, the warrior leaves the fight and takes a
+/// score penalty of 200. If another warrior on the party's side is still in the battle the turn
+/// ends; with none left the party has run away and the battle ends without loot.
 pub(crate) fn leave(
     state: &mut Session,
     content: &Content,
     member: usize,
     edge_message: bool,
 ) -> Result<Vec<Event>, RuleError> {
-    let c = state.combat.as_mut().ok_or("retreat combat missing")?;
-    let point = c.squad.positions[member];
+    let combat = state.combat.as_mut().ok_or("retreat combat missing")?;
+    let point = combat.squad.pos[member];
     let cell = OpeningMission::index(
-        i32::from(point.0 + c.map.shift.0 + 5),
-        i32::from(point.1 + c.map.shift.1 + 5),
+        i32::from(point.0 + combat.field.map_shift.0 + 5),
+        i32::from(point.1 + combat.field.map_shift.1 + 5),
     )?;
-    c.map.tiles[cell] = c.squad.under_tiles[member];
-    c.squad.positions[member] = (-1, -1);
-    c.order[c.cursor] = -1;
+    combat.field.tiles[cell] = combat.squad.char_under[member];
+    combat.squad.pos[member] = (-1, -1);
+    combat.battle_order[combat.battle_order_index] = -1;
     let warrior = &mut state.warriors[member];
-    warrior.record_mut().set_defeated_marker(-1);
-    warrior.record_mut().set_active_flag(0);
+    warrior.record_mut().set_position(-1);
+    warrior.record_mut().set_in_battle(0);
     CharacterStatisticsMut(&mut warrior.bytes).add(Statistic::ScorePenalty, 200);
     let mut events = vec![];
     if edge_message {
-        events.push(Event::Feedback(NativeFeedback::Flash {
+        events.push(Event::Feedback(GameFeedback::Flash {
             address: 0x403c3a,
             x: 100,
             y: 100,
@@ -51,17 +57,19 @@ pub(crate) fn leave(
     if state
         .warriors
         .iter()
-        .any(|w| w.record().active_flag() != 0 && w.record().faction().is_ok_and(|f| f == 0))
+        .any(|w| w.record().in_battle() != 0 && w.record().faction().is_ok_and(|f| f == 0))
     {
         events.extend(runtime::end_turn(state, content)?);
     } else {
-        state.native_work.early_booty = 1;
+        state.globals.coward = 1;
         events.extend(finish(state, content)?);
     }
     Ok(events)
 }
 
-/// Retreated booty takes its early return before loot, cash or promotion.
+/// After a retreat booty returns before loot, cash or promotion.
+///
+/// Original: booty
 pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     if state.selected_battle_treasure.is_some() {
         return runtime::retreat_selected_rewards(state, content);
@@ -79,25 +87,25 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
                     silent: true,
                     warnings: false,
                 },
-                &state.native_work.ammunition_work,
+                &state.globals.loaded_items,
                 &mut state.random,
-                Some(&state.native_work.inventory_record),
+                Some(&state.globals.inventory_record),
             )?;
             events.extend(crate::ammunition::commit_result(state, member, result)?);
         }
     }
     for warrior in &mut state.warriors {
-        crate::story_inventory::normalize_warrior_after_battle(warrior)?;
-        warrior.record_mut().set_active_flag(1);
+        crate::story::inventory::normalize_warrior_after_battle(warrior)?;
+        warrior.record_mut().set_in_battle(1);
     }
     state.clear_tactical_fields();
-    state.retain_npcs();
+    state.store_monsters();
     state.store_spell_fatigue();
     let combat = state.combat.take().ok_or("retreat combat missing")?;
-    state.native_work.ready = combat.ready;
-    state.native_work.attack_packet = combat.attack_packet;
-    state.native_work.attack_identity = combat.attack_identity;
-    state.native_work.weapon_work = combat.weapon_work;
+    state.globals.in_spell = combat.in_spell;
+    state.globals.spell_info = combat.spell_info;
+    state.globals.cast_identity = combat.cast_identity;
+    state.globals.weapon_traits = combat.weapon_traits;
     state.reload_battle_land()?;
     if !state
         .combat_story
@@ -112,7 +120,7 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
     state.ordinary_battle_rewards = None;
     state.selected_battle_treasure = None;
     state.battle_after_message = 0;
-    for item in &mut state.booty_items {
+    for item in &mut state.booty_list {
         item.0.fill(0);
     }
     let position = state.exploration.as_mut().ok_or("retreat map missing")?;
@@ -125,18 +133,18 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
             .ok_or("NPC retreat continuation missing")?;
         script.cursor = start.restore(&mut script.record, false)?.unwrap() as u8;
         let outcome = start.return_kind(false, true);
-        crate::story_npc_battle::finish(
+        crate::story::npc_battle::finish(
             outcome,
             &mut state.warriors,
             [position.last_move[0] as u8, position.last_move[1] as u8],
         )?;
         match outcome {
-            crate::story_npc_battle::NpcBattleReturn::EscapeScript(id) => replacement = Some(id),
-            crate::story_npc_battle::NpcBattleReturn::EscapeMove => {
+            crate::story::npc_battle::NpcBattleReturn::EscapeScript(id) => replacement = Some(id),
+            crate::story::npc_battle::NpcBattleReturn::EscapeMove => {
                 events.extend([
-                    Event::Feedback(NativeFeedback::Warning { index: 118 }),
+                    Event::Feedback(GameFeedback::Warning { index: 118 }),
                     Event::Sound { resource_id: 26260 },
-                    Event::Feedback(NativeFeedback::Warning { index: 124 }),
+                    Event::Feedback(GameFeedback::Warning { index: 124 }),
                 ]);
                 position.x -= i32::from(position.last_move[0]);
                 position.y -= i32::from(position.last_move[1]);

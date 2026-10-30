@@ -25,31 +25,29 @@ pub fn helper_frame(fixture: &Value, snapshot: &Value, member: usize) -> Session
     captured_party(&mut state, fixture, snapshot);
     let reserves = read("reserves");
     state.ammunition = crate::support::longs(&reserves[..800]);
-    state.native_work.loot_quality = Some(read("loot_quality"));
+    state.globals.loot_quality = Some(read("loot_quality"));
     assert_eq!(
         &reserves[800..],
-        &state.native_work.loot_quality.as_ref().unwrap()[..4]
+        &state.globals.loot_quality.as_ref().unwrap()[..4]
     );
     state.random = crate::native_common::random_state(snapshot);
-    state.selected_warrior = member;
-    state.native_work.inventory_record =
-        InventoryRecord(read("selected_record").try_into().unwrap());
+    state.char_select_new = member;
+    state.globals.inventory_record = InventoryRecord(read("selected_record").try_into().unwrap());
     state.flags = read("flags");
-    state.party_buffs = read("party_buffs");
-    state.native_work.psi_memory = read("memory");
+    state.party_condition = read("party_buffs");
+    state.globals.define_spells = read("memory");
     state.crate_items = inventory(&read, "crate");
-    state.booty_items = inventory(&read, "loot");
-    state.native_work.attack_packet = read("packet");
-    state.native_work.attack_identity =
-        crate::support::words(&read("identity")).try_into().unwrap();
-    state.native_work.attack_count = snapshot.n("count");
+    state.booty_list = inventory(&read, "loot");
+    state.globals.spell_info = read("packet");
+    state.globals.cast_identity = crate::support::words(&read("identity")).try_into().unwrap();
+    state.globals.attack_count = snapshot.n("count");
     state
-        .native_work
-        .party_mask
+        .globals
+        .party_track
         .copy_from_slice(&crate::support::words(&read("mask"))[..6]);
-    state.native_work.health_context = HealthContext {
-        unavailable: 0,
-        selected_warrior: member,
+    state.globals.health_context = HealthContext {
+        kill_party: 0,
+        char_select_new: member,
         effect: snapshot.n::<i8>("health_effect"),
         last_body: snapshot.n("health_last_body"),
         marks_affected: snapshot.n::<i16>("heal_marks_affected") != 0,
@@ -58,51 +56,51 @@ pub fn helper_frame(fixture: &Value, snapshot: &Value, member: usize) -> Session
             .unwrap(),
     };
     let combat = state.combat.as_mut().unwrap();
-    combat.map.tiles = crate::support::words(&read("map"));
-    combat.map.shift = (
+    combat.field.tiles = crate::support::words(&read("map"));
+    combat.field.map_shift = (
         snapshot.n::<i16>("shift_x") - 5,
         snapshot.n::<i16>("shift_y") - 5,
     );
-    combat.squad.positions = crate::support::positions(&read("party_positions"));
-    combat.order = crate::support::words(&read("order"));
-    combat.cursor = snapshot.n("cursor");
-    combat.round = snapshot.n::<i16>("round_script_counter") - 1;
-    combat.round_scripts = RoundScripts::default();
-    combat.death_queue = DeathQueue::default();
-    combat.spell_fields = read("fields");
-    combat.field_used = read("field_used");
-    combat.attack_packet = state.native_work.attack_packet.clone();
-    combat.attack_identity = state.native_work.attack_identity;
-    combat.unavailable = 0;
+    combat.squad.pos = crate::support::positions(&read("party_positions"));
+    combat.battle_order = crate::support::words(&read("order"));
+    combat.battle_order_index = snapshot.n("cursor");
+    combat.combat_round = snapshot.n::<i16>("round_script_counter") - 1;
+    combat.round_macros = RoundMacros::default();
+    combat.todo_queue = TodoQueue::default();
+    combat.spell_queue = read("fields");
+    combat.collide_check = read("field_used");
+    combat.spell_info = state.globals.spell_info.clone();
+    combat.cast_identity = state.globals.cast_identity;
+    combat.kill_party = 0;
     state
 }
 
 pub fn geometry(combat: &mut Combat, read: &dyn Fn(&str) -> Vec<u8>, delta: (i16, i16)) {
     for (positions, key) in [
-        (&mut combat.squad.positions, "party_positions"),
-        (&mut combat.enemies.positions, "monster_positions"),
+        (&mut combat.squad.pos, "party_positions"),
+        (&mut combat.roster.mon_pos, "monster_positions"),
     ] {
         *positions = crate::support::positions(&read(key))
             .into_iter()
             .map(|(x, y)| (x.wrapping_add(delta.0), y.wrapping_add(delta.1)))
             .collect();
     }
-    combat.squad.under_tiles = crate::support::words(&read("under_tiles"));
-    combat.map.tiles = crate::support::words(&read("map"));
-    combat.order = crate::support::words(&read("order"));
+    combat.squad.char_under = crate::support::words(&read("under_tiles"));
+    combat.field.tiles = crate::support::words(&read("map"));
+    combat.battle_order = crate::support::words(&read("order"));
 }
 
 pub fn spell_work(combat: &mut Combat, read: &dyn Fn(&str) -> Vec<u8>) {
-    combat.spell_fields = read("fields");
-    combat.field_used = read("used");
-    combat.attack_packet = read("packet");
-    combat.attack_identity = crate::support::words(&read("identity")).try_into().unwrap();
+    combat.spell_queue = read("fields");
+    combat.collide_check = read("used");
+    combat.spell_info = read("packet");
+    combat.cast_identity = crate::support::words(&read("identity")).try_into().unwrap();
 }
 
 pub fn records(combat: &mut Combat, read: &dyn Fn(&str) -> Vec<u8>) {
     let native = crate::support::monsters(&read("records"));
-    assert_eq!(combat.enemies.records.len(), native.len());
-    combat.enemies.records = native;
+    assert_eq!(combat.roster.records.len(), native.len());
+    combat.roster.records = native;
 }
 
 pub fn inventory(read: &dyn Fn(&str) -> Vec<u8>, key: &str) -> Vec<InventoryRecord> {
@@ -119,27 +117,27 @@ pub fn medical_input(state: &mut Session, snapshot: &Value) {
     state.warriors = crate::support::warriors(&snapshot["party"]);
     state.random = crate::native_common::random_state(snapshot);
     let combat = state.combat.as_mut().unwrap();
-    combat.attack_packet = snapshot.bytes("packet");
-    combat.attack_identity = snapshot.words("identity")[..3].try_into().unwrap();
-    combat.cursor = snapshot.n::<usize>("cursor");
-    combat.round = snapshot.n::<i16>("round");
-    combat.order = snapshot.words("order");
-    combat.map.tiles = snapshot.words("map");
-    combat.squad.positions = crate::support::positions(&snapshot.bytes("party_positions"));
-    combat.squad.under_tiles = snapshot.words("under_tiles");
-    combat.unavailable = snapshot.n::<i8>("unavailable");
-    combat.spell_fields = snapshot.bytes("fields");
-    combat.field_used = snapshot.bytes("used");
+    combat.spell_info = snapshot.bytes("packet");
+    combat.cast_identity = snapshot.words("identity")[..3].try_into().unwrap();
+    combat.battle_order_index = snapshot.n::<usize>("cursor");
+    combat.combat_round = snapshot.n::<i16>("round");
+    combat.battle_order = snapshot.words("order");
+    combat.field.tiles = snapshot.words("map");
+    combat.squad.pos = crate::support::positions(&snapshot.bytes("party_positions"));
+    combat.squad.char_under = snapshot.words("under_tiles");
+    combat.kill_party = snapshot.n::<i8>("unavailable");
+    combat.spell_queue = snapshot.bytes("fields");
+    combat.collide_check = snapshot.bytes("used");
     combat
-        .weapon_work
+        .weapon_traits
         .load_pair(&snapshot.bytes("weapon_work"), &snapshot.bytes("ammo_work"))
         .unwrap();
 }
 
-pub fn weapon_work(read: &dyn Fn(&str) -> Vec<u8>) -> WeaponWork {
+pub fn weapon_traits(read: &dyn Fn(&str) -> Vec<u8>) -> WeaponTraits {
     let weapon = read("weapon_work");
     let ammunition = read("ammo_work");
-    WeaponWork {
+    WeaponTraits {
         natural_attack_index: 0,
         sound: word(&weapon, 14).unwrap(),
         weapon_armor_filter: word(&weapon, 136).unwrap(),
@@ -154,8 +152,8 @@ pub fn session(
     selected: usize,
 ) {
     party_work(state, snapshot, read);
-    state.selected_warrior = selected;
-    state.native_work.loaded_item_field32 = snapshot.n::<i16>("item_context");
+    state.char_select_new = selected;
+    state.globals.loaded_item_field32 = snapshot.n::<i16>("item_context");
     state.bandage_ready = snapshot.n::<i16>("aid_gate");
     state.party_currency = snapshot.n::<i32>("currency");
     state.flags = read("flags");
@@ -165,12 +163,12 @@ pub fn session(
 pub fn actor_work(state: &mut Session, snapshot: &Value) {
     let combat = state.combat.as_mut().unwrap();
     if let Some(selected) = snapshot.get("current_npc_index").and_then(Value::as_u64) {
-        combat.selected_enemy = selected as usize;
+        combat.monster_up = selected as usize;
     } else if let Some(body) = combat.active_body().filter(|body| *body >= 10) {
-        combat.selected_enemy = (body - 10) as usize;
+        combat.monster_up = (body - 10) as usize;
     }
-    state.native_work.selected_enemy = combat.selected_enemy;
-    state.native_work.script_enemy = combat.script_enemy;
+    state.globals.monster_up = combat.monster_up;
+    state.globals.macro_monster = combat.macro_monster;
 }
 
 pub fn party_work(state: &mut Session, snapshot: &Value, read: &dyn Fn(&str) -> Vec<u8>) {
@@ -180,27 +178,26 @@ pub fn party_work(state: &mut Session, snapshot: &Value, read: &dyn Fn(&str) -> 
         warrior.bytes = native.bytes;
     }
     state.random = crate::native_common::random_state(snapshot);
-    state.native_work.attack_count = snapshot.n::<i16>("count");
-    state.native_work.attack_packet = read("packet");
-    state.native_work.attack_identity =
-        crate::support::words(&read("identity")).try_into().unwrap();
-    state.native_work.psi_memory = read("memory");
-    state.party_buffs = read("party_buffs");
+    state.globals.attack_count = snapshot.n::<i16>("count");
+    state.globals.spell_info = read("packet");
+    state.globals.cast_identity = crate::support::words(&read("identity")).try_into().unwrap();
+    state.globals.define_spells = read("memory");
+    state.party_condition = read("party_buffs");
     state
-        .native_work
-        .party_mask
+        .globals
+        .party_track
         .copy_from_slice(&crate::support::words(&read("mask"))[..6]);
 }
 
 pub fn carried_items(state: &mut Session, read: &dyn Fn(&str) -> Vec<u8>) {
     state.crate_items = inventory(read, "crate");
-    state.booty_items = inventory(read, "loot");
+    state.booty_list = inventory(read, "loot");
 }
 
 pub fn health(state: &mut Session, snapshot: &Value, read: &dyn Fn(&str) -> Vec<u8>) {
-    let health = &mut state.native_work.health_context;
-    health.selected_warrior = state.selected_warrior;
-    health.unavailable = state.combat.as_ref().unwrap().unavailable;
+    let health = &mut state.globals.health_context;
+    health.char_select_new = state.char_select_new;
+    health.kill_party = state.combat.as_ref().unwrap().kill_party;
     health.effect = snapshot.n::<i8>("health_effect");
     health.last_body = snapshot.n::<i16>("health_last_body");
     health.marks_affected = snapshot.n::<i16>("heal_marks_affected") != 0;
@@ -210,7 +207,10 @@ pub fn health(state: &mut Session, snapshot: &Value, read: &dyn Fn(&str) -> Vec<
 }
 
 pub fn earned_projection(state: &mut Session, snapshot: &Value, baseline: &Value) {
-    let before = state.combat.as_ref().map(|c| (c.cursor, c.round));
+    let before = state
+        .combat
+        .as_ref()
+        .map(|c| (c.battle_order_index, c.combat_round));
     let read = |key: &str| snapshot.bytes(key);
     session(
         state,
@@ -221,19 +221,24 @@ pub fn earned_projection(state: &mut Session, snapshot: &Value, baseline: &Value
     let combat = state.combat.as_mut().unwrap();
     records(combat, &read);
     geometry(combat, &read, viewport_delta(snapshot, baseline));
-    combat.cursor = snapshot.n::<usize>("cursor");
-    combat.round += (snapshot.n::<i64>("round") - baseline.n::<i64>("round")) as i16;
-    combat.round_scripts.counter = snapshot.n::<i8>("round_script_counter");
-    combat.round_scripts.slots = snapshot.words("round_slots").try_into().unwrap();
+    combat.battle_order_index = snapshot.n::<usize>("cursor");
+    combat.combat_round += (snapshot.n::<i64>("round") - baseline.n::<i64>("round")) as i16;
+    combat.round_macros.counter = snapshot.n::<i8>("round_script_counter");
+    combat.round_macros.slots = snapshot.words("round_slots").try_into().unwrap();
     spell_work(combat, &read);
-    combat.unavailable = snapshot.n::<i8>("unavailable");
-    combat.weapon_work = weapon_work(&read);
-    state.native_work.attack_packet = combat.attack_packet.clone();
-    state.native_work.attack_identity = combat.attack_identity;
-    state.native_work.weapon_work = combat.weapon_work;
+    combat.kill_party = snapshot.n::<i8>("unavailable");
+    combat.weapon_traits = weapon_traits(&read);
+    state.globals.spell_info = combat.spell_info.clone();
+    state.globals.cast_identity = combat.cast_identity;
+    state.globals.weapon_traits = combat.weapon_traits;
     health(state, snapshot, &read);
     turn_origin(state.combat.as_mut().unwrap(), before.unwrap());
-    if before != state.combat.as_ref().map(|c| (c.cursor, c.round)) {
+    if before
+        != state
+            .combat
+            .as_ref()
+            .map(|c| (c.battle_order_index, c.combat_round))
+    {
         actor_work(state, snapshot);
     }
 }
@@ -263,25 +268,22 @@ pub fn shifted_positions(
 pub fn npc_projection(state: &mut Session, f: &Value, snapshot: &Value, baseline: &Value) {
     let before = {
         let c = state.combat.as_ref().unwrap();
-        (c.cursor, c.round)
+        (c.battle_order_index, c.combat_round)
     };
     let read = |key: &str| crate::support::buffer(f, &snapshot[key]);
     let delta = viewport_delta(snapshot, baseline);
     party_work(state, snapshot, &read);
     state.flags = crate::support::buffer(f, &snapshot["flags"]);
-    state.allies = crate::support::buffer(f, &snapshot["references"]);
+    state.holdover = crate::support::buffer(f, &snapshot["references"]);
     carried_items(state, &read);
     let reserves = crate::support::buffer(f, &snapshot["reserves"]);
     state.ammunition = crate::support::longs(&reserves[..800]);
-    state.native_work.ammunition_work.item =
-        Some(crate::support::buffer(f, &snapshot["item_work"]));
-    state.native_work.ammunition_work.weapon =
-        Some(crate::support::buffer(f, &snapshot["weapon_work"]));
-    state.native_work.ammunition_work.ammo =
-        Some(crate::support::buffer(f, &snapshot["ammo_work"]));
-    state.native_work.loaded_item_field32 =
-        word(state.native_work.ammunition_work.item.as_ref().unwrap(), 32).unwrap();
-    state.selected_warrior = snapshot.n::<usize>("active_member");
+    state.globals.loaded_items.item = Some(crate::support::buffer(f, &snapshot["item_work"]));
+    state.globals.loaded_items.weapon = Some(crate::support::buffer(f, &snapshot["weapon_work"]));
+    state.globals.loaded_items.ammo = Some(crate::support::buffer(f, &snapshot["ammo_work"]));
+    state.globals.loaded_item_field32 =
+        word(state.globals.loaded_items.item.as_ref().unwrap(), 32).unwrap();
+    state.char_select_new = snapshot.n::<usize>("active_member");
     state.bandage_ready = snapshot.n::<i16>("aid_gate");
     state.enemy_spell_disabled = snapshot.n::<u8>("enemy_spell_disabled");
     let count = snapshot.n::<usize>("body_count");
@@ -294,23 +296,23 @@ pub fn npc_projection(state: &mut Session, f: &Value, snapshot: &Value, baseline
     let positions = shifted_positions(&read, "npc_positions", delta);
     assert!(positions[count..].iter().all(|point| *point == (0, 0)));
     let combat = state.combat.as_mut().unwrap();
-    combat.enemies.records = crate::support::monsters(&all_npcs[..count * MONSTER_BYTES]);
-    combat.enemies.positions = positions[..count].to_vec();
-    combat.squad.positions = shifted_positions(&read, "party_positions", delta);
-    combat.map.tiles = crate::native_common::buffer_words(f, &snapshot["map"]);
-    combat.order = crate::native_common::buffer_words(f, &snapshot["order"]);
-    combat.cursor = snapshot.n::<usize>("cursor");
+    combat.roster.records = crate::support::monsters(&all_npcs[..count * MONSTER_BYTES]);
+    combat.roster.mon_pos = positions[..count].to_vec();
+    combat.squad.pos = shifted_positions(&read, "party_positions", delta);
+    combat.field.tiles = crate::native_common::buffer_words(f, &snapshot["map"]);
+    combat.battle_order = crate::native_common::buffer_words(f, &snapshot["order"]);
+    combat.battle_order_index = snapshot.n::<usize>("cursor");
     turn_origin(combat, before);
-    combat.spell_fields = crate::support::buffer(f, &snapshot["fields"]);
-    combat.field_used = crate::support::buffer(f, &snapshot["field_used"]);
-    combat.attack_packet = crate::support::buffer(f, &snapshot["packet"]);
-    combat.attack_identity = crate::native_common::buffer_words(f, &snapshot["identity"])
+    combat.spell_queue = crate::support::buffer(f, &snapshot["fields"]);
+    combat.collide_check = crate::support::buffer(f, &snapshot["field_used"]);
+    combat.spell_info = crate::support::buffer(f, &snapshot["packet"]);
+    combat.cast_identity = crate::native_common::buffer_words(f, &snapshot["identity"])
         .try_into()
         .unwrap();
-    state.native_work.attack_packet = combat.attack_packet.clone();
-    state.native_work.attack_identity = combat.attack_identity;
-    let health = &mut state.native_work.health_context;
-    health.selected_warrior = state.selected_warrior;
+    state.globals.spell_info = combat.spell_info.clone();
+    state.globals.cast_identity = combat.cast_identity;
+    let health = &mut state.globals.health_context;
+    health.char_select_new = state.char_select_new;
     health.effect = snapshot.n::<i8>("health_effect");
     health.last_body = snapshot.n::<i16>("health_last_body");
     health.marks_affected = snapshot.n::<i64>("heal_marks_affected") != 0;
@@ -318,18 +320,18 @@ pub fn npc_projection(state: &mut Session, f: &Value, snapshot: &Value, baseline
 
 // Source getup1265c2..1265e0 stores the selected body's native turn-start coordinates.
 pub fn turn_origin(combat: &mut Combat, before: (usize, i16)) {
-    if before != (combat.cursor, combat.round) {
+    if before != (combat.battle_order_index, combat.combat_round) {
         combat.turn_origin = combat
             .active_body()
             .filter(|body| *body < 6)
-            .map(|body| combat.squad.positions[body as usize]);
+            .map(|body| combat.squad.pos[body as usize]);
     }
 }
 
 // Source-derived undo metadata reconstructed from frozen prefix events, not new game output.
 pub fn recorded_turn_origin(receipt: &Value, combat: &Combat) -> Option<(i16, i16)> {
     let body = combat.active_body().filter(|body| *body < 6)?;
-    let mut origin = combat.squad.positions[body as usize];
+    let mut origin = combat.squad.pos[body as usize];
     for (command, events) in receipt
         .array("commands")
         .iter()

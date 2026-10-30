@@ -60,8 +60,8 @@ fn authored_credit_chest_awards_once_across_saved_script_return() {
     assert_eq!(state.party_currency, currency.wrapping_add(500));
     let mut resumed = support::checkpoint(&state, &content, "credit-chest-after");
     for candidate in [&mut state, &mut resumed] {
-        for slot in 0..candidate.booty_items.len() {
-            if candidate.booty_items[slot].id() != 0 {
+        for slot in 0..candidate.booty_list.len() {
+            if candidate.booty_list[slot].id() != 0 {
                 apply(Command::StoreLoot { slot }, candidate, &content).unwrap();
             }
         }

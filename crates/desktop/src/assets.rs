@@ -2,6 +2,8 @@ use centurions_content::{Content, ContentError, graphics, read_resource, ui};
 use macroquad::prelude::*;
 use std::{collections::HashMap, path::Path};
 
+/// The PICT ids the game draws from the application's own resources: the
+/// screens, dialog backgrounds, buttons and combat panels.
 const APPLICATION_PICTURES: &[i16] = &[
     1, 2, 4, 6, 7, 19, 128, 130, 131, 132, 142, 149, 151, 154, 158, 159, 160, 162, 165, 168, 173,
     179, 180, 181, 182, 183, 187, 195, 203, 204, 214, 215, 216, 221, 222, 233, 234, 235, 15, 16,
@@ -10,9 +12,365 @@ const APPLICATION_PICTURES: &[i16] = &[
     231, 401,
 ];
 
+/// Dialog windows whose 'DLOG' bounds and 'DITL' items are loaded from the
+/// Cargo Pod; 'DITL' 145 is loaded with them but has no 'DLOG' size.
+const DIALOG_IDS: &[i16] = &[
+    128, 131, 132, 133, 136, 137, 144, 147, 148, 149, 153, 157, 158, 159, 160, 161, 166, 167, 169,
+    177, 190,
+];
+
+/// 'DITL' 145 holds the squad text and has no matching 'DLOG' bounds.
+const SQUAD_DIALOG_ITEMS: i16 = 145;
+
+/// Main-window 'CNTL' resources other than the 300..=309 and 190..=195 ranges.
+const MAIN_CONTROL_IDS: [i16; 7] = [142, 154, 155, 166, 167, 168, 169];
+
+/// Every main-window 'CNTL' the desktop places.
+fn main_control_ids() -> impl Iterator<Item = i16> {
+    (300..=309).chain(190..=195).chain(MAIN_CONTROL_IDS)
+}
+
+/// The Cargo Pod's reference strings and dialog resources, loaded before
+/// anything else so dialog pictures are known when pictures are decoded.
+struct Dialogs {
+    reference_strings: HashMap<i16, Vec<String>>,
+    items: HashMap<i16, Vec<ui::DialogItem>>,
+    sizes: HashMap<i16, Vec2>,
+    pictures: std::collections::HashSet<i16>,
+}
+
+/// The executable's 'vers' 1 short version string.
+fn load_executable_version(content: &Content, extracted: &Path) -> Result<String, ContentError> {
+    let version = content
+        .resources
+        .iter()
+        .find(|resource| {
+            resource.original.ends_with("/New Centurions")
+                && resource.r#type == "vers"
+                && resource.id == 1
+        })
+        .ok_or_else(|| ContentError::Invalid("executable version resource missing".into()))?;
+    let version_bytes = read_resource(extracted, version)?;
+    ui::pascal_text(
+        version_bytes
+            .get(6..)
+            .ok_or_else(|| ContentError::Invalid("truncated executable version resource".into()))?,
+    )
+}
+
+/// Loads the dialogs' DLOG sizes and DITL items, the pictures they draw, and the
+/// reference strings (STR# 128, 134, 137, 138 and 1201) from the Cargo Pod.
+fn load_dialogs(content: &Content, extracted: &Path) -> Result<Dialogs, ContentError> {
+    let mut dialogs = Dialogs {
+        reference_strings: HashMap::new(),
+        items: HashMap::new(),
+        sizes: HashMap::new(),
+        pictures: std::collections::HashSet::new(),
+    };
+    for resource in &content.resources {
+        if resource.original.ends_with("/Cargo Pod")
+            && resource.r#type == "STR#"
+            && matches!(resource.id, 128 | 134 | 137 | 138 | 1201)
+        {
+            dialogs.reference_strings.insert(
+                resource.id,
+                ui::string_list(&read_resource(extracted, resource)?)?,
+            );
+        }
+        if resource.original.ends_with("/Cargo Pod")
+            && resource.r#type == "DITL"
+            && (DIALOG_IDS.contains(&resource.id) || resource.id == SQUAD_DIALOG_ITEMS)
+        {
+            let items = ui::dialog_items(&read_resource(extracted, resource)?)?;
+            for item in &items {
+                if item.kind & 0x7f == 64 && item.data.len() == 2 {
+                    let id = i16::from_be_bytes(item.data[..2].try_into().unwrap());
+                    if id > 0 {
+                        dialogs.pictures.insert(id);
+                    }
+                }
+            }
+            dialogs.items.insert(resource.id, items);
+        }
+        if resource.original.ends_with("/Cargo Pod")
+            && resource.r#type == "DLOG"
+            && DIALOG_IDS.contains(&resource.id)
+        {
+            let bytes = read_resource(extracted, resource)?;
+            dialogs.sizes.insert(
+                resource.id,
+                vec2(
+                    (centurions_content::word(&bytes, 6)? - centurions_content::word(&bytes, 2)?)
+                        as f32,
+                    (centurions_content::word(&bytes, 4)? - centurions_content::word(&bytes, 0)?)
+                        as f32,
+                ),
+            );
+        }
+    }
+    Ok(dialogs)
+}
+
+/// Collections filled in one pass over the resources, in resource order.
+#[derive(Default)]
+struct Loaded {
+    terrain: HashMap<u8, Texture2D>,
+    icons: HashMap<i16, Texture2D>,
+    target_patterns: HashMap<i16, Texture2D>,
+    portraits: HashMap<i16, Texture2D>,
+    panels: HashMap<i16, Texture2D>,
+    menus: HashMap<i16, ui::Menu>,
+    menu_bar: Option<Vec<i16>>,
+    font: Option<Font>,
+    movie_background: Option<Texture2D>,
+    button_pens: [Option<graphics::Image>; 2],
+    names: HashMap<i16, String>,
+    spell_names: HashMap<i16, String>,
+    warnings: Vec<String>,
+    conditions: Vec<String>,
+    questions: Vec<String>,
+    squad_text: Vec<String>,
+    upgrade_dialog: Vec<ui::DialogItem>,
+    information_dialog: Vec<ui::DialogItem>,
+    appearance_dialog: Vec<ui::DialogItem>,
+    character_strings: std::collections::BTreeMap<i16, Vec<u8>>,
+    item_dialog: Vec<ui::DialogItem>,
+    scan_dialog: Vec<ui::DialogItem>,
+    upgrade_names: Vec<String>,
+    upgrade_formulas: Vec<String>,
+    main_controls: HashMap<i16, Rect>,
+    preference_descriptions: Vec<String>,
+}
+
+impl Loaded {
+    /// String lists and the text-bearing dialog item lists.
+    fn load_strings(
+        &mut self,
+        resource: &centurions_content::Resource,
+        extracted: &Path,
+    ) -> Result<(), ContentError> {
+        let cargo = resource.original.ends_with("/Cargo Pod");
+        if cargo && resource.r#type == "STR#" && resource.id == 6001 {
+            self.preference_descriptions = ui::string_list(&read_resource(extracted, resource)?)?;
+        }
+        if resource.r#type == "STR#" && !resource.original.contains("/Scenarios/") {
+            self.character_strings
+                .insert(resource.id, read_resource(extracted, resource)?);
+        }
+        if cargo && resource.r#type == "DITL" && resource.id == 138 {
+            self.information_dialog = ui::dialog_items(&read_resource(extracted, resource)?)?;
+        }
+        if cargo && resource.r#type == "DITL" && resource.id == 170 {
+            self.appearance_dialog = ui::dialog_items(&read_resource(extracted, resource)?)?;
+        }
+        if cargo && resource.r#type == "STR#" && resource.id == 133 {
+            self.conditions = ui::string_list(&read_resource(extracted, resource)?)?;
+        }
+        if cargo && resource.r#type == "STR#" && resource.id == 3 {
+            self.warnings = ui::string_list(&read_resource(extracted, resource)?)?;
+        }
+        if cargo
+            && resource.r#type == "STR#"
+            && (1..=4).contains(&(resource.id / 1000))
+            && (0..=6).contains(&(resource.id % 1000))
+        {
+            let base = resource.id / 1000 * 1000 + (resource.id % 1000 + 1) * 100;
+            for (index, name) in ui::string_list(&read_resource(extracted, resource)?)?
+                .into_iter()
+                .enumerate()
+            {
+                self.spell_names.insert(base + index as i16 + 1, name);
+            }
+        }
+        if cargo && resource.r#type == "STR#" && resource.id == 135 {
+            self.questions = ui::string_list(&read_resource(extracted, resource)?)?;
+        }
+        if cargo && resource.r#type == "DITL" && resource.id == SQUAD_DIALOG_ITEMS {
+            self.squad_text = ui::dialog_strings(&read_resource(extracted, resource)?)?;
+        }
+        if cargo && resource.r#type == "DITL" && resource.id == 155 {
+            self.upgrade_dialog = ui::dialog_items(&read_resource(extracted, resource)?)?;
+        }
+        if cargo && resource.r#type == "DITL" && resource.id == 141 {
+            self.item_dialog = ui::dialog_items(&read_resource(extracted, resource)?)?;
+        }
+        if cargo && resource.r#type == "DITL" && resource.id == 135 {
+            self.scan_dialog = ui::dialog_items(&read_resource(extracted, resource)?)?;
+        }
+        if cargo && resource.r#type == "STR#" && resource.id == 143 {
+            self.upgrade_names = ui::string_list(&read_resource(extracted, resource)?)?;
+        }
+        if cargo && resource.r#type == "STR#" && resource.id == 144 {
+            self.upgrade_formulas = ui::string_list(&read_resource(extracted, resource)?)?;
+        }
+        if resource.r#type == "STR#"
+            && resource.original.ends_with("/Data ID")
+            && [1, 201, 401, 601].contains(&resource.id)
+        {
+            for (i, name) in ui::string_prefix(&read_resource(extracted, resource)?, 200)?
+                .into_iter()
+                .enumerate()
+            {
+                self.names.insert(resource.id - 1 + i as i16, name);
+            }
+        }
+        Ok(())
+    }
+
+    /// Main-window controls, button pens, the movie pattern, menus and the font.
+    fn load_interface(
+        &mut self,
+        resource: &centurions_content::Resource,
+        extracted: &Path,
+    ) -> Result<(), ContentError> {
+        let cargo = resource.original.ends_with("/Cargo Pod");
+        if cargo && resource.r#type == "CNTL" && main_control_ids().any(|id| id == resource.id) {
+            let bytes = read_resource(extracted, resource)?;
+            let top = f32::from(centurions_content::word(&bytes, 0)?);
+            let left = f32::from(centurions_content::word(&bytes, 2)?);
+            let bottom = f32::from(centurions_content::word(&bytes, 4)?);
+            let right = f32::from(centurions_content::word(&bytes, 6)?);
+            // mainscreeninit moves the bottom-left combat controls down and the Auto boxes across.
+            let dx = if matches!(resource.id, 166 | 167) {
+                0.
+            } else {
+                160.
+            };
+            let dy = if (190..=195).contains(&resource.id) {
+                20.
+            } else {
+                128.
+            };
+            self.main_controls.insert(
+                resource.id,
+                Rect::new(left + dx, top + dy, right - left, bottom - top),
+            );
+        }
+        if cargo && resource.r#type == "ppat" && matches!(resource.id, 133 | 136) {
+            self.button_pens[usize::from(resource.id == 136)] = Some(graphics::decode_pattern(
+                &read_resource(extracted, resource)?,
+            )?);
+        }
+        if cargo && resource.r#type == "ppat" && resource.id == 131 {
+            let image = graphics::decode_pattern(&read_resource(extracted, resource)?)?;
+            let texture = Texture2D::from_rgba8(image.width, image.height, &image.rgba);
+            texture.set_filter(FilterMode::Nearest);
+            self.movie_background = Some(texture);
+        }
+        if cargo && resource.r#type == "MENU" {
+            let menu = ui::menu(&read_resource(extracted, resource)?)
+                .map_err(|error| ContentError::Invalid(format!("MENU {}: {error}", resource.id)))?;
+            self.menus.insert(resource.id, menu);
+        }
+        if cargo && resource.r#type == "MBAR" && resource.id == 128 {
+            self.menu_bar = Some(ui::menu_bar(&read_resource(extracted, resource)?).map_err(
+                |error| ContentError::Invalid(format!("MBAR {}: {error}", resource.id)),
+            )?);
+        }
+        if cargo && resource.r#type == "sfnt" && resource.id == 30600 {
+            self.font = Some(
+                load_ttf_font_from_bytes(&read_resource(extracted, resource)?)
+                    .map_err(|e| ContentError::Invalid(format!("Textile font: {e}")))?,
+            );
+        }
+        Ok(())
+    }
+
+    /// Terrain, panel and dialog pictures, portraits, icons and target patterns.
+    fn load_textures(
+        &mut self,
+        resource: &centurions_content::Resource,
+        extracted: &Path,
+        dialog_pictures: &std::collections::HashSet<i16>,
+    ) -> Result<(), ContentError> {
+        let cargo = resource.original.ends_with("/Cargo Pod");
+        let picture = cargo
+            && resource.r#type == "PICT"
+            && (centurions_content::tile_sets::picture_terrain(resource.id).is_some()
+                || ui::PANEL_PICTURES.contains(&resource.id)
+                || APPLICATION_PICTURES.contains(&resource.id)
+                || dialog_pictures.contains(&resource.id));
+        let portrait = resource.original.ends_with("/Portraits") && resource.r#type == "cicn";
+        let icon =
+            (cargo || resource.original.ends_with("/Tacticals")) && resource.r#type == "cicn";
+        if !picture && !portrait && !icon {
+            return Ok(());
+        }
+        let bytes = read_resource(extracted, resource)?;
+        if cargo && resource.r#type == "cicn" && (10000..=10050).contains(&resource.id) {
+            let bitmap = graphics::decode_cicn_bitmap(&bytes)?;
+            let texture = Texture2D::from_rgba8(bitmap.width, bitmap.height, &bitmap.rgba);
+            texture.set_filter(FilterMode::Nearest);
+            self.target_patterns.insert(resource.id, texture);
+        }
+        let decoded = if picture {
+            graphics::decode_pict(&bytes)
+                .map_err(|error| ContentError::Invalid(format!("PICT {}: {error}", resource.id)))?
+        } else {
+            graphics::decode_cicn(&bytes)?
+        };
+        let texture = Texture2D::from_rgba8(decoded.width, decoded.height, &decoded.rgba);
+        texture.set_filter(FilterMode::Nearest);
+        if picture && let Some(set) = centurions_content::tile_sets::picture_terrain(resource.id) {
+            self.terrain.insert(set, texture);
+        } else if picture {
+            self.panels.insert(resource.id, texture);
+        } else if portrait {
+            self.portraits.insert(resource.id, texture);
+        } else {
+            self.icons.insert(resource.id, texture);
+        }
+        Ok(())
+    }
+}
+
+/// The inverting blend the target pattern overlay draws with.
+fn target_material() -> Result<Material, ContentError> {
+    load_material(
+        macroquad::miniquad::ShaderSource::Glsl {
+            vertex: r#"#version 100
+attribute vec3 position;
+attribute vec2 texcoord;
+varying lowp vec2 uv;
+uniform mat4 Model;
+uniform mat4 Projection;
+void main() { gl_Position = Projection * Model * vec4(position, 1); uv = texcoord; }
+"#,
+            fragment: r#"#version 100
+varying lowp vec2 uv;
+uniform sampler2D Texture;
+void main() { gl_FragColor = texture2D(Texture, uv); }
+"#,
+        },
+        MaterialParams {
+            pipeline_params: macroquad::miniquad::PipelineParams {
+                color_blend: Some(macroquad::miniquad::BlendState::new(
+                    macroquad::miniquad::Equation::Add,
+                    macroquad::miniquad::BlendFactor::OneMinusValue(
+                        macroquad::miniquad::BlendValue::DestinationColor,
+                    ),
+                    macroquad::miniquad::BlendFactor::OneMinusValue(
+                        macroquad::miniquad::BlendValue::SourceColor,
+                    ),
+                )),
+                alpha_blend: Some(macroquad::miniquad::BlendState::new(
+                    macroquad::miniquad::Equation::Add,
+                    macroquad::miniquad::BlendFactor::Zero,
+                    macroquad::miniquad::BlendFactor::One,
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .map_err(|error| ContentError::Invalid(format!("target overlay: {error}")))
+}
+
+/// Everything the screens draw or print from the game's resources: terrain, icons
+/// (cicn), portraits, pictures, menus, fonts, dialogs and strings.
 pub struct Assets {
     pub reference_strings: HashMap<i16, Vec<String>>,
-    pub native_text: centurions_content::native_text::NativeText,
+    pub game_text: centurions_content::game_text::GameText,
     pub terrain: HashMap<u8, Texture2D>,
     base_terrain: HashMap<u8, Texture2D>,
     pub icons: HashMap<i16, Texture2D>,
@@ -23,8 +381,7 @@ pub struct Assets {
     base_panels: HashMap<i16, Texture2D>,
     base_icons: HashMap<i16, Texture2D>,
     pub movie_background: Texture2D,
-    /// 'ppat' 133 and 136, which ToolBoxInit 0x1318e0..0x13191a loads into the
-    /// button pens 0x4358e2 (light) and 0x4358de (dark).
+    /// The button pens ToolBoxInit loads: 'ppat' 133 (light) and 136 (dark).
     pub button_pens: [Option<graphics::Image>; 2],
     pub menus: HashMap<i16, ui::Menu>,
     pub menu_bar: Vec<i16>,
@@ -55,7 +412,29 @@ pub struct Assets {
     /// Pictures with white keyed out, for CopyBits' transparent mode.
     transparent: std::cell::RefCell<HashMap<i16, Texture2D>>,
 }
+
+/// Draws the whole of `texture` scaled into `rect`.
+pub fn texture_in(texture: &Texture2D, rect: Rect) {
+    draw_texture_ex(
+        texture,
+        rect.x,
+        rect.y,
+        WHITE,
+        DrawTextureParams {
+            dest_size: Some(rect.size()),
+            ..Default::default()
+        },
+    );
+}
+
+/// Draws `texture` as a 32 by 32 icon with its top left at `origin`.
+pub fn icon_in(texture: &Texture2D, origin: Vec2) {
+    texture_in(texture, Rect::new(origin.x, origin.y, 32., 32.));
+}
+
 impl Assets {
+    /// Draws the targeting pattern for `shape` (a 224-pixel square) with its top left
+    /// at `point`, clipped to `clip`.
     pub fn target_pattern(&self, shape: i16, point: Vec2, clip: Rect) {
         let Some(texture) = self.target_patterns.get(&(9999 + shape)) else {
             return;
@@ -88,296 +467,45 @@ impl Assets {
         gl_use_default_material();
     }
 
+    /// Loads the pictures, strings, menus, dialogs and fonts, then selects the
+    /// scenario's own resources over them.
     pub fn load(content: &Content, extracted: &Path) -> Result<Self, ContentError> {
-        let mut terrain = HashMap::new();
-        let mut icons = HashMap::new();
-        let mut target_patterns = HashMap::new();
-        let mut portraits = HashMap::new();
-        let mut panels = HashMap::new();
-        let mut menus = HashMap::new();
-        let mut menu_bar = None;
-        let mut font = None;
-        let mut movie_background = None;
-        let mut button_pens = [None, None];
-        let mut names = HashMap::new();
-        let mut spell_names = HashMap::new();
-        let mut warnings = Vec::new();
-        let mut conditions = Vec::new();
-        let mut questions = Vec::new();
-        let mut squad_text = Vec::new();
-        let mut upgrade_dialog = Vec::new();
-        let mut information_dialog = Vec::new();
-        let mut appearance_dialog = Vec::new();
-        let mut character_strings = std::collections::BTreeMap::new();
-        let mut item_dialog = Vec::new();
-        let mut scan_dialog = Vec::new();
-        let mut upgrade_names = Vec::new();
-        let mut upgrade_formulas = Vec::new();
-        let mut main_controls = HashMap::new();
-        let mut dialogs = HashMap::new();
-        let mut dialog_sizes = HashMap::new();
-        let mut reference_strings = HashMap::new();
-        let mut preference_descriptions = Vec::new();
-        let mut dialog_pictures = std::collections::HashSet::new();
-        let version = content
-            .resources
-            .iter()
-            .find(|resource| {
-                resource.original.ends_with("/New Centurions")
-                    && resource.r#type == "vers"
-                    && resource.id == 1
-            })
-            .ok_or_else(|| ContentError::Invalid("executable version resource missing".into()))?;
-        let version_bytes = read_resource(extracted, version)?;
-        let executable_version = ui::pascal_text(version_bytes.get(6..).ok_or_else(|| {
-            ContentError::Invalid("truncated executable version resource".into())
-        })?)?;
+        let executable_version = load_executable_version(content, extracted)?;
+        let dialogs = load_dialogs(content, extracted)?;
+        let mut loaded = Loaded::default();
         for resource in &content.resources {
-            if resource.original.ends_with("/Cargo Pod")
-                && resource.r#type == "STR#"
-                && matches!(resource.id, 128 | 134 | 137 | 138 | 1201)
-            {
-                reference_strings.insert(
-                    resource.id,
-                    ui::string_list(&read_resource(extracted, resource)?)?,
-                );
-            }
-            if resource.original.ends_with("/Cargo Pod")
-                && resource.r#type == "DITL"
-                && matches!(
-                    resource.id,
-                    128 | 131
-                        | 132
-                        | 133
-                        | 136
-                        | 137
-                        | 144
-                        | 145
-                        | 147
-                        | 148
-                        | 149
-                        | 153
-                        | 157
-                        | 158
-                        | 159
-                        | 160
-                        | 161
-                        | 166
-                        | 167
-                        | 169
-                        | 177
-                        | 190
-                )
-            {
-                let items = ui::dialog_items(&read_resource(extracted, resource)?)?;
-                for item in &items {
-                    if item.kind & 0x7f == 64 && item.data.len() == 2 {
-                        let id = i16::from_be_bytes(item.data[..2].try_into().unwrap());
-                        if id > 0 {
-                            dialog_pictures.insert(id);
-                        }
-                    }
-                }
-                dialogs.insert(resource.id, items);
-            }
-            if resource.original.ends_with("/Cargo Pod")
-                && resource.r#type == "DLOG"
-                && matches!(
-                    resource.id,
-                    128 | 131
-                        | 132
-                        | 133
-                        | 136
-                        | 137
-                        | 144
-                        | 147
-                        | 148
-                        | 149
-                        | 153
-                        | 157
-                        | 158
-                        | 159
-                        | 160
-                        | 161
-                        | 166
-                        | 167
-                        | 169
-                        | 177
-                        | 190
-                )
-            {
-                let bytes = read_resource(extracted, resource)?;
-                dialog_sizes.insert(
-                    resource.id,
-                    vec2(
-                        (centurions_content::word(&bytes, 6)?
-                            - centurions_content::word(&bytes, 2)?) as f32,
-                        (centurions_content::word(&bytes, 4)?
-                            - centurions_content::word(&bytes, 0)?) as f32,
-                    ),
-                );
-            }
+            loaded.load_strings(resource, extracted)?;
+            loaded.load_interface(resource, extracted)?;
+            loaded.load_textures(resource, extracted, &dialogs.pictures)?;
         }
-        for resource in &content.resources {
-            let cargo = resource.original.ends_with("/Cargo Pod");
-            if cargo && resource.r#type == "STR#" && resource.id == 6001 {
-                preference_descriptions = ui::string_list(&read_resource(extracted, resource)?)?;
-            }
-            if resource.r#type == "STR#" && !resource.original.contains("/Scenarios/") {
-                character_strings.insert(resource.id, read_resource(extracted, resource)?);
-            }
-            if cargo && resource.r#type == "DITL" && resource.id == 138 {
-                information_dialog = ui::dialog_items(&read_resource(extracted, resource)?)?;
-            }
-            if cargo && resource.r#type == "DITL" && resource.id == 170 {
-                appearance_dialog = ui::dialog_items(&read_resource(extracted, resource)?)?;
-            }
-            if cargo
-                && resource.r#type == "CNTL"
-                && ((300..=309).contains(&resource.id)
-                    || (190..=195).contains(&resource.id)
-                    || matches!(resource.id, 142 | 154 | 155 | 166 | 167 | 168 | 169))
-            {
-                let bytes = read_resource(extracted, resource)?;
-                let top = f32::from(centurions_content::word(&bytes, 0)?);
-                let left = f32::from(centurions_content::word(&bytes, 2)?);
-                let bottom = f32::from(centurions_content::word(&bytes, 4)?);
-                let right = f32::from(centurions_content::word(&bytes, 6)?);
-                // mainscreeninit moves bottom-left combat controls vertically, Auto boxes horizontally.
-                let dx = if matches!(resource.id, 166 | 167) {
-                    0.
-                } else {
-                    160.
-                };
-                let dy = if (190..=195).contains(&resource.id) {
-                    20.
-                } else {
-                    128.
-                };
-                main_controls.insert(
-                    resource.id,
-                    Rect::new(left + dx, top + dy, right - left, bottom - top),
-                );
-            }
-            if cargo && resource.r#type == "ppat" && matches!(resource.id, 133 | 136) {
-                button_pens[usize::from(resource.id == 136)] = Some(graphics::decode_pattern(
-                    &read_resource(extracted, resource)?,
-                )?);
-            }
-            if cargo && resource.r#type == "ppat" && resource.id == 131 {
-                let image = graphics::decode_pattern(&read_resource(extracted, resource)?)?;
-                let texture = Texture2D::from_rgba8(image.width, image.height, &image.rgba);
-                texture.set_filter(FilterMode::Nearest);
-                movie_background = Some(texture);
-            }
-            if cargo && resource.r#type == "MENU" {
-                let menu = ui::menu(&read_resource(extracted, resource)?).map_err(|error| {
-                    ContentError::Invalid(format!("MENU {}: {error}", resource.id))
-                })?;
-                menus.insert(resource.id, menu);
-            }
-            if cargo && resource.r#type == "MBAR" && resource.id == 128 {
-                menu_bar = Some(ui::menu_bar(&read_resource(extracted, resource)?).map_err(
-                    |error| ContentError::Invalid(format!("MBAR {}: {error}", resource.id)),
-                )?);
-            }
-            if cargo && resource.r#type == "sfnt" && resource.id == 30600 {
-                font = Some(
-                    load_ttf_font_from_bytes(&read_resource(extracted, resource)?)
-                        .map_err(|e| ContentError::Invalid(format!("Textile font: {e}")))?,
-                );
-            }
-            if cargo && resource.r#type == "STR#" && resource.id == 133 {
-                conditions = ui::string_list(&read_resource(extracted, resource)?)?;
-            }
-            if cargo && resource.r#type == "STR#" && resource.id == 3 {
-                warnings = ui::string_list(&read_resource(extracted, resource)?)?;
-            }
-            if cargo
-                && resource.r#type == "STR#"
-                && (1..=4).contains(&(resource.id / 1000))
-                && (0..=6).contains(&(resource.id % 1000))
-            {
-                let base = resource.id / 1000 * 1000 + (resource.id % 1000 + 1) * 100;
-                for (index, name) in ui::string_list(&read_resource(extracted, resource)?)?
-                    .into_iter()
-                    .enumerate()
-                {
-                    spell_names.insert(base + index as i16 + 1, name);
-                }
-            }
-            if cargo && resource.r#type == "STR#" && resource.id == 135 {
-                questions = ui::string_list(&read_resource(extracted, resource)?)?;
-            }
-            if cargo && resource.r#type == "DITL" && resource.id == 145 {
-                squad_text = ui::dialog_strings(&read_resource(extracted, resource)?)?;
-            }
-            if cargo && resource.r#type == "DITL" && resource.id == 155 {
-                upgrade_dialog = ui::dialog_items(&read_resource(extracted, resource)?)?;
-            }
-            if cargo && resource.r#type == "DITL" && resource.id == 141 {
-                item_dialog = ui::dialog_items(&read_resource(extracted, resource)?)?;
-            }
-            if cargo && resource.r#type == "DITL" && resource.id == 135 {
-                scan_dialog = ui::dialog_items(&read_resource(extracted, resource)?)?;
-            }
-            if cargo && resource.r#type == "STR#" && resource.id == 143 {
-                upgrade_names = ui::string_list(&read_resource(extracted, resource)?)?;
-            }
-            if cargo && resource.r#type == "STR#" && resource.id == 144 {
-                upgrade_formulas = ui::string_list(&read_resource(extracted, resource)?)?;
-            }
-            if resource.r#type == "STR#"
-                && resource.original.ends_with("/Data ID")
-                && [1, 201, 401, 601].contains(&resource.id)
-            {
-                for (i, name) in ui::string_prefix(&read_resource(extracted, resource)?, 200)?
-                    .into_iter()
-                    .enumerate()
-                {
-                    names.insert(resource.id - 1 + i as i16, name);
-                }
-            }
-            let picture = cargo
-                && resource.r#type == "PICT"
-                && (centurions_content::tile_sets::picture_terrain(resource.id).is_some()
-                    || ui::PANEL_PICTURES.contains(&resource.id)
-                    || APPLICATION_PICTURES.contains(&resource.id)
-                    || dialog_pictures.contains(&resource.id));
-            let portrait = resource.original.ends_with("/Portraits") && resource.r#type == "cicn";
-            let icon =
-                (cargo || resource.original.ends_with("/Tacticals")) && resource.r#type == "cicn";
-            if !picture && !portrait && !icon {
-                continue;
-            }
-            let bytes = read_resource(extracted, resource)?;
-            if cargo && resource.r#type == "cicn" && (10000..=10050).contains(&resource.id) {
-                let bitmap = graphics::decode_cicn_bitmap(&bytes)?;
-                let texture = Texture2D::from_rgba8(bitmap.width, bitmap.height, &bitmap.rgba);
-                texture.set_filter(FilterMode::Nearest);
-                target_patterns.insert(resource.id, texture);
-            }
-            let decoded = if picture {
-                graphics::decode_pict(&bytes).map_err(|error| {
-                    ContentError::Invalid(format!("PICT {}: {error}", resource.id))
-                })?
-            } else {
-                graphics::decode_cicn(&bytes)?
-            };
-            let texture = Texture2D::from_rgba8(decoded.width, decoded.height, &decoded.rgba);
-            texture.set_filter(FilterMode::Nearest);
-            if picture
-                && let Some(set) = centurions_content::tile_sets::picture_terrain(resource.id)
-            {
-                terrain.insert(set, texture);
-            } else if picture {
-                panels.insert(resource.id, texture);
-            } else if portrait {
-                portraits.insert(resource.id, texture);
-            } else {
-                icons.insert(resource.id, texture);
-            }
-        }
+        let Loaded {
+            terrain,
+            icons,
+            target_patterns,
+            portraits,
+            panels,
+            mut menus,
+            menu_bar,
+            font,
+            movie_background,
+            button_pens,
+            names,
+            spell_names,
+            warnings,
+            conditions,
+            questions,
+            squad_text,
+            upgrade_dialog,
+            information_dialog,
+            appearance_dialog,
+            character_strings,
+            item_dialog,
+            scan_dialog,
+            upgrade_names,
+            upgrade_formulas,
+            main_controls,
+            preference_descriptions,
+        } = loaded;
         let menu_bar = menu_bar.ok_or_else(|| ContentError::Invalid("MBAR 128 missing".into()))?;
         for id in menu_bar.iter().chain([134, 135].iter()) {
             if !menus.contains_key(id) {
@@ -392,10 +520,7 @@ impl Assets {
             }
         }
         if questions.len() < 19
-            || (300..=309)
-                .chain(190..=195)
-                .chain([142, 154, 155, 166, 167, 168, 169])
-                .any(|id| !main_controls.contains_key(&id))
+            || main_control_ids().any(|id| !main_controls.contains_key(&id))
             || squad_text.len() < 70
             || upgrade_dialog.len() < 102
             || item_dialog.len() < 99
@@ -407,53 +532,17 @@ impl Assets {
                 "incomplete original dialog text".into(),
             ));
         }
-        let native_text = centurions_content::native_text::NativeText::load(content, extracted)?;
-        menus.get_mut(&136).unwrap().items[7].text = native_text.text(0x403670, true)?;
+        let game_text = centurions_content::game_text::GameText::load(content, extracted)?;
+        menus.get_mut(&136).unwrap().items[7].text =
+            game_text.text(crate::game_strings::ACTIVATE_WARRIOR_EDIT, true)?;
         let font = font.ok_or_else(|| ContentError::Invalid("Textile font missing".into()))?;
-        let target_material = load_material(
-            macroquad::miniquad::ShaderSource::Glsl {
-                vertex: r#"#version 100
-attribute vec3 position;
-attribute vec2 texcoord;
-varying lowp vec2 uv;
-uniform mat4 Model;
-uniform mat4 Projection;
-void main() { gl_Position = Projection * Model * vec4(position, 1); uv = texcoord; }
-"#,
-                fragment: r#"#version 100
-varying lowp vec2 uv;
-uniform sampler2D Texture;
-void main() { gl_FragColor = texture2D(Texture, uv); }
-"#,
-            },
-            MaterialParams {
-                pipeline_params: macroquad::miniquad::PipelineParams {
-                    color_blend: Some(macroquad::miniquad::BlendState::new(
-                        macroquad::miniquad::Equation::Add,
-                        macroquad::miniquad::BlendFactor::OneMinusValue(
-                            macroquad::miniquad::BlendValue::DestinationColor,
-                        ),
-                        macroquad::miniquad::BlendFactor::OneMinusValue(
-                            macroquad::miniquad::BlendValue::SourceColor,
-                        ),
-                    )),
-                    alpha_blend: Some(macroquad::miniquad::BlendState::new(
-                        macroquad::miniquad::Equation::Add,
-                        macroquad::miniquad::BlendFactor::Zero,
-                        macroquad::miniquad::BlendFactor::One,
-                    )),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        )
-        .map_err(|error| ContentError::Invalid(format!("target overlay: {error}")))?;
+        let target_material = target_material()?;
         let mut assets = Self {
             base_terrain: terrain.clone(),
             base_panels: panels.clone(),
             base_icons: icons.clone(),
-            reference_strings,
-            native_text,
+            reference_strings: dialogs.reference_strings,
+            game_text,
             terrain,
             icons,
             target_patterns,
@@ -493,8 +582,8 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
             upgrade_names,
             upgrade_formulas,
             main_controls,
-            dialogs,
-            dialog_sizes,
+            dialogs: dialogs.items,
+            dialog_sizes: dialogs.sizes,
             preference_descriptions,
             executable_version,
             transparent: Default::default(),
@@ -506,6 +595,8 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
         assets.select_content(content, extracted)?;
         Ok(assets)
     }
+    /// Chooses the font for game text: the original game font when `enabled`, the menu font
+    /// otherwise.
     pub fn set_artistic_font(&mut self, enabled: bool) {
         self.font = if enabled {
             self.original_font.clone()
@@ -513,6 +604,8 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
             self.menu_font.clone()
         };
     }
+    /// Layers the chosen scenario's own names, strings, pictures and icons over the
+    /// application's, replacing the previous scenario's.
     pub fn select_content(&mut self, content: &Content, root: &Path) -> Result<(), ContentError> {
         let mut names = self.names.clone();
         names.retain(|id, _| *id < 800);
@@ -570,11 +663,14 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
         self.icons = icons;
         Ok(())
     }
+    /// The title shown in the menu bar for a menu; the Apple menu's title is the
+    /// Apple symbol.
     pub fn menu_title(&self, resource_id: i16) -> Option<&str> {
         let title = self.menus.get(&resource_id)?.title.as_str();
         // Textile sfnt 30600 maps the Apple character to glyph 210 in its Unicode cmap.
         Some(if title == "\u{14}" { "\u{f8ff}" } else { title })
     }
+    /// The name stored under `id`, empty if there is none.
     pub fn name(&self, id: i16) -> String {
         self.names.get(&id).cloned().unwrap_or_default()
     }
@@ -616,6 +712,7 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
         self.transparent.borrow_mut().insert(id, texture.clone());
         Some(texture)
     }
+    /// Draws the whole of picture `id` scaled into `rect`.
     pub fn panel(&self, id: i16, rect: Rect) {
         if let Some(texture) = self.panels.get(&id) {
             draw_texture_ex(
@@ -630,6 +727,7 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
             );
         }
     }
+    /// Where dialog `id` sits in the window: centred, below the menu bar.
     pub fn dialog_origin(&self, id: i16) -> Vec2 {
         let size = self
             .dialog_sizes
@@ -641,9 +739,12 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
             20. + ((580. - size.y) / 2.).max(0.),
         )
     }
+    /// Dialog `id`'s item number `item` (counting from 1) as a window rectangle.
     pub fn dialog_rect(&self, id: i16, item: usize) -> Rect {
         self.dialog_rect_at(id, item, self.dialog_origin(id))
     }
+    /// Dialog `id`'s item number `item` (counting from 1) as a rectangle for a
+    /// dialog drawn with its top left at `origin`.
     pub fn dialog_rect_at(&self, id: i16, item: usize, origin: Vec2) -> Rect {
         let [top, left, bottom, right] = self.dialogs[&id][item - 1].rect;
         Rect::new(
@@ -653,9 +754,12 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
             (bottom - top) as f32,
         )
     }
+    /// Draws dialog `id` centred in the window.
     pub fn draw_dialog(&self, id: i16) {
         self.draw_dialog_at(id, self.dialog_origin(id));
     }
+    /// Draws dialog `id` with its top left at `origin`: its pictures, then its
+    /// static text.
     pub fn draw_dialog_at(&self, id: i16, origin: Vec2) {
         let size = self.dialog_sizes[&id];
         draw_rectangle(origin.x, origin.y, size.x, size.y, BLACK);
@@ -692,19 +796,23 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
                 && !item.text().contains('^')
                 && let Some(clip) = self.dialog_rect_at(id, i + 1, origin).intersect(port)
             {
-                self.wrapped_color(&item.text(), clip, 12, 14., YELLOW);
+                self.dialog_text(&item.text(), clip);
             }
         }
     }
+    /// Prints `text` at baseline `(x, y)` in the game font.
     pub fn text(&self, text: &str, x: f32, y: f32, size: u16, color: Color) {
         self.draw_text(text, x, y, size, color, &self.font);
     }
+    /// The width of `text` in the game font.
     pub fn text_width(&self, text: &str, size: u16) -> f32 {
         measure_text(text, Some(&self.font), size, 1.).width
     }
+    /// Prints `text` at baseline `(x, y)` in the menu font.
     pub fn menu_text(&self, text: &str, x: f32, y: f32, size: u16, color: Color) {
         self.draw_text(text, x, y, size, color, &self.menu_font);
     }
+    /// Prints `text` in `font`; the Apple symbol comes from the symbol font.
     fn draw_text(&self, text: &str, x: f32, y: f32, size: u16, color: Color, font: &Font) {
         draw_text_ex(
             text,
@@ -722,9 +830,17 @@ void main() { gl_FragColor = texture2D(Texture, uv); }
             },
         );
     }
+    /// Dialog text: 12-point yellow on 14-pixel lines.
+    pub fn dialog_text(&self, text: &str, rect: Rect) -> f32 {
+        self.wrapped_color(text, rect, 12, 14., YELLOW)
+    }
+    /// Word-wraps white `text` into `rect`; returns the height used.
     pub fn wrapped(&self, text: &str, rect: Rect, size: u16, line_height: f32) -> f32 {
         self.wrapped_color(text, rect, size, line_height, WHITE)
     }
+    /// Word-wraps `text` into `rect`; returns the height used. The introduction
+    /// and popup help wrap with their own variants, which differ and are under
+    /// review.
     pub fn wrapped_color(
         &self,
         text: &str,

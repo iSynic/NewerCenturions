@@ -71,7 +71,7 @@ fn combat_controls_capture_cancel_and_resolve_through_apply() {
     let content = native_input::compare_attack_estimates();
     use centurions_core::{apply, load, save};
     let mut state = state();
-    state.native_work.psi_memory = vec![0; 480];
+    state.globals.define_spells = vec![0; 480];
     let actor = state.combat.as_ref().unwrap().active_body().unwrap() as usize;
     for (offset, value) in [
         (0xf4, 100_i16),
@@ -83,19 +83,19 @@ fn combat_controls_capture_cancel_and_resolve_through_apply() {
         state.warriors[actor].bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
     }
     let combat = state.combat.as_mut().unwrap();
-    let origin = combat.squad.positions[actor];
+    let origin = combat.squad.pos[actor];
     let point = (origin.0, origin.1 + 1);
     let cell = centurions_content::mission::OpeningMission::index(
-        i32::from(point.0 + combat.map.shift.0 + 5),
-        i32::from(point.1 + combat.map.shift.1 + 5),
+        i32::from(point.0 + combat.field.map_shift.0 + 5),
+        i32::from(point.1 + combat.field.map_shift.1 + 5),
     )
     .unwrap();
-    combat.map.tiles[cell] = 10;
-    combat.enemies.positions[0] = point;
-    combat.enemies.records[0].bytes[0xe..0x10].copy_from_slice(&1_i16.to_be_bytes());
-    combat.enemies.records[0].bytes[0x110..0x112].copy_from_slice(&100_i16.to_be_bytes());
-    combat.enemies.records[0].bytes[0xb0] = 1;
-    combat.enemies.records[0].bytes[0xb1] = 1;
+    combat.field.tiles[cell] = 10;
+    combat.roster.mon_pos[0] = point;
+    combat.roster.records[0].bytes[0xe..0x10].copy_from_slice(&1_i16.to_be_bytes());
+    combat.roster.records[0].bytes[0x110..0x112].copy_from_slice(&100_i16.to_be_bytes());
+    combat.roster.records[0].bytes[0xb0] = 1;
+    combat.roster.records[0].bytes[0xb1] = 1;
     let start = state.clone();
     let controls = crate::combat_controls::buttons(&state, &content, actor);
     let button = controls
@@ -138,9 +138,9 @@ fn combat_controls_capture_cancel_and_resolve_through_apply() {
     ui.feedback_input(0., false);
     ui.feedback_input(1., false);
     assert!(!ui.feedback_input(2., false));
-    assert!(ui.persistent_feedback.is_some());
+    assert!(ui.feedback.persistent.is_some());
     let combat = state.combat.as_mut().unwrap();
-    combat.cursor = 110;
+    combat.battle_order_index = 110;
     combat.selection_pending = true;
     let before = state.clone();
     let pointer = layout::MAP.center();
@@ -224,8 +224,8 @@ fn original_field_controls_dispatch_and_resume_without_mutating_blocked_sessions
     assert_eq!(state, before);
     for (id, enabled) in [(0, false), (1, true), (9, false), (11, true), (12, false)] {
         state
-            .native_work
-            .encounter_work
+            .globals
+            .encounter_headers
             .load(&content.map(0).unwrap().typed_encounters, id, true)
             .unwrap();
         state.exploration.as_mut().unwrap().presentation = Some(Presentation::Typed {
@@ -247,7 +247,7 @@ fn combat_buttons_execute_actions_and_preserve_cancelled_or_refused_state() {
     use centurions_core::{apply, combat::controls};
     let content = crate::original_content::load();
     let mut state = state();
-    state.native_work.psi_memory = vec![0; 480];
+    state.globals.define_spells = vec![0; 480];
     let actor = state.combat.as_ref().unwrap().active_body().unwrap() as usize;
     let key = |key, state: &Session| {
         command(crate::combat_controls::shortcut(key, state, &content, actor).unwrap())
@@ -288,7 +288,7 @@ fn combat_buttons_execute_actions_and_preserve_cancelled_or_refused_state() {
     apply(toggle, &mut state, &content).unwrap();
     let mut automated = state.clone();
     apply(key(KeyCode::A, &automated), &mut automated, &content).unwrap();
-    let automatic = automated.combat.as_ref().unwrap().automatic;
+    let automatic = automated.combat.as_ref().unwrap().do_auto;
     assert!(automatic.iter().all(|v| !v));
     apply(Command::RunControlledTurn, &mut automated, &content).unwrap();
     assert!(automated != state, "Auto performed no action");
@@ -317,28 +317,25 @@ fn combat_buttons_execute_actions_and_preserve_cancelled_or_refused_state() {
     ] {
         state.warriors[actor].bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
     }
-    let origin = state.combat.as_ref().unwrap().squad.positions[actor];
+    let origin = state.combat.as_ref().unwrap().squad.pos[actor];
     state.combat.as_mut().unwrap().turn_origin = Some(origin);
     let c = state.combat.as_ref().unwrap();
     let point = (origin.0 + 1, origin.1);
     let cell = centurions_content::mission::OpeningMission::index(
-        i32::from(point.0 + c.map.shift.0 + 5),
-        i32::from(point.1 + c.map.shift.1 + 5),
+        i32::from(point.0 + c.field.map_shift.0 + 5),
+        i32::from(point.1 + c.field.map_shift.1 + 5),
     )
     .unwrap();
-    let ground = c.squad.under_tiles[actor];
-    state.combat.as_mut().unwrap().map.tiles[cell] = ground;
+    let ground = c.squad.char_under[actor];
+    state.combat.as_mut().unwrap().field.tiles[cell] = ground;
     apply(Command::Move { dx: 1, dy: 0 }, &mut state, &content).unwrap();
-    assert_eq!(state.combat.as_ref().unwrap().squad.positions[actor], point);
+    assert_eq!(state.combat.as_ref().unwrap().squad.pos[actor], point);
     let random = state.random.clone();
     apply(key(KeyCode::U, &state), &mut state, &content).unwrap();
-    assert_eq!(
-        state.combat.as_ref().unwrap().squad.positions[actor],
-        origin
-    );
+    assert_eq!(state.combat.as_ref().unwrap().squad.pos[actor], origin);
     assert_eq!(state.random, random);
     let c = state.combat.as_ref().unwrap();
-    assert_eq!(c.map.tiles[cell], ground);
+    assert_eq!(c.field.tiles[cell], ground);
     let before = state.clone();
     state.warriors[actor].bytes[0x3c..0x3e].copy_from_slice(&1_i16.to_be_bytes());
     let refused = state.clone();
@@ -346,7 +343,10 @@ fn combat_buttons_execute_actions_and_preserve_cancelled_or_refused_state() {
     assert!(state == refused, "refused Delay changed state");
     state = before;
     apply(key(KeyCode::D, &state), &mut state, &content).unwrap();
-    assert_eq!(state.combat.as_ref().unwrap().order[109], actor as i16);
+    assert_eq!(
+        state.combat.as_ref().unwrap().battle_order[109],
+        actor as i16
+    );
     assert_ne!(
         state.combat.as_ref().unwrap().active_body(),
         Some(actor as i16)
@@ -358,14 +358,14 @@ fn combat_buttons_execute_actions_and_preserve_cancelled_or_refused_state() {
     assert_eq!(word(&state.warriors[actor].bytes, 0x40).unwrap(), ap - 1);
     state = start;
     let c = state.combat.as_mut().unwrap();
-    c.enemies.positions[0] = origin;
+    c.roster.mon_pos[0] = origin;
     let refused = state.clone();
     assert!(apply(key(KeyCode::E, &state), &mut state, &content).is_err());
     assert!(state == refused, "refused Escape changed state");
     let c = state.combat.as_mut().unwrap();
-    c.enemies
-        .positions
-        .fill((80 - c.map.shift.0, 80 - c.map.shift.1));
+    c.roster
+        .mon_pos
+        .fill((80 - c.field.map_shift.0, 80 - c.field.map_shift.1));
     let before = state.clone();
     let events = apply(key(KeyCode::E, &state), &mut state, &content).unwrap();
     app.observe(&events);
@@ -381,6 +381,6 @@ fn combat_buttons_execute_actions_and_preserve_cancelled_or_refused_state() {
     app.handle(ApplicationAction::EscapeAnswer(true), &mut state, &content)
         .unwrap();
     let combat = state.combat.as_ref();
-    assert!(combat.is_none_or(|c| c.squad.positions[actor] == (-1, -1)));
+    assert!(combat.is_none_or(|c| c.squad.pos[actor] == (-1, -1)));
     assert!(!app.blocks_game());
 }

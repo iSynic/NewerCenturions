@@ -1,41 +1,47 @@
-//! The showiteminfo 0x1555f2 DLOG 149 fields, in the original SetIText order.
-//! Each DITL item keeps its last text; item 24 is set under ForeColor 205.
-use super::{BTreeMap, Content, InventoryRecord, NativeText, RuleError, indexed_string};
+//! The item information dialog's fields (DLOG 149), set in the game's order.
+//! Each field keeps the last text set; item 24 is set in color 205.
+use super::{BTreeMap, Content, GameText, InventoryRecord, RuleError, indexed_string};
+use crate::combat::spells::{FIRST_SPELL_DESCRIPTOR, spell_level};
 use centurions_content::{
     Warrior,
     mission::OpeningMission,
     records::{
         EquipmentEligibility, EquipmentModifiers, InventoryModifier as Modifier, ItemDefinition,
-        ItemPanelRecord, ItemPanelWorkMut, ProfessionEquipment, RaceEquipment,
+        ItemPanelMut, ItemPanelRecord, ProfessionEquipment, ProfileTable, RaceEquipment,
     },
-    span,
 };
 
+/// A field of the item information dialog: text (plain or red), or an icon.
 #[derive(Clone, Debug, PartialEq)]
 pub enum InformationField {
     Text { text: String, red: bool },
     Icon(i16),
 }
 
+/// The fields of the item information dialog as they are set, with the text they read from.
 struct Fields<'a> {
-    native: &'a NativeText,
+    game_text: &'a GameText,
     strings: &'a BTreeMap<i16, Vec<u8>>,
     items: BTreeMap<u16, InformationField>,
 }
 
 impl Fields<'_> {
+    /// Sets a text field.
     fn set(&mut self, item: u16, text: String) {
         self.items
             .insert(item, InformationField::Text { text, red: false });
     }
-    fn native(&self, address: u32) -> Result<String, RuleError> {
-        Ok(self.native.text(address, false)?)
+    /// The game's text at an address as a string.
+    fn game_text(&self, address: u32) -> Result<String, RuleError> {
+        Ok(self.game_text.text(address, false)?)
     }
+    /// Sets a field to a text the game keeps as a Pascal string.
     fn pascal(&mut self, item: u16, address: u32) -> Result<(), RuleError> {
-        let text = self.native.text(address, true)?;
+        let text = self.game_text.text(address, true)?;
         self.set(item, text);
         Ok(())
     }
+    /// A string from a STR# resource by its index.
     fn indexed(&self, resource: i16, index: i16) -> Result<String, RuleError> {
         let text = indexed_string(self.strings, resource, index)?;
         Ok(encoding_rs::MACINTOSH.decode(text.payload()).0.into_owned())
@@ -51,19 +57,21 @@ impl Fields<'_> {
     }
 }
 
-/// `record` is the shown instance, or `None` with the bare item ID record of
-/// member 0xffff (no merge, ammunition 0); `owner` is the selected warrior
-/// whose race and MOS canuse tests.
+/// `record` is the shown instance, or `None` for a bare item ID (no instance
+/// values, no ammunition); `owner` is the selected warrior whose race and MOS
+/// are checked.
+///
+/// Original: showiteminfo
 pub fn information(
     content: &Content,
     mission: &OpeningMission,
     owner: &Warrior,
     (record, merged): (&InventoryRecord, bool),
-    native: &NativeText,
+    game_text: &GameText,
     strings: &BTreeMap<i16, Vec<u8>>,
 ) -> Result<BTreeMap<u16, InformationField>, RuleError> {
     let mut fields = Fields {
-        native,
+        game_text,
         strings,
         items: BTreeMap::new(),
     };
@@ -73,13 +81,13 @@ pub fn information(
     let ammo_id = if merged { record.ammunition_id()? } else { 0 };
     let loaded = ammo_id != 0;
     let ammo = crate::ammunition::definition(content, ammo_id)?;
-    let mut work = crate::ammunition::definition(content, record.id())?;
+    let mut definition = crate::ammunition::definition(content, record.id())?;
     if merged {
-        ItemPanelWorkMut(&mut work).merge_item_information(&record.0, &ammo)?;
+        ItemPanelMut(&mut definition).merge_item_information(&record.0, &ammo)?;
     }
-    let item = ItemDefinition(&work);
-    let panel = ItemPanelRecord(&work);
-    let values = EquipmentModifiers::read(&work)?;
+    let item = ItemDefinition(&definition);
+    let panel = ItemPanelRecord(&definition);
+    let values = EquipmentModifiers::read(&definition)?;
     let ammunition = ItemDefinition(&ammo);
     let (label, text) = if item.ammunition_caliber()? != 0 {
         if loaded {
@@ -103,7 +111,7 @@ pub fn information(
     } else {
         (
             0x401084,
-            fields.indexed(-11000, item.category()?.wrapping_add(1))?,
+            fields.indexed(-11000, item.item_type()?.wrapping_add(1))?,
         )
     };
     fields.pascal(20, label)?;
@@ -127,7 +135,8 @@ pub fn information(
     fields.items.insert(3, InformationField::Icon(item.icon()?));
     fields.set(6, mission.item_description(item.description_id()?)?);
     special_information(&mut fields, &item, &panel)?;
-    let damage = crate::items::shown_damage(&work, &ammo, loaded, record.damage_enhancement())?;
+    let damage =
+        crate::items::shown_damage(&definition, &ammo, loaded, record.damage_enhancement())?;
     if damage.base != 0 {
         fields.set(27, damage.base.to_string());
     }
@@ -196,7 +205,7 @@ pub fn information(
     }
     let supplied = item.supplied_quantity()?;
     if record.capacity()? > 0 {
-        fields.set(22, record.quantity()?.to_string());
+        fields.set(22, record.charge()?.to_string());
         fields.set(53, record.capacity()?.to_string());
     } else if supplied > 0 {
         fields.set(22, supplied.to_string());
@@ -209,11 +218,11 @@ pub fn information(
         fields.pascal(53, 0x400fa6)?;
     }
     let weight = item
-        .unit_weight()?
+        .charge_weight()?
         .wrapping_mul(supplied)
-        .wrapping_add(item.base_weight()?);
+        .wrapping_add(item.weight()?);
     fields.set(23, weight.to_string());
-    let (race, profession) = conflicts(&work, owner, mission)?;
+    let (race, profession) = conflicts(&definition, owner, mission)?;
     if race {
         fields.pascal(18, 0x400f96)?;
     }
@@ -223,7 +232,8 @@ pub fn information(
     Ok(fields.items)
 }
 
-/// DITL item 48 keeps only its last SetIText.
+/// Sets the special-effect line (item 48) from the item's effect, spell or attribute changes; a
+/// later change replaces the line an earlier one set.
 fn special_information(
     fields: &mut Fields<'_>,
     item: &ItemDefinition<'_>,
@@ -236,13 +246,13 @@ fn special_information(
         fields.set(48, text);
     }
     if effect == -10 {
-        let text = fields.native(0x401046)? + &fields.indexed(133, amount.wrapping_sub(19))?;
+        let text = fields.game_text(0x401046)? + &fields.indexed(133, amount.wrapping_sub(19))?;
         fields.set(48, text);
     }
-    if (1101..4000).contains(&amount) {
-        let tier = amount % 1000 / 100 - 1;
+    if (FIRST_SPELL_DESCRIPTOR..4000).contains(&amount) {
+        let tier = spell_level(amount);
         let resource = (amount / 1000).wrapping_mul(1000).wrapping_add(tier);
-        let text = fields.native(0x40103c)? + &fields.indexed(resource, amount % 100)?;
+        let text = fields.game_text(0x40103c)? + &fields.indexed(resource, amount % 100)?;
         fields.set(48, text);
     }
     if effect == 122 {
@@ -263,7 +273,7 @@ fn special_information(
             let sign = if adjustment > 0 { "+" } else { "" };
             let text = format!(
                 "{sign}{adjustment}{}{}",
-                fields.native(0x400fb6)?,
+                fields.game_text(0x400fb6)?,
                 fields.indexed(1201, attribute)?
             );
             fields.set(48, text);
@@ -272,17 +282,19 @@ fn special_information(
     Ok(())
 }
 
-/// canuse 0x157586 with item -1: the Racial (WORD 435504) and M.O.S.
-/// (WORD 435506) conflict flags over the merged item work.
+/// Whether the item conflicts with the owner's race and, separately, with the owner's M.O.S.,
+/// returned in that order.
+///
+/// Original: canuse
 fn conflicts(
-    work: &[u8],
+    definition: &[u8],
     owner: &Warrior,
     mission: &OpeningMission,
 ) -> Result<(bool, bool), RuleError> {
     let (race, mos) = profiles(owner, mission)?;
     let race_id = owner.record().race()?;
     let mos_id = owner.record().profession()?;
-    let eligibility = EquipmentEligibility(work);
+    let eligibility = EquipmentEligibility(definition);
     let mut racial = eligibility.required_race()? != 0 && eligibility.required_race()? != race_id;
     let mut caste =
         eligibility.required_profession()? != 0 && eligibility.required_profession()? != mos_id;
@@ -311,15 +323,16 @@ fn conflicts(
     if (0..7).contains(&school) && eligibility.forbids_school(school as usize)? {
         caste = true;
     }
-    // BitTst(WORD 114, school-1): a missing school (-1) tests bit 7 of BYTE 113.
+    // A warrior without a school (-1) tests bit 7 of the byte before the
+    // required-schools mask, as the game does.
     if eligibility.has_required_schools()? && !eligibility.permits_required_school_bit(school)? {
         caste = true;
     }
     Ok((racial, caste))
 }
 
-/// One showcondition154a46 popup row: AppendMenu text, SetItemIcon, DisableItem
-/// and SetItemMark(19).
+/// One row of the dialog's popups: its text, icon, whether it is disabled and
+/// whether it is marked.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UseRow {
     pub text: String,
@@ -329,6 +342,7 @@ pub struct UseRow {
     pub marked: bool,
 }
 
+/// A row of the list of users, enabled and without a mark.
 fn row(text: String) -> UseRow {
     UseRow {
         text,
@@ -339,24 +353,25 @@ fn row(text: String) -> UseRow {
     }
 }
 
-/// DLOG 149 item 2, showcondition mode 3: the abilities the selected warrior's
-/// race and MOS both permit (STR# 6); SetItemIcon(bit+2, 385) for each ability
-/// bit of the ITEM work, at that item number. `passes` repeats the member loop
-/// when the shift key widens it to the squad.
+/// The profession popup: the abilities the selected warrior's race and MOS both
+/// permit (`STR#` 6), with icon 385 on each ability the item has. `passes`
+/// repeats the member loop when the shift key widens it to the squad.
+///
+/// Original: showcondition
 pub fn profession_list(
     mission: &OpeningMission,
     owner: &Warrior,
-    work: &[u8],
-    native: &NativeText,
+    definition: &[u8],
+    game_text: &GameText,
     strings: &BTreeMap<i16, Vec<u8>>,
     passes: usize,
 ) -> Result<Vec<UseRow>, RuleError> {
     let (race, mos) = profiles(owner, mission)?;
-    let eligibility = EquipmentEligibility(work);
+    let eligibility = EquipmentEligibility(definition);
     let names = centurions_content::ui::string_list(strings.get(&6).ok_or("STR# 6 missing")?)?;
     let mut rows = vec![];
     for _ in 0..passes {
-        rows.push(row(native.text(0x401112, true)?));
+        rows.push(row(game_text.text(0x401112, true)?));
         rows[0].portrait = Some(owner.record().portrait()?);
         let mut marks = vec![];
         for bit in 0..64 {
@@ -380,32 +395,33 @@ pub fn profession_list(
     Ok(rows)
 }
 
-/// DLOG 149 item 1, showcondition mode 4: every squad member, disabled when
-/// canuse fails. Each canuse first runs loaditem(ITEM WORD 102), so the rows
-/// follow the same description chain as ListItemUsers.
+/// The user popup: every squad member, disabled when the member cannot use the
+/// item. Each check reloads the item from its description, as ListItemUsers does.
+///
+/// Original: showcondition
 pub fn user_list(
     content: &Content,
     mission: &OpeningMission,
     warriors: &[Warrior],
     selected: usize,
-    work: &[u8],
-    native: &NativeText,
+    definition: &[u8],
+    game_text: &GameText,
     passes: usize,
 ) -> Result<Vec<UseRow>, RuleError> {
     // Menu item numbers are absolute, so a widened second pass only appends text.
-    let mut work = work.to_vec();
+    let mut definition = definition.to_vec();
     let mut rows = vec![];
     for _ in 0..passes {
-        rows.push(row(native.text(0x4010e8, true)?));
+        rows.push(row(game_text.text(0x4010e8, true)?));
         rows[0].icon = Some(379);
         for (member, warrior) in warriors.iter().enumerate() {
             rows.push(row(warrior.name.clone()));
             rows[member + 1].portrait = Some(warrior.record().portrait()?);
-            let id = ItemDefinition(&work).description_id()?;
+            let id = ItemDefinition(&definition).description_id()?;
             if id > 0 {
-                work = crate::ammunition::definition(content, id)?;
+                definition = crate::ammunition::definition(content, id)?;
             }
-            let (racial, caste) = conflicts(&work, warrior, mission)?;
+            let (racial, caste) = conflicts(&definition, warrior, mission)?;
             if racial || caste {
                 rows[member + 1].enabled = false;
             }
@@ -417,6 +433,7 @@ pub fn user_list(
     Ok(rows)
 }
 
+/// The race and profession profiles of the owner, for judging which items can be used.
 fn profiles<'a>(
     owner: &Warrior,
     mission: &'a OpeningMission,
@@ -427,7 +444,7 @@ fn profiles<'a>(
         return Err("item information owner has no Race or MOS profile".into());
     }
     Ok((
-        RaceEquipment(span(&mission.races, (race_id as usize - 1) * 408, 408)?),
-        ProfessionEquipment(span(&mission.profiles, (mos_id as usize - 1) * 576, 576)?),
+        RaceEquipment(ProfileTable::races(&mission.races).row(race_id as usize - 1)?),
+        ProfessionEquipment(ProfileTable::professions(&mission.profiles).row(mos_id as usize - 1)?),
     ))
 }

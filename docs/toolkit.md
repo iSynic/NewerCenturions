@@ -31,7 +31,7 @@ without a native draw sequence qualify aggregate seed/draw count only. The
 retained event projection compares sound/result/status/Flash requests, excluding
 uncaptured amounts and source-only presentation events explicitly. The first
 difference is the first in the report's record/work/RNG/event ordering, not an
-inferred causal explanation across those independent sections. At most500 rows
+inferred causal explanation across those independent sections. At most 500 rows
 are stored; total differences and truncation remain visible.
 
 Canonical documents have this shape:
@@ -50,8 +50,8 @@ Canonical documents have this shape:
 That short byte string illustrates the encoding, not a valid warrior record.
 Record bytes can also be byte arrays. Add `rng.trace` entries with `call` and
 `result` to compare draw order. A failed or truncated probe remains inspectable
-but is not usable equality evidence. Exit codes are0 for a usable match,1 for
-differences/unusable evidence and2 for invalid inputs or execution errors.
+but is not usable equality evidence. Exit codes are 0 for a usable match, 1 for
+differences/unusable evidence and 2 for invalid inputs or execution errors.
 
 ## Reusable native probes
 
@@ -86,7 +86,7 @@ A minimal original `getmovecost153de6` case:
 ```
 
 `memory` entries supply `address` and exactly one of `hex` or a repository-relative
-`file` with byte `offset` and `length`. Scalar values use widths1/2/4. Registers
+`file` with byte `offset` and `length`. Scalar values use widths 1/2/4. Registers
 accept D0-D7, A0-A6 and the condition flags. Extra `stops` are explicit native
 addresses. Each case has its own emulator and cannot alter the imported program.
 
@@ -96,12 +96,12 @@ or `opcode`, and a `kind`: `return`, `trap`, `random_bound` or `sane_model`.
 memory writes; `registers` declare returned register values. `return` defaults to
 C caller cleanup; `argument_bytes` declares additional callee cleanup. A `trap`
 requires its exact `stack_delta`. `random_bound` controls the existing bounded
-Rand primitive, reading its WORD argument at `argument_offset` (default4).
+Rand primitive, reading its WORD argument at `argument_offset` (default 4).
 `sane_model` is allowed only forA9EB and delegates to the unchanged model.
 There is no blanket unknown-trap or unknown-call success handler.
 
-Failures retain PC/opcode, registers, the last64 instruction locations and native
-call targets, the stack window, declared memory watches and up to4,096 service
+Failures retain PC/opcode, registers, the last 64 instruction locations and native
+call targets, the stack window, declared memory watches and up to 4,096 service
 calls. Call-log truncation is explicit.
 Instruction budgets stop runaway cases; uninitialized-memory diagnostics make
 the receipt fail. Provenance includes the specification, helper definitions,
@@ -131,7 +131,7 @@ allowlisted documentation/metadata, toolchain and recorded logs still match.
 Missing or changed inputs require a new batch rather than refreshing old success.
 Interrupted runs retain authoritative process IDs; another run refuses to
 restart while a recorded process remains alive. Attempts have separate logs.
-A process exit0 becomes reusable only after post-check identity verification
+A process exit 0 becomes reusable only after post-check identity verification
 succeeds. Interrupted or invalidated attempts retain their logs without a cached
 success status.
 
@@ -210,7 +210,7 @@ whether they changed state remain visible. Reconstruction replay uses the
 existing CLI with tracing. Replay and import cases emit a build-bound
 `observations.json` envelope for the navigator; its source-output checksum is
 verified when read. An optional `expected` JSON file requests an exact
-structured output comparison. Per-case timeout defaults to120 seconds.
+structured output comparison. Per-case timeout defaults to 120 seconds.
 
 Runs fingerprint the executable, installation/extraction inputs, manifest,
 commands, saves and expected output, checking them again after execution. An

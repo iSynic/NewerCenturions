@@ -4,10 +4,10 @@ fn state(f: &Value, c: &Value) -> Session {
     let mut s: Session = serde_json::from_value(f["foundation"].clone()).unwrap();
     s.warriors = support::warriors(&c["party_before"]);
     let combat = s.combat.as_mut().unwrap();
-    combat.enemies.records = support::monsters(&c["records_before"]);
+    combat.roster.records = support::monsters(&c["records_before"]);
     s.enemy_spell_disabled = u8::from(c["variant"] == 6);
     // The probe writes447196=5; this full command also supplies Getup's zero WORDs.
-    crate::native_common::npc_command_input(&mut s, c.n::<usize>("actor") - 10, [0, 0]);
+    crate::native_common::monster_command_input(&mut s, c.n::<usize>("actor") - 10, [0, 0]);
     s
 }
 #[test]
@@ -22,15 +22,15 @@ fn blocked_first_spell_chance_matches_six_complete_native_enemy_turns() {
         let mut s = state(&f, case);
         let combat = s.combat.as_mut().unwrap();
         let mut rng = RandomState::new(case.n::<u32>("seed_before"));
-        let mut work = EnemyWork {
-            item_context: s.native_work.loaded_item_field32,
-            attack_count: s.native_work.attack_count,
-            packet: combat.attack_packet.clone(),
-            identity: combat.attack_identity,
+        let mut work = EnemyGlobals {
+            item_context: s.globals.loaded_item_field32,
+            attack_count: s.globals.attack_count,
+            packet: combat.spell_info.clone(),
+            identity: combat.cast_identity,
             spell_disabled: s.enemy_spell_disabled,
-            ..EnemyWork::default()
+            ..EnemyGlobals::default()
         };
-        let events = enemy_action_with_work(
+        let events = enemy_action_with_globals(
             combat,
             &mut s.warriors,
             mission,
@@ -42,25 +42,25 @@ fn blocked_first_spell_chance_matches_six_complete_native_enemy_turns() {
         let context = format!("variant{}", case["variant"]);
         support::native_expect! {
             bytes &support::record_bytes(&s.warriors) => &case.bytes("party_after"), &format!("{context} party");
-            bytes &support::record_bytes(&combat.enemies.records) => &case.bytes("records_after"), &format!("{context} enemies");
+            bytes &support::record_bytes(&combat.roster.records) => &case.bytes("records_after"), &format!("{context} enemies");
         };
         assert_eq!(
-            combat.map.tiles,
+            combat.field.tiles,
             words(&case.bytes("map_after")),
             "{context} map"
         );
         assert_eq!(
-            combat.order,
+            combat.battle_order,
             words(&case.bytes("order_after")),
             "{context} order"
         );
         support::native_expect! {
-            positions combat.enemies.positions => &case.bytes("positions_after"), "{context} positions";
+            positions combat.roster.mon_pos => &case.bytes("positions_after"), "{context} positions";
         };
-        assert_eq!(combat.spell_fields, case.bytes("fields_after"));
-        assert_eq!(combat.field_used, case.bytes("used_after"));
+        assert_eq!(combat.spell_queue, case.bytes("fields_after"));
+        assert_eq!(combat.collide_check, case.bytes("used_after"));
         assert_eq!(
-            combat.attack_packet,
+            combat.spell_info,
             case.bytes("packet_after"),
             "{context} packet"
         );

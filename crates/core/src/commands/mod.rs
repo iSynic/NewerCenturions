@@ -2,7 +2,6 @@ use crate::{Command, Event, RuleError, Session};
 use centurions_content::Content;
 
 mod admission;
-mod boundary;
 mod characters;
 mod combat;
 mod inventory;
@@ -10,6 +9,7 @@ mod transaction;
 mod world;
 pub use transaction::apply;
 
+/// Checks that the state admits a command, then hands it to the subsystem that owns it.
 fn apply_inner(
     command: Command,
     state: &mut Session,
@@ -117,9 +117,6 @@ fn apply_inner(
         | Command::SelectMedicalTarget { .. }
         | Command::StopBleeding { .. }
         | Command::SetFirearmMode { .. }) => combat::execute(command, state, content),
-        command @ (Command::WithPreferences { .. } | Command::CombatClick { .. }) => {
-            boundary::execute(command, state, content)
-        }
         command @ (Command::CreationDialog
         | Command::CreationEquipment
         | Command::CreationScans
@@ -127,17 +124,25 @@ fn apply_inner(
         | Command::SelectWarriors { .. }
         | Command::ReplaceSquad { .. }
         | Command::ReorderSquad { .. }
-        | Command::EditWarriorScans { .. }
+        | Command::ImportStarters
+        | Command::SelectStarters { .. }) => characters::squad::execute(command, state, content),
+        command @ (Command::EditWarriorScans { .. }
         | Command::EditWarriorLevel { .. }
         | Command::EditCarriedItem { .. }
         | Command::SetWarriorAppearance { .. }
         | Command::EditWarriorUpgrade { .. }
         | Command::UpgradeWarrior { .. }
-        | Command::EnterWarriorUpgrade { .. }
-        | Command::ViewWarrior { .. }
-        | Command::RecalculateStatistics { .. }
-        | Command::ImportStarters
-        | Command::SelectStarters { .. }) => characters::execute(command, state, content),
+        | Command::EnterWarriorUpgrade { .. }) => {
+            characters::editor::execute(command, state, content)
+        }
+        command @ (Command::ViewWarrior { .. } | Command::RecalculateStatistics { .. }) => {
+            characters::view::execute(command, state)
+        }
+        // transaction::apply unwraps preferences and resolves combat clicks before
+        // admission, so neither reaches dispatch.
+        Command::WithPreferences { .. } | Command::CombatClick { .. } => {
+            unreachable!("preferences and combat clicks unwrap at the command boundary")
+        }
     }
 }
 

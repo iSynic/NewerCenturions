@@ -1,29 +1,75 @@
-//! Script execution for maintained exploration.
+//! Running a land script's operations.
 use super::{
-    active_map, finish_dispatch, finish_script, present_menu, present_typed, retain_script_stamp,
+    active_map, active_table, finish_dispatch, finish_script, present_menu, present_typed,
+    store_script_stamp,
 };
+use crate::combat::runtime;
 use crate::{Event, RuleError, Session};
 use centurions_content::Content;
 
 mod operation;
-use centurions_content::records::StoryRecord;
+use centurions_content::mission::OpeningMission;
+use centurions_content::records::{ExtraTable, StoryRecord};
+use operation::Adapter;
 pub(crate) use operation::Operation;
+
+/// Sound 20005, played as a script presents a simple or typed encounter.
+const ENCOUNTER_SOUND: i16 = 20005;
 
 mod battles;
 mod branches;
-mod conditions;
+mod encounters;
 mod lands;
+mod map_mutation;
 mod party;
 mod presentation;
 
+/// How a script parameter selects its EXTRA record.
+#[derive(Clone, Copy)]
+pub(super) enum ExtraIndex {
+    /// `parameter as usize`: a negative parameter selects past the table.
+    Signed(i16),
+    /// The parameter's magnitude.
+    Magnitude(i16),
+    /// An index the caller has already converted.
+    Exact(usize),
+}
+
+/// Reads a script's extra record and keeps a copy as the shared extra row. With
+/// `missing` absent, a map without combat tables panics; otherwise it returns
+/// that error.
+pub(super) fn load_extra<'a>(
+    globals: &mut crate::Globals,
+    map: &'a OpeningMission,
+    index: ExtraIndex,
+    missing: Option<&'static str>,
+) -> Result<&'a [u8], RuleError> {
+    let tables = match missing {
+        Some(message) => map.combat.as_ref().ok_or(message)?,
+        None => map.combat.as_ref().unwrap(),
+    };
+    let index = match index {
+        ExtraIndex::Signed(parameter) => parameter as usize,
+        ExtraIndex::Magnitude(parameter) => usize::from(parameter.unsigned_abs()),
+        ExtraIndex::Exact(index) => index,
+    };
+    let extra = ExtraTable(&tables.encounters).record(index)?;
+    globals.extra_record = extra.to_vec();
+    Ok(extra)
+}
+
+/// Whether the script goes on to its next action or stops to wait for the player.
 #[derive(PartialEq, Eq)]
 pub(super) enum ScriptStep {
     Continue,
     Pause,
 }
 
+/// Runs the land script action by action until it ends, needs the player, or is handed to a battle.
+/// A script that has used all its actions repeats its menu while the menu has choices left. A
+/// script that runs more than 128 actions in one call is refused.
 pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
-    crate::combat::runtime::resume_turn_child(state)?;
+    runtime::resume_turn_child(state)?;
     let mut effects = Vec::new();
     for _ in 0..128 {
         if state.zero_time.is_some()
@@ -36,9 +82,9 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                 .and_then(|p| p.script.as_ref())
                 .map(|script| script.record.clone());
             if let Some(record) = record {
-                super::retain_turn_header(state, &record);
-                crate::time::retain_zero_work(state, &record);
-                crate::combat::runtime::retain_death_header(state, &record);
+                super::store_turn_header(state, &record);
+                crate::time::store_zero_record(state, &record);
+                runtime::store_death_header(state, &record);
             }
         }
         if let Some(stamp) = state
@@ -47,7 +93,7 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
             .and_then(|p| p.script.as_ref())
             .and_then(|s| StoryRecord(&s.record).dispatch_stamp())
         {
-            retain_script_stamp(state, stamp);
+            store_script_stamp(state, stamp);
         }
         let map = active_map(state, content)?;
         let position = state.exploration.as_mut().unwrap();
@@ -66,31 +112,23 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
                     if menu.typed {
                         position.presentation = Some(present_typed(
                             map,
-                            if state.typed_encounters.is_empty() {
-                                &map.typed_encounters
-                            } else {
-                                &state.typed_encounters
-                            },
+                            active_table(&state.typed_encounters, &map.typed_encounters),
                             script,
                             id,
-                            &mut state.native_work.encounter_work,
+                            &mut state.globals.encounter_headers,
                             false,
                         )?);
                         effects.push(Event::StoryPresented);
                         return Ok(effects);
                     }
-                    let table = if state.menus.is_empty() {
-                        &map.menus
-                    } else {
-                        &state.menus
-                    };
+                    let table = active_table(&state.menus, &map.menus);
                     effects.push(Event::Sound { resource_id: 20005 });
                     position.presentation = present_menu(
                         map,
                         table,
                         script,
                         id,
-                        &mut state.native_work.encounter_work,
+                        &mut state.globals.encounter_headers,
                         false,
                     )?;
                     if position.presentation.is_some() {
@@ -105,7 +143,7 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
         }
         let cursor = usize::from(script.cursor);
         let (opcode, parameter) = StoryRecord(&script.record).instruction(cursor)?;
-        let operation = Operation::from_native(opcode);
+        let operation = Operation::from_opcode(opcode);
         script.cursor += 1;
         crate::trace::story(
             "exploration",
@@ -114,121 +152,35 @@ pub(crate) fn run_script(state: &mut Session, content: &Content) -> Result<Vec<E
             opcode,
             parameter,
         );
-        let step = match operation {
-            Operation::CombatCleanup
-            | Operation::UndoLastStep
-            | Operation::ReplaceActor
-            | Operation::EndCombat
-            | Operation::NeutralizeActors
-            | Operation::SetFactionCondition
-            | Operation::SummonActors
-            | Operation::RemoveActorClass
-            | Operation::ReplaceRoundScript
-            | Operation::SelectedSpell
-            | Operation::PartySpell
-            | Operation::SelectPartyBySave
-            | Operation::EditSchedule
-            | Operation::GroupBattle
-            | Operation::SelectedBattle
-            | Operation::NpcBattle
-            | Operation::StageTransition
-            | Operation::DestroyCategories => battles::execute(
-                operation,
-                parameter,
-                state,
-                content,
-                map,
-                cursor,
-                &mut effects,
-            )?,
-            Operation::Clinic
-            | Operation::AdjustStatistics
-            | Operation::Confiscate
-            | Operation::Shop
-            | Operation::RevealNote
-            | Operation::SelectedHealth
-            | Operation::PartyHealth
-            | Operation::FilterParty
-            | Operation::SetRecoveryRestrictions
-            | Operation::ChangeFatigue
-            | Operation::SetMissionFlag
-            | Operation::AddMissionScore
-            | Operation::AddAlly
-            | Operation::RemoveAllies
-            | Operation::CopyMapEvent
-            | Operation::ReplaceScript
-            | Operation::LimitedShopOrTreasure
-            | Operation::Treasure
-            | Operation::Experience
-            | Operation::GiveCondition
-            | Operation::AlterShop
-            | Operation::RandomTreasure
-            | Operation::DropAllEquipment
-            | Operation::PickByTrait
-            | Operation::PickByCaste
-            | Operation::DropMemberCredits
-            | Operation::TakeVictoryPoints => party::execute(
-                operation,
-                parameter,
-                state,
-                content,
-                map,
-                cursor,
-                &mut effects,
-            )?,
-            Operation::ResetExperience => {
-                effects.extend(super::loot::reset_experience(state, content)?);
-                ScriptStep::Pause
+        let step = match operation.adapter() {
+            Adapter::Battles => {
+                battles::execute(operation, parameter, state, content, map, &mut effects)?
             }
-            Operation::PartyConditionBranch
-            | Operation::GameTimeBranch
-            | Operation::ItemChargesBranch
-            | Operation::QuestRangeBranch
-            | Operation::PsiPointsBranch
-            | Operation::CharacterConditionBranch
-            | Operation::PickedBranch
-            | Operation::MiscellaneousBranch => {
+            Adapter::Party => party::execute(
+                operation,
+                parameter,
+                state,
+                content,
+                map,
+                cursor,
+                &mut effects,
+            )?,
+            Adapter::Branches => {
                 branches::execute(operation, parameter, state, content, map, &mut effects)?
             }
-            Operation::ChangeLandTiles | Operation::PartyPosition | Operation::ResizeRegion => {
+            Adapter::LandExtra => {
                 lands::execute(operation, parameter, state, content, map, &mut effects)?
             }
-            Operation::ClearObjects
-            | Operation::ChangeRegion
-            | Operation::ReplaceMapEvent
-            | Operation::ChangeTiles
-            | Operation::SetEventChances
-            | Operation::Pause
-            | Operation::MapEffect
-            | Operation::ConsumePartyItems
-            | Operation::ChooseWarrior
-            | Operation::Travel
-            | Operation::TeleportActivate
-            | Operation::BreakEncounter
-            | Operation::Menu
-            | Operation::TypedMenu
-            | Operation::PartyItemBranch
-            | Operation::UpdateVariable
-            | Operation::VariableBranch
-            | Operation::RandomBranch
-            | Operation::AllyClassBranch
-            | Operation::DisableMenuEntry
-            | Operation::DisableEncounterChoice
-            | Operation::PaymentBranch
-            | Operation::ItemPrerequisiteBranch
-            | Operation::ChanceBranch
-            | Operation::FlagBranch
-            | Operation::DifficultyBranch
-            | Operation::TileBranch => conditions::execute(
-                operation,
-                parameter,
-                state,
-                content,
-                map,
-                cursor,
-                &mut effects,
-            )?,
-            _ => presentation::execute(
+            Adapter::Travel => {
+                lands::travel(operation, parameter, state, content, map, &mut effects)?
+            }
+            Adapter::MapMutation => {
+                map_mutation::execute(operation, parameter, state, content, map)?
+            }
+            Adapter::Encounters => {
+                encounters::execute(operation, parameter, state, map, &mut effects)?
+            }
+            Adapter::Presentation => presentation::execute(
                 operation,
                 parameter,
                 state,

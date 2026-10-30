@@ -28,14 +28,14 @@ fn leader_death_stories_match_original_complete_enemy_map_and_order_records() {
         let positions = support::positions(case.text("positions"));
         let mut health = centurions_core::story_health::context(&state.warriors, 0, None);
         health.last_body = 10; // VerifyOpeningStories sets native DAT408574 to body10.
-        state.native_work.health_context = health;
+        state.globals.health_context = health;
         let mut combat = support::battle();
         combat.battle = 1;
-        combat.map.tiles = words(case.text("map_before"));
-        combat.squad.positions.fill((1, 1));
-        combat.enemies.records = support::monsters(&case["enemies"]);
-        combat.enemies.positions = positions;
-        combat.order = words(case.text("order_before"));
+        combat.field.tiles = words(case.text("map_before"));
+        combat.squad.pos.fill((1, 1));
+        combat.roster.records = support::monsters(&case["enemies"]);
+        combat.roster.mon_pos = positions;
+        combat.battle_order = words(case.text("order_before"));
         state.combat = Some(combat);
         crate::native_common::source_victory_context(&mut state);
         state.combat_story = Some(runtime::DeathStory {
@@ -44,8 +44,8 @@ fn leader_death_stories_match_original_complete_enemy_map_and_order_records() {
             cursor: 0,
             actor: 0,
             entry: centurions_core::combat::death_scripts::DeathEntry {
-                x: i32::from(current_combat(&state).enemies.positions[0].0) + 5,
-                y: i32::from(current_combat(&state).enemies.positions[0].1) + 5,
+                x: i32::from(current_combat(&state).roster.mon_pos[0].0) + 5,
+                y: i32::from(current_combat(&state).roster.mon_pos[0].1) + 5,
                 ..Default::default()
             },
             ..Default::default()
@@ -74,9 +74,9 @@ fn leader_death_stories_match_original_complete_enemy_map_and_order_records() {
         assert_eq!(support::event_sounds(&events), case.n::<Vec<i16>>("sounds"));
         let c = current_combat(&state);
         support::native_expect! {
-            records &c.enemies.records => &case["after_enemies"], format!("script {} variant {}",case["script"],case["variant"]);
-            words &(c.map.tiles) => &case["map"], "binary_opening_stories";
-            words &(c.order) => &case["order"], "binary_opening_stories";
+            records &c.roster.records => &case["after_enemies"], format!("script {} variant {}",case["script"],case["variant"]);
+            words &(c.field.tiles) => &case["map"], "binary_opening_stories";
+            words &(c.battle_order) => &case["order"], "binary_opening_stories";
         }
         assert_eq!(state.random.seed, 12);
         assert_eq!(state.random.draws, 0);

@@ -1,14 +1,22 @@
+use crate::combat::spells::spell_identity;
 use crate::{Content, Event, Phase, RuleError, Session, combat, story_spell};
-use centurions_content::records::{AttackPacket, ItemDefinition};
+use centurions_content::records::{ItemDefinition, SpellInfoRecord};
 use serde::{Deserialize, Serialize};
 mod ranks;
 
+/// A psi spell or item being cast outdoors, waiting for its targets: who casts, which spell, its
+/// power and how many targets remain, and the item when one casts it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Selection {
+    /// The warrior casting.
     pub actor: usize,
+    /// The spell being cast.
     pub spell: i16,
+    /// The spell's power.
     pub power: i16,
+    /// Targets still to choose.
     pub remaining: i16,
+    /// The item casting the spell, if an item does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub item: Option<i16>,
 }
@@ -17,7 +25,9 @@ mod item;
 pub(crate) use item::begin_item;
 pub(crate) use item::begin_selected as begin_item_selected;
 
-// Items12b0e4..12b0f6 compares the wrapped choice argument with partyLast.
+// The choice argument wraps before it is compared with the last party member.
+/// The most targets the choice allows: with mode 0, the spell's power capped at the number of
+/// members, otherwise one; the argument wraps before it is compared with the last member.
 fn choice_limit(mode: u8, power: i16, members: usize) -> i16 {
     let last = members as i16 - 1;
     let argument = if mode == 0 { power.wrapping_sub(1) } else { 0 };
@@ -28,11 +38,12 @@ fn choice_limit(mode: u8, power: i16, members: usize) -> i16 {
     }
 }
 
+/// Checks that a pending outdoor cast is consistent with the spell and party.
 pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleError> {
     let Some(pending) = &state.outdoor_psi else {
         return Ok(());
     };
-    let packet = &state.native_work.attack_packet;
+    let packet = &state.globals.spell_info;
     centurions_content::span(packet, 0, 58)?;
     let map = state
         .map(
@@ -82,30 +93,25 @@ pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleErr
         || (pending.item.is_none()
             && !combat::player_psi::OUTDOOR_TARGET_SPELLS.contains(&pending.spell))
         || !(if pending.item.is_some() {
-            (AttackPacket(packet).targeting_mode() as i8) <= 2
+            (SpellInfoRecord(packet).target_type() as i8) <= 2
         } else {
-            matches!(AttackPacket(packet).targeting_mode(), 0 | 1)
+            matches!(SpellInfoRecord(packet).target_type(), 0 | 1)
         })
         || packet != &original
-        || state.native_work.attack_count != pending.power
-        || state.native_work.attack_identity
-            != [
-                pending.spell / 1000 - 1,
-                pending.spell % 1000 / 100 - 1,
-                pending.spell % 100 - 1,
-            ]
+        || state.globals.attack_count != pending.power
+        || state.globals.cast_identity != spell_identity(pending.spell)
     {
         return Err(RuleError::Invalid(
             "invalid outdoor Psi continuation".into(),
         ));
     }
     let limit = choice_limit(
-        AttackPacket(packet).targeting_mode(),
+        SpellInfoRecord(packet).target_type(),
         pending.power,
         state.warriors.len(),
     );
     if !ranks::valid(
-        &state.native_work.party_mask,
+        &state.globals.party_track,
         state.warriors.len(),
         limit,
         pending.remaining,
@@ -117,7 +123,9 @@ pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleErr
     Ok(())
 }
 
-/// getchoice12535e assigns descending ranks; deselection closes the rank gap.
+/// Choosing a target gives it the next lower rank; deselecting closes the gap.
+///
+/// Original: getchoice
 pub(crate) fn select(
     state: &mut Session,
     content: &Content,
@@ -132,7 +140,7 @@ pub(crate) fn select(
         .as_mut()
         .ok_or("outdoor Psi selection missing")?;
     let sound = ranks::toggle(
-        &mut state.native_work.party_mask[..state.warriors.len()],
+        &mut state.globals.party_track[..state.warriors.len()],
         &mut pending.remaining,
         warrior,
     );
@@ -143,28 +151,32 @@ pub(crate) fn select(
     Ok(events)
 }
 
-/// getchoice125264 accepts Enter/Space only while the shared Ready WORD is nonzero.
+/// Enter or Space finishes the choice only while `in_spell` is set.
+///
+/// Original: getchoice
 pub fn can_finish(state: &Session) -> bool {
-    state.outdoor_psi.is_some() && state.native_work.ready != 0
+    state.outdoor_psi.is_some() && state.globals.in_spell != 0
 }
 
+/// Finishes the choice of targets and resolves the cast, refusing while no spell is in effect.
 pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
-    if state.native_work.ready == 0 {
+    if state.globals.in_spell == 0 {
         return Err(RuleError::Refused { feedback: vec![] });
     }
     resolve(state, content)
 }
 
+/// Resolves the outdoor cast on the chosen targets and clears the pending selection.
 fn resolve(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let pending = state
         .outdoor_psi
         .take()
         .ok_or("outdoor Psi selection missing")?;
-    let packet = state.native_work.attack_packet.clone();
-    let identity = state.native_work.attack_identity;
+    let packet = state.globals.spell_info.clone();
+    let identity = state.globals.cast_identity;
     let mut events = vec![];
     if pending.item.is_none() {
-        let memory = &mut state.native_work.psi_memory;
+        let memory = &mut state.globals.define_spells;
         for (index, value) in identity.into_iter().chain([pending.power]).enumerate() {
             let offset = pending.actor * 80 + 72 + index * 2;
             memory[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
@@ -188,22 +200,23 @@ fn resolve(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleErr
     Ok(events)
 }
 
-/// buttonchoice10ad22 returns after the charge, without the combat cancellation refund.
+/// Cancelling outside combat keeps the Psi already spent; only combat refunds it.
+///
+/// Original: buttonchoice, getchoice
 pub(crate) fn cancel(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
-    // buttonchoice10ae52 and getchoice12524c.
-    state.set_ready(0);
+    state.set_in_spell(0);
     if state
         .outdoor_psi
         .as_ref()
         .is_some_and(|pending| pending.item.is_some())
     {
-        state.native_work.party_mask.fill(0);
+        state.globals.party_track.fill(0);
         return resolve(state, content);
     }
     state
         .outdoor_psi
         .take()
         .ok_or("outdoor Psi selection missing")?;
-    state.native_work.party_mask.fill(0);
+    state.globals.party_track.fill(0);
     Ok(vec![])
 }

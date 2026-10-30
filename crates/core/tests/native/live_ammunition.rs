@@ -22,7 +22,7 @@ fn authored_pack_collection_matches_live_records_reserve_and_rng() {
         *reserve = i32::from_be_bytes(*raw);
     }
     for (item, raw) in state
-        .booty_items
+        .booty_list
         .iter_mut()
         .zip(before["loot"].bytes("hex").as_chunks::<22>().0)
     {
@@ -52,7 +52,7 @@ fn authored_pack_collection_matches_live_records_reserve_and_rng() {
     support::native_expect! {
         bytes support::long_bytes(&state.ammunition) => &after["ammunition"]["hex"], "live_ammunition";
         bytes state
-                .booty_items
+                .booty_list
                 .iter()
                 .take(20)
                 .flat_map(|item| item.0)

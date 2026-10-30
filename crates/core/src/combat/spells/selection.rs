@@ -1,16 +1,16 @@
-//! Selection for combat/spells.
+//! Spell target selection: bestchoice's aim and the target triples it fills.
 use super::{Combat, RandomState, RuleError, firearm, validate_direct};
 use centurions_content::combat::MonsterRecord;
 use centurions_content::{
     Warrior,
-    records::{AttackPacket, EnemyRecord},
+    records::{EnemyRecord, SpellInfoRecord},
 };
 
 mod view;
 use crate::combat::map_alias::{Land, MapAliases, land_aliases};
 pub(crate) use view::SelectionView;
 
-/// One target triple at 443722 + 6 * n: its first, second and kind WORDs.
+/// One target triple (`target[n]`): its first and second values and its kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpellTarget {
     pub first: i16,
@@ -18,6 +18,28 @@ pub struct SpellTarget {
     pub kind: i16,
 }
 
+impl SpellTarget {
+    /// A body triple: kind 1 for a warrior (body below 10), kind 2 for a monster.
+    pub fn body(body: i16) -> Self {
+        Self {
+            first: body,
+            second: 0,
+            kind: if body < 10 { 1 } else { 2 },
+        }
+    }
+
+    /// A location triple (kind 3) at map coordinates.
+    pub fn cell(x: i16, y: i16) -> Self {
+        Self {
+            first: x,
+            second: y,
+            kind: 3,
+        }
+    }
+}
+
+/// A monster's chosen cast: whether it can cast, the caster, the power count, the reach, the
+/// distance to the nearest foe and to each body in reach, the targets, and the rotation.
 pub struct SpellSelection {
     pub cast: bool,
     pub caster: MonsterRecord,
@@ -29,14 +51,7 @@ pub struct SpellSelection {
     pub rotation: u8,
 }
 
-pub(super) fn position(combat: &Combat, body: usize) -> Option<(i16, i16)> {
-    if body < 10 {
-        combat.squad.positions.get(body).copied()
-    } else {
-        combat.enemies.positions.get(body - 10).copied()
-    }
-}
-
+/// Which side a warrior or monster body is on.
 pub(super) fn faction(
     combat: &Combat,
     warriors: &[Warrior],
@@ -50,7 +65,7 @@ pub(super) fn faction(
             .faction()?)
     } else {
         Ok(combat
-            .enemies
+            .roster
             .records
             .get(body - 10)
             .ok_or_else(|| RuleError::Invalid("spell monster body".into()))?
@@ -59,6 +74,11 @@ pub(super) fn faction(
     }
 }
 
+/// Picks the body at whose cell the spell's area would do the most good: the most hostile bodies
+/// and the fewest friendly ones among those within range, judged by a rule that differs for the
+/// party's side (side 0) and the monsters' side.
+///
+/// Original: bestchoice
 pub(super) fn best_choice(
     (combat, aliases): (&Combat, MapAliases<'_>),
     warriors: &[Warrior],
@@ -68,9 +88,8 @@ pub(super) fn best_choice(
     distances: &[i16; 112],
     range: i16,
 ) -> Result<Option<usize>, RuleError> {
-    // Compatibility policy: the original WORD underflow reads outside Mac RAM.
-    // Basilisk can read unrelated host bytes there; only unreadable-page results
-    // support this empty mask. See evidence/hive-memory-verification.md.
+    // A pattern index below the table reads outside memory and is treated as an
+    // empty pattern (evidence/hive-memory-verification.md).
     let empty = [0; 49];
     let pattern = if shape == 0 {
         &empty[..]
@@ -83,10 +102,10 @@ pub(super) fn best_choice(
             continue;
         }
         let eligible = if candidate < warriors.len() {
-            warriors[candidate].record().active_flag() != 0
+            warriors[candidate].record().in_battle() != 0
         } else if candidate >= 10 {
             combat
-                .enemies
+                .roster
                 .records
                 .get(candidate - 10)
                 .is_some_and(|m| m.record().stamina().unwrap_or(0) > 0)
@@ -96,7 +115,8 @@ pub(super) fn best_choice(
         if !eligible {
             continue;
         }
-        let center = position(combat, candidate)
+        let center = combat
+            .get_body_position(candidate)
             .ok_or_else(|| RuleError::Invalid("spell candidate position".into()))?;
         let (mut friendly, mut hostile) = (0, 0);
         let mut seen = [false; 110];
@@ -105,13 +125,13 @@ pub(super) fn best_choice(
                 if pattern[y * 7 + x] == 0 {
                     continue;
                 }
-                let ax = combat.map.shift.0 + 5 + center.0 - 3 + x as i16;
-                let ay = combat.map.shift.1 + 5 + center.1 - 3 + y as i16;
-                // bestchoice1363e4 indexes MULU.W column*90 plus a signed row, so a row
-                // past either edge reads the neighbouring column or the memory beside the map.
+                let ax = combat.field.map_shift.0 + 5 + center.0 - 3 + x as i16;
+                let ay = combat.field.map_shift.1 + 5 + center.1 - 3 + y as i16;
+                // The column is unsigned and the row signed, so a row past either edge
+                // reads the neighbouring column or the memory beside the map.
                 let index = i32::from(ax as u16) * 90 + i32::from(ay);
                 let body = aliases
-                    .read(&combat.map, index)?
+                    .read(&combat.field, index)?
                     .ok_or(RuleError::Unsupported {
                         action: "combat.spell.target",
                         dependency: "spell area outside the map and the represented memory beside it",
@@ -127,10 +147,7 @@ pub(super) fn best_choice(
                 seen[body] = true;
                 let same = faction(combat, warriors, body)? == side
                     || (body >= 10
-                        && combat.enemies.records[body - 10]
-                            .record()
-                            .mechanical_state()
-                            == 0xff);
+                        && combat.roster.records[body - 10].record().mechanical_state() == 0xff);
                 if same {
                     friendly += 1;
                 } else {
@@ -155,6 +172,7 @@ pub(super) fn best_choice(
     Ok(best)
 }
 
+/// A monster's spell targets: the bodies in reach and the cells the spell is aimed at.
 pub fn select_targets(
     combat: &Combat,
     warriors: &[Warrior],
@@ -210,7 +228,7 @@ pub(crate) fn select_firearm_targets_beside(
     prepared: &firearm::PreparedFirearm,
     random: &mut RandomState,
 ) -> Result<SpellSelection, RuleError> {
-    if prepared.packet.len() != 58 || AttackPacket(&prepared.packet).defense_category() != 9 {
+    if prepared.packet.len() != 58 || SpellInfoRecord(&prepared.packet).defense_category() != 9 {
         return Err(RuleError::Invalid("firearm target packet".into()));
     }
     select_targets_impl(
@@ -224,6 +242,7 @@ pub(crate) fn select_firearm_targets_beside(
     )
 }
 
+/// A monster's targets for a firearm shot, with the shot count of the prepared firearm.
 pub fn select_firearm_targets(
     combat: &Combat,
     warriors: &[Warrior],
@@ -233,7 +252,7 @@ pub fn select_firearm_targets(
     prepared: &firearm::PreparedFirearm,
     random: &mut RandomState,
 ) -> Result<SpellSelection, RuleError> {
-    if prepared.packet.len() != 58 || AttackPacket(&prepared.packet).defense_category() != 9 {
+    if prepared.packet.len() != 58 || SpellInfoRecord(&prepared.packet).defense_category() != 9 {
         return Err(RuleError::Invalid("firearm target packet".into()));
     }
     select_targets_impl(
@@ -247,7 +266,9 @@ pub fn select_firearm_targets(
     )
 }
 
-pub fn select_retained_targets(
+/// A monster's targets for the prepared attack: the shot count is used only for a defense category
+/// 9 shot.
+pub fn select_spell_info_targets(
     combat: &Combat,
     warriors: &[Warrior],
     mission: &centurions_content::mission::OpeningMission,
@@ -259,7 +280,8 @@ pub fn select_retained_targets(
     if prepared.packet.len() != 58 {
         return Err(RuleError::Invalid("retained target packet".into()));
     }
-    let count = (AttackPacket(&prepared.packet).defense_category() == 9).then_some(prepared.shots);
+    let count =
+        (SpellInfoRecord(&prepared.packet).defense_category() == 9).then_some(prepared.shots);
     select_targets_impl(
         (combat, MapAliases::of_mission(mission)),
         warriors,
@@ -271,6 +293,7 @@ pub fn select_retained_targets(
     )
 }
 
+/// Chooses a monster's targets over the live battle.
 pub(super) fn select_targets_impl(
     (combat, aliases): (&Combat, MapAliases<'_>),
     warriors: &[Warrior],
@@ -291,6 +314,8 @@ pub(super) fn select_targets_impl(
     )
 }
 
+/// A monster's targets for a firearm shot over held records, with the shot count of the prepared
+/// firearm.
 pub(crate) fn select_firearm_from_view(
     view: &impl SelectionView,
     warriors: &[Warrior],
@@ -300,7 +325,7 @@ pub(crate) fn select_firearm_from_view(
     prepared: &firearm::PreparedFirearm,
     random: &mut RandomState,
 ) -> Result<SpellSelection, RuleError> {
-    if prepared.packet.len() != 58 || AttackPacket(&prepared.packet).defense_category() != 9 {
+    if prepared.packet.len() != 58 || SpellInfoRecord(&prepared.packet).defense_category() != 9 {
         return Err(RuleError::Invalid("firearm target packet".into()));
     }
     select_from_view(
@@ -314,8 +339,8 @@ pub(crate) fn select_firearm_from_view(
     )
 }
 
-/// enemy_fire's retained-packet selection: the shot count applies only to category 9.
-pub(crate) fn select_retained_from_view(
+/// An enemy shot's held-packet selection: the shot count applies only to category 9.
+pub(crate) fn select_spell_info_from_view(
     view: &impl SelectionView,
     warriors: &[Warrior],
     mission: &centurions_content::mission::OpeningMission,
@@ -324,7 +349,8 @@ pub(crate) fn select_retained_from_view(
     prepared: &firearm::PreparedFirearm,
     random: &mut RandomState,
 ) -> Result<SpellSelection, RuleError> {
-    let count = (AttackPacket(&prepared.packet).defense_category() == 9).then_some(prepared.shots);
+    let count =
+        (SpellInfoRecord(&prepared.packet).defense_category() == 9).then_some(prepared.shots);
     select_from_view(
         view,
         warriors,
@@ -336,7 +362,7 @@ pub(crate) fn select_retained_from_view(
     )
 }
 
-/// The enemy decision's spell targeting over retained records.
+/// The enemy decision's spell targeting over held records.
 pub(crate) fn select_spell_from_view(
     view: &impl SelectionView,
     warriors: &[Warrior],
@@ -357,6 +383,15 @@ pub(crate) fn select_spell_from_view(
     )
 }
 
+/// Chooses what a monster casts at. It draws the power count (1 to 7, or the shot count), works out
+/// the reach from the packet and the caster's size, and measures every eligible body on the
+/// aimed-at side (the caster's own side when the packet's cannot byte is 4, the other side
+/// otherwise). A body counts when it is within reach and, if the spell has range, in sight. With
+/// nothing in reach it does not cast. The count is cut until the caster has the psi for it. A mode
+/// above 1 aims at the best cell; mode 0 and 1 pick random bodies in reach. A cast spends the
+/// caster's 2 action points, 3 movement and the psi.
+///
+/// Original: getrange, bestchoice
 fn select_from_view(
     view: &impl SelectionView,
     warriors: &[Warrior],
@@ -367,12 +402,12 @@ fn select_from_view(
     random: &mut RandomState,
 ) -> Result<SpellSelection, RuleError> {
     let (packet, firearm_count) = targeting;
-    // combat114e16 compares the mode as a signed BYTE and aims every mode above 1 at
-    // bestchoice's body; spelltargets15cb0e shapes only modes 3 and 4 and resolvespell's
-    // mode7 arm ignores the mask. Modes 128.. are negative: they fail every signed
-    // test (114cd0, 114dde, 114efa) like mode 0 but not its equality test (114c56).
-    let mode = AttackPacket(packet).targeting_mode() as i8;
-    let caster = view.npc(caster_index)?;
+    // The mode is a signed byte. Every mode above 1 aims at bestchoice's body;
+    // spelltargets shapes only modes 3 and 4, and the mode-7 arm ignores the mask.
+    // Modes 128 and up are negative: they fail every signed test like mode 0, but
+    // not its equality test.
+    let mode = SpellInfoRecord(packet).target_type() as i8;
+    let caster = view.monster(caster_index)?;
     let start = view.position(caster_index + 10)?;
     let side = caster.record().faction()?;
     let mut next_random = random.clone();
@@ -380,10 +415,10 @@ fn select_from_view(
     if let Some(firearm_count) = firearm_count {
         count = firearm_count;
     }
-    let mut range = AttackPacket(packet)
+    let mut range = SpellInfoRecord(packet)
         .range_per_power()
         .wrapping_mul(count)
-        .wrapping_add(AttackPacket(packet).base_range())
+        .wrapping_add(SpellInfoRecord(packet).range_base())
         .wrapping_abs();
     let size = caster.record().size()?.wrapping_abs();
     range = range.wrapping_add(i16::from(size != 0) + i16::from(size == 3));
@@ -398,17 +433,16 @@ fn select_from_view(
         rotation: 0,
     };
     let mut available = 0;
-    for body in (0..warriors.len()).chain(10..10 + view.npc_count()) {
+    for body in (0..warriors.len()).chain(10..10 + view.monster_count()) {
         let eligible = if body < 10 {
-            warriors[body].record().active_flag() != 0 && warriors[body].record().stamina()? > 0
+            warriors[body].record().in_battle() != 0 && warriors[body].record().stamina()? > 0
         } else {
-            let m = &view.npc(body - 10)?.bytes;
-            EnemyRecord::from_bytes(m).stamina()? > 0
-                && EnemyRecord::from_bytes(m).mechanical_state() != 0xff
+            let record = &view.monster(body - 10)?.bytes;
+            EnemyRecord::from_bytes(record).stamina()? > 0
+                && EnemyRecord::from_bytes(record).mechanical_state() != 0xff
         };
         if !eligible
-            || ((view.faction(warriors, body)? == side)
-                != (AttackPacket(packet).saving_throw_mode() == 4))
+            || ((view.faction(warriors, body)? == side) != (SpellInfoRecord(packet).cannot() == 4))
         {
             continue;
         }
@@ -425,9 +459,10 @@ fn select_from_view(
         } else {
             distance <= f32::from(range)
         };
-        // Sight only when packet bytes 3 and 2 sum above 0, as getrange (125662) tests.
+        // Sight matters only when the range bytes sum above 0, as getrange tests.
         if in_range
-            && (AttackPacket(packet).range_per_power() + AttackPacket(packet).base_range() <= 0
+            && (SpellInfoRecord(packet).range_per_power() + SpellInfoRecord(packet).range_base()
+                <= 0
                 || view.visible(mission, start, end)?)
         {
             result.distances[body] = distance.trunc() as i16;
@@ -442,7 +477,7 @@ fn select_from_view(
         count = next_random.bound(available);
     }
     count = count.min(7);
-    while AttackPacket(packet).psi_cost().wrapping_mul(count) > caster.record().psi_points()? {
+    while SpellInfoRecord(packet).cost().wrapping_mul(count) > caster.record().psi_points()? {
         count -= 1;
         if count == 0 {
             result.count = 0;
@@ -451,33 +486,34 @@ fn select_from_view(
         }
     }
     result.count = count;
-    let desired = if mode > 0 && AttackPacket(packet).defense_category() != 9 {
+    let desired = if mode > 0 && SpellInfoRecord(packet).defense_category() != 9 {
         1
     } else {
         count
     };
-    let random_point = mode == 3 && AttackPacket(packet).area_shape() == 10;
+    let random_point = mode == 3 && SpellInfoRecord(packet).area_size() == 10;
     if !random_point && mode > 1 && result.nearest < range {
         if let Some(body) = view.best_choice(
             warriors,
             areas,
-            usize::from(AttackPacket(packet).area_shape()),
+            usize::from(SpellInfoRecord(packet).area_size()),
             side,
             &result.distances,
             range,
         )? {
             let target = view.position(body)?;
-            result.targets.push(SpellTarget {
-                first: target.0.wrapping_add(view.map_shift().0).wrapping_add(5),
-                second: target.1.wrapping_add(view.map_shift().1).wrapping_add(5),
-                kind: 3,
-            });
+            result.targets.push(SpellTarget::cell(
+                target.0.wrapping_add(view.map_shift().0).wrapping_add(5),
+                target.1.wrapping_add(view.map_shift().1).wrapping_add(5),
+            ));
         }
     } else if (random_point && result.nearest < range) || (mode < 2 && result.nearest <= range) {
         for _ in 0..desired {
             let mut selected = None;
             for _ in 0..100 {
-                let body = next_random.bound(view.npc_target_bound()).wrapping_sub(1);
+                let body = next_random
+                    .bound(view.monster_target_bound())
+                    .wrapping_sub(1);
                 let body = usize::try_from(body)
                     .ok()
                     .filter(|body| *body < result.distances.len())
@@ -493,11 +529,10 @@ fn select_from_view(
             let Some(body) = selected else { break };
             result.targets.push(if random_point {
                 let target = view.position(body)?;
-                SpellTarget {
-                    first: target.0.wrapping_add(view.map_shift().0).wrapping_add(5),
-                    second: target.1.wrapping_add(view.map_shift().1).wrapping_add(5),
-                    kind: 3,
-                }
+                SpellTarget::cell(
+                    target.0.wrapping_add(view.map_shift().0).wrapping_add(5),
+                    target.1.wrapping_add(view.map_shift().1).wrapping_add(5),
+                )
             } else {
                 SpellTarget {
                     first: body as i16,
@@ -512,20 +547,20 @@ fn select_from_view(
     {
         result.cast = true;
         let actions = result.caster.record().action_points().wrapping_sub(2);
-        let movement = result.caster.record().movement_points().wrapping_sub(3);
+        let movement = result.caster.record().movement().wrapping_sub(3);
         result.caster.record_mut().set_action_points(actions);
-        result.caster.record_mut().set_movement_points(movement);
+        result.caster.record_mut().set_movement(movement);
         result.caster.record_mut().set_reaction_ready(actions >= 1);
         let psi = result
             .caster
             .record()
             .psi_points()?
-            .wrapping_sub(AttackPacket(packet).psi_cost().wrapping_mul(count));
+            .wrapping_sub(SpellInfoRecord(packet).cost().wrapping_mul(count));
         result.caster.record_mut().set_psi_points(psi);
         if firearm_count.is_some() {
             result.count = 1;
         }
-        if AttackPacket(packet).has_randomized_animation() {
+        if SpellInfoRecord(packet).can_rotate() {
             result.rotation = (next_random.bound(4) - 1) as u8;
         }
     }

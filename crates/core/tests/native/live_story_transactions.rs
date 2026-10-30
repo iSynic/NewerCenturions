@@ -43,7 +43,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         }
         let mut adjusted = support::mission_session(&content);
         adjusted.warriors = warriors;
-        adjusted.native_work.party_mask = mask;
+        adjusted.globals.party_track = mask;
         let position = adjusted.exploration.as_mut().unwrap();
         let mut record = position.event_headers[..42].to_vec();
         record[8..40].fill(0);
@@ -100,7 +100,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
                     .iter()
                     .any(|event| matches!(event, Event::CombatStarted { battle: 1, .. }))
             );
-            assert_eq!(current_combat(&walking).order[1..7], [0, 1, 2, 3, 4, 5]);
+            assert_eq!(current_combat(&walking).battle_order[1..7], [0, 1, 2, 3, 4, 5]);
         } else {
             assert_eq!(walking.phase, Phase::Exploration);
             assert!(walking.exploration.as_ref().unwrap().presentation.is_none());
@@ -113,7 +113,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         let mut casting = support::mission_session(&content);
         casting.warriors = support::warriors(&case.bytes("before"));
         casting.random = RandomState::new(12);
-        casting.native_work.party_mask = case.n::<Vec<i16>>("mask").try_into().unwrap();
+        casting.globals.party_track = case.n::<Vec<i16>>("mask").try_into().unwrap();
         let position = casting.exploration.as_mut().unwrap();
         position.script = Some(centurions_core::ScriptState::scheduled(
             content.map(0).unwrap().script(176).unwrap().to_vec(),
@@ -141,37 +141,37 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         let mut arena = support::battle();
         // This source-composed caller starts from the fresh session's cold NPC
         // backing; the helper capture itself records only its six active rows.
-        arena.retained_npcs = neutralizing.native_work.npc_backing.clone();
-        arena.enemies.records = support::monsters(&case.bytes("before"));
-        arena.enemies.positions = vec![(10, 10); arena.enemies.records.len()];
-        arena.order[1] = 0;
-        arena.order[2] = 10;
-        arena.order[109] = 1;
-        arena.cursor = 109;
-        arena.round_scripts.counter = 2;
-        arena.round_scripts.slots[0] = 35;
+        arena.monsters = neutralizing.globals.monsters.clone();
+        arena.roster.records = support::monsters(&case.bytes("before"));
+        arena.roster.mon_pos = vec![(10, 10); arena.roster.records.len()];
+        arena.battle_order[1] = 0;
+        arena.battle_order[2] = 10;
+        arena.battle_order[109] = 1;
+        arena.battle_order_index = 109;
+        arena.round_macros.counter = 2;
+        arena.round_macros.slots[0] = 35;
         neutralizing.combat = Some(arena);
         crate::native_common::source_victory_context_recorded(
             &mut neutralizing,
             None,
             Some(case.n("counter_before")),
         );
-        neutralizing.party_buffs[2..4].copy_from_slice(&5_i16.to_be_bytes());
+        neutralizing.party_condition[2..4].copy_from_slice(&5_i16.to_be_bytes());
         let random = neutralizing.random.clone();
         assert_eq!(
             apply(Command::EndTurn, &mut neutralizing, &content).unwrap(),
             vec![Event::StoryPresented]
         );
         let paused = current_combat(&neutralizing);
-        assert_eq!(paused.cursor, 110);
-        assert_eq!(paused.round_scripts.counter, 3);
+        assert_eq!(paused.battle_order_index, 110);
+        assert_eq!(paused.round_macros.counter, 3);
         assert_eq!(
-            support::record_bytes(&paused.enemies.records),
+            support::record_bytes(&paused.roster.records),
             case.bytes("before")
         );
         assert_eq!(neutralizing.random, random);
         assert_eq!(
-            centurions_content::word(&neutralizing.party_buffs, 2).unwrap(),
+            centurions_content::word(&neutralizing.party_condition, 2).unwrap(),
             5
         );
         assert!(matches!(
@@ -188,15 +188,15 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             &content,
         );
         let arena = current_combat(&neutralizing);
-        assert!(arena.round_scripts.pending.is_none());
-        assert_eq!(arena.round_scripts.counter, 3);
+        assert!(arena.round_macros.pending.is_none());
+        assert_eq!(arena.round_macros.counter, 3);
         assert_eq!(arena.active_body(), Some(0));
         assert_eq!(
-            centurions_content::word(&neutralizing.party_buffs, 2).unwrap(),
+            centurions_content::word(&neutralizing.party_condition, 2).unwrap(),
             4
         );
         for (actual, native) in arena
-            .enemies
+            .roster
             .records
             .iter()
             .zip(support::monsters(&case.bytes("after")))
@@ -214,13 +214,13 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     let mut survivor = support::mission_session(&content);
     survivor.phase = Phase::Combat;
     let mut arena = support::battle();
-    arena.enemies.records =
+    arena.roster.records =
         support::monsters(&support::fixture("death-summon.json").array("cases")[1].bytes("before"));
-    arena.enemies.records.push(arena.enemies.records[0].clone());
-    arena.enemies.positions = vec![(20, 20), (21, 20)];
-    arena.script_enemy = 1;
-    arena.order[1] = 0;
-    let untouched = arena.enemies.records[0].clone();
+    arena.roster.records.push(arena.roster.records[0].clone());
+    arena.roster.mon_pos = vec![(20, 20), (21, 20)];
+    arena.macro_monster = 1;
+    arena.battle_order[1] = 0;
+    let untouched = arena.roster.records[0].clone();
     survivor.combat = Some(arena);
     crate::native_common::source_victory_context(&mut survivor);
     let position = survivor.exploration.as_mut().unwrap();
@@ -234,10 +234,10 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     let mut restored = checkpoint(&survivor, &content, "retained-survivor");
     replay_command(Command::Continue, &mut survivor, &mut restored, &content);
     let arena = current_combat(&survivor);
-    assert_eq!(arena.enemies.records[0], untouched);
-    assert_eq!(arena.enemies.records[1].stamina().unwrap(), 1);
-    assert_eq!(word(&arena.enemies.records[1].bytes, 14).unwrap(), 0);
-    assert_eq!(arena.enemies.records[1].bytes[0x82], 1);
+    assert_eq!(arena.roster.records[0], untouched);
+    assert_eq!(arena.roster.records[1].stamina().unwrap(), 1);
+    assert_eq!(word(&arena.roster.records[1].bytes, 14).unwrap(), 0);
+    assert_eq!(arena.roster.records[1].bytes[0x82], 1);
     // The queued curse must use its removed body's location and preserve its lingering field.
     let case = support::fixture("tactical-curse.json");
     let mut curse = support::mission_session(&content);
@@ -245,19 +245,19 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     curse.warriors = support::warriors(&case.bytes("before"));
     curse.random = RandomState::new(12);
     let mut combat = support::battle();
-    combat.map.tiles = case.words("map");
-    combat.squad.positions = (0..6).map(|i| (20 + i, 20)).collect();
-    combat.enemies.records = support::monsters(&case.bytes("enemy_before"));
-    combat.enemies.positions = vec![(20, 22)];
-    combat.order[1] = 0;
+    combat.field.tiles = case.words("map");
+    combat.squad.pos = (0..6).map(|i| (20 + i, 20)).collect();
+    combat.roster.records = support::monsters(&case.bytes("enemy_before"));
+    combat.roster.mon_pos = vec![(20, 22)];
+    combat.battle_order[1] = 0;
     let entry = centurions_core::combat::death_scripts::DeathEntry {
         script: 176,
         x: 25,
         y: 25,
         ..Default::default()
     };
-    combat.death_queue.enqueue(entry).unwrap();
-    combat.death_queue.begin();
+    combat.todo_queue.enqueue(entry).unwrap();
+    combat.todo_queue.begin();
     curse.combat = Some(combat);
     crate::native_common::source_victory_context(&mut curse);
     curse.combat_story = Some(centurions_core::combat::runtime::DeathStory {
@@ -270,12 +270,12 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     apply(Command::Continue, &mut curse, &content).unwrap();
     assert_eq!(support::record_bytes(&curse.warriors), case.bytes("after"));
     assert_eq!(
-        current_combat(&curse).enemies.records[0].bytes,
+        current_combat(&curse).roster.records[0].bytes,
         case.bytes("enemy_after")
     );
-    assert_eq!(current_combat(&curse).spell_fields, case.bytes("fields"));
+    assert_eq!(current_combat(&curse).spell_queue, case.bytes("fields"));
     assert_eq!(
-        curse.native_work.party_mask.as_slice(),
+        curse.globals.party_track.as_slice(),
         &case.words("mask")[..6]
     );
     support::assert_rng(&curse.random, &case["seed"], &case["draws"]);
@@ -288,9 +288,9 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         ..Default::default()
     };
     let combat = curse.combat.as_mut().unwrap();
-    combat.death_queue = Default::default();
-    combat.death_queue.enqueue(entry).unwrap();
-    combat.death_queue.begin();
+    combat.todo_queue = Default::default();
+    combat.todo_queue.enqueue(entry).unwrap();
+    combat.todo_queue.begin();
     curse.combat_story = Some(centurions_core::combat::runtime::DeathStory {
         script: 11,
         cursor: 1,
@@ -349,10 +349,10 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         summoning.mission_score = 10;
         summoning.random = RandomState::new(12);
         let mut combat = support::battle();
-        combat.map.tiles = case.words("map_before");
-        combat.enemies.records = support::monsters(&case.bytes("before"));
-        combat.enemies.positions = vec![(20, 20)];
-        combat.order[1] = 0;
+        combat.field.tiles = case.words("map_before");
+        combat.roster.records = support::monsters(&case.bytes("before"));
+        combat.roster.mon_pos = vec![(20, 20)];
+        combat.battle_order[1] = 0;
         let entry = centurions_core::combat::death_scripts::DeathEntry {
             script: 16,
             faction: case.n("faction"),
@@ -360,10 +360,10 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             y: 25,
             ..Default::default()
         };
-        combat.death_queue.enqueue(entry).unwrap();
-        combat.death_queue.begin();
+        combat.todo_queue.enqueue(entry).unwrap();
+        combat.todo_queue.begin();
         // death-summon captures queued opcode124 with the first retained entry.
-        summoning.native_work.death_processing.queue = 1;
+        summoning.globals.death_processing.doing_queue = 1;
         summoning.combat = Some(combat);
         crate::native_common::source_victory_context(&mut summoning);
         summoning.combat_story = Some(centurions_core::combat::runtime::DeathStory {
@@ -378,14 +378,14 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             let mut round = summoning.clone();
             round.combat_story = None;
             let c = round.combat.as_mut().unwrap();
-            c.death_queue = Default::default();
-            c.cursor = 109;
-            c.enemies.records[0].bytes[0x110..0x112].copy_from_slice(&1_i16.to_be_bytes());
+            c.todo_queue = Default::default();
+            c.battle_order_index = 109;
+            c.roster.records[0].bytes[0x110..0x112].copy_from_slice(&1_i16.to_be_bytes());
             // This separate round-death input begins with an undefeated NPC,
             // rather than the already counted queued death cloned above.
-            c.victory_work.defeated = 0;
-            c.enemies.records[0].bytes[0xce] = 2;
-            c.enemies.records[0].bytes[0xcb] = 0;
+            c.kill_counts.kill_mon = 0;
+            c.roster.records[0].bytes[0xce] = 2;
+            c.roster.records[0].bytes[0xcb] = 0;
             apply(Command::EndTurn, &mut round, &content).unwrap();
             // getup's Ready is zero, so this scripted drain death runs before the loop resumes.
             let story = round.combat_story.as_ref().unwrap();
@@ -408,12 +408,12 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         assert_eq!(summoning.mission_score, 8);
         let combat = current_combat(&summoning);
         assert_eq!(
-            support::record_bytes(&combat.enemies.records),
+            support::record_bytes(&combat.roster.records),
             case.bytes("after")
         );
-        assert_eq!(combat.map.tiles, case.words("map_after"));
+        assert_eq!(combat.field.tiles, case.words("map_after"));
         assert_eq!(
-            combat.enemies.positions[1],
+            combat.roster.mon_pos[1],
             support::positions(&case.bytes("position"))[0]
         );
         // The native receipt stops before the caller's survivor dialog entry.
@@ -443,7 +443,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
         assert_eq!(
             events.iter().any(|event| matches!(
                 event,
-                Event::Feedback(centurions_core::feedback::NativeFeedback::Warning { index: 50 })
+                Event::Feedback(centurions_core::feedback::GameFeedback::Warning { index: 50 })
             )),
             credits == 0
         );
@@ -461,9 +461,9 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     let mut captive: Session = serde_json::from_value(receipt["input"].clone()).unwrap();
     // The native probe begins with the cold zero scratch; its old input omitted it.
     captive
-        .native_work
-        .recovery_work
-        .displaced_items
+        .globals
+        .storage
+        .storage_items
         .fill(0);
     let mut record = content.map(0).unwrap().script(282).unwrap().to_vec();
     record[20..24].fill(0); // Bound this caller after taking equipment, before its battle.
@@ -506,7 +506,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     assert!(matches!(
         events.first(),
         Some(Event::Feedback(
-            centurions_core::feedback::NativeFeedback::Flash {
+            centurions_core::feedback::GameFeedback::Flash {
                 address: 0x401c02,
                 ..
             }
@@ -514,7 +514,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     ));
     let mut resumed = checkpoint(&captive, &content, "confiscated");
     let mut skirmish = captive.clone();
-    skirmish.native_work.party_mask.fill(1);
+    skirmish.globals.party_track.fill(1);
     stage(
         &mut skirmish,
         content.map(0).unwrap().script(282).unwrap().to_vec(),
@@ -522,7 +522,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     );
     apply(Command::Continue, &mut skirmish, &content).unwrap();
     assert_eq!(skirmish.phase, centurions_core::Phase::Combat);
-    assert_eq!(skirmish.suppress_allies, 1);
+    assert_eq!(skirmish.suspend_allies, 1);
     skirmish.validate(&content).unwrap();
     for candidate in [&mut captive, &mut resumed] {
         stage(
@@ -540,7 +540,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             Some(Presentation::Loot)
         );
         apply(Command::Continue, candidate, &content).unwrap();
-        assert_eq!(candidate.suppress_allies, 0);
+        assert_eq!(candidate.suspend_allies, 0);
         assert!(matches!(
             candidate.exploration.as_ref().unwrap().presentation,
             Some(Presentation::Dialogue { id: 1068, .. })
@@ -566,7 +566,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
     );
     let mut resumed = checkpoint(&choice, &content, "limited-choice");
     let slot = choice
-        .booty_items
+        .booty_list
         .iter()
         .position(|item| item.id() != 0)
         .unwrap();
@@ -576,7 +576,7 @@ fn failed_story_transaction_discards_mutations_and_ordered_effects() {
             candidate.loot_limit,
             Some(limited["remaining_after"].as_i64().unwrap() as i16)
         );
-        assert!(!candidate.booty_items.iter().any(|item| item.id() != 0));
+        assert!(!candidate.booty_list.iter().any(|item| item.id() != 0));
         assert!(matches!(
             candidate.exploration.as_ref().unwrap().presentation,
             Some(Presentation::Dialogue { id: 741, .. })
@@ -681,9 +681,9 @@ fn shared_direct_death_child_preserves_original_header_and_saved_dialogue_return
     // Controlled defeat is the same boundary used by the native nested-caller fixture.
     let arena = state.combat.as_mut().unwrap();
     arena.direct_deaths = true;
-    arena.enemies.records[0].bytes[0x110..0x112].fill(0);
+    arena.roster.records[0].bytes[0x110..0x112].fill(0);
     combat::lifecycle::kill_body(arena, &mut state.warriors, 10).unwrap();
-    arena.death_queue.processing = true;
+    arena.todo_queue.processing = true;
     let entry = arena.direct_death.take().unwrap().1;
     assert_eq!(entry.script, 51);
 
@@ -722,9 +722,9 @@ fn shared_direct_death_child_preserves_original_header_and_saved_dialogue_return
     assert_eq!(started, [14, 15]);
     for candidate in [&mut state, &mut resumed] {
         let combat = candidate.combat.as_mut().unwrap();
-        combat.enemies.records[0].bytes[0x110..0x112].fill(0);
+        combat.roster.records[0].bytes[0x110..0x112].fill(0);
         // The constructed child-return control acknowledges a completed battle.
-        combat.victory_work.defeated = combat.victory_work.total;
+        combat.kill_counts.kill_mon = combat.kill_counts.num_enemy;
     }
     step(Command::EndTurn, &mut state, &mut resumed, &content);
     assert!(state.combat.is_none());

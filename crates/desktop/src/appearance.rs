@@ -7,6 +7,9 @@ use centurions_content::{Content, ui, word};
 use centurions_core::{Command, Event, RuleError, Session, apply};
 use macroquad::prelude::*;
 
+/// The warrior appearance picker: a draft of the session in which the current
+/// warrior is given a new figure (cicn) or portrait: the six of the warrior's race, then 24
+/// choices to a page.
 pub struct Appearance {
     pub draft: Session,
     pub portrait: bool,
@@ -14,6 +17,7 @@ pub struct Appearance {
 }
 
 impl Appearance {
+    /// Opens the picker on the first page, working on a copy of the session.
     pub fn new(state: &Session, portrait: bool) -> Self {
         Self {
             draft: state.clone(),
@@ -21,24 +25,24 @@ impl Appearance {
             page: 0,
         }
     }
+    /// The cicn or portrait resource shown in picker cell `item`: for the first six cells, one
+    /// of the warrior's race; for the others, one from the current page.
     fn resource(&self, item: usize) -> Result<i16, RuleError> {
         let first = if self.portrait { 254 } else { 9254 };
         let offset = if item < 9 {
-            (word(
-                &self.draft.warriors[self.draft.selected_warrior].bytes,
-                0x32,
-            )? - 1)
-                * 6
+            (word(&self.draft.warriors[self.draft.char_select_new].bytes, 0x32)? - 1) * 6
         } else {
             self.page - 6
         };
         Ok(first + item as i16 + offset)
     }
+    /// Answers a click in the picker: choose a figure or portrait, switch to another
+    /// squad member, or turn to the next page (wrapping to the first).
     pub fn handle(&mut self, item: usize, content: &Content) -> Result<Vec<Event>, RuleError> {
         match item {
             3..=32 => apply(
                 Command::SetWarriorAppearance {
-                    warrior: self.draft.selected_warrior,
+                    warrior: self.draft.char_select_new,
                     portrait: self.portrait,
                     resource: self.resource(item)?,
                 },
@@ -46,7 +50,7 @@ impl Appearance {
                 content,
             ),
             33..=38 if item - 33 < self.draft.warriors.len() => {
-                self.draft.selected_warrior = item - 33;
+                self.draft.char_select_new = item - 33;
                 Ok(vec![Event::Sound { resource_id: 141 }])
             }
             57 => {
@@ -70,6 +74,8 @@ impl Appearance {
             _ => Err(RuleError::Refused { feedback: vec![] }),
         }
     }
+    /// Draws the appearance dialog: the page of figures or portraits, each squad
+    /// member's current choice, and the selected warrior's name, gender and race.
     pub fn draw(&self, assets: &Assets, controls: &mut Vec<Control>) {
         draw_rectangle(0., 20., 640., 460., BLACK);
         for (i, item) in assets.appearance_dialog.iter().enumerate() {
@@ -82,7 +88,7 @@ impl Appearance {
                 assets.panel(i16::from_be_bytes(item.data[..2].try_into().unwrap()), rect);
             }
             if item.kind == 8 && !matches!(number, 71 | 74..=80) {
-                assets.wrapped_color(&item.text(), rect, 12, 14., YELLOW);
+                assets.dialog_text(&item.text(), rect);
             }
             let image = if (3..=32).contains(&number) {
                 self.resource(number).ok().and_then(|id| {
@@ -113,16 +119,7 @@ impl Appearance {
                 None
             };
             if let Some(image) = image {
-                draw_texture_ex(
-                    image,
-                    rect.x,
-                    rect.y,
-                    WHITE,
-                    DrawTextureParams {
-                        dest_size: Some(rect.size()),
-                        ..Default::default()
-                    },
-                );
+                crate::assets::texture_in(image, rect);
             }
             if matches!(number, 2 | 57)
                 || (3..=32).contains(&number) && image.is_some()
@@ -135,13 +132,13 @@ impl Appearance {
                 });
             }
         }
-        let actor = &self.draft.warriors[self.draft.selected_warrior];
+        let actor = &self.draft.warriors[self.draft.char_select_new];
         let title = assets
-            .native_text
+            .game_text
             .text(if self.portrait { 0x401a4c } else { 0x4034e2 }, true)
             .unwrap_or_default();
         text(assets, 71, &title);
-        let gender = match word(&actor.bytes, 0x38).unwrap_or(0) {
+        let gender = match actor.record().gender().unwrap_or(0) {
             1 => 0x401a46,
             2 => 0x401a3e,
             _ => 0x401a38,
@@ -149,7 +146,7 @@ impl Appearance {
         text(
             assets,
             74,
-            &assets.native_text.text(gender, true).unwrap_or_default(),
+            &assets.game_text.text(gender, true).unwrap_or_default(),
         );
         for (item, table, offset) in [(75, 129, 0x32), (76, 131, 0x34)] {
             if let Some(strings) = assets
@@ -167,10 +164,11 @@ impl Appearance {
         for (i, warrior) in self.draft.warriors.iter().enumerate() {
             text(assets, 65 + i, &warrior.name);
         }
-        let selected = rect(&assets.appearance_dialog[32 + self.draft.selected_warrior]);
+        let selected = rect(&assets.appearance_dialog[32 + self.draft.char_select_new]);
         draw_rectangle_lines(selected.x, selected.y, selected.w, selected.h, 1., YELLOW);
     }
 }
+/// The dialog item's rectangle, moved down below the menu bar.
 fn rect(item: &ui::DialogItem) -> Rect {
     let [top, left, bottom, right] = item.rect;
     Rect::new(
@@ -180,8 +178,9 @@ fn rect(item: &ui::DialogItem) -> Rect {
         (bottom - top) as f32,
     )
 }
+/// Prints `value` in item `item` of the appearance dialog.
 fn text(assets: &Assets, item: usize, value: &str) {
     if let Some(field) = assets.appearance_dialog.get(item - 1) {
-        assets.wrapped_color(value, rect(field), 12, 14., YELLOW);
+        assets.dialog_text(value, rect(field));
     }
 }

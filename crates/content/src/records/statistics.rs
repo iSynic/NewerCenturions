@@ -1,6 +1,9 @@
-//! LONG counters used by attack, capture, killbody and viewcharacter.
-use crate::{ContentError, mission::long};
+//! A warrior's career statistics: signed long counters kept by attacks,
+//! captures and deaths and shown on the character screen.
+use crate::ContentError;
+use crate::bytes::{add_long_wrapping, long, put_long};
 
+/// The career statistics a warrior keeps.
 #[derive(Clone, Copy)]
 pub enum Statistic {
     DamageReceived,
@@ -20,6 +23,7 @@ pub enum Statistic {
 }
 
 impl Statistic {
+    /// Locates the counter in the warrior record.
     fn offset(self) -> usize {
         match self {
             Self::DamageReceived => 0xa42,
@@ -39,23 +43,27 @@ impl Statistic {
     }
 }
 
+/// A warrior's career statistics as a read-only view.
 pub struct CharacterStatistics<'a>(pub &'a [u8]);
+/// A warrior's career statistics as a view that can change them.
 pub struct CharacterStatisticsMut<'a>(pub &'a mut [u8]);
 
 impl CharacterStatistics<'_> {
+    /// The statistic's current count.
     pub fn value(&self, statistic: Statistic) -> Result<i32, ContentError> {
         long(self.0, statistic.offset())
     }
 }
 
 impl CharacterStatisticsMut<'_> {
+    /// Sets the statistic.
     pub fn set(&mut self, statistic: Statistic, value: i32) {
         let offset = statistic.offset();
-        self.0[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+        put_long(self.0, offset, value);
     }
+    /// Adds `amount` to the statistic, wrapping.
     pub fn add(&mut self, statistic: Statistic, amount: i32) {
         let offset = statistic.offset();
-        let previous = i32::from_be_bytes(self.0[offset..offset + 4].try_into().unwrap());
-        self.0[offset..offset + 4].copy_from_slice(&previous.wrapping_add(amount).to_be_bytes());
+        add_long_wrapping(self.0, offset, amount);
     }
 }

@@ -7,13 +7,13 @@ use centurions_core::typed_encounter::{
 
 fn item_state(state: &mut Session, case: &Value) {
     native_common::restore_party(state, &serde_json::json!({"party": case["after"]}));
-    state.native_work.ammunition_work.item = Some(case.bytes("item_work"));
-    state.native_work.loaded_item_field32 = word(&case.bytes("item_work"), 32).unwrap();
+    state.globals.loaded_items.item = Some(case.bytes("item_work"));
+    state.globals.loaded_item_field32 = word(&case.bytes("item_work"), 32).unwrap();
     if state.combat.is_none() {
         state
-            .native_work
+            .globals
             .health_context
-            .selected_warrior = case.n("member");
+            .char_select_new = case.n("member");
     }
 }
 
@@ -21,7 +21,7 @@ fn item_state(state: &mut Session, case: &Value) {
 fn password_prefix_and_case_selection_match_original_comparison() {
     let fixture = support::fixture("typed-encounter.json");
     let native =
-        centurions_content::native_text::NativeText::load(&content(), std::path::Path::new("."))
+        centurions_content::game_text::GameText::load(&content(), std::path::Path::new("."))
             .unwrap();
     let lowercase = native.bytes(0x3ffc50, 256).unwrap();
     assert_eq!(
@@ -182,8 +182,8 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             record.fill(0);
             record[8..10].copy_from_slice(&5_i16.to_be_bytes());
             record[24..26].copy_from_slice(&case.n::<i16>("encounter").to_be_bytes());
-            map.tile_properties[..40].fill(0);
-            map.tile_properties[2..4].copy_from_slice(&1_i16.to_be_bytes());
+            map.map_stats[..40].fill(0);
+            map.map_stats[2..4].copy_from_slice(&1_i16.to_be_bytes());
             map.minutes_per_tick = 0;
             let position = state.exploration.as_mut().unwrap();
             position.map = 0;
@@ -252,7 +252,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
         if returned != 0 {
             if returned == 1 {
                 // This source-only return control has no current combat actor to refresh.
-                state.native_work.initiative_work.order[0] = -1;
+                state.globals.battle_order.order[0] = -1;
                 state.combat_story = Some(centurions_core::combat::runtime::DeathStory {
                     shared_dispatch: true,
                     child_returned: true,
@@ -265,8 +265,8 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
         }
         if case.get("mask_before").is_some() {
             state
-                .native_work
-                .party_mask
+                .globals
+                .party_track
                 .copy_from_slice(&case.words("mask_before"));
         }
         assert!(matches!(
@@ -281,7 +281,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
         if let Some(warning) = case.get("warning") {
             if case.get("active_body").is_some() {
                 let mut combat = support::battle();
-                combat.order[1] = case.n("active_body");
+                combat.battle_order[1] = case.n("active_body");
                 state.combat = Some(combat);
                 state.phase = Phase::Combat;
             }
@@ -314,7 +314,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                 case.n::<Vec<i16>>("sounds")
                     .into_iter()
                     .map(
-                        |resource_id| centurions_core::feedback::NativeFeedback::Sound {
+                        |resource_id| centurions_core::feedback::GameFeedback::Sound {
                             resource_id,
                         },
                     )
@@ -325,7 +325,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             expected_feedback.extend(
                 warnings
                     .into_iter()
-                    .map(|index| centurions_core::feedback::NativeFeedback::Warning { index }),
+                    .map(|index| centurions_core::feedback::GameFeedback::Warning { index }),
             );
             assert_eq!(feedback, expected_feedback);
             support::same_session(&state, &before);
@@ -391,9 +391,9 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             bytes &support::record_bytes(&state.warriors) => &case.bytes("after"), "encounter item party";
         };
         assert_eq!(state.random, before.random);
-        assert_eq!(state.native_work.party_mask.as_slice(), case.words("mask"));
+        assert_eq!(state.globals.party_track.as_slice(), case.words("mask"));
         assert_eq!(
-            state.native_work.ammunition_work.item.as_ref().unwrap(),
+            state.globals.loaded_items.item.as_ref().unwrap(),
             &case.bytes("item_work")
         );
         if returning {
@@ -405,11 +405,11 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
             let (work, slot) = (case.bytes("item_work"), case.n::<usize>("slot"));
             let id = expected.warriors[case.n::<usize>("member")].inventory().unwrap()[slot].id();
             let story = -word(&work, 50).unwrap() - 100;
-            expected.native_work.fire_item = if word(&work, 26).unwrap() == 23 { story } else { id };
+            expected.globals.item_used = if word(&work, 26).unwrap() == 23 { story } else { id };
             item_state(&mut expected, case);
             expected
-                .native_work
-                .party_mask
+                .globals
+                .party_track
                 .copy_from_slice(&case.words("mask"));
             if returned != 0 {
                 expected.combat_story = None;
@@ -520,7 +520,7 @@ fn typed_branch_and_last_attempt_match_complete_original_script() {
                 let prior = state.clone();
                 assert!(
                     matches!(apply(command.clone(), &mut state, &content), Err(RuleError::Refused { feedback })
-                    if feedback == vec![centurions_core::feedback::NativeFeedback::Warning { index: 58 }])
+                    if feedback == vec![centurions_core::feedback::GameFeedback::Warning { index: 58 }])
                 );
                 assert!(apply(command, &mut resumed, &content).is_err());
                 support::same_session(&state, &prior);
@@ -648,8 +648,8 @@ fn typed_cancel_and_header_persistence_preserve_original_boundaries() {
             &content.map(0).unwrap().menus
         };
         state
-            .native_work
-            .encounter_work
+            .globals
+            .encounter_headers
             .load(table, id, typed)
             .unwrap();
         let position = state.exploration.as_mut().unwrap();
@@ -731,8 +731,8 @@ fn typed_cancel_and_header_persistence_preserve_original_boundaries() {
             loaded[..written.len()].copy_from_slice(&case.bytes("record"));
             let mut state = support::mission_session(&content);
             state
-                .native_work
-                .encounter_work
+                .globals
+                .encounter_headers
                 .load(&loaded, 0, typed)
                 .unwrap();
             let mut script = ScriptState::scheduled(vec![0; 42], 0);

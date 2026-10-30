@@ -4,6 +4,8 @@ use crate::{
 };
 use centurions_content::{Content, InventoryRecord};
 
+/// Runs the item commands: the pack and its information pages, shops, loot, the crate and booty,
+/// equipping, ammunition and using items.
 pub(super) fn execute(
     command: Command,
     state: &mut Session,
@@ -103,9 +105,9 @@ pub(super) fn execute(
                         silent: true,
                         warnings: false,
                     },
-                    &state.native_work.ammunition_work,
+                    &state.globals.loaded_items,
                     &mut state.random,
-                    Some(&state.native_work.inventory_record),
+                    Some(&state.globals.inventory_record),
                 )?;
                 events.extend(ammunition::commit_result(state, member, result)?);
             }
@@ -128,7 +130,7 @@ pub(super) fn execute(
                 .warriors
                 .get_mut(warrior)
                 .ok_or("drop warrior outside squad")?;
-            state.native_work.inventory_record = record
+            state.globals.inventory_record = record
                 .inventory()?
                 .get(slot)
                 .cloned()
@@ -181,11 +183,13 @@ pub(super) fn execute(
         }
         Command::UseItem { warrior, slot } => exploration::use_item(state, content, warrior, slot),
         Command::AddToCrate { item } => insert(item, &mut state.crate_items, true),
-        Command::AddToBooty { item } => insert(item, &mut state.booty_items, false),
+        Command::AddToBooty { item } => insert(item, &mut state.booty_list, false),
         _ => unreachable!("command routed to wrong subsystem"),
     }
 }
 
+/// Puts an item in the first empty slot of the crate or booty list, or reports full storage when
+/// none is empty. Crate storage also plays its sound.
 pub(crate) fn insert(
     item: InventoryRecord,
     records: &mut [InventoryRecord],

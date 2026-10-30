@@ -9,17 +9,19 @@ use centurions_content::records::{
 };
 use damage::{DamageFlags, DamagePacket, resolve_damage};
 
-/// Loaded WEAPON work and the attacker's separately retained melee-slot state.
-/// Bare attacks retain definition zero for immunity fields.
+/// The loaded weapon and the attacker's melee slot. A bare-handed attack uses
+/// definition zero for immunity.
 #[derive(Clone, Copy)]
 pub(crate) struct PreparedMeleeWeapon<'a> {
     pub definition: &'a [u8],
     pub armed: bool,
 }
 
-/// Warrior-to-warrior branch of attack 0x100af0, including the unconditional reflection roll.
-/// The selector -10 condition is rolled against the target before the hit roll and lands on
+/// A warrior attacks another warrior. Reflection is always rolled. The weapon's
+/// condition is rolled against the target before the hit roll and lands on
 /// whichever warrior takes the damage.
+///
+/// Original: attack
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn attack(
     warriors: &mut [Warrior],
@@ -73,8 +75,10 @@ pub(crate) fn attack(
     )
 }
 
-/// Prepared warrior-to-warrior arithmetic; the caller has admitted and counted the attack.
-/// `selected` supplies inventory-slot enhancement; the bare-hand bonus is retained work.
+/// A warrior-against-warrior blow once the caller has allowed and counted it.
+/// `selected` supplies the inventory slot's enhancement.
+///
+/// Original: attack
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn attack_prepared(
     warriors: &mut [Warrior],
@@ -182,12 +186,12 @@ pub(crate) fn attack_prepared(
     if victim.record().turn_skip_duration()? != 0 {
         damage = victim.record().stamina()?;
     }
-    victim.record_mut().mark_damaged();
+    victim.record_mut().mark_been_attacked();
     let health = victim.record().stamina()?.wrapping_sub(damage);
     victim.record_mut().set_stamina(health);
     victim.record_mut().add_damage_received(damage);
     if health < 1 && health > -10 {
-        victim.record_mut().set_bleeding_flag(1);
+        victim.record_mut().set_bleeding(1);
     }
     Ok((
         AttackResult {
@@ -205,20 +209,22 @@ pub(crate) fn attack_prepared(
     ))
 }
 
-/// One warrior call into attack 0x100af0, after the caller has loaded the weapon work.
+/// How a warrior's melee attack ended.
 pub enum WarriorMelee {
-    /// `packet` is the attack packet the call leaves when it was under the attack limit;
-    /// `target` is the body that took the blow.
+    /// `packet` is the attack packet left after a blow under the attack limit;
+    /// `target` is the body that took it.
     Struck {
         result: AttackResult,
         packet: Option<Vec<u8>>,
         target: i16,
     },
-    /// A type-9 spell weapon ended the attack after its count; `warned` is warning 39.
+    /// A type-9 spell weapon ended the attack; `warned` is warning 39.
     Halted { packet: Vec<u8>, warned: bool },
 }
 
-/// A warrior's melee against an enemy (bodies 10 and up) or another warrior.
+/// A warrior's melee against a monster (bodies 10 and up) or another warrior.
+///
+/// Original: attack
 #[allow(clippy::too_many_arguments)]
 pub fn warrior_melee(
     combat: &mut Combat,
@@ -228,7 +234,7 @@ pub fn warrior_melee(
     target: i16,
     items: &[Vec<u8>],
     attacks: &[u8],
-    retained: &[u8],
+    info: &[u8],
     buffs: &[u8],
 ) -> Result<WarriorMelee, RuleError> {
     let actor = usize::try_from(attacker).map_err(|_| "melee actor outside party")?;
@@ -242,7 +248,7 @@ pub fn warrior_melee(
         attacks,
         current_turn,
     )? {
-        None => (attack::attack_packet(attacks)?, true),
+        None => (attack::spell_info(attacks)?, true),
         Some(SpellWeapon::Strike {
             packet,
             rolls_condition,
@@ -254,18 +260,18 @@ pub fn warrior_melee(
         }
     };
     let (result, packet, target) = if target >= 10 {
-        let enemy = combat
-            .enemies
+        let monster = combat
+            .roster
             .records
             .get_mut((target - 10) as usize)
             .ok_or("melee target outside the enemies")?;
         let (result, packet, reflected) = attack::warrior_attack_with_base(
             &mut warriors[actor],
-            enemy,
+            monster,
             random,
             base,
             rolls_condition,
-            retained,
+            info,
             combat.difficulty,
             weapon,
         )?;
@@ -291,6 +297,8 @@ pub fn warrior_melee(
     })
 }
 
+/// The melee weapon definition a warrior swings, if it holds one. An item outside the weapon
+/// category in that slot is not supported.
 pub(crate) fn weapon<'a>(
     warrior: &[u8],
     items: &'a [Vec<u8>],
@@ -302,7 +310,7 @@ pub(crate) fn weapon<'a>(
     let definition = items
         .get(id.unsigned_abs() as usize)
         .ok_or("melee weapon definition missing")?;
-    if ItemDefinition(definition).category()?.wrapping_abs() != 2 {
+    if ItemDefinition(definition).item_type()?.wrapping_abs() != 2 {
         return Err(RuleError::Unsupported {
             action: "combat.attack",
             dependency: "melee slot item outside the weapon category",
@@ -311,21 +319,23 @@ pub(crate) fn weapon<'a>(
     Ok(Some(definition))
 }
 
-/// attack 0x1011c8: a melee weapon whose word 44 names a spell above 1100 strikes with
-/// that spell's packet (loadspell2). The selector -10 block then reads the spell as its
-/// mode, so any condition is admitted without a roll.
+/// A melee weapon that names a spell above 1100 strikes with that spell's packet.
+/// The weapon-condition test then reads the spell as its mode, so any condition is
+/// admitted without a roll.
 pub(crate) enum SpellWeapon {
     Strike {
         packet: Vec<u8>,
         rolls_condition: bool,
     },
-    /// The attack ends after its count; `warned` is warning 39 for the turn's warrior.
+    /// The attack ends; `warned` is warning 39 for the turn's warrior.
     Halt { packet: Vec<u8>, warned: bool },
 }
 
-/// A type-9 spell packet never strikes for a manual warrior. An automatic warrior whose
-/// bare-hand damage is below 8 returns to melee (toweap 0x15ef50) and strikes without
-/// the selector -10 roll; otherwise the attack ends.
+/// A type-9 spell weapon never strikes for a warrior under player control. A warrior
+/// on automatic whose bare-hand damage is below 8 returns to fists and strikes
+/// without the weapon-condition roll; otherwise the attack ends.
+///
+/// Original: attack, toweap
 pub(crate) fn spell_weapon(
     warrior: &mut Warrior,
     weapon: Option<&[u8]>,
@@ -346,20 +356,20 @@ pub(crate) fn spell_weapon(
             rolls_condition: true,
         }));
     }
-    if warrior.record().automatic_mode()? == 0 {
+    if warrior.record().computer_control()? == 0 {
         return Ok(Some(SpellWeapon::Halt {
             packet,
             warned: current_turn,
         }));
     }
-    // This record-only compatibility entry has no retained character-work bonus.
+    // Without the panel's character, the bare-hand bonus is not added.
     if warrior.record().bare_hand_damage()? >= 8 {
         return Ok(Some(SpellWeapon::Halt {
             packet,
             warned: false,
         }));
     }
-    warrior.record_mut().set_firing_mode(false);
+    warrior.record_mut().set_toggle(false);
     DevelopmentField::MeleeSound.write(&mut warrior.bytes, definition.impact_sound()?);
     Ok(Some(SpellWeapon::Strike {
         packet,
@@ -367,6 +377,11 @@ pub(crate) fn spell_weapon(
     }))
 }
 
+/// Sets a warrior's melee damage: bonus damage plus one up to the bonus plus bare-hand damage, then
+/// the weapon's melee and elemental damage scaled by the active warrior's second inventory slot
+/// enhancement.
+///
+/// Original: attack
 pub(crate) fn prepare_packet(
     packet: &mut [u8],
     warrior: &[u8],
@@ -404,8 +419,10 @@ pub(crate) fn prepare_packet(
     Ok(())
 }
 
-/// attack 0x100af0 reads WORD447d96 only for an unequipped melee slot. Keep
-/// the weapon's Single-factor calculations in prepare_packet unchanged.
+/// Prepares the attack packet; the bare-hand bonus counts only for an empty melee
+/// slot.
+///
+/// Original: attack
 pub(crate) fn prepare_packet_with_context(
     packet: &mut [u8],
     warrior: &[u8],
