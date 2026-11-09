@@ -108,7 +108,7 @@ pub(crate) fn read_scenarios(
     Ok(catalog)
 }
 
-/// A level's bestiary order, movies, note labels and opening prologue.
+/// A level's bestiary order, movies and their styles, note labels and opening prologue.
 fn read_level_tables(
     originals: &Path,
     extracted: &Path,
@@ -148,6 +148,16 @@ fn read_level_tables(
                 .decode(&read_resource(extracted, resource)?)
                 .0
                 .replace('\r', "\n"),
+        );
+    }
+    for resource in manifest
+        .resources
+        .iter()
+        .filter(|r| r.r#type == "styl" && r.original == owner)
+    {
+        tables.movie_styles.insert(
+            resource.id,
+            crate::text_runs::text_runs(&read_resource(extracted, resource)?)?,
         );
     }
     for resource in manifest

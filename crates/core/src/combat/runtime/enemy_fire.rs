@@ -42,6 +42,7 @@ pub(super) fn enemy_fire(
             monster_index,
             &prepared,
             random,
+            globals.animation_delay,
         )?
     } else {
         crate::combat::spells::select_firearm_targets_beside(
@@ -51,6 +52,7 @@ pub(super) fn enemy_fire(
             monster_index,
             &prepared,
             random,
+            globals.animation_delay,
         )?
     };
     globals.attack_count = selection.count;

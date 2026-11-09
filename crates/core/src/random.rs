@@ -24,6 +24,8 @@ impl RandomState {
         result
     }
     /// A random number from 1 up to the bound.
+    ///
+    /// Original: Rand
     #[track_caller]
     pub fn bound(&mut self, bound: i16) -> i16 {
         let result = rules::random_bound(bound, self.advance());

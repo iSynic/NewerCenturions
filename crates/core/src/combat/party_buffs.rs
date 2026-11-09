@@ -14,6 +14,16 @@ pub(crate) fn mind_shield(buffs: &[u8]) -> Result<bool, RuleError> {
     Ok(word(buffs, 14)? != 0)
 }
 
+/// Whether the party's inertial shield is up.
+pub(crate) fn inertial_shield(buffs: &[u8]) -> Result<bool, RuleError> {
+    Ok(word(buffs, 4)? != 0)
+}
+
+/// Whether the party's Wizard Eye is up, so walls no longer stop its sight.
+pub(crate) fn wizard_eye(buffs: &[u8]) -> Result<bool, RuleError> {
+    Ok(word(buffs, 8)? != 0)
+}
+
 /// Extends the party's inertial protection to at least the duration.
 pub fn extend_inertial(buffs: &mut [u8], duration: i16) -> Result<(), RuleError> {
     extend(buffs, 2, duration)

@@ -241,6 +241,7 @@ fn current_seed12_target_selection_matches_the_original_count_and_ordered_target
         6,
         &packet,
         &mut random,
+        0,
     )
     .unwrap();
     let native_targets = words(&fixture, &case["casts"][0]["targets"]);

@@ -597,6 +597,48 @@ impl Session {
         )
     }
 
+    /// Whether the battle's line of sight runs clear from one cell to another; a battle
+    /// without a land sees everything.
+    ///
+    /// Original: cansee
+    pub fn sight_clear(&self, content: &Content, from: (i16, i16), to: (i16, i16)) -> bool {
+        let (Some(combat), Some(land)) = (self.combat.as_ref(), self.land(content)) else {
+            return true;
+        };
+        crate::combat::lifecycle::can_see(
+            combat,
+            land,
+            from,
+            to,
+            self.command_preferences.animation_delay,
+        )
+        .unwrap_or(true)
+    }
+
+    /// The land with the given number as loadland brings it in: under the tile set its saved
+    /// state holds, or the authored one when the party has not been there.
+    ///
+    /// Original: loadland
+    pub fn land_numbered<'a>(
+        &self,
+        content: &'a Content,
+        index: i32,
+    ) -> Option<&'a centurions_content::mission::OpeningMission> {
+        if self.exploration.as_ref().is_some_and(|p| p.map == index) {
+            return self.land(content);
+        }
+        match self
+            .visited_maps
+            .get(&index)
+            .and_then(|records| RegionTable(&records.regions).stored_terrain())
+        {
+            Some(terrain) => {
+                content.land_at(self.mission.as_deref(), self.scenario_level, index, terrain)
+            }
+            None => self.map(content, index),
+        }
+    }
+
     /// The original quits when a land names a tile set the installation cannot
     /// supply, so a land change is refused before it alters the session.
     ///

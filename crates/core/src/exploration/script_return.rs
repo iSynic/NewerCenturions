@@ -211,26 +211,15 @@ pub(super) fn finish_script(
     }])
 }
 
-/// The text of a dialogue with ^1, ^2 and so on replaced by the names of the first, second and so
-/// on warrior; a fallen warrior's name gives way to the last warrior still standing.
+/// The text of a dialogue with its name tokens filled in from the squad.
+///
+/// Original: textbox
 pub(crate) fn dialogue(
     map: &OpeningMission,
     warriors: &[Warrior],
     id: i16,
 ) -> Result<String, RuleError> {
-    let mut text = map.dialogue(id)?;
-    for index in 0..warriors.len() {
-        let selected = if warriors[index].stamina()? < 1 {
-            (0..warriors.len())
-                .rev()
-                .find(|i| warriors[*i].stamina().unwrap_or(0) > 0)
-                .unwrap_or(index)
-        } else {
-            index
-        };
-        text = text.replace(&format!("^{}", index + 1), &warriors[selected].name);
-    }
-    Ok(text)
+    crate::story::text::substitute_names(&map.dialogue(id)?, warriors)
 }
 
 /// Every suspended script shares the dispatch stamp loaddoor2 writes. Turn and

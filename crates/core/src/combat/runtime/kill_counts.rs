@@ -35,6 +35,14 @@ impl KillCounts {
         self.kill_mon = self.num_enemy;
     }
 
+    /// The hostile monsters still to defeat, as the combat panel shows them: the defeated
+    /// count taken from the hostile count with wrapping.
+    ///
+    /// Original: number
+    pub fn remaining(self) -> i16 {
+        self.num_enemy.wrapping_sub(self.kill_mon)
+    }
+
     /// Whether hostile monsters remain undefeated.
     pub(crate) fn has_remaining(self) -> bool {
         self.num_enemy > self.kill_mon

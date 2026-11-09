@@ -131,6 +131,8 @@ pub fn restore_stage_warriors(warriors: &[Warrior]) -> Result<Vec<Warrior>, Rule
 
 /// Begins a scenario stage: the party goes to the stage's starting square and map, the warriors are
 /// restored, held-over allies are cleared, and the stage's start script and prologue are queued.
+///
+/// Original: Displaymissionname
 pub(crate) fn begin_stage(
     state: &mut Session,
     content: &Content,

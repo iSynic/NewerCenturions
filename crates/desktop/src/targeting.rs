@@ -6,18 +6,43 @@ use crate::{
     presentation::{Action, Control, Inspection, UiState},
 };
 use centurions_content::{Content, word};
-use centurions_core::{Command, MedicalTarget, Session};
+use centurions_core::{
+    Command, MedicalTarget, Session, combat::targeting::readout, feedback::GameFeedback,
+};
 use macroquad::prelude::*;
 
 /// The target the player is weighing: the hit estimate under the pointer, whether a firearm aims at
-/// the map, and the medical cancel prompt.
+/// the map, the medical cancel prompt, and the cell the cast rectangle's icon points at.
 #[derive(Default)]
 pub struct Targeting {
     pub firearm_map: bool,
     pub estimate_target: Option<i16>,
     pub estimate: std::cell::RefCell<Option<EstimateCache>>,
     pub medical_cancel: bool,
+    /// The view cell last chosen while targeting, counted from the view's top left, which the
+    /// cast rectangle's facing icon and the firearm's turned icon point at; it starts at the
+    /// view's top left cell and is not moved when the view scrolls.
+    pub cursor: (i16, i16),
+    /// The warrior whose turn it last was: the facing icon points away from his cell.
+    pub actor: i16,
+    /// The view cell under the pointer as the target loop last read it, counted from the view's
+    /// top left, which the range readout measures; it starts at the view's top left cell and is
+    /// not moved when the view scrolls.
+    pub hover: (i16, i16),
+    /// The colour cursor the range readout last chose, taken when the pointer is drawn.
+    pub count_cursor: std::cell::Cell<Option<i16>>,
 }
+
+/// The last column of the view the target loop reads the pointer in.
+const LAST_COLUMN: i16 = 14;
+/// The last row of the view the target loop reads the pointer in.
+const LAST_ROW: i16 = 13;
+/// The text size of the range readout.
+const READOUT_SIZE: u16 = 17;
+/// The readout's baseline, and the left edges of the distance and of the maximum range.
+const READOUT_BASELINE: f32 = 573.;
+const DISTANCE_LEFT: f32 = 640.;
+const MAXIMUM_LEFT: f32 = 765.;
 
 /// Whether the player is choosing targets: for a firearm, a scan, bandaging or
 /// a medical item.
@@ -31,14 +56,46 @@ pub fn active(state: &Session, ui: &UiState) -> bool {
         )
 }
 
+/// The view cell under the pointer: the pointer's cell counted from the view's top left, with
+/// negative offsets taken toward zero and the cell held inside the view.
+///
+/// Original: combatchoice
+fn view_cell(pointer: Vec2) -> (i16, i16) {
+    (
+        (((pointer.x - layout::MAP.x) / 32.) as i16).clamp(0, LAST_COLUMN),
+        (((pointer.y - layout::MAP.y) / 32.) as i16).clamp(0, LAST_ROW),
+    )
+}
+
+/// The map cell a view cell stands for: the view cell added to the view's origin.
+///
+/// Original: combatchoice
+fn map_cell(state: &Session, ui: &UiState, cell: (i16, i16)) -> (i16, i16) {
+    let (x, y) = crate::combat_controls::origin(state, ui).unwrap_or((0, 0));
+    (x.wrapping_add(cell.0), y.wrapping_add(cell.1))
+}
+
+/// The offset from the acting warrior to the view cell last chosen. The warrior's position is
+/// counted from the view's top left as it is now, so a scroll since the cell was chosen moves
+/// the warrior and not the cell.
+///
+/// Original: combatchoice
+pub fn aim_offset(state: &Session, ui: &UiState) -> (i16, i16) {
+    let Some(actor) = state
+        .combat
+        .as_ref()
+        .and_then(|combat| combat.squad.pos.get(ui.targeting.actor as usize))
+    else {
+        return (0, 0);
+    };
+    let (x, y) = map_cell(state, ui, ui.targeting.cursor);
+    (x.wrapping_sub(actor.0), y.wrapping_sub(actor.1))
+}
+
 /// The action Escape stands for while choosing targets.
 fn cancellation(state: &Session, ui: &UiState) -> Action {
     if state.medical_continuation.is_some() || state.psi_selection.is_some() {
-        if ui.targeting.medical_cancel {
-            Action::KeepMedicalTarget
-        } else {
-            Action::MedicalCancel
-        }
+        Action::MedicalCancel
     } else if state.outdoor_psi.is_some() {
         Action::Command(Command::CancelOutdoorPsi)
     } else if ui.inspection == Some(Inspection::Bandage) {
@@ -136,6 +193,14 @@ pub fn input(
     controls: &[Control],
     pointer: Option<Vec2>,
 ) -> Option<Action> {
+    if let Some(actor) = crate::acting::active_warrior(state) {
+        ui.targeting.actor = actor;
+    }
+    if state.combat.is_some()
+        && let Some(point) = pointer
+    {
+        ui.targeting.hover = view_cell(point);
+    }
     if !ui.targeting.medical_cancel
         && state.combat.is_some()
         && (state.psi_selection.is_some()
@@ -175,7 +240,14 @@ pub fn input(
             return Some(Action::RotatePsi);
         }
     }
-    if is_key_pressed(KeyCode::Escape) || state.outdoor_psi.is_some() && is_key_pressed(KeyCode::A)
+    if ui.targeting.medical_cancel {
+        // The abort question answers to y and n; Escape does not close it.
+        if let Some(answer) = crate::story_dialogs::typed_answer(b'y', b'n') {
+            let (yes, no) = abort_answers(state);
+            return Some(if answer { yes } else { no });
+        }
+    } else if is_key_pressed(KeyCode::Escape)
+        || state.outdoor_psi.is_some() && is_key_pressed(KeyCode::A)
     {
         return Some(cancellation(state, ui));
     }
@@ -210,6 +282,7 @@ pub fn input(
             && layout::MAP.contains(pointer)
             && let Some(point) = crate::combat_controls::map_position(state, ui, pointer)
         {
+            ui.targeting.cursor = view_cell(pointer);
             return map_action(state, content, ui, point);
         }
     }
@@ -256,37 +329,154 @@ fn spell_info(
     ))
 }
 
-/// Marks `body`'s cell as the `rank`-th target.
+/// The cicn the cast rectangle shows while targets are chosen. Its cycling frame advances every
+/// eight ticks, and a weapon's facing icon takes its look from the loaded weapon.
+///
+/// Original: combatchoice
+fn aim_icon(state: &Session, ui: &UiState, info: &centurions_core::SpellInfo) -> Option<i16> {
+    let combat = state.combat.as_ref()?;
+    let facing_look = state
+        .globals
+        .loaded_items
+        .weapon
+        .as_deref()
+        .and_then(|weapon| word(weapon, 0x36).ok())
+        .unwrap_or(0);
+    let frame = (get_time() * crate::TICKS_PER_SECOND / 8.) as i64 % 8;
+    centurions_core::combat::targeting::aim::aim_icon(
+        info,
+        combat.in_spell,
+        frame as i16,
+        facing_look,
+        aim_offset(state, ui),
+    )
+}
+
+/// Draws the distance to the cell under the pointer, red beyond the power's reach and yellow
+/// within it, and the power's reach in green; the cursor counts the targets still to pick.
+///
+/// Original: updatespell
+fn draw_readout(state: &Session, content: &Content, assets: &Assets, ui: &UiState) {
+    let choice = ui
+        .psi
+        .choice
+        .filter(|_| ui.inspection == Some(Inspection::PsiTargets));
+    let Some(readout) = readout::range_readout(
+        state,
+        content,
+        choice,
+        map_cell(state, ui, ui.targeting.hover),
+    ) else {
+        return;
+    };
+    let distance = if readout.beyond_maximum() {
+        layout::RED_COLOR
+    } else {
+        layout::YELLOW_COLOR
+    };
+    assets.text(
+        &readout.distance.to_string(),
+        DISTANCE_LEFT,
+        READOUT_BASELINE,
+        READOUT_SIZE,
+        distance,
+    );
+    assets.text(
+        &readout.maximum.to_string(),
+        MAXIMUM_LEFT,
+        READOUT_BASELINE,
+        READOUT_SIZE,
+        layout::TOOLBOX_GREEN,
+    );
+    ui.targeting.count_cursor.set(Some(readout.cursor));
+}
+
+/// Marks `body`'s cell as the `rank`-th target, unless the body has no stamina left. A monster's
+/// marker follows its size.
+///
+/// Original: showtargets
 fn marker(state: &Session, assets: &Assets, ui: &UiState, body: i16, rank: usize) {
     let Some(combat) = &state.combat else { return };
-    let point = if crate::acting::is_warrior_body(body) {
-        combat.squad.pos.get(body as usize)
+    let (point, size) = if crate::acting::is_warrior_body(body) {
+        let alive = state
+            .warriors
+            .get(body as usize)
+            .is_some_and(|warrior| warrior.stamina().unwrap_or(0) >= 1);
+        (combat.squad.pos.get(body as usize).filter(|_| alive), 0)
     } else {
-        combat.roster.mon_pos.get((body - 10) as usize)
+        let monster = combat.roster.records.get((body - 10) as usize);
+        (
+            combat
+                .roster
+                .mon_pos
+                .get((body - 10) as usize)
+                .filter(|_| monster.is_some_and(|monster| monster.stamina().unwrap_or(0) >= 1)),
+            monster.map_or(0, |monster| monster.record().size().unwrap_or(0)),
+        )
     };
     if let Some(point) = point {
-        cell_marker(state, assets, ui, *point, rank);
+        cell_marker(state, assets, ui, *point, size, rank);
     }
 }
 
-/// The target key plots cicn 14999 + n over the n-th target's 32-pixel cell; a
-/// location triple uses the cursor cell.
+/// The size a location target's marker takes: the monster template's size, which nothing resets
+/// between battles.
 ///
-/// Original: combatchoice
-fn cell_marker(state: &Session, assets: &Assets, ui: &UiState, point: (i16, i16), rank: usize) {
+/// Original: showtargets
+fn location_size(state: &Session) -> i16 {
+    state
+        .globals
+        .monster_pick
+        .known()
+        .and_then(|template| word(&template, 0x10).ok())
+        .unwrap_or(0)
+}
+
+/// The target key plots cicn 14999 + n over the n-th target's 32-pixel cell, moved up 16 pixels
+/// for a size of 1 or 3 and left 16 above 1; a location triple uses the cursor cell.
+///
+/// Original: showtargets
+fn cell_marker(
+    state: &Session,
+    assets: &Assets,
+    ui: &UiState,
+    point: (i16, i16),
+    size: i16,
+    rank: usize,
+) {
     if let Some((vx, vy)) = crate::combat_controls::origin(state, ui) {
-        let rect = Rect::new(
+        let mut rect = Rect::new(
             (point.0 - vx) as f32 * 32.,
             20. + (point.1 - vy) as f32 * 32.,
             32.,
             32.,
         );
-        if layout::MAP.contains(vec2(rect.x, rect.y))
-            && let Some(image) = assets.icons.get(&(15000 + rank as i16))
-        {
-            crate::assets::texture_in(image, rect);
+        let size = size.wrapping_abs();
+        if size == 1 || size == 3 {
+            rect.y -= 16.;
+        }
+        if size > 1 {
+            rect.x -= 16.;
+        }
+        if let Some(image) = assets.icons.get(&(15000 + rank as i16)) {
+            crate::presentation::plot_clipped(image, rect, layout::MAP);
         }
     }
+}
+
+/// The answers of the abort question asked when the player gives up choosing a target for a
+/// medical item or a Psi power with a charge: yes gives the charge up and no keeps choosing.
+///
+/// Original: combatchoice
+fn abort_answers(state: &Session) -> (Action, Action) {
+    let abort = if state.psi_selection.is_some() {
+        Command::CancelPsiSelection
+    } else {
+        Command::SelectMedicalTarget {
+            selection: MedicalTarget::ConfirmedCancel,
+        }
+    };
+    (Action::Command(abort), Action::KeepMedicalTarget)
 }
 
 /// Draws the targeting screen: the target markers, the hit estimate, the
@@ -300,24 +490,19 @@ pub fn draw(
 ) {
     controls.clear();
     if ui.targeting.medical_cancel {
-        let prompt = assets
-            .game_text
-            .text(crate::game_strings::ABORT_CHARGE_QUESTION, false)
-            .unwrap_or_default();
-        let command = if state.psi_selection.is_some() {
-            Command::CancelPsiSelection
-        } else {
-            Command::SelectMedicalTarget {
-                selection: MedicalTarget::ConfirmedCancel,
-            }
-        };
-        crate::story_dialogs::question(
+        crate::feedback::draw_message(
             assets,
-            &prompt,
-            Action::Command(command),
-            Action::KeepMedicalTarget,
-            controls,
+            Vec2::ZERO,
+            &GameFeedback::Flash {
+                address: crate::game_strings::ABORT_CHARGE_QUESTION,
+                x: 30,
+                y: 50,
+                wait: -1,
+                sound: 0,
+            },
         );
+        let (yes, no) = abort_answers(state);
+        crate::story_dialogs::plain_question_strip(assets, yes, no, controls);
         return;
     }
     if state.outdoor_psi.is_some() {
@@ -381,6 +566,8 @@ pub fn draw(
         && let Some(info) = spell_info(state, content, ui, power)
     {
         crate::presentation::draw_info(assets, &info);
+        crate::presentation::draw_aim(assets, aim_icon(state, ui, &info));
+        draw_readout(state, content, assets, ui);
     }
     let finish = if state.psi_selection.is_some() {
         Command::FirePsiSelection
@@ -507,7 +694,7 @@ pub fn draw(
         .and_then(|c| c.firearm_selection.as_ref())
     {
         for (rank, location) in selection.locations.iter().enumerate() {
-            cell_marker(state, assets, ui, *location, rank);
+            cell_marker(state, assets, ui, *location, location_size(state), rank);
         }
     }
 }

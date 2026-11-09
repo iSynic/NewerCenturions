@@ -21,6 +21,8 @@ fn apply_inner(
         | Command::ClinicControl { .. }
         | Command::ViewCreature { .. }
         | Command::ViewNote { .. }
+        | Command::RevealSight
+        | Command::ChangeMusic { .. }
         | Command::EndMission
         | Command::SetDifficulty { .. }
         | Command::EnterMission { .. }
@@ -63,6 +65,7 @@ fn apply_inner(
         | Command::ShowLootItemInformation { .. }
         | Command::ShowDraggedItemInformation { .. }
         | Command::ChooseAmmunition { .. }
+        | Command::ChooseCombatAmmunition { .. }
         | Command::UnequipItem { .. }
         | Command::Reload { .. }
         | Command::FitAmmunition { .. }
@@ -98,6 +101,7 @@ fn apply_inner(
         | Command::CancelFireTargets
         | Command::CastPsi { .. }
         | Command::CastPartyPsi { .. }
+        | Command::FastSpell { .. }
         | Command::CastPsiOnWarrior { .. }
         | Command::BeginMedicalItem { .. }
         | Command::BeginLearnedHeal { .. }

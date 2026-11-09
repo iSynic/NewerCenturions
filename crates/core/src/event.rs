@@ -82,6 +82,11 @@ pub struct SpellInfo {
     /// A firearm (category 9), which clears the flight box and shows `weapon_icon`.
     pub firearm: bool,
     pub weapon_icon: Option<i16>,
+    /// The look of the spell's cursor and missile icons (packet byte 17).
+    pub look: i16,
+    /// A firearm whose loaded weapon takes caliber 16 or 18, which turns its icon toward the
+    /// target when shown.
+    pub missile: bool,
     /// STR# ID and index; none when the work record it reads is not represented.
     pub name: Option<(i16, i16)>,
     /// `power_level`, or a firearm's own count; none when not represented.
@@ -125,6 +130,8 @@ impl SpellInfo {
             icon = detail + 10013;
         }
         let firearm = byte(19) == 9;
+        let missile =
+            firearm && matches!(weapon.and_then(|weapon| word(weapon, 32)), Some(16 | 18));
         let name = if firearm {
             weapon.and_then(|weapon| word(weapon, 0x66)).and_then(|id| {
                 let base = crate::rules::selection_base(id);
@@ -151,6 +158,8 @@ impl SpellInfo {
             weapon_icon: weapon
                 .and_then(|weapon| word(weapon, 10))
                 .filter(|_| firearm),
+            look: i16::from(byte(17) as i8),
+            missile,
             name,
             number: if firearm { number } else { Some(count) },
             lead: 0,

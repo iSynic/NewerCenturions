@@ -1,6 +1,7 @@
 # The New Centurions
 
 - The supplied Centurions 1.3.2 binary is the behavior authority. Realmz projects are read-only references.
+- Always seek source parity with the 1.3.2 binary: behaviour, presentation, text, ordering and RNG. A deviation is allowed only as an explicit exception approved by the owner and recorded in `docs/source-notes/`. Missing parity is a gap to close, not a choice to make; do not substitute a simpler behaviour, and do not hold a recovered original behaviour for a decision unless it needs an exception.
 - Preserve `NewCenturions/` byte-for-byte. Generated extraction and Ghidra outputs belong in ignored `analysis/`.
 - Recover actions with resource/address evidence, integer widths, ordered effects, and RNG consumption. Record that evidence in `docs/` subsystem notes, `evidence/` and fixture provenance, not in code comments. Unsupported gameplay must return a diagnostic without changing state.
 - Keep rule state and randomness independent of desktop presentation. Use the same command boundary for desktop and replay.

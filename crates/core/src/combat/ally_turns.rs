@@ -310,6 +310,7 @@ fn fire_rifle(
         &mut globals.buffers,
         globals.display_writers,
         &mut globals.attack_count,
+        globals.animation_delay,
     )
 }
 
@@ -370,7 +371,14 @@ fn approach(
         {
             break;
         }
-        runtime::select_enemy_target(combat, warriors, mission, random, body)?;
+        runtime::select_enemy_target(
+            combat,
+            warriors,
+            mission,
+            random,
+            body,
+            globals.animation_delay,
+        )?;
         let moved = runtime::move_actor_with_reactions(
             combat,
             warriors,

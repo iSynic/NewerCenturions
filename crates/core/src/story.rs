@@ -28,6 +28,7 @@ pub mod remove_allies;
 pub mod schedule;
 pub mod skill;
 pub(crate) mod spell;
+pub mod text;
 pub mod treasure;
 pub mod variables;
 

@@ -37,6 +37,7 @@ pub(super) fn apply(state: &mut Session, content: &Content) -> Result<FirearmOut
         &state.globals.monsters,
         &state.globals.battlefield,
         &state.globals.warrior_table,
+        state.command_preferences.animation_delay,
     )?;
     let selection = if weapon_id == 0 || SpellInfoRecord(&prepared.packet).defense_category() != 9 {
         spells::select_spell_info_from_view(

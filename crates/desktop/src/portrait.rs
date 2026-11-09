@@ -14,23 +14,22 @@ pub struct Marks {
     pub conditions_left: Option<f32>,
     /// Whether the member is on automatic.
     pub automatic: bool,
+    /// Whether a battle is on: a warrior who is down but no longer bleeding then shows the
+    /// stabilised mark.
+    pub in_combat: bool,
 }
 
 /// Plots the portrait with its 32-pixel box's upper-left corner at `at`. A
 /// 40-pixel cicn grows the box by four on every side.
 ///
-/// Original: plotportrait
+/// Original: plotportrait, updatepictbox
 pub fn draw(assets: &Assets, warrior: &Warrior, at: Vec2, marks: Marks) {
     let record = warrior.record();
     let texture = record
         .portrait()
         .ok()
         .and_then(|id| assets.portraits.get(&id));
-    let rect = if texture.is_some_and(|texture| texture.height() == 40.) {
-        Rect::new(at.x - 4., at.y - 4., 40., 40.)
-    } else {
-        Rect::new(at.x, at.y, 32., 32.)
-    };
+    let rect = plot_box(texture, at);
     if let Some(texture) = texture {
         icon(texture, rect);
     }
@@ -67,20 +66,39 @@ pub fn draw(assets: &Assets, warrior: &Warrior, at: Vec2, marks: Marks) {
         }
         assets.text(&label, rect.x + 5., rect.bottom() - 3., 10, WHITE);
     }
-    // updatepictbox: stamina below 1 adds cicn 2019 over the box grown by four,
-    // and below -9 also cicn 2015 over the 32-pixel box.
+    // updatepictbox: stamina below 1 adds cicn 2019 over the box grown by four; then below -9
+    // cicn 2015, or in a battle for a warrior who is not bleeding cicn 177, over the 32-pixel box.
     let stamina = record.stamina().unwrap_or(0);
     if stamina < 1 {
+        let overlay = if stamina < -9 {
+            Some(2015)
+        } else if record.bleeding() == 0 && marks.in_combat {
+            Some(177)
+        } else {
+            None
+        };
         for (id, rect) in [
-            (2019, Rect::new(at.x - 4., at.y - 4., 40., 40.)),
-            (2015, Rect::new(at.x, at.y, 32., 32.)),
+            (Some(2019), Rect::new(at.x - 4., at.y - 4., 40., 40.)),
+            (overlay, Rect::new(at.x, at.y, 32., 32.)),
         ] {
-            if (id == 2019 || stamina < -9)
+            if let Some(id) = id
                 && let Some(texture) = assets.icons.get(&id)
             {
                 icon(texture, rect);
             }
         }
+    }
+}
+
+/// The box a portrait cicn is plotted in with its 32-pixel box's upper-left corner at `at`: a
+/// 40-pixel cicn grows the box by four on every side.
+///
+/// Original: plotportrait
+pub fn plot_box(texture: Option<&Texture2D>, at: Vec2) -> Rect {
+    if texture.is_some_and(|texture| texture.height() == 40.) {
+        Rect::new(at.x - 4., at.y - 4., 40., 40.)
+    } else {
+        Rect::new(at.x, at.y, 32., 32.)
     }
 }
 

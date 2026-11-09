@@ -274,6 +274,8 @@ impl WarriorEditor {
     }
     /// Draws the Upgrade Warrior dialog: the warrior's attributes, statistics and
     /// the controls.
+    ///
+    /// Original: showupgrade
     pub fn draw(&self, content: &Content, assets: &Assets, controls: &mut Vec<Control>) {
         clear_background(BLACK);
         assets.panel(165, crate::layout::DIALOG_FRAME);

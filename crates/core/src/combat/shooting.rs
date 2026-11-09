@@ -267,7 +267,13 @@ pub(crate) fn admit(
         return Err(refused(crate::feedback::CombatRefusal::OutOfRange));
     }
     let mission = state.land(content).unwrap();
-    if !lifecycle::can_see(combat, mission, start, end, 0)? {
+    if !lifecycle::can_see(
+        combat,
+        mission,
+        start,
+        end,
+        state.command_preferences.animation_delay,
+    )? {
         return Err(refused(crate::feedback::CombatRefusal::Blocked));
     }
     let warrior = &state.warriors[actor as usize];
@@ -326,8 +332,14 @@ pub(crate) fn admit_location(
     } else if packet.range_base() + packet.range_per_power() > 0 {
         // Line of sight is tested only when packet bytes 2 and 3 sum above 0.
         let map = state.land(content).ok_or("combat map unavailable")?;
-        (!lifecycle::can_see(combat, map, start, location, 0)?)
-            .then_some(crate::feedback::CombatRefusal::Blocked)
+        (!lifecycle::can_see(
+            combat,
+            map,
+            start,
+            location,
+            state.command_preferences.animation_delay,
+        )?)
+        .then_some(crate::feedback::CombatRefusal::Blocked)
     } else {
         None
     };

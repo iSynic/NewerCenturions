@@ -121,6 +121,11 @@ impl RegionTable<'_> {
     pub fn light_level(&self) -> Result<u8, ContentError> {
         Ok(span(self.0, 522, 1)?[0])
     }
+    /// Whether the land shows only the squares the party has seen. Squares not seen yet are drawn
+    /// as the blank tile.
+    pub fn limits_sight(&self) -> bool {
+        self.0.get(523).is_some_and(|byte| *byte != 0)
+    }
     /// Stops the scan of lower regions and the retry after avoiding a battle.
     pub fn exclusive(&self, region: usize) -> bool {
         self.0[524 + region] != 0

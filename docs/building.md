@@ -129,7 +129,9 @@ production code. The gate is a ratchet on the count of maintained test code line
 not exceed `MAINTAINED_TEST_CEILING` in the tool:
 
 - Lower the ceiling whenever consolidation removes lines.
-- Never raise it to admit new tests; offset new coverage by consolidating.
+- Never raise it to admit new tests; offset new coverage by consolidating. The one approved
+  exception raised it from 6549 to 6580 to restore the sight-reveal and facing tests, and it
+  is not to be raised again.
 - A count rather than a ratio, so that simplifying production code never fails
   the gate.
 

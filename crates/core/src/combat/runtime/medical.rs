@@ -223,6 +223,7 @@ pub fn select_medical_target(
         &mut state.random,
         &pending,
         &selection,
+        state.command_preferences.animation_delay,
     )?;
     let packet = &state.combat.as_ref().unwrap().spell_info;
     let health = &mut state.globals.health_context;

@@ -13,6 +13,13 @@ mod zero;
 pub use zero::{ZeroOwners, ZeroTimeReturn};
 pub(crate) use zero::{resume_owned, store_zero_record, validate_zero, zero_tick};
 
+/// Outside battle the party's fatigue is held between 4 and 135.
+///
+/// Original: updatefat
+pub(crate) fn hold_fatigue(fatigue: i16) -> i16 {
+    fatigue.clamp(4, 135)
+}
+
 /// Lets time pass on the land by a number of ticks of so many minutes each. When the minutes reach
 /// an hour, party buffs wear off, the warriors are reduced outdoors, fatigue rises and psi energy
 /// returns. At hour 24 the day turns and the calendar is scanned, and at hour 12 the warriors
@@ -84,7 +91,7 @@ pub(crate) fn advance(
         }
         position.minute -= 60;
         position.hour = position.hour.wrapping_add(1);
-        position.fatigue = position.fatigue.saturating_add(1).clamp(4, 135);
+        position.fatigue = hold_fatigue(position.fatigue.saturating_add(1));
         for warrior in &mut state.warriors {
             let bytes = &mut warrior.bytes;
             let energy = WarriorRecord::from_bytes(bytes).psi_points()?;

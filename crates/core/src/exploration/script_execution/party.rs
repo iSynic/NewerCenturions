@@ -223,12 +223,16 @@ pub(super) fn execute(
                 ExtraIndex::Magnitude(parameter),
                 None,
             )?;
-            position.fatigue = match FatigueChange::decode(extra)? {
-                FatigueChange::Set(value) => value,
+            // Keeping the fatigue leaves it exactly as stored, without the clamp.
+            match FatigueChange::decode(extra)? {
+                FatigueChange::Set(value) => position.fatigue = crate::time::hold_fatigue(value),
                 // Divides first, then multiplies with 16-bit wrapping.
-                FatigueChange::Percent(percent) => (percent / 100).wrapping_mul(position.fatigue),
-                FatigueChange::Keep => position.fatigue,
-            };
+                FatigueChange::Percent(percent) => {
+                    position.fatigue =
+                        crate::time::hold_fatigue((percent / 100).wrapping_mul(position.fatigue));
+                }
+                FatigueChange::Keep => {}
+            }
         }
         Operation::SetMissionFlag => {
             state.flags = story::set_mission_flag(&state.flags, parameter)?;

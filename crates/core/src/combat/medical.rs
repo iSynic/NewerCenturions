@@ -248,6 +248,7 @@ pub fn resolve(
     random: &mut RandomState,
     pending: &MedicalContinuation,
     target: &MedicalTarget,
+    delay: i16,
 ) -> Result<MedicalResolution, RuleError> {
     if pending.actor >= warriors.len()
         || !(1..=6).contains(&warriors.len())
@@ -309,6 +310,7 @@ pub fn resolve(
         &mut next_random,
         pending,
         target,
+        delay,
     )?;
     *combat = next_combat;
     warriors.clone_from_slice(&next_warriors);
@@ -326,6 +328,7 @@ fn resolve_inner(
     random: &mut RandomState,
     pending: &MedicalContinuation,
     target: &MedicalTarget,
+    delay: i16,
 ) -> Result<MedicalResolution, RuleError> {
     let mut flights = vec![];
     let (member, portrait, mut events) = match *target {
@@ -383,7 +386,7 @@ fn resolve_inner(
                     }],
                 });
             }
-            if !lifecycle::can_see(combat, mission, from, (x, y), 0)? {
+            if !lifecycle::can_see(combat, mission, from, (x, y), delay)? {
                 return Err(RuleError::Refused {
                     feedback: vec![crate::feedback::GameFeedback::Combat {
                         kind: crate::feedback::CombatRefusal::Blocked,

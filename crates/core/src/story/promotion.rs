@@ -41,6 +41,8 @@ pub struct Promotion {
 /// The victory points for `level`: the sum, over that many levels, of a share that starts at 714 and
 /// is multiplied at each level by a factor that begins at 1.45, falls by 0.01 a level and stays at
 /// least 1.15.
+///
+/// Original: getexp
 pub fn victory_points_threshold(level: i16) -> Result<i32, RuleError> {
     let mut running = 714.0_f32;
     let mut total = 0_i32;

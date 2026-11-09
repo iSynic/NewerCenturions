@@ -3,6 +3,22 @@ use crate::{Event, RuleError, Session};
 use centurions_content::records::InventorySlots;
 use centurions_content::{Content, InventoryRecord};
 
+/// Makes the warrior named on the shop window's character row the buyer. The warrior shown before
+/// has the pack tidied, and the new buyer's load is weighed again.
+///
+/// Original: choice, change
+fn change_buyer(state: &mut Session, content: &Content, buyer: usize) -> Result<(), RuleError> {
+    let selected = state.globals.health_context.char_select_new;
+    if buyer == selected || buyer >= state.warriors.len() {
+        return Ok(());
+    }
+    if let Some(previous) = state.warriors.get_mut(selected) {
+        crate::items::compact(previous)?;
+    }
+    state.set_warrior_selector(buyer);
+    super::calculate_weight(&mut state.warriors[buyer], content)
+}
+
 /// Shows all nine visible rows, then the selected owned row.
 ///
 /// Original: updateshop
@@ -28,6 +44,9 @@ pub(crate) fn inspect(
         .exploration
         .as_ref()
         .is_some_and(|position| position.presentation == Some(crate::Presentation::Shop));
+    if shop {
+        change_buyer(state, content, members[0])?;
+    }
     for side in 0..2 {
         if shop && side == 1 {
             if shop_family >= 5 || scroll[side] >= 1000 {

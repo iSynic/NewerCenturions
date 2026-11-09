@@ -115,40 +115,13 @@ fn movement_direction(down: impl Fn(KeyCode) -> bool) -> (i8, i8) {
     )
 }
 
-/// The action for the reload key: fit the warrior's equipped missile weapon with
-/// the compatible ammunition in stock in combat, the kind already loaded first and then the
-/// lowest numbered; with none to fit, or outside combat, reload.
-pub fn refill_action(
-    state: &Session,
-    content: &centurions_content::Content,
-    warrior: usize,
-) -> Action {
-    if state.phase == Phase::Combat
-        && let Some((slot, item)) = state
-            .warriors
-            .get(warrior)
-            .and_then(|actor| actor.inventory().ok())
-            .and_then(|inventory| {
-                inventory.into_iter().enumerate().find(|(_, item)| {
-                    item.equipped() != 0 && matches!(item.category_code(), 2 | 15)
-                })
-            })
-    {
-        let candidates =
-            centurions_core::ammunition::compatible_ammunition(content, &item).unwrap_or_default();
-        let loaded = item.ammunition_id().unwrap_or(0);
-        if let Some(ammunition) = candidates
-            .iter()
-            .copied()
-            .filter(|id| state.ammunition[(*id - 200) as usize] > 0)
-            .min_by_key(|id| if *id == loaded { 0 } else { *id })
-        {
-            return Action::Command(Command::FitAmmunition {
-                warrior,
-                slot,
-                ammunition,
-            });
-        }
+/// The action for the reload key: in combat the Load control, which offers the
+/// ammunition popup for the warrior's equipped firearm; otherwise reload.
+///
+/// Original: combatchoice
+pub fn refill_action(state: &Session, warrior: usize) -> Action {
+    if state.phase == Phase::Combat {
+        return Action::Inventory(crate::inventory::InventoryAction::CombatLoad(warrior));
     }
     Action::Command(Command::Reload { warrior })
 }
@@ -164,6 +137,7 @@ pub fn action(
     controls: &[Control],
     pointer: Option<Vec2>,
 ) -> Option<Action> {
+    ui.inventory.close_stale_load_popup(state);
     if state.combat.as_ref().is_some_and(|c| c.selection_pending) {
         // The automatic resume owns this frame; no actor/camera is selected yet.
         ui.movement.reset();
@@ -183,6 +157,11 @@ pub fn action(
         return pressed.then_some(Action::CombatView(
             crate::combat_controls::ViewAction::Reveal,
         ));
+    }
+    if crate::combat_controls::peek(state, ui, pointer) {
+        ui.movement.reset();
+        ui.movement.stop_pointer();
+        return None;
     }
     if crate::collection::active(state, ui) && state.promotion.is_none() {
         if let Some(action) = crate::collection::input(state, ui, pointer) {
@@ -221,6 +200,14 @@ pub fn action(
         .is_some_and(|p| p.presentation == Some(Presentation::Shop))
         || ui.inspection == Some(Inspection::Items) && !crate::collection::active(state, ui)
     {
+        if ui
+            .inventory
+            .held_warning_due(get_time(), is_mouse_button_down(MouseButton::Left))
+        {
+            ui.feedback
+                .queue
+                .push_back(centurions_core::feedback::GameFeedback::Warning { index: 60 });
+        }
         if is_mouse_button_pressed(MouseButton::Left)
             && (is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt))
             && let Some(point) = pointer
@@ -231,6 +218,18 @@ pub fn action(
             return Some(Action::Inventory(
                 crate::inventory::InventoryAction::DragInformation { side, slot },
             ));
+        }
+        if is_mouse_button_pressed(MouseButton::Left)
+            && crate::application::command_modifier()
+            && let Some(point) = pointer
+            && let Some(control) = topmost(controls, point)
+            && let Action::Inventory(crate::inventory::InventoryAction::Item { side, slot }) =
+                control.action
+        {
+            return Some(Action::Inventory(crate::inventory::InventoryAction::Wear {
+                side,
+                slot,
+            }));
         }
         if is_mouse_button_released(MouseButton::Left)
             && let Some(action) = ui.inventory.release(pointer)
@@ -420,6 +419,7 @@ pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
             | Command::SetFirearmMode { .. }
             | Command::EndTurn,
         ) => free,
+        Action::Inventory(crate::inventory::InventoryAction::CombatLoad(_)) => free,
         Action::Command(Command::ChooseWarrior { index }) => *index < state.warriors.len(),
         _ => true,
     }
@@ -479,6 +479,10 @@ fn action_inner(
     {
         return c.enabled.then(|| c.action.clone());
     }
+    if ui.inventory.load_popup_open() {
+        // The popup takes the click that closes it; keys do nothing meanwhile.
+        return None;
+    }
     if let Flow::Done(action) = encounter_actions_input(state) {
         return action;
     }
@@ -486,7 +490,7 @@ fn action_inner(
         return action;
     }
     if crate::application::command_modifier() {
-        return None;
+        return fast_spell_key(state, ui);
     }
     if let Flow::Done(action) = presentation_keys(state, content, ui) {
         return action;
@@ -499,7 +503,7 @@ fn action_inner(
         return None;
     }
     let selected = active.map(|b| b as usize).unwrap_or(ui.selected);
-    if let Flow::Done(action) = shortcut_keys(state, content, selected) {
+    if let Flow::Done(action) = shortcut_keys(state, selected) {
         return action;
     }
     movement_input(state, ui, pointer)
@@ -754,6 +758,14 @@ fn presentation_keys(
         }
         return Flow::Done(None);
     }
+    if let (Presentation::Question { .. } | Presentation::Avoidance { .. }, Some((yes, no))) =
+        (p, ui.question_keys)
+    {
+        return Flow::Done(
+            crate::story_dialogs::typed_answer(yes, no)
+                .map(|answer| Action::Command(Command::Choose { answer })),
+        );
+    }
     if matches!(
         p,
         Presentation::Question { .. }
@@ -775,7 +787,10 @@ fn presentation_keys(
             .enumerate()
         {
             if index < labels.len() && is_key_pressed(key) {
-                return Flow::Done(Some(Action::Command(Command::SelectMenuEntry { index })));
+                return Flow::Done(Some(crate::story_dialogs::menu_slot_action(
+                    &state.globals.encounter_headers,
+                    index,
+                )));
             }
         }
         return Flow::Done(
@@ -830,8 +845,43 @@ fn typed_entry_input(
     })
 }
 
+/// Command with a digit key casts the selected warrior's preset scan on the land map: 1 to 9 are
+/// presets 1 to 9 and 0 is preset 10.
+///
+/// Original: checkkeypad
+fn fast_spell_key(state: &Session, ui: &UiState) -> Option<Action> {
+    let free = state.phase == Phase::Exploration
+        && ui.inspection.is_none()
+        && state
+            .exploration
+            .as_ref()
+            .is_some_and(|p| p.presentation.is_none() && p.script.is_none());
+    if !free {
+        return None;
+    }
+    [
+        KeyCode::Key1,
+        KeyCode::Key2,
+        KeyCode::Key3,
+        KeyCode::Key4,
+        KeyCode::Key5,
+        KeyCode::Key6,
+        KeyCode::Key7,
+        KeyCode::Key8,
+        KeyCode::Key9,
+        KeyCode::Key0,
+    ]
+    .into_iter()
+    .position(is_key_pressed)
+    .map(|index| {
+        Action::Command(Command::FastSpell {
+            slot: index as u8 + 1,
+        })
+    })
+}
+
 /// Field-control letters outdoors, refill, combat shortcuts and the Psi key.
-fn shortcut_keys(state: &Session, content: &centurions_content::Content, selected: usize) -> Flow {
+fn shortcut_keys(state: &Session, selected: usize) -> Flow {
     if state.phase == Phase::Exploration {
         for (key, id) in [
             (KeyCode::C, control::CAMP),
@@ -857,7 +907,7 @@ fn shortcut_keys(state: &Session, content: &centurions_content::Content, selecte
         }
     }
     if state.phase != Phase::Combat && is_key_pressed(KeyCode::R) {
-        return Flow::Done(Some(refill_action(state, content, selected)));
+        return Flow::Done(Some(refill_action(state, selected)));
     }
     if state.phase == Phase::Combat {
         for key in [
@@ -881,9 +931,7 @@ fn shortcut_keys(state: &Session, content: &centurions_content::Content, selecte
             KeyCode::Space,
         ] {
             if is_key_pressed(key) {
-                return Flow::Done(crate::combat_controls::shortcut(
-                    key, state, content, selected,
-                ));
+                return Flow::Done(crate::combat_controls::shortcut(key, state, selected));
             }
         }
     } else if is_key_pressed(KeyCode::P) {

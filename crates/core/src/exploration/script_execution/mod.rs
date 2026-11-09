@@ -20,6 +20,7 @@ mod battles;
 mod branches;
 mod encounters;
 mod lands;
+pub(super) use lands::enter_land;
 mod map_mutation;
 mod party;
 mod presentation;
@@ -38,6 +39,8 @@ pub(super) enum ExtraIndex {
 /// Reads a script's extra record and keeps a copy as the shared extra row. With
 /// `missing` absent, a map without combat tables panics; otherwise it returns
 /// that error.
+///
+/// Original: loadextracode
 pub(super) fn load_extra<'a>(
     globals: &mut crate::Globals,
     map: &'a OpeningMission,

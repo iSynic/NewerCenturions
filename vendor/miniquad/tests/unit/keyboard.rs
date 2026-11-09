@@ -15,9 +15,6 @@ fn virtual_input_and_physical_scan_codes_agree() {
         assert_eq!(message_scancode(vk, 0), scan);
         assert_eq!(message_scancode(vk, (scan as isize) << 16), scan);
     }
-}
-
-#[test]
-fn unknown_virtual_input_stays_unknown() {
+    // An unknown virtual key stays unknown.
     assert_eq!(message_scancode(0, 0), 0);
 }

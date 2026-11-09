@@ -11,6 +11,8 @@ pub const DEACTIVATE_WARRIOR_EDIT: u32 = 0x403658;
 pub const START_MUSIC: u32 = 0x40355e;
 /// Pascal " ---" (a maximum Psi of zero).
 pub const NO_PSI: u32 = 0x400a76;
+/// Pascal "---" (the capture button's second special skill when the warrior has none).
+pub const NO_SPECIAL_SKILL: u32 = 0x400a6c;
 /// Pascal "No Special Attacks".
 pub const NO_SPECIAL_ATTACKS: u32 = 0x404046;
 /// C "This warrior does not meet the minimum skill level to use this item.  Minimum
@@ -39,3 +41,20 @@ pub const ATTACK_YOUR_FRIEND: u32 = 0x403be6;
 pub const STAY_AND_FIGHT: u32 = 0x403df4;
 /// Pascal "Embrace Cowardice".
 pub const EMBRACE_COWARDICE: u32 = 0x403e04;
+/// Pascal "No" (a race that does not regenerate).
+pub const REGENERATES_NO: u32 = 0x40197a;
+/// Pascal "Yes" (a race that regenerates).
+pub const REGENERATES_YES: u32 = 0x40197e;
+/// C "If you play a saved game which has a character by this name, this one may change to
+/// match that one." (flashed when a new warrior's name is already kept).
+pub const NAME_KEPT_ALREADY: u32 = 0x401d2a;
+/// Pascal "Range = " (the readout of the distance to the body in view).
+pub const RANGE_LABEL: u32 = 0x403786;
+/// Pascal " Blocked" (follows the range when the body in view cannot be seen).
+pub const BLOCKED: u32 = 0x403aa8;
+/// Pascal "Enemies Left" (the label before the count of monsters still to defeat).
+pub const ENEMIES_LEFT: u32 = 0x401b6a;
+/// Pascal "---" (the weapon in view holds no charge).
+pub const NO_CHARGE: u32 = 0x403aa4;
+/// Pascal "??" (the charge of a monster's weapon is unknown).
+pub const UNKNOWN_CHARGE: u32 = 0x403aa0;

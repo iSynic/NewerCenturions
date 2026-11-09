@@ -78,6 +78,11 @@ pub(in crate::commands) fn execute(
         }
         Command::ReorderSquad { destinations } => {
             roster::admit_management(state)?;
+            if state.confiscated.as_ref().is_some_and(|held| held.active) {
+                return Err(RuleError::Refused {
+                    feedback: vec![crate::confiscation::squad_order_refusal()],
+                });
+            }
             if destinations.len() != state.warriors.len()
                 || destinations.iter().any(|i| *i >= destinations.len())
                 || has_repeated_index(&destinations)

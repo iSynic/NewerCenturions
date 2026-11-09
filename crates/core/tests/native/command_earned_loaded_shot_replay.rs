@@ -287,6 +287,7 @@ fn party_range_membership_retains_the_original_truncated_boundary() {
         4,
         &prepared,
         &mut random,
+        0,
     )
     .unwrap();
     assert_eq!(selection.range, 6);

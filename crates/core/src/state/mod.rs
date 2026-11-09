@@ -14,5 +14,5 @@ pub(crate) use globals::{EXTRA_RECORD_BYTES, LOOT_QUALITY_BYTES, TREASURE_RECORD
 pub use session::{CommandPreferences, Phase, Session};
 pub use warrior_table::WarriorTable;
 pub(crate) use warrior_table::{UPGRADE_ENTRY_BODY, UPGRADE_PREVIOUS_BODY};
-pub(crate) use world::{EVENT_HEADER_BYTES, REGION_BYTES};
+pub(crate) use world::{EVENT_HEADER_BYTES, LAND_CELLS, REGION_BYTES};
 pub use world::{Exploration, LevelState, MapState};

@@ -69,6 +69,11 @@ pub(super) fn execute(
             row,
             item,
         } => items::choose_ammunition(state, content, warrior, (scroll, row), item),
+        Command::ChooseCombatAmmunition {
+            warrior,
+            slot,
+            item,
+        } => items::choose_combat_ammunition(state, content, warrior, slot, item),
         Command::ShowDraggedItemInformation {
             warrior,
             slot,
@@ -82,7 +87,7 @@ pub(super) fn execute(
             professions,
             widened,
         } => items::list_item_users(state, content, warrior, professions, widened),
-        Command::OpenShop => shop::open(state),
+        Command::OpenShop => shop::open(state, content),
         Command::CloseShop => shop::close(state, content),
         Command::BuyItem { warrior, stock } => shop::buy(state, content, warrior, stock),
         Command::SellItem { warrior, slot } => shop::sell(state, content, warrior, slot),
@@ -190,6 +195,8 @@ pub(super) fn execute(
 
 /// Puts an item in the first empty slot of the crate or booty list, or reports full storage when
 /// none is empty. Crate storage also plays its sound.
+///
+/// Original: addtocrate, addtobooty
 pub(crate) fn insert(
     item: InventoryRecord,
     records: &mut [InventoryRecord],

@@ -33,6 +33,11 @@ pub(crate) fn config() -> Conf {
         // The game's Hide The Desktop default is not a request for Windows fullscreen.
         fullscreen: false,
         high_dpi: false,
+        icon: Some(macroquad::miniquad::conf::Icon {
+            small: crate::app_icon::SMALL,
+            medium: crate::app_icon::MEDIUM,
+            big: crate::app_icon::BIG,
+        }),
         ..Default::default()
     }
 }

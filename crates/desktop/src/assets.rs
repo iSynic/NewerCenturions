@@ -12,12 +12,44 @@ const APPLICATION_PICTURES: &[i16] = &[
     231, 401,
 ];
 
+/// The colour cursor combatinfo shows over a guarding body: 'crsr' 132.
+const SHIELD_CURSOR: i16 = 132;
+
+/// The colour cursors that count the targets still to pick while a target is chosen: 'crsr'
+/// 147 to 155.
+const COUNT_CURSORS: std::ops::RangeInclusive<i16> = 147..=155;
+
 /// Dialog windows whose 'DLOG' bounds and 'DITL' items are loaded from the
 /// Cargo Pod; 'DITL' 145 is loaded with them but has no 'DLOG' size.
 const DIALOG_IDS: &[i16] = &[
-    128, 131, 132, 133, 136, 137, 144, 147, 148, 149, 153, 157, 158, 159, 160, 161, 166, 167, 169,
-    177, 190,
+    RESTRICTIONS_DIALOG,
+    128,
+    131,
+    132,
+    133,
+    136,
+    137,
+    144,
+    147,
+    148,
+    149,
+    153,
+    157,
+    158,
+    159,
+    160,
+    161,
+    166,
+    167,
+    169,
+    177,
+    190,
+    200,
 ];
+
+/// The read-only Scenario Restrictions dialog (DLOG -7931) the squad screen opens; its backdrop
+/// picture has a negative number, which no other dialog's pictures do.
+pub const RESTRICTIONS_DIALOG: i16 = -7931;
 
 /// 'DITL' 145 holds the squad text and has no matching 'DLOG' bounds.
 const SQUAD_DIALOG_ITEMS: i16 = 145;
@@ -58,6 +90,55 @@ fn load_executable_version(content: &Content, extracted: &Path) -> Result<String
     )
 }
 
+/// The words appended to Preferences menu items 10 to 15: the short version of the executable,
+/// of the item, scan, race and caste data files and of the troop editor. A data file that cannot
+/// be opened shows "Unknown ???"; a troop editor that cannot be opened shows "Not Installed".
+///
+/// Original: MenuInit
+fn load_version_suffixes(content: &Content, extracted: &Path) -> Vec<String> {
+    let short_version = |file: &str, id: i16| -> Option<String> {
+        let resource = content.resources.iter().find(|resource| {
+            resource.original.ends_with(file) && resource.r#type == "vers" && resource.id == id
+        })?;
+        let bytes = read_resource(extracted, resource).ok()?;
+        ui::pascal_text(bytes.get(6..)?).ok()
+    };
+    let data_file =
+        |file: &str, id: i16| short_version(file, id).unwrap_or_else(|| "Unknown ???".to_string());
+    vec![
+        short_version("/New Centurions", 1).unwrap_or_default(),
+        short_version("/Data Files/Data ID", 5).unwrap_or_default(),
+        data_file("/Data Files/Data S", 6),
+        data_file("/Data Files/Data Race", 20),
+        data_file("/Data Files/Data MOS", 21),
+        short_version("/NC Troop Editor 1.0", 1)
+            .or_else(|| short_version("/NC Troop Editor (DEMO)", 1))
+            .unwrap_or_else(|| "Not Installed".to_string()),
+    ]
+}
+
+/// Replaces each parameter mark `^0` to `^3` in dialog text with the parameter of that number; a
+/// mark without a parameter becomes empty.
+///
+/// Original: ParamText
+fn substitute_parameters(text: &str, parameters: &[&str]) -> String {
+    let mut result = String::new();
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        let number = characters
+            .peek()
+            .and_then(|next| next.to_digit(10))
+            .filter(|number| character == '^' && *number < 4);
+        if let Some(number) = number {
+            characters.next();
+            result.push_str(parameters.get(number as usize).copied().unwrap_or_default());
+        } else {
+            result.push(character);
+        }
+    }
+    result
+}
+
 /// Loads the dialogs' DLOG sizes and DITL items, the pictures they draw, and the
 /// reference strings (STR# 128, 134, 137, 138 and 1201) from the Cargo Pod.
 fn load_dialogs(content: &Content, extracted: &Path) -> Result<Dialogs, ContentError> {
@@ -85,7 +166,7 @@ fn load_dialogs(content: &Content, extracted: &Path) -> Result<Dialogs, ContentE
             for item in &items {
                 if item.kind & 0x7f == 64 && item.data.len() == 2 {
                     let id = i16::from_be_bytes(item.data[..2].try_into().unwrap());
-                    if id > 0 {
+                    if id > 0 || resource.id == RESTRICTIONS_DIALOG {
                         dialogs.pictures.insert(id);
                     }
                 }
@@ -140,6 +221,8 @@ struct Loaded {
     upgrade_formulas: Vec<String>,
     main_controls: HashMap<i16, Rect>,
     preference_descriptions: Vec<String>,
+    shield_cursor: Option<(Texture2D, (i16, i16))>,
+    count_cursors: HashMap<i16, (Texture2D, (i16, i16))>,
 }
 
 impl Loaded {
@@ -284,12 +367,31 @@ impl Loaded {
         dialog_pictures: &std::collections::HashSet<i16>,
     ) -> Result<(), ContentError> {
         let cargo = resource.original.ends_with("/Cargo Pod");
-        let picture = cargo
+        let picture = (cargo
             && resource.r#type == "PICT"
             && (centurions_content::tile_sets::picture_terrain(resource.id).is_some()
                 || ui::PANEL_PICTURES.contains(&resource.id)
                 || APPLICATION_PICTURES.contains(&resource.id)
-                || dialog_pictures.contains(&resource.id));
+                || dialog_pictures.contains(&resource.id)))
+            || (resource.original.ends_with("/Data Files/Buildings")
+                && resource.r#type == "PICT"
+                && (23000..24000).contains(&resource.id));
+        if cargo
+            && resource.r#type == "crsr"
+            && (resource.id == SHIELD_CURSOR || COUNT_CURSORS.contains(&resource.id))
+        {
+            let cursor = graphics::decode_crsr(&read_resource(extracted, resource)?)?;
+            let texture =
+                Texture2D::from_rgba8(cursor.image.width, cursor.image.height, &cursor.image.rgba);
+            texture.set_filter(FilterMode::Nearest);
+            if resource.id == SHIELD_CURSOR {
+                self.shield_cursor = Some((texture, cursor.hotspot));
+            } else {
+                self.count_cursors
+                    .insert(resource.id, (texture, cursor.hotspot));
+            }
+            return Ok(());
+        }
         let portrait = resource.original.ends_with("/Portraits") && resource.r#type == "cicn";
         let icon =
             (cargo || resource.original.ends_with("/Tacticals")) && resource.r#type == "cicn";
@@ -408,7 +510,13 @@ pub struct Assets {
     pub dialogs: HashMap<i16, Vec<ui::DialogItem>>,
     pub dialog_sizes: HashMap<i16, Vec2>,
     pub preference_descriptions: Vec<String>,
+    /// The shield cursor and its hotspot, which marks a guarding body.
+    pub shield_cursor: Option<(Texture2D, (i16, i16))>,
+    /// The cursors that count the targets still to pick, by 'crsr' id, with their hotspots.
+    pub count_cursors: HashMap<i16, (Texture2D, (i16, i16))>,
     pub executable_version: String,
+    /// The words appended to Preferences menu items 10 to 15.
+    pub version_suffixes: Vec<String>,
     /// Pictures with white keyed out, for CopyBits' transparent mode.
     transparent: std::cell::RefCell<HashMap<i16, Texture2D>>,
 }
@@ -471,6 +579,7 @@ impl Assets {
     /// scenario's own resources over them.
     pub fn load(content: &Content, extracted: &Path) -> Result<Self, ContentError> {
         let executable_version = load_executable_version(content, extracted)?;
+        let version_suffixes = load_version_suffixes(content, extracted);
         let dialogs = load_dialogs(content, extracted)?;
         let mut loaded = Loaded::default();
         for resource in &content.resources {
@@ -505,6 +614,8 @@ impl Assets {
             upgrade_formulas,
             main_controls,
             preference_descriptions,
+            shield_cursor,
+            count_cursors,
         } = loaded;
         let menu_bar = menu_bar.ok_or_else(|| ContentError::Invalid("MBAR 128 missing".into()))?;
         for id in menu_bar.iter().chain([134, 135].iter()) {
@@ -585,7 +696,10 @@ impl Assets {
             dialogs: dialogs.items,
             dialog_sizes: dialogs.sizes,
             preference_descriptions,
+            shield_cursor,
+            count_cursors,
             executable_version,
+            version_suffixes,
             transparent: Default::default(),
         };
         let characters = Font::ascii_character_list();
@@ -759,8 +873,20 @@ impl Assets {
         self.draw_dialog_at(id, self.dialog_origin(id));
     }
     /// Draws dialog `id` with its top left at `origin`: its pictures, then its
-    /// static text.
+    /// static text. Text that holds a parameter mark is left for the caller to draw.
     pub fn draw_dialog_at(&self, id: i16, origin: Vec2) {
+        self.draw_dialog_items(id, origin, None);
+    }
+    /// Draws dialog `id` as `draw_dialog_at` does, with the parameter marks of its static text
+    /// (`^0` to `^3`) replaced by `parameters`.
+    ///
+    /// Original: ParamText
+    pub fn draw_dialog_with_parameters(&self, id: i16, origin: Vec2, parameters: &[&str]) {
+        self.draw_dialog_items(id, origin, Some(parameters));
+    }
+    /// Draws the dialog's pictures and static text; `parameters` fills its parameter marks, and
+    /// without them text holding a mark is left out.
+    fn draw_dialog_items(&self, id: i16, origin: Vec2, parameters: Option<&[&str]>) {
         let size = self.dialog_sizes[&id];
         draw_rectangle(origin.x, origin.y, size.x, size.y, BLACK);
         let port = Rect::new(origin.x, origin.y, size.x, size.y);
@@ -792,11 +918,16 @@ impl Assets {
             }
         }
         for (i, item) in self.dialogs[&id].iter().enumerate() {
-            if item.kind & 0x7f == 8
-                && !item.text().contains('^')
-                && let Some(clip) = self.dialog_rect_at(id, i + 1, origin).intersect(port)
-            {
-                self.dialog_text(&item.text(), clip);
+            if item.kind & 0x7f != 8 {
+                continue;
+            }
+            let text = match parameters {
+                Some(parameters) => substitute_parameters(&item.text(), parameters),
+                None if item.text().contains('^') => continue,
+                None => item.text(),
+            };
+            if let Some(clip) = self.dialog_rect_at(id, i + 1, origin).intersect(port) {
+                self.dialog_text(&text, clip);
             }
         }
     }

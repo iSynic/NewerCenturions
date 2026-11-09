@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -17,6 +18,7 @@ pub struct Help {
     first: usize,
     last: usize,
     path: Option<PathBuf>,
+    flash_start: Cell<Option<f64>>,
 }
 
 #[cfg(test)]
@@ -34,6 +36,7 @@ impl Default for Help {
             first: 0,
             last: 0,
             path: None,
+            flash_start: Cell::new(None),
         }
     }
 }
@@ -101,10 +104,19 @@ impl Help {
             self.first = page;
             self.last = last;
             self.page = Some(page);
+            self.flash_start.set(None);
             self.seen.insert(page);
             self.save()?;
         }
         Ok(())
+    }
+
+    /// The seconds the page showing now has been up, counted from the first call
+    /// made for it at time `now`; the highlight flashes by it.
+    pub fn page_age(&self, now: f64) -> f64 {
+        let start = self.flash_start.get().unwrap_or(now);
+        self.flash_start.set(Some(start));
+        now - start
     }
 
     /// Carries out a click on the help strip: Done, the previous and next pages, or
@@ -129,6 +141,7 @@ impl Help {
         if let Some(page) = self.page {
             self.seen.insert(page);
         }
+        self.flash_start.set(None);
         self.save()?;
         Ok(if item == 1 || item == 3 { 148 } else { 141 })
     }

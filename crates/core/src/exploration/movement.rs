@@ -32,7 +32,10 @@ pub fn manual_encounter(state: &mut Session, content: &Content) -> Result<Vec<Ev
 }
 
 /// Moves the party one square in a direction. It is refused, with warning 54, when fatigue is over
-/// 134 and the scenario has not disabled camping.
+/// 134 and the scenario has not disabled camping. A step off the edge of the land slides the party
+/// onto the neighbouring land, or is cancelled where there is none.
+///
+/// Original: checkkeypad
 pub fn move_squad(
     state: &mut Session,
     content: &Content,
@@ -50,6 +53,12 @@ pub fn move_squad(
     }
     if !crate::field_controls::free(state) {
         return Err(RuleError::Refused { feedback: vec![] });
+    }
+    // A step off the edge of the land is slid or cancelled before fatigue is tested and before
+    // camp is broken.
+    if let Some(events) = super::land_edge::cross_edge(state, content, dx, dy)? {
+        state.exploration.as_mut().unwrap().last_move = [0; 2];
+        return Ok(events);
     }
     // Above fatigue 134 the party cannot move while camping is allowed; the
     // test comes before breaking camp.
@@ -168,7 +177,11 @@ pub(crate) fn resume_movement(
                 if crate::field_controls::automatic_search(state) {
                     continue;
                 }
-                let skill = travel::secret_search_skill(&state.warriors)?;
+                let mut skill = travel::secret_search_skill(&state.warriors)?;
+                // An inertial shield makes the party's search for secrets certain.
+                if crate::combat::party_buffs::inertial_shield(&state.party_condition)? {
+                    skill = 100;
+                }
                 let position = state.exploration.as_mut().unwrap();
                 let search = travel::discover_secrets(
                     &position.floor,

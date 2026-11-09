@@ -12,6 +12,14 @@ use macroquad::prelude::*;
 ///
 /// Original: downbutton
 pub(super) fn draw_pressed(assets: &Assets, rect: Rect) {
+    draw_edge(assets, rect, false);
+}
+
+/// The edge a picker cell or frame is drawn with: raised starts with the light pen, sunken with
+/// the dark one.
+///
+/// Original: edge_button
+pub(crate) fn draw_edge(assets: &Assets, rect: Rect, raised: bool) {
     let [light, dark] = &assets.button_pens;
     let (left, top) = (rect.x as i32, rect.y as i32);
     let (right, bottom) = (left + rect.w as i32, top + rect.h as i32);
@@ -23,8 +31,8 @@ pub(super) fn draw_pressed(assets: &Assets, rect: Rect) {
         .map(|y| (right - 1, y))
         .chain((left + 1..right - 1).map(|x| (x, bottom - 1)))
         .collect();
-    stroke(dark.as_ref(), &first);
-    stroke(light.as_ref(), &second);
+    stroke(if raised { light } else { dark }.as_ref(), &first);
+    stroke(if raised { dark } else { light }.as_ref(), &second);
 }
 
 /// A pixel pattern's colour at each pixel, the pattern anchored at the origin.

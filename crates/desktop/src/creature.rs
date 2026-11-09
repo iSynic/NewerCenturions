@@ -5,6 +5,7 @@ use crate::{
 };
 use centurions_content::word;
 use macroquad::prelude::*;
+use std::cell::Cell;
 
 /// A monster or ally record viewed on the creature page.
 pub struct Creature {
@@ -12,11 +13,21 @@ pub struct Creature {
     pub ally: bool,
     pub record: Vec<u8>,
     pub description: String,
+    /// The icon rectangle the page starts from: the one the creature page before it
+    /// left behind, or the picture frame (dialog item 37) on a page opened afresh.
+    pub icon_start: Option<Rect>,
+    /// The icon rectangle this page leaves for the next page it is turned to.
+    pub icon_next: Cell<Option<Rect>>,
 }
 
 impl Creature {
     /// Draws the creature page (dialog 158): the creature's name, description,
-    /// picture and statistics, and the buttons.
+    /// picture and statistics, and the buttons. The picture is drawn narrower for
+    /// the tall and wide sizes, inside its full-size frame. The icon rectangle is
+    /// one shared rectangle: each page insets the one the page before it left, and
+    /// the check boxes of a monster page leave the rectangle of the last box.
+    ///
+    /// Original: beast
     pub fn draw(&self, assets: &Assets, controls: &mut Vec<Control>) {
         assets.draw_dialog(158);
         for number in [1, 2, 3, 4] {
@@ -40,10 +51,20 @@ impl Creature {
         }
         let icon = word(r, 80).unwrap_or(0);
         assets.panel(142, assets.dialog_rect(158, 37));
+        let size = word(r, 16).unwrap_or(0);
+        let across = if matches!(size, 0 | 2) { 16. } else { 0. };
+        let down = if size.unsigned_abs() < 2 { 16. } else { 0. };
+        let start = self
+            .icon_start
+            .unwrap_or_else(|| assets.dialog_rect(158, 37));
         if let Some(texture) = assets.icons.get(&icon) {
-            let rect = assets.dialog_rect(158, 37);
-            crate::assets::texture_in(texture, rect);
+            crate::assets::texture_in(texture, inset(start, across, down));
         }
+        self.icon_next.set(Some(if self.ally {
+            inset(start, across, down)
+        } else {
+            assets.dialog_rect(158, 45)
+        }));
         if word(r, 78).unwrap_or(0) != 0 {
             for (number, address) in [(8, 0x40406a), (9, 0x404062), (10, 0x40405a)] {
                 field(
@@ -110,4 +131,14 @@ impl Creature {
             assets.dialog_rect(158, number),
         );
     }
+}
+
+/// The rectangle drawn in from its left and right edges by `across` and from its
+/// top and bottom edges by `down`.
+fn inset(mut rect: Rect, across: f32, down: f32) -> Rect {
+    rect.x += across;
+    rect.w -= 2. * across;
+    rect.y += down;
+    rect.h -= 2. * down;
+    rect
 }

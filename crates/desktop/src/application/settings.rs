@@ -6,7 +6,10 @@ use macroquad::prelude::*;
 
 impl Application {
     /// Carries out the choices in the preferences dialog, music playlist and popup
-    /// help.
+    /// help. Turning popup help off closes the page, plays its sound and then
+    /// flashes the original confirmation message.
+    ///
+    /// Original: firstt
     pub(super) fn handle_settings(
         &mut self,
         action: ApplicationAction,
@@ -16,13 +19,24 @@ impl Application {
         let next = None;
         let mut events = Vec::new();
         match action {
-            ApplicationAction::PreferenceCancel => self.preferences_dialog = None,
+            ApplicationAction::PreferenceCancel => {
+                if self
+                    .preferences_dialog
+                    .as_mut()
+                    .is_some_and(|dialog| dialog.close_picker())
+                {
+                    events.push(Event::Sound { resource_id: 141 });
+                } else {
+                    self.preferences_dialog = None;
+                }
+            }
             ApplicationAction::PreferenceItem(item) => {
                 let dialog = self
                     .preferences_dialog
                     .as_mut()
                     .ok_or("Preferences are not open.")?;
-                if dialog.item(item)? {
+                let taken = dialog.item(item)?;
+                if taken.accepted {
                     let settings = self.help.settings.clone();
                     self.help.settings["native"] = dialog.draft.encode();
                     if let Err(error) = self.help.save() {
@@ -32,7 +46,9 @@ impl Application {
                     self.preferences = dialog.draft.clone();
                     self.preferences_dialog = None;
                 }
-                events.push(Event::Sound { resource_id: 141 });
+                events.push(Event::Sound {
+                    resource_id: taken.sound,
+                });
             }
             ApplicationAction::Playlist(index) => {
                 if !self.supported(145, index + 10, state) {
@@ -57,6 +73,17 @@ impl Application {
                 let resource_id = self.help.action(item)?;
                 if resource_id != 0 {
                     events.push(Event::Sound { resource_id });
+                    if item == 6 {
+                        events.push(Event::Feedback(
+                            centurions_core::feedback::GameFeedback::Flash {
+                                address: 0x4037aa,
+                                x: 50,
+                                y: 250,
+                                wait: 0,
+                                sound: 6000,
+                            },
+                        ));
+                    }
                 }
             }
             _ => unreachable!("application action routed to wrong screen"),

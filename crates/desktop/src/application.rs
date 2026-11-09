@@ -20,13 +20,19 @@ pub enum Screen {
 pub enum ApplicationAction {
     SkipLogo,
     Menu(i16, usize),
+    /// A click on an encounter menu choice that is no longer offered.
+    RefuseMenuEntry,
     Warrior(usize),
     Member(usize),
     Add,
     Remove,
     EraseWarrior,
+    /// The answer to the Erase Warrior question.
+    EraseAnswer(bool),
     ImportWarrior,
     ViewRestrictions,
+    /// A click on an enabled item of the Scenario Restrictions dialog, or Return, closes it.
+    CloseRestrictions,
     /// Moves the roster list five rows up or down (squad dialog items 17 and 18).
     RosterScroll(bool),
     Done,
@@ -126,6 +132,14 @@ impl Application {
                 self.menu_bar.submenu = None;
             }
             if let Event::NoteViewed { record, text, .. } = event {
+                let show = centurions_content::records::MapNote(record)
+                    .show()
+                    .unwrap_or(0);
+                if show != 0 {
+                    // A note that names a movie shows the movie and nothing else.
+                    self.open_intro(self.screen, Some(show));
+                    continue;
+                }
                 self.notes.open = Some(crate::note::Note {
                     record: record.clone(),
                     text: text.clone(),
@@ -250,6 +264,7 @@ impl Application {
             || self.characters.item_editor.is_some()
             || self.selection.order.is_some()
             || self.selection.end_question
+            || self.selection.erase_question
             || self.questions.escape
             || self.characters.creation.is_some()
             || self.preferences_dialog.is_some()
@@ -326,11 +341,13 @@ impl Application {
             | ApplicationAction::Add
             | ApplicationAction::Remove
             | ApplicationAction::EraseWarrior
+            | ApplicationAction::EraseAnswer(_)
             | ApplicationAction::ImportWarrior
             | ApplicationAction::ViewRestrictions
+            | ApplicationAction::CloseRestrictions
             | ApplicationAction::RosterScroll(_)
             | ApplicationAction::Done) => self.handle_squad(action, state, content)?,
-            action @ ApplicationAction::Menu(_, _) => {
+            action @ (ApplicationAction::Menu(_, _) | ApplicationAction::RefuseMenuEntry) => {
                 self.handle_menu_actions(action, state, content)?
             }
         };

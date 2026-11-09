@@ -82,6 +82,7 @@ pub(crate) fn leave_battle(state: &mut Session) -> Result<(), RuleError> {
     state.globals.outer_todo_queue = Some(combat.todo_queue.clone());
     state.globals.in_spell = combat.in_spell;
     state.store_spell_fatigue();
+    state.settle_fatigue_after_battle();
     state.combat = None;
     state.handled_deaths.clear();
     state.phase = Phase::Exploration;

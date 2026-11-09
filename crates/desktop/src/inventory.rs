@@ -11,6 +11,11 @@ type ItemDetail = (
     Result<centurions_core::item_display::output::PanelPlan, String>,
 );
 
+/// The longest gap between two clicks that make a double-click, in seconds.
+const DOUBLE_CLICK_SECONDS: f64 = 0.35;
+/// The pause between repeats of the worn-item warning while the button stays down, in seconds.
+const WARNING_REPEAT_SECONDS: f64 = 20. / 60.;
+
 /// A choice on the Items screen: a warrior, an item, scrolling, transferring,
 /// stockpiling, shopping, refitting, ammunition and item information.
 #[derive(Clone, Debug)]
@@ -29,6 +34,11 @@ pub enum InventoryAction {
     },
     Transfer,
     Activate,
+    /// A command-click on an item row wears the item or takes it off.
+    Wear {
+        side: usize,
+        slot: usize,
+    },
     Refit(usize),
     Stockpile,
     Shop,
@@ -44,6 +54,8 @@ pub enum InventoryAction {
     /// A MENU 1000 item, numbered from 1.
     AmmunitionItem(u16),
     CloseAmmunition,
+    /// The combat Load control opens loadammoproc's popup for the warrior.
+    CombatLoad(usize),
     /// moveicon's option-drag on a shop window row.
     DragInformation {
         side: usize,
@@ -62,6 +74,11 @@ pub struct Inventory {
     /// when the owner changes.
     display_row: i16,
     drag: Option<(usize, usize)>,
+    /// The warning a press on a worn item has just earned, until the screen shows it.
+    warning: Option<i16>,
+    /// When a held press on a worn item next earns its warning (the large view warns only for a
+    /// held press).
+    held: Option<f64>,
     last_click: f64,
     category: usize,
     rows: RefCell<ItemRows>,
@@ -87,6 +104,8 @@ impl Default for Inventory {
             quick_info: false,
             display_row: 0,
             drag: None,
+            warning: None,
+            held: None,
             last_click: -1.,
             category: 0,
             rows: RefCell::new(BTreeMap::new()),
@@ -145,7 +164,7 @@ impl Inventory {
         if self.information.is_some() {
             return Ok(self.handle_information(action, state));
         }
-        if self.ammunition.is_some() || matches!(action, Ammunition) {
+        if self.ammunition.is_some() || matches!(action, Ammunition | CombatLoad(_)) {
             return Ok(self.handle_ammunition(action, state, content));
         }
         match action {
@@ -173,14 +192,20 @@ impl Inventory {
                 return Ok(self.drag_information(state, content, side, slot));
             }
             Item { side, slot } => {
-                self.record(state, content, side, slot)?;
-                let activate = self.selected == Some((side, slot)) && now - self.last_click < 0.35;
+                let item = self.record(state, content, side, slot)?;
+                let activate = self.selected == Some((side, slot))
+                    && now - self.last_click < DOUBLE_CLICK_SECONDS;
+                // A worn item is held in place unless the Option key starts the move.
+                let worn = (side == 0 || !Self::shop(state)) && item.equipped() != 0;
                 self.selected = Some((side, slot));
                 self.display_row = slot.saturating_sub(self.scroll[side]) as i16;
-                self.drag = Some((side, slot));
+                self.drag = (!worn).then_some((side, slot));
                 self.last_click = now;
                 if activate {
                     return self.handle(Activate, state, content, now);
+                }
+                if worn {
+                    self.warn_worn(now);
                 }
                 if !Self::shop(state) && side == 0 && self.quick_info {
                     return Ok(Some(Action::Command(Command::HighlightInventoryRow {
@@ -232,7 +257,22 @@ impl Inventory {
                     quick_info: self.quick_info,
                 })));
             }
-            CloseInformation | UseList(_) | Ammunition | AmmunitionItem(_) | CloseAmmunition => {}
+            CloseInformation | UseList(_) | Ammunition | AmmunitionItem(_) | CloseAmmunition
+            | CombatLoad(_) => {}
+            Wear { side, slot } => {
+                if side > 1 || (side == 1 && Self::shop(state)) {
+                    return Ok(None);
+                }
+                let item = self.record(state, content, side, slot)?;
+                self.selected = Some((side, slot));
+                self.display_row = slot.saturating_sub(self.scroll[side]) as i16;
+                let warrior = self.members[side];
+                return Ok(Some(Action::Command(if item.equipped() != 0 {
+                    Command::UnequipItem { warrior, slot }
+                } else {
+                    Command::EquipItem { warrior, slot }
+                })));
+            }
             Shop => return Ok(Some(Action::Command(Command::OpenShop))),
             Category(family) => {
                 if family >= 5 {
@@ -262,7 +302,14 @@ impl Inventory {
                 let item = self.record(state, content, side, slot)?;
                 let warrior = self.members[side];
                 let command = match action {
-                    Activate if Self::shop(state) => return Ok(None),
+                    Activate if Self::shop(state) && side == 1 => return Ok(None),
+                    Activate if Self::shop(state) => {
+                        if item.equipped() != 0 {
+                            Command::UnequipItem { warrior, slot }
+                        } else {
+                            Command::EquipItem { warrior, slot }
+                        }
+                    }
                     Activate if centurions_core::typed_record(state, content).is_ok() => {
                         Command::UseItem { warrior, slot }
                     }
@@ -421,6 +468,7 @@ impl Inventory {
     /// Ends a drag: an item dropped on the other warrior's list is transferred to
     /// that warrior.
     pub fn release(&mut self, pointer: Option<Vec2>) -> Option<InventoryAction> {
+        self.held = None;
         let (side, slot) = self.drag.take()?;
         let pointer = pointer?;
         let destination = if pointer.x < 343. {
@@ -436,6 +484,39 @@ impl Inventory {
         } else {
             None
         }
+    }
+    /// A press on a worn item starts no move; it earns warning 60 at once, or in the large view
+    /// once the button has been held for a double-click time.
+    ///
+    /// Original: choice
+    fn warn_worn(&mut self, now: f64) {
+        if self.quick_info {
+            self.held = Some(now + DOUBLE_CLICK_SECONDS);
+        } else {
+            self.warning = Some(60);
+        }
+    }
+    /// The warning the last choice earned, if it has not been shown yet.
+    pub fn take_warning(&mut self) -> Option<i16> {
+        self.warning.take()
+    }
+    /// Whether the button held on a worn item has earned another warning 60: one after the
+    /// double-click time, then one every twenty ticks until the button is let go.
+    ///
+    /// Original: choice
+    pub fn held_warning_due(&mut self, now: f64, pressed: bool) -> bool {
+        let Some(due) = self.held else {
+            return false;
+        };
+        if !pressed {
+            self.held = None;
+            return false;
+        }
+        if now < due {
+            return false;
+        }
+        self.held = Some(now + WARNING_REPEAT_SECONDS);
+        true
     }
     /// The item record in `slot` of the warrior shown on `side`.
     pub(super) fn record(

@@ -317,6 +317,8 @@ pub fn initial_items(
 
 /// Sets the starting special skills: race plus MOS for each skill the MOS has,
 /// then adjustments from the brawn and quickness-and-coordination tables.
+///
+/// Original: updatespec
 fn specialties(
     b: &mut [u8],
     race: &RaceProfile<'_>,

@@ -142,6 +142,7 @@ pub(super) fn enemy_spell_continue(
             monster_index,
             &packet,
             random,
+            globals.animation_delay,
         )?;
         globals.attack_count = selection.count;
         combat.target_picks.clear();

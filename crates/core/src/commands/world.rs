@@ -21,6 +21,11 @@ pub(super) fn execute(
             Ok(events)
         }
         Command::ViewNote { index } => reference_views::note(state, content, index),
+        Command::RevealSight => exploration::reveal_sight(state, content).map(|()| vec![]),
+        Command::ChangeMusic { playlist } => {
+            crate::music::choose_title(&mut state.random, &playlist);
+            Ok(vec![])
+        }
         Command::EndMission => {
             if !matches!(state.phase, Phase::Exploration | Phase::Combat)
                 || state.medical_continuation.is_some()

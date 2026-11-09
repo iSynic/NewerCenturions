@@ -10,6 +10,11 @@ use crate::{
 /// is refused outside warrior management; and a story shown during combat must be continued
 /// first. A command that is not part of a targeting exchange clears the pending target quantity.
 pub(super) fn check(command: &Command, state: &mut Session) -> Result<(), RuleError> {
+    // Sight is taken whenever the field map is drawn, and the music changes track on its own,
+    // whatever question is open.
+    if matches!(command, Command::RevealSight | Command::ChangeMusic { .. }) {
+        return Ok(());
+    }
     if state.out_of_combat_walk_choice.is_some() {
         return if matches!(command, Command::AnswerOccupiedChoice { .. }) {
             Ok(())

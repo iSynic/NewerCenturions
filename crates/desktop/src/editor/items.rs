@@ -12,6 +12,9 @@ use macroquad::prelude::*;
 /// item 1 (Done).
 pub const ITEM_EDITOR_CLOSE: usize = 2;
 
+/// The icon drawn behind the picture of an equipped item.
+const EQUIPPED_ICON: i16 = 176;
+
 /// The carried-item editor: a draft of the session in which one item of a
 /// warrior's pack is changed.
 pub struct ItemEditor {
@@ -82,7 +85,9 @@ impl ItemEditor {
         )
     }
     /// Draws the item editor dialog: the item's name and modifiers, and the
-    /// controls.
+    /// controls. An equipped item's picture sits on the equipped icon.
+    ///
+    /// Original: updateedititem
     pub fn draw(&self, content: &Content, assets: &Assets, controls: &mut Vec<Control>) {
         clear_background(BLACK);
         assets.panel(215, crate::layout::DIALOG_FRAME);
@@ -128,6 +133,11 @@ impl ItemEditor {
         {
             let rect = Self::rect(assets, 71);
             crate::assets::texture_in(portrait, rect);
+        }
+        if item.equipped() != 0
+            && let Some(icon) = assets.icons.get(&EQUIPPED_ICON)
+        {
+            crate::assets::texture_in(icon, Self::rect(assets, 3));
         }
         if let Some(definition) = content.items.get(usize::from(item.id().unsigned_abs())) {
             if let Ok(id) = centurions_content::records::ItemDefinition(definition).icon()

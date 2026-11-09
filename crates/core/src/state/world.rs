@@ -193,6 +193,18 @@ impl Exploration {
         }
     }
 
+    /// Whether the square is drawn blank: the land shows only what the party has seen, and the
+    /// party has not seen the square.
+    ///
+    /// Original: hidden
+    pub fn sight_hidden(&self, x: i32, y: i32) -> bool {
+        usize::try_from(x * 90 + y)
+            .ok()
+            .and_then(|index| self.visibility.get(index))
+            .is_some_and(|seen| *seen == 0)
+            && centurions_content::records::RegionTable(&self.region_state).limits_sight()
+    }
+
     /// The records of the land the party is on.
     pub fn map_state(&self) -> MapState {
         MapState {

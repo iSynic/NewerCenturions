@@ -20,8 +20,19 @@ impl UiState {
             }
             Some(Action::Inventory(command)) => {
                 let category = matches!(command, crate::inventory::InventoryAction::Category(_));
+                let click = matches!(
+                    &command,
+                    crate::inventory::InventoryAction::CombatLoad(warrior)
+                        if centurions_core::items::load_control(state, *warrior)
+                            .is_ok_and(|control| control != centurions_core::items::LoadControl::Inert)
+                );
                 let result = self.inventory.handle(command, state, content, now)?;
-                if category {
+                if let Some(index) = self.inventory.take_warning() {
+                    self.feedback
+                        .queue
+                        .push_back(centurions_core::feedback::GameFeedback::Warning { index });
+                }
+                if category || click {
                     self.feedback
                         .queue
                         .push_back(centurions_core::feedback::GameFeedback::Sound {

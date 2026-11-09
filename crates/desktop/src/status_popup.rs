@@ -1,4 +1,5 @@
-//! Read-only condition and modifier pop-ups, as showcondition shows them.
+//! Read-only condition, modifier and creature pop-ups, as showcondition and
+//! showcondition2 show them.
 use crate::{
     assets::Assets,
     presentation::{Action, Control, Inspection, UiState},
@@ -12,11 +13,24 @@ const VISIBLE_ROWS: usize = 30;
 /// The height of each row.
 const ROW_HEIGHT: f32 = 18.;
 
-/// Whether the conditions or modifiers list is open.
+/// Whether the conditions, modifiers or creature list is open.
 pub fn active(ui: &UiState) -> bool {
     matches!(
         ui.inspection,
-        Some(Inspection::Conditions | Inspection::Modifiers)
+        Some(
+            Inspection::Conditions
+                | Inspection::Modifiers
+                | Inspection::CreatureConditions(_)
+                | Inspection::CreatureItems(_)
+        )
+    )
+}
+
+/// Whether the open list is a creature's.
+fn creature(ui: &UiState) -> bool {
+    matches!(
+        ui.inspection,
+        Some(Inspection::CreatureConditions(_) | Inspection::CreatureItems(_))
     )
 }
 
@@ -46,13 +60,64 @@ pub fn input() -> Option<Action> {
 struct Row {
     text: String,
     portrait: Option<i16>,
+    icon: Option<i16>,
     checked: bool,
     timed: bool,
 }
 
+/// The lines of a creature's list: its name and icon, then one line for each
+/// condition it is under or each item it carries, a carried item checked when its
+/// word is negative.
+///
+/// Original: showcondition2
+fn creature_rows(state: &Session, assets: &Assets, body: i16, items: bool) -> Vec<Row> {
+    let Some(monster) = state
+        .combat
+        .as_ref()
+        .and_then(|combat| combat.roster.records.get(usize::try_from(body - 10).ok()?))
+        .map(|monster| monster.record())
+    else {
+        return Vec::new();
+    };
+    let row = |text: String, checked: bool| Row {
+        text,
+        portrait: None,
+        icon: None,
+        checked,
+        timed: false,
+    };
+    let mut rows = vec![Row {
+        icon: monster.icon().ok(),
+        ..row(monster.name().unwrap_or_default(), false)
+    }];
+    if items {
+        for slot in 0..6 {
+            let item = monster.item(slot).unwrap_or(0);
+            if item != 0 {
+                rows.push(row(assets.name(item.wrapping_abs()), item < 0));
+            }
+        }
+    } else {
+        for index in (0..40).filter(|index| monster.condition_duration(*index) != 0) {
+            rows.push(row(
+                assets.conditions.get(index).cloned().unwrap_or_default(),
+                false,
+            ));
+        }
+    }
+    rows
+}
+
 /// The lines of the conditions or modifiers list for the squad, as showcondition
-/// lists them.
+/// lists them, or of the creature list.
 fn rows(state: &Session, assets: &Assets, ui: &UiState) -> Vec<Row> {
+    match ui.inspection {
+        Some(Inspection::CreatureConditions(body)) => {
+            return creature_rows(state, assets, body, false);
+        }
+        Some(Inspection::CreatureItems(body)) => return creature_rows(state, assets, body, true),
+        _ => {}
+    }
     let mut rows = Vec::new();
     let modifiers = ui.inspection == Some(Inspection::Modifiers);
     let labels = assets
@@ -68,6 +133,7 @@ fn rows(state: &Session, assets: &Assets, ui: &UiState) -> Vec<Row> {
         rows.push(Row {
             text: warrior.name.clone(),
             portrait: warrior.record().portrait().ok(),
+            icon: None,
             checked: false,
             timed: false,
         });
@@ -96,6 +162,7 @@ fn rows(state: &Session, assets: &Assets, ui: &UiState) -> Vec<Row> {
             rows.push(Row {
                 text,
                 portrait: None,
+                icon: None,
                 checked: !modifiers && value < 0,
                 timed: !modifiers && value > 0,
             });
@@ -116,8 +183,10 @@ pub fn draw(state: &Session, assets: &Assets, ui: &UiState, controls: &mut Vec<C
         + 52.)
         .min(744.);
     let height = visible as f32 * ROW_HEIGHT + 8.;
-    // PopUpMenuSelect opens at left 50, top 400; keep the list inside the game port.
-    let rect = Rect::new(50., 420_f32.min(598. - height), width, height);
+    // PopUpMenuSelect opens at left 50, top 400, or at left 40 for a creature; keep
+    // the list inside the game port.
+    let left = if creature(ui) { 40. } else { 50. };
+    let rect = Rect::new(left, 420_f32.min(598. - height), width, height);
     draw_rectangle(rect.x + 3., rect.y + 3., rect.w, rect.h, BLACK);
     draw_rectangle(
         rect.x,
@@ -130,6 +199,9 @@ pub fn draw(state: &Session, assets: &Assets, ui: &UiState, controls: &mut Vec<C
     for (index, row) in rows.iter().skip(first).take(visible).enumerate() {
         let y = rect.y + 4. + index as f32 * ROW_HEIGHT;
         if let Some(image) = row.portrait.and_then(|id| assets.portraits.get(&id)) {
+            crate::assets::texture_in(image, Rect::new(rect.x + 17., y, 16., 16.));
+        }
+        if let Some(image) = row.icon.and_then(|id| assets.icons.get(&id)) {
             crate::assets::texture_in(image, Rect::new(rect.x + 17., y, 16., 16.));
         }
         if row.checked {

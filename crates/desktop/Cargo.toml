@@ -10,6 +10,9 @@ centurions-core.workspace = true
 serde_json.workspace = true
 macroquad = { version = "=0.4.16", features = ["audio"] }
 
+[build-dependencies]
+embed-resource = "=3.0.12"
+
 [features]
 default = []
 original-fixtures = ["centurions-content/original-fixtures", "centurions-core/original-fixtures"]

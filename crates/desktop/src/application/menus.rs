@@ -109,6 +109,8 @@ pub(super) mod menu {
         pub const REFRESH_SCREEN: usize = 4;
         /// "Start Popup Help" (the last supported item).
         pub const START_POPUP_HELP: usize = 5;
+        /// "New Centurions - ", the first of the six items that show a version.
+        pub const FIRST_VERSION: usize = 10;
     }
     pub mod music {
         /// "Stop Playing Music".
@@ -287,6 +289,8 @@ impl Application {
 
     /// The items of menu `id`, with the scenario names, archive names, held-over allies or note
     /// labels filled in where the menu lists them; a note not yet found shows its unknown label.
+    ///
+    /// Original: updatemapmenu
     pub(super) fn menu_items(
         &self,
         id: i16,
@@ -294,6 +298,16 @@ impl Application {
         assets: &Assets,
     ) -> centurions_content::ui::Menu {
         let mut menu = assets.menus[&id].clone();
+        if id == menu::PREFERENCES {
+            for (item, suffix) in menu
+                .items
+                .iter_mut()
+                .skip(menu::preferences::FIRST_VERSION - 1)
+                .zip(&assets.version_suffixes)
+            {
+                item.text.push_str(suffix);
+            }
+        }
         if id == 130 {
             menu.items.truncate(4);
             menu.items.extend(self.scenario_names.iter().map(|name| {

@@ -59,6 +59,7 @@ impl Application {
                     } else {
                         (current + 1).min(entries.len().saturating_sub(1))
                     };
+                    let icon_start = view.icon_next.get();
                     events = apply(
                         Command::ViewCreature {
                             index: entries[next],
@@ -80,6 +81,8 @@ impl Application {
                                 ally: *ally,
                                 record: record.clone(),
                                 description: description.clone(),
+                                icon_start,
+                                icon_next: Default::default(),
                             })
                         } else {
                             None
@@ -89,6 +92,7 @@ impl Application {
                 }
             }
             ApplicationAction::CombatInformation(body) => {
+                let icon_start = self.creature.as_ref().and_then(|c| c.icon_next.get());
                 events = apply(Command::ViewCombatBody { body }, state, content)?;
                 if crate::acting::is_warrior_body(body) {
                     self.characters.information =
@@ -108,6 +112,8 @@ impl Application {
                                 ally: *ally,
                                 record: record.clone(),
                                 description: description.clone(),
+                                icon_start,
+                                icon_next: Default::default(),
                             })
                         } else {
                             None
@@ -161,12 +167,10 @@ impl Application {
                         next = Some(Action::InformationInspection(member, inspection));
                     }
                     96 | 97 => {
-                        self.characters.creation = Some(crate::creation::Creation::profile(
-                            state,
-                            content,
-                            member,
-                            item == 97,
-                        )?);
+                        let creation =
+                            crate::creation::Creation::profile(state, content, member, item == 97)?;
+                        events = crate::creation::Creation::tutorial_events(creation.stage);
+                        self.characters.creation = Some(creation);
                     }
                     100 => {
                         self.characters.information.as_mut().unwrap().detailed = true;

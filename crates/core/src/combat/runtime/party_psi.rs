@@ -15,17 +15,7 @@ pub fn party_psi(
     spell: i16,
     power: i16,
 ) -> Result<Vec<Event>, RuleError> {
-    if state.phase != Phase::Exploration
-        || state.combat.is_some()
-        || state
-            .exploration
-            .as_ref()
-            .is_none_or(|position| position.presentation.is_some() || position.script.is_some())
-    {
-        return Err(RuleError::Invalid(
-            "outdoor psi requires an unobstructed exploration turn".into(),
-        ));
-    }
+    require_field_turn(state)?;
     let mission = state
         .land(content)
         .ok_or_else(|| RuleError::Invalid("mission missing".into()))?;
@@ -41,8 +31,39 @@ pub fn party_psi(
             power,
         },
     )?;
-    // castspell sets in_spell; a global (mode 7) spell clears it.
+    // The menu cast marks a spell in effect; a global (mode 7) spell clears it again.
     state.globals.in_spell = 1;
+    begin_cast(state, content, warrior, spell, power, result)
+}
+
+/// Fails unless the party stands on the land map with nothing else under way.
+pub(super) fn require_field_turn(state: &Session) -> Result<(), RuleError> {
+    if state.phase != Phase::Exploration
+        || state.combat.is_some()
+        || state
+            .exploration
+            .as_ref()
+            .is_none_or(|position| position.presentation.is_some() || position.script.is_some())
+    {
+        return Err(RuleError::Invalid(
+            "outdoor psi requires an unobstructed exploration turn".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Starts a paid cast: the warrior's choice is remembered and, when targets must still be chosen,
+/// the cast waits for them; otherwise it is resolved on the party.
+///
+/// Original: buttonchoice
+pub(super) fn begin_cast(
+    state: &mut Session,
+    content: &Content,
+    warrior: usize,
+    spell: i16,
+    power: i16,
+    result: crate::combat::player_psi::PartyCastResult,
+) -> Result<Vec<Event>, RuleError> {
     if let Some(duration) = result.scenario_duration {
         crate::combat::party_buffs::extend_scenario_tail(state, duration)?;
     }

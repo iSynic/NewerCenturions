@@ -400,7 +400,7 @@ fn killbody_origin(
 /// Destroys monsters of a class, starting from the body killbody last handled
 /// rather than the story's origin.
 ///
-/// Original: newland
+/// Original: newland, getclosest
 pub(crate) fn destroy_class(
     combat: &mut Combat,
     extra: &[u8],

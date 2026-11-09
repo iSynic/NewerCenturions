@@ -2,8 +2,11 @@
 use super::UiState;
 use crate::{assets::Assets, layout};
 use centurions_content::Content;
-use centurions_core::Session;
+use centurions_core::{Exploration, Session};
 use macroquad::prelude::*;
+
+/// The tile drawn for a square the party has not seen.
+const HIDDEN_TILE: i16 = 300;
 
 /// Draws tile `tile` (1 to 300, 20 to a row) of terrain sheet `terrain` at
 /// `(x, y)`; any other tile number draws nothing.
@@ -44,6 +47,12 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
         .and_then(|_| crate::combat_controls::origin(state, ui))
         .map(|(x, y)| (i32::from(x), i32::from(y)))
         .unwrap_or(layout::outdoor_origin(position.x, position.y));
+    // Reveal Friends draws every body even in capture mode.
+    let capturing = combat.is_some_and(|c| c.capture_actor.is_some())
+        && !(ui.combat_view.reveal && ui.playback.is_none());
+    let targets = combat
+        .map(|c| super::bodies::capture_targets(state, c, (vx, vy)))
+        .unwrap_or_default();
     for y in 0..13 {
         for x in 0..15 {
             let sx = layout::MAP.x + x as f32 * 32.;
@@ -76,6 +85,15 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
                 );
                 let icon = if tile < 0 && id >= 1000 {
                     Some(id)
+                } else if capturing && (0..6).contains(&id) && c.capture_actor != Some(id) {
+                    // Capture mode draws only the capturing warrior.
+                    None
+                } else if capturing
+                    && id >= 10
+                    && !targets.get((id - 10) as usize).copied().unwrap_or(false)
+                {
+                    // ... and the monsters it can capture.
+                    None
                 } else if (0..6).contains(&id) {
                     // A slot past a short squad holds no warrior to draw.
                     state
@@ -100,19 +118,21 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
                 }
             } else {
                 let index = (vx + x) as usize * 90 + (vy + y) as usize;
-                terrain(assets, mission.terrain, position.floor[index], sx, sy);
-                if position.objects[index] > 0 {
-                    terrain(assets, mission.terrain, position.objects[index], sx, sy);
-                }
-                if position.objects[index] < 0
-                    && let Some(texture) = assets.icons.get(&position.objects[index].wrapping_abs())
-                {
-                    draw_texture(texture, sx, sy, WHITE);
-                }
+                let tile = if position.sight_hidden(vx + x, vy + y) {
+                    HIDDEN_TILE
+                } else {
+                    position.floor[index]
+                };
+                terrain(assets, mission.terrain, tile, sx, sy);
             }
         }
     }
+    if combat.is_none() {
+        buildings(assets, mission, position, (vx, vy));
+        object_icons(assets, mission, position, (vx, vy));
+    }
     if let Some(c) = combat {
+        super::fields::draw(state, content, c, assets, (vx, vy));
         super::bodies::draw(state, c, assets, ui, (vx, vy));
         super::range_lines::draw_edges(state, c, (vx, vy));
     }
@@ -160,6 +180,95 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
             layout::MAP.y + (position.y - vy) as f32 * 32.,
             WHITE,
         );
+    }
+}
+
+/// Draws the buildings of the object layer after the floor: a positive object
+/// value is the picture 23000 plus the value, anchored by its own size at the
+/// bottom right of its cell and spilling up and left over the neighbouring
+/// cells, with white left out. The cells from the view origin over 22 rows and
+/// columns are visited, rows outermost, so a building below or to the right of
+/// the window can reach into it and a later building covers an earlier one. A
+/// cell the party has not seen draws the blank tile instead of its building.
+///
+/// Original: centerpictlarge
+fn buildings(
+    assets: &Assets,
+    mission: &centurions_content::mission::OpeningMission,
+    position: &Exploration,
+    (vx, vy): (i32, i32),
+) {
+    for y in vy..vy + 22 {
+        for x in vx..vx + 22 {
+            if x > 89 || y > 89 {
+                continue;
+            }
+            let object = position.objects[x as usize * 90 + y as usize];
+            if object <= 0 {
+                continue;
+            }
+            if position.sight_hidden(x, y) {
+                if (x - vx) < 15 && (y - vy) < 13 {
+                    let sx = layout::MAP.x + (x - vx) as f32 * 32.;
+                    let sy = layout::MAP.y + (y - vy) as f32 * 32.;
+                    terrain(assets, mission.terrain, HIDDEN_TILE, sx, sy);
+                }
+                continue;
+            }
+            let Some(texture) = assets.transparent_picture(23000 + object) else {
+                continue;
+            };
+            let right = layout::MAP.x + (x - vx + 1) as f32 * 32.;
+            let bottom = layout::MAP.y + (y - vy + 1) as f32 * 32.;
+            super::bodies::plot_clipped(
+                &texture,
+                Rect::new(
+                    right - texture.width(),
+                    bottom - texture.height(),
+                    texture.width(),
+                    texture.height(),
+                ),
+                layout::MAP,
+            );
+        }
+    }
+}
+
+/// Draws the icon of each negative object value after the buildings: the land's
+/// background tile first for a value above -500, so a building reaching into the
+/// cell is covered, then the icon of the value's magnitude. A cell the party has
+/// not seen draws the blank tile alone.
+///
+/// Original: centerpictlarge
+fn object_icons(
+    assets: &Assets,
+    mission: &centurions_content::mission::OpeningMission,
+    position: &Exploration,
+    (vx, vy): (i32, i32),
+) {
+    for y in 0..13 {
+        for x in 0..15 {
+            let (cx, cy) = (vx + x, vy + y);
+            if cx > 89 || cy > 89 {
+                continue;
+            }
+            let object = position.objects[cx as usize * 90 + cy as usize];
+            if object >= 0 {
+                continue;
+            }
+            let sx = layout::MAP.x + x as f32 * 32.;
+            let sy = layout::MAP.y + y as f32 * 32.;
+            if position.sight_hidden(cx, cy) {
+                terrain(assets, mission.terrain, HIDDEN_TILE, sx, sy);
+                continue;
+            }
+            if object > -500 {
+                terrain(assets, mission.terrain, mission.default_tile, sx, sy);
+            }
+            if let Some(texture) = assets.icons.get(&object.wrapping_abs()) {
+                draw_texture(texture, sx, sy, WHITE);
+            }
+        }
     }
 }
 
@@ -221,6 +330,8 @@ pub(super) fn draw_story_picture(assets: &Assets, ui: &UiState) {
 }
 
 /// Draws the frame of the outdoor spell effect playing now, over its map cell.
+///
+/// Original: spelleffectoutdoors
 pub(super) fn draw_outdoor_effect(state: &Session, assets: &Assets, ui: &UiState) {
     let Some(effect) = ui.effects.front() else {
         return;

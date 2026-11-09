@@ -32,6 +32,8 @@ pub(crate) fn wrapping_spell_descriptor(identity: [i16; 3]) -> i16 {
 }
 
 /// The attack packet for a spell number: found by its school, level and index in the attack table.
+///
+/// Original: loadspell
 pub fn load_packet(attacks: &[u8], id: i16) -> Result<Vec<u8>, RuleError> {
     if id < FIRST_SPELL_DESCRIPTOR {
         return Err(RuleError::Invalid("spell descriptor".into()));

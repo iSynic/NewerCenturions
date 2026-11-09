@@ -40,6 +40,20 @@ fn flash(address: u32) -> Event {
     })
 }
 
+/// The refusal given to Squad Order while the party's equipment is held: the squad keeps its
+/// places.
+///
+/// Original: HandleMenuChoice
+pub fn squad_order_refusal() -> GameFeedback {
+    GameFeedback::Flash {
+        address: 0x4036b2,
+        x: 50,
+        y: 50,
+        wait: 0,
+        sound: 5000,
+    }
+}
+
 /// Confiscate takes items from the party. The forward force-drop loop is
 /// deliberate.
 ///

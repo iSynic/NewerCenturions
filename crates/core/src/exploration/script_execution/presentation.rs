@@ -174,6 +174,10 @@ pub(super) fn execute(
                 text,
             });
             effects.push(Event::Sound { resource_id: 20005 });
+            effects.push(Event::Feedback(crate::feedback::GameFeedback::Tutorial {
+                first: QUESTION_TUTORIAL,
+                last: QUESTION_TUTORIAL,
+            }));
             effects.push(Event::StoryPresented);
             return Ok(ScriptStep::Pause);
         }
@@ -248,6 +252,8 @@ pub(super) fn execute(
 
 /// Tutorial 105, shown as a party pick begins.
 const PARTY_PICK_TUTORIAL: usize = 105;
+/// Tutorial 106, shown as a question is put to the player.
+const QUESTION_TUTORIAL: usize = 106;
 
 /// Each picked member with nonzero maximum Psi takes the last of |e1| draws of
 /// randrange(e2, e3), negated for negative e1, clamped to 0..maximum. A nonzero

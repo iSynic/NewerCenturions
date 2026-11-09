@@ -20,7 +20,7 @@ pub(super) enum Prepared {
 /// Loads the attacker's melee weapon, ammunition and spell-weapon packet; a spell weapon can halt
 /// the attack.
 ///
-/// Original: attack
+/// Original: attack, nobrassnoammo
 pub(super) fn prepare(
     state: &mut Session,
     content: &Content,

@@ -603,6 +603,25 @@ fn question_condition_and_continuation_match_original_blocks() {
         }
         assert_eq!(word(&extra, 8).unwrap(), 186);
     }
+    // The labels 185 and 186 caption the answers from the shipped Data SD2; a Data OD takes
+    // 25-byte records, and a record past its end leaves the preloaded caption.
+    let content = content();
+    let tables = &content.scenario.as_ref().unwrap().maps[0].shared;
+    let [yes, no] = tables.question_captions((185, 186), "");
+    assert_eq!(yes.text(), "Join the battle.");
+    assert_eq!(no.text(), "Stand back and watch.");
+    assert_eq!((yes.key_byte(), no.key_byte()), (b'J', b'S'));
+    let mut options = vec![0; 2 * 25];
+    options[25..29].copy_from_slice(b"\x03Yes");
+    let tables = centurions_content::mission::StoryTables {
+        option_texts: Some(options),
+        ..Default::default()
+    };
+    let [yes, no] = tables.question_captions((-1, 5), "Stand");
+    assert_eq!((yes.text(), no.text()), ("Yes".into(), "Stand".into()));
+    // A seek the file refuses fails the open file for the caption after it too.
+    let failed = tables.question_captions((5, 1), "Stand").map(|caption| caption.text());
+    assert_eq!(failed, ["Stand", "Stand"]);
 }
 
 #[test]

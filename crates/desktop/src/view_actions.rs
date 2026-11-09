@@ -6,7 +6,7 @@ use crate::{
     status_popup, targeting,
 };
 use centurions_content::Content;
-use centurions_core::{Command, Event, Session, apply};
+use centurions_core::{Command, Event, Session, apply, feedback::GameFeedback};
 
 /// Starts firearm target selection; false after reporting a refusal.
 fn begin_fire_targets(state: &mut Session, content: &Content, ui: &mut UiState) -> bool {
@@ -83,7 +83,10 @@ pub fn handle(
         Action::Open(inspection) => {
             if matches!(
                 inspection,
-                presentation::Inspection::Conditions | presentation::Inspection::Modifiers
+                presentation::Inspection::Conditions
+                    | presentation::Inspection::Modifiers
+                    | presentation::Inspection::CreatureConditions(_)
+                    | presentation::Inspection::CreatureItems(_)
             ) && application.audio.sound
                 && let Some(audio) = audio
             {
@@ -225,7 +228,19 @@ pub fn handle(
                 .queue
                 .push_back(centurions_core::feedback::GameFeedback::Sound { resource_id: 141 });
         }
-        Action::MedicalCancel => ui.targeting.medical_cancel = true,
+        Action::MedicalCancel => {
+            // The question is flashed with the warning sound, then its strip plays the question
+            // sound and offers the question tutorial.
+            ui.targeting.medical_cancel = true;
+            ui.feedback.queue.extend([
+                GameFeedback::Sound { resource_id: 6000 },
+                GameFeedback::Sound { resource_id: 20005 },
+                GameFeedback::Tutorial {
+                    first: 106,
+                    last: 106,
+                },
+            ]);
+        }
         Action::KeepMedicalTarget => ui.targeting.medical_cancel = false,
         _ => unreachable!("non-viewing action reached the viewing controller"),
     }

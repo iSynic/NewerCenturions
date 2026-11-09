@@ -3,12 +3,16 @@ mod map_context;
 pub(crate) use map_context::active_map;
 use map_context::unsupported;
 pub(crate) mod boat;
+mod land_edge;
 mod movement;
 pub(crate) use movement::resume_movement;
 pub use movement::{manual_encounter, move_squad};
 mod item_use;
 pub(crate) use item_use::check_item_actor;
 pub use item_use::use_item;
+mod sight;
+pub use sight::field_origin;
+pub(crate) use sight::reveal_sight;
 mod regions;
 pub(crate) use regions::check_region;
 #[cfg(all(test, feature = "original-fixtures"))]
@@ -22,7 +26,7 @@ pub use continuations::{
 };
 mod choices;
 pub(crate) use choices::finish_typed_selection;
-pub use choices::{cancel_menu, choose, choose_warrior, select_menu};
+pub use choices::{cancel_menu, choose, choose_warrior, question_label_words, select_menu};
 mod menus;
 use menus::{active_table, present_menu, present_typed};
 pub use menus::{submit_text, typed_record};

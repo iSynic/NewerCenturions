@@ -489,7 +489,14 @@ fn approach(
         {
             break;
         }
-        select_enemy_target(combat, warriors, mission, random, body)?;
+        select_enemy_target(
+            combat,
+            warriors,
+            mission,
+            random,
+            body,
+            globals.animation_delay,
+        )?;
         let moved = move_actor_with_reactions(
             combat,
             warriors,

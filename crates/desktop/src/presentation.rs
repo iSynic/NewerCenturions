@@ -11,6 +11,10 @@ pub enum Inspection {
     FireTargets,
     Weapons,
     Conditions,
+    /// The conditions of the creature in the combat information panel.
+    CreatureConditions(i16),
+    /// The items of the creature in the combat information panel.
+    CreatureItems(i16),
     Modifiers,
     Specials,
     Psi,
@@ -38,6 +42,8 @@ pub struct UiState {
     pub page: usize,
     pub typed_text: String,
     pub typed_entry: bool,
+    /// The keys that answer the question on show, as (yes, no).
+    pub question_keys: Option<(u8, u8)>,
     pub effects: VecDeque<OutdoorAnimation>,
     /// The NPC steps and result pauses of the last combat command still being shown.
     pub playback: Option<crate::combat_playback::Playback>,
@@ -46,8 +52,14 @@ pub struct UiState {
     pub delay_until: f64,
     pub psi: crate::scan_picker::PsiSelection,
     pub targeting: crate::targeting::Targeting,
+    /// The figure the combat panel's movement is compared with, which the panel leaves behind
+    /// as it draws: a monster's icon number or a warrior's weapon number. Nothing else the
+    /// game draws leaves a figure here that is modelled, so it starts at zero.
+    pub panel_scratch: std::cell::Cell<i16>,
     /// The logical pointer while the left button is held, for downbutton's look.
     pub held_pointer: Option<Vec2>,
+    /// The map, square and Wizard Eye the party last looked from.
+    pub sight: Option<(i32, i32, i32, [u8; 2])>,
 }
 /// An outdoor spell effect playing at a map cell: its cicn base, place, size and
 /// frame timing.
@@ -148,14 +160,18 @@ mod controls;
 pub(crate) use controls::authored_text;
 use controls::{button, field};
 
+mod combat_panel;
 mod panels;
+use combat_panel::draw_combat_information;
 pub use panels::draw_specials;
-use panels::{draw_clinic, draw_combat_information, draw_survivors, equipped_ammunition_reserve};
+use panels::{draw_clinic, draw_survivors, equipped_ammunition_reserve};
 
 mod state;
 
-mod bevel;
+pub(crate) mod bevel;
 mod bodies;
+pub(crate) use bodies::plot_clipped;
+mod fields;
 mod flights;
 mod map;
 mod range_lines;
@@ -164,6 +180,6 @@ use map::{draw_outdoor_effect, draw_story_picture, map};
 mod scene;
 mod spell_panel;
 pub use scene::draw;
-pub(crate) use spell_panel::draw_info;
+pub(crate) use spell_panel::{draw_aim, draw_info};
 
 mod hud;

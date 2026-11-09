@@ -47,6 +47,7 @@ pub(super) fn reset_experience(
         .map(|arena| &arena.spell_info)
         .map(|packet| SpellInfoRecord(packet).health_effect());
     state.store_spell_fatigue();
+    state.settle_fatigue_after_battle();
     if let Some(arena) = state.combat.take() {
         state.globals.in_spell = arena.in_spell;
         state.globals.spell_info = arena.spell_info;

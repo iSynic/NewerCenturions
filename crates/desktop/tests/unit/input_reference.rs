@@ -97,7 +97,7 @@ fn combat_controls_capture_cancel_and_resolve_through_apply() {
     combat.roster.records[0].bytes[0xb0] = 1;
     combat.roster.records[0].bytes[0xb1] = 1;
     let start = state.clone();
-    let controls = crate::combat_controls::buttons(&state, &content, actor);
+    let controls = crate::combat_controls::buttons(&state, actor);
     let button = controls
         .iter()
         .find(|c| matches!(c.action, Action::Command(Command::BeginCapture)))
@@ -250,7 +250,7 @@ fn combat_buttons_execute_actions_and_preserve_cancelled_or_refused_state() {
     state.globals.define_spells = vec![0; 480];
     let actor = state.combat.as_ref().unwrap().active_body().unwrap() as usize;
     let key = |key, state: &Session| {
-        command(crate::combat_controls::shortcut(key, state, &content, actor).unwrap())
+        command(crate::combat_controls::shortcut(key, state, actor).unwrap())
     };
     let start = state.clone();
     // Native turn-script17 emits -120 after replacing the mutant; it cannot block input.

@@ -86,7 +86,17 @@ impl SupportSpellResult {
 }
 
 impl crate::Session {
-    /// Combat updatefat skips its clamp, so effect68 leaves fatigue 1 until a later change.
+    /// Once the battle is over the party's fatigue is held in range again, which lifts the 1 that
+    /// effect 68 left behind.
+    ///
+    /// Original: updatefat
+    pub(crate) fn settle_fatigue_after_battle(&mut self) {
+        if let Some(position) = self.exploration.as_mut() {
+            position.fatigue = crate::time::hold_fatigue(position.fatigue);
+        }
+    }
+
+    /// Combat updatefat skips its clamp, so effect 68 leaves fatigue 1 until the battle ends.
     pub(crate) fn store_spell_fatigue(&mut self) {
         if let Some(combat) = self.combat.as_mut()
             && std::mem::take(&mut combat.fatigue_reset)

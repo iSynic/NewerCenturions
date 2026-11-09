@@ -36,7 +36,10 @@ impl Application {
         if self.screen != Screen::Logo && self.screen != Screen::Intro {
             self.draw_menus(state, assets, &mut controls);
         }
-        if let Some(note) = &self.notes.open {
+        if self.selection.restrictions && self.screen == Screen::Squad {
+            controls.clear();
+            self.draw_restrictions(content, state, assets, &mut controls);
+        } else if let Some(note) = &self.notes.open {
             controls.clear();
             note.draw(state, content, assets);
         } else if let Some(creature) = &self.creature {
@@ -181,25 +184,27 @@ impl Application {
         }
         self.draw_question(state, assets, &mut controls);
         if let Some(page) = self.help.page {
-            crate::help::draw_page(page, content, assets, &mut controls);
+            let age = self
+                .preferences
+                .enabled(crate::preferences::pref::SCREEN_800_X_600)
+                .then(|| self.help.page_age(get_time()));
+            crate::help::draw_page(page, age, content, assets, &mut controls);
         }
         controls
     }
 
-    /// The yes/no question window: keeping a created warrior, end of game,
-    /// editor, help reset or quit. The escape question has its own window,
+    /// The yes/no question window: keeping a created warrior, erasing a warrior, end
+    /// of game, editor, help reset or quit. The escape question has its own window,
     /// drawn with the choice dialogs.
     fn draw_question(&self, state: &Session, assets: &Assets, controls: &mut Vec<Control>) {
-        let keeping = self
-            .characters
-            .creation
-            .as_ref()
-            .is_some_and(|c| c.stage == crate::creation::Stage::Keep);
+        let creation_question = self.characters.creation.as_ref().and_then(|c| c.question());
+        let keeping = creation_question.is_some();
         if keeping
             || self.questions.quit
             || self.questions.help_reset
             || self.characters.editor_question
             || self.selection.end_question
+            || self.selection.erase_question
         {
             let origin = vec2(0., 20.);
             draw_texture_ex(
@@ -214,8 +219,10 @@ impl Application {
             );
             assets.panel(182, Rect::new(origin.x + 22., origin.y + 23., 320., 84.));
             assets.wrapped(
-                &assets.questions[if keeping {
-                    1
+                &assets.questions[if let Some(question) = creation_question {
+                    question - 1
+                } else if self.selection.erase_question {
+                    2
                 } else if self.selection.end_question {
                     if state.phase == Phase::Combat { 9 } else { 0 }
                 } else if self.characters.editor_question {
@@ -243,6 +250,8 @@ impl Application {
                         ApplicationAction::CreationAnswer(answer)
                     } else if self.questions.escape {
                         ApplicationAction::EscapeAnswer(answer)
+                    } else if self.selection.erase_question {
+                        ApplicationAction::EraseAnswer(answer)
                     } else if self.selection.end_question {
                         ApplicationAction::EndAnswer(answer)
                     } else if self.characters.editor_question {

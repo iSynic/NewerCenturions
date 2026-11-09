@@ -101,6 +101,7 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
     state.clear_tactical_fields();
     state.store_monsters();
     state.store_spell_fatigue();
+    state.settle_fatigue_after_battle();
     let combat = state.combat.take().ok_or("retreat combat missing")?;
     state.globals.in_spell = combat.in_spell;
     state.globals.spell_info = combat.spell_info;

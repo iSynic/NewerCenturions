@@ -83,6 +83,7 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
                     0,
                     &packet,
                     &mut random,
+                    0,
                 )
             } else {
                 centurions_core::combat::spells::select_firearm_targets(
@@ -101,6 +102,7 @@ fn enemy_spell_selection_matches_original_targets_caster_and_random_consumption(
                         sound: 0,
                     },
                     &mut random,
+                    0,
                 )
             };
             let result = result.unwrap();

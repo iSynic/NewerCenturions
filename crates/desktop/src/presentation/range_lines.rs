@@ -64,7 +64,7 @@ fn draw(state: &Session, combat: &Combat, (vx, vy): (i32, i32), mode: Mode) {
     // redColor, blueColor and the green ToolBoxInit sets up.
     let red = Color::from_rgba(0xdd, 0x08, 0x06, 255);
     let blue = Color::from_rgba(0x00, 0x00, 0xd4, 255);
-    let green = Color::from_rgba(0x00, 0xff, 0x32, 255);
+    let green = layout::TOOLBOX_GREEN;
     // Monsters with stamina, the size class moving the end to the body centre.
     for (index, record) in combat.roster.records.iter().enumerate() {
         if record.stamina().unwrap_or(0) <= 0 {

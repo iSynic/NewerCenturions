@@ -11,8 +11,9 @@ pub fn select_enemy_target(
     mission: &centurions_content::mission::OpeningMission,
     random: &mut RandomState,
     body: i16,
+    delay: i16,
 ) -> Result<i16, RuleError> {
-    crate::combat::targeting::select_actor_target(combat, warriors, mission, random, body)
+    crate::combat::targeting::select_actor_target(combat, warriors, mission, random, body, delay)
 }
 
 /// The active warrior guards for the rest of the turn: a guard sound plays and the turn ends.

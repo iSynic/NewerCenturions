@@ -156,7 +156,7 @@ pub(crate) fn start(
         }
         Action::Rest => {
             events.push(Event::Sound { resource_id: 6001 });
-            state.exploration.as_mut().unwrap().fatigue = (fatigue - 2).clamp(4, 135);
+            state.exploration.as_mut().unwrap().fatigue = crate::time::hold_fatigue(fatigue - 2);
             control
                 .pending
                 .extend([Step::Time(4), Step::Time(1), Step::Region(1)]);

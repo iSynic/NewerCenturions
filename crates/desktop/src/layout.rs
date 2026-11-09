@@ -2,6 +2,15 @@ use macroquad::prelude::*;
 
 /// The 800 by 600 window.
 pub const SIZE: Vec2 = Vec2::new(800., 600.);
+/// The height of the menu bar above the game window.
+pub const MENU_BAR: f32 = 20.;
+/// How far right of the window's left edge the game's own coordinates start.
+pub const ORIGIN_LEFT: f32 = 160.;
+/// How far below the menu bar the game's own vertical coordinates start.
+pub const ORIGIN_TOP: f32 = 140.;
+/// How far the large field preference moves the vertical coordinates of the
+/// controls and readouts up.
+pub const LARGE_FIELD_SHIFT: f32 = 32.;
 /// The area the map is drawn in.
 pub const MAP: Rect = Rect::new(0., 20., 480., 416.);
 /// The left edge of the squad rows beside the map.
@@ -32,6 +41,13 @@ pub const DISABLED_CONTROL_PICT: i16 = 154;
 pub const INTRO_TEXT: Color = Color::from_rgba(252, 243, 15, 255);
 /// cyanColor, used for the squad screen's unselected roster names.
 pub const CYAN: Color = Color::from_rgba(0x02, 0xab, 0xea, 255);
+/// QuickDraw's redColor, which the game draws with ForeColor(205).
+pub const RED_COLOR: Color = Color::from_rgba(0xdd, 0x08, 0x06, 255);
+/// QuickDraw's yellowColor, which the game draws with ForeColor(69).
+pub const YELLOW_COLOR: Color = Color::from_rgba(0xfc, 0xf3, 0x05, 255);
+/// The green RGB 0x0000/0xff00/0x3200 the game sets up at startup: friends' range
+/// lines and the range readout.
+pub const TOOLBOX_GREEN: Color = Color::from_rgba(0x00, 0xff, 0x32, 255);
 /// RGB 0x3800/0xb300/0xf900, used for a pool below its maximum.
 pub const POOL_BELOW_MAXIMUM: Color = Color::from_rgba(0x38, 0xb3, 0xf9, 255);
 
@@ -131,5 +147,5 @@ pub fn row(index: usize) -> Rect {
 ///
 /// Original: centerpictlarge
 pub fn outdoor_origin(x: i32, y: i32) -> (i32, i32) {
-    ((x - 8).clamp(0, 75), (y - 8).clamp(0, 76))
+    centurions_core::field_origin(x, y)
 }

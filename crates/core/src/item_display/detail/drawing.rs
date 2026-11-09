@@ -78,6 +78,8 @@ impl<'a> Panel<'a> {
     }
     /// Draws a figure at a position only when it is positive, with a plus sign in front if asked
     /// for; zero and negative figures draw nothing, though the number is still converted.
+    ///
+    /// Original: stringnozero, stringnozeronoplus
     pub fn number_at(&mut self, x: i16, y: i16, value: i16, plus: bool) -> Result<(), RuleError> {
         self.move_to(x, y);
         let text = self.convert_number(value)?;

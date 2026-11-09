@@ -17,6 +17,7 @@ pub(super) struct OutOfCombatSelection<'a> {
     map: &'a CombatField,
     count: i16,
     table: &'a WarriorTable,
+    delay: i16,
 }
 
 impl<'a> OutOfCombatSelection<'a> {
@@ -25,6 +26,7 @@ impl<'a> OutOfCombatSelection<'a> {
         backing: &'a Monsters,
         tactical: &'a Battlefield,
         table: &'a WarriorTable,
+        delay: i16,
     ) -> Result<Self, RuleError> {
         let count = backing.num_mon;
         // Session validation holds num_mon in 0..=100.
@@ -38,6 +40,7 @@ impl<'a> OutOfCombatSelection<'a> {
             map,
             count,
             table,
+            delay,
         })
     }
 }
@@ -100,7 +103,7 @@ impl SelectionView for OutOfCombatSelection<'_> {
         from: (i16, i16),
         to: (i16, i16),
     ) -> Result<bool, RuleError> {
-        visible(self.map, mission, from, to)
+        visible(self.map, mission, from, to, self.delay)
     }
     /// Refuses a choice among area targets, which a shot after the battle does not support.
     fn best_choice(
@@ -122,6 +125,7 @@ pub(super) fn visible(
     mission: &OpeningMission,
     from: (i16, i16),
     to: (i16, i16),
+    delay: i16,
 ) -> Result<bool, RuleError> {
     // Sight needs only the map, mission, coordinates and delay; this view holds no
     // actors and is never installed.
@@ -136,5 +140,5 @@ pub(super) fn visible(
             mon_pos: vec![],
         },
     );
-    combat::lifecycle::can_see(&view, mission, from, to, 0)
+    combat::lifecycle::can_see(&view, mission, from, to, delay)
 }

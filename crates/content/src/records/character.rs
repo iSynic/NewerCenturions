@@ -75,7 +75,7 @@ impl CharacterIdentityMut<'_> {
     /// Stamps the three wrapping checksums a saved warrior carries. The first
     /// sums a field whose meaning is unknown; none of them is a statistic.
     ///
-    /// Original: savecharacter
+    /// Original: savecharacter, setverify
     pub fn refresh_save_checksums(&mut self) -> Result<(), ContentError> {
         for (destination, fields) in [
             (2, &[0x3a, 0x52, 0x1e][..]),

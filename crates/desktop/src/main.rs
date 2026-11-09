@@ -5,6 +5,7 @@
 mod fixture_hex;
 
 mod acting;
+mod app_icon;
 mod appearance;
 mod application;
 mod assets;
@@ -17,6 +18,7 @@ mod command_result;
 mod creation;
 mod creature;
 mod editor;
+mod farewell;
 mod feedback;
 mod file_dialog;
 mod frame;
@@ -30,7 +32,9 @@ mod note;
 #[cfg(all(test, feature = "original-fixtures"))]
 #[path = "../tests/unit/original_content.rs"]
 mod original_content;
+mod picker;
 mod portrait;
+mod preference_icon;
 mod preferences;
 mod presentation;
 mod save_files;
@@ -78,6 +82,7 @@ async fn main() {
     let mut enemy_error = false;
     let mut sync_error = false;
     let mut render_context: Option<((Option<String>, u8), centurions_content::Content)> = None;
+    let mut farewell: Option<farewell::Farewell> = None;
     loop {
         if !activity.poll() && capture.is_none() {
             ui.movement.reset();
@@ -111,7 +116,14 @@ async fn main() {
         let pointer = canvas.pointer(vec2(mouse.0, mouse.1));
         frame::log_pressed_keys(&input_log);
         set_camera(&camera);
-        if let (Ok(content), Some(state), Some(Ok(assets))) = (&loaded, &mut state, &mut assets) {
+        if let (Some(farewell), Some(Ok(assets))) = (&farewell, &assets) {
+            if let Ok(audio) = &audio {
+                audio.tick_sounds(get_time());
+            }
+            farewell.draw(assets, get_time());
+        } else if let (Ok(content), Some(state), Some(Ok(assets))) =
+            (&loaded, &mut state, &mut assets)
+        {
             frame::select_render_context(
                 content,
                 state,
@@ -123,6 +135,7 @@ async fn main() {
             let content = render_context
                 .as_ref()
                 .map_or(content, |(_, selected)| selected);
+            frame::look_at_land(state, content, &mut ui);
             ui.preferences = application.preferences.clone();
             assets.set_artistic_font(
                 ui.preferences
@@ -151,12 +164,19 @@ async fn main() {
             {
                 audio.set_volumes(application.audio.volume, application.audio.music_volume);
                 audio.tick_sounds(get_time());
-                audio.music(
+                let playlist = application.audio.playlist;
+                let gave_up = audio.music(
                     application.audio.music_enabled,
                     application.audio.music_request.take(),
-                    &application.audio.playlist,
+                    || frame::change_music(state, content, playlist, &mut ui),
                     get_time(),
                 );
+                if gave_up {
+                    application.audio.music_enabled = false;
+                    ui.events(&[centurions_core::Event::Feedback(
+                        centurions_core::feedback::GameFeedback::Warning { index: 155 },
+                    )]);
+                }
                 application.audio.current_music = audio.current_resource();
             }
             if let Err(error) = application.prepare_information(state, assets) {
@@ -175,6 +195,7 @@ async fn main() {
                 .map_or(&*state, |playback| &playback.session);
             ui.held_pointer = pointer.filter(|_| is_mouse_button_down(MouseButton::Left));
             let controls = application.draw(content, shown, assets, &ui);
+            combat_controls::draw_peek_cursor(shown, assets, &ui, pointer);
             ui.movement.repeat_seconds = (application.speed as f64 * 5. - 5.) / 60.;
             let script_pause = {
                 ui.prepare_capture_prompt(state);
@@ -250,6 +271,7 @@ async fn main() {
             let mut automatic_turn = false;
             if action.is_none() && !blocked && ui.effects.is_empty() && get_time() >= ui.delay_until
             {
+                ui.question_keys = story_dialogs::question_keys(content, state, assets);
                 action = input::action(state, content, &mut ui, &controls, pointer);
             } else {
                 ui.movement.reset();
@@ -366,7 +388,17 @@ async fn main() {
         }
         canvas.draw(&target);
         if application.quit {
-            break;
+            match &farewell {
+                None if capture.is_none() && matches!(assets, Some(Ok(_))) => {
+                    farewell = Some(farewell::Farewell::begin(
+                        get_time(),
+                        audio.as_ref().ok(),
+                        application.audio.sound,
+                    ));
+                }
+                Some(farewell) if !farewell.finished(get_time()) => {}
+                _ => break,
+            }
         }
         if let Some(path) = &capture
             && frames >= 3

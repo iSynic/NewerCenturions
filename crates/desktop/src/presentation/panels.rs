@@ -1,7 +1,7 @@
 //! Panels presentation.
-use super::{Action, Control, Inspection, UiState, field};
+use super::{Action, Control, Inspection, UiState};
 use crate::assets::Assets;
-use centurions_content::{Content, Warrior};
+use centurions_content::Warrior;
 use centurions_core::{Command, Session};
 use macroquad::prelude::*;
 
@@ -78,7 +78,10 @@ pub(super) fn draw_clinic(
     }
 }
 
-/// Draws the survivors dialog (DLOG 173) and its Continue control.
+/// Draws the survivors dialog (DLOG 173) and its Continue control. Each creature's
+/// picture is drawn smaller for the sizes that cover more than one cell.
+///
+/// Original: bodycount, monsterupdate
 pub(super) fn draw_survivors(state: &Session, assets: &Assets, controls: &mut Vec<Control>) {
     assets.draw_dialog(173);
     controls.push(Control {
@@ -106,14 +109,15 @@ pub(super) fn draw_survivors(state: &Session, assets: &Assets, controls: &mut Ve
         if record.survivor_marker().unwrap_or(0) == -1
             && let Some(icon) = assets.icons.get(&2003)
         {
-            draw_texture(icon, rect.x + 3., rect.y + 3., WHITE);
+            crate::assets::texture_in(icon, Rect::new(rect.x, rect.y, 64., 64.));
         }
         if let Some(icon) = assets.icons.get(&record.icon().unwrap_or(0)) {
             let (horizontal, vertical) = match record.size().unwrap_or(0) {
                 0 => (19., 19.),
-                1 => (19., 3.),
-                2 => (3., 19.),
-                _ => (3., 3.),
+                1 => (3., 19.),
+                2 => (19., 3.),
+                3 | -3 => (3., 3.),
+                _ => (0., 0.),
             };
             crate::assets::texture_in(
                 icon,
@@ -179,94 +183,6 @@ pub(super) fn draw_survivors(state: &Session, assets: &Assets, controls: &mut Ve
     );
 }
 
-/// Draws the information panels under the map (PICT 166 and 228) for the body in
-/// view: a monster's stamina, psi points and shield, or a warrior's.
-pub(super) fn draw_combat_information(
-    content: &Content,
-    state: &Session,
-    assets: &Assets,
-    body: i16,
-) {
-    assets.panel(166, Rect::new(0., 449., 308., 139.));
-    assets.panel(228, Rect::new(310., 449., 160., 140.));
-    if !crate::acting::is_warrior_body(body) {
-        let Some(monster) = state
-            .combat
-            .as_ref()
-            .and_then(|c| c.roster.records.get((body - 10) as usize))
-        else {
-            return;
-        };
-        let record = monster.record();
-        for (value, x, y) in [
-            (record.stamina(), 115., 470.),
-            (record.psi_points(), 115., 493.),
-            (record.shield_points(), 223., 470.),
-            (record.armor_rating(), 274., 470.),
-        ] {
-            assets.text(&value.unwrap_or(0).to_string(), x, y, 12, WHITE);
-        }
-        for (value, x) in [(record.movement(), 115.), (record.action_points(), 211.)] {
-            assets.text(&value.max(0).to_string(), x, 516., 12, WHITE);
-        }
-        if let Ok(icon) = record.icon()
-            && let Some(texture) = assets.icons.get(&icon)
-        {
-            crate::assets::texture_in(texture, Rect::new(8., 456., 64., 64.));
-        }
-        assets.text(&record.name().unwrap_or_default(), 126., 536., 12, WHITE);
-        return;
-    }
-    let Some(w) = state.warriors.get(body as usize) else {
-        return;
-    };
-    for (value, x, y) in [
-        (w.record().stamina(), 115., 470.),
-        (w.record().psi_points(), 115., 493.),
-        (w.record().movement(), 115., 516.),
-        (w.record().action_points(), 211., 516.),
-        (w.record().shield_chance(), 181., 470.),
-        (w.record().shield_points(), 223., 470.),
-        (w.record().armor_rating(), 274., 470.),
-    ] {
-        assets.text(&field(value), x, y, 12, WHITE);
-    }
-    if let Ok(id) = w.record().icon()
-        && let Some(texture) = assets.icons.get(&id)
-    {
-        draw_texture(texture, 22., 472., WHITE);
-    }
-    assets.text(&w.name, 126., 536., 12, WHITE);
-    let id = w.record().equipped_weapon().unwrap_or(0);
-    assets.text(&assets.name(id), 126., 558., 12, YELLOW);
-    if let Some(def) = content.items.get(id.unsigned_abs() as usize)
-        && let Ok(icon) = centurions_content::records::ItemDefinition(def).icon()
-        && let Some(texture) = assets.icons.get(&icon)
-    {
-        draw_texture(texture, 8., 529., WHITE);
-    }
-    if let Some(item) = w
-        .inventory()
-        .unwrap_or_default()
-        .iter()
-        .find(|i| i.id() == id && i.equipped() == 1)
-    {
-        assets.text(
-            &item.charge().unwrap_or(0).to_string(),
-            72.,
-            580.,
-            12,
-            YELLOW,
-        );
-    }
-    assets.text(
-        &format!("Reserve {}", equipped_ammunition_reserve(state, w)),
-        116.,
-        580.,
-        12,
-        WHITE,
-    );
-}
 /// The reserve ammunition in the pack for the warrior's equipped weapon.
 pub(super) fn equipped_ammunition_reserve(state: &Session, warrior: &Warrior) -> i32 {
     let weapon = warrior.record().equipped_weapon().unwrap_or(0);

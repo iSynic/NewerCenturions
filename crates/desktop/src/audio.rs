@@ -35,8 +35,21 @@ impl Default for Settings {
     }
 }
 
-/// The loaded snd sounds and music, the volumes, the music playing now and the
-/// sounds waiting for their delays to pass.
+/// The reserved sound channel the ambient sound cycle plays on: the sound
+/// playing now and the sounds queued behind it.
+#[derive(Default)]
+struct AmbientChannel {
+    playing_until: f64,
+    queue: VecDeque<i16>,
+}
+
+/// The first of the three ambient sounds; the other two follow it.
+const AMBIENT_SOUND: i16 = 10000;
+/// The ambient sounds queued behind the first while the channel stays busy.
+const AMBIENT_FOLLOWERS: [i16; 2] = [10001, 10002];
+
+/// The loaded snd sounds and music, the volumes, the music playing now, the
+/// sounds waiting for their delays to pass and the ambient sound channel.
 pub struct Audio {
     sounds: HashMap<i16, (Sound, f64)>,
     volume: Cell<f32>,
@@ -45,7 +58,18 @@ pub struct Audio {
     current_music: Cell<Option<usize>>,
     music_until: Cell<f64>,
     pending_sounds: RefCell<VecDeque<(f64, i16)>>,
+    ambient: RefCell<AmbientChannel>,
 }
+/// The outcome of drawing the next music title.
+pub enum MusicDraw {
+    /// The title drawn from the playlist.
+    Drawn(usize),
+    /// The search through the playlist gave up.
+    GaveUp,
+    /// The command was refused, so the music stays as it is.
+    Refused,
+}
+
 impl Audio {
     /// Loads the snd sounds and, as the music playlist, snd 20128 through 20140, each
     /// with its length.
@@ -105,6 +129,7 @@ impl Audio {
             current_music: Cell::new(None),
             music_until: Cell::new(0.),
             pending_sounds: RefCell::new(VecDeque::new()),
+            ambient: RefCell::new(AmbientChannel::default()),
         })
     }
     /// Sets the sound and music volumes (0 to 10) for sounds and music already
@@ -123,39 +148,54 @@ impl Audio {
             set_sound_volume(&self.music[index].1, music);
         }
     }
-    /// Starts the requested music, or else the next title chosen on the playlist
-    /// once the current one has finished; stops it when music is turned off.
-    pub fn music(&self, enabled: bool, requested: Option<i16>, playlist: &[bool; 13], now: f64) {
+    /// Changes the music when it is turned on and no title is playing, the playing one has
+    /// finished or a title is requested: `choose` draws the next title from the playlist with the
+    /// game's random numbers (the search may give up, or the command may be refused and leave the
+    /// music as it is), and the requested title replaces it. Turned off, the music stops. Returns
+    /// whether the search gave up, which turns the music off.
+    ///
+    /// Original: submitmusic
+    pub fn music(
+        &self,
+        enabled: bool,
+        requested: Option<i16>,
+        choose: impl FnOnce() -> MusicDraw,
+        now: f64,
+    ) -> bool {
         if !enabled {
             if let Some(index) = self.current_music.take() {
                 stop_sound(&self.music[index].1);
             }
-            return;
+            return false;
         }
         if self.music.is_empty() {
-            return;
+            return false;
         }
         let requested = requested.and_then(|id| self.music.iter().position(|track| track.0 == id));
         let current = self.current_music.get();
         if requested.is_none() && current.is_some() && now < self.music_until.get() {
-            return;
+            return false;
         }
-        let start = current.map_or(0, |i| (i + 1) % self.music.len());
+        let title = match choose() {
+            MusicDraw::Drawn(title) => title,
+            MusicDraw::Refused => return false,
+            MusicDraw::GaveUp => {
+                if let Some(previous) = self.current_music.take() {
+                    stop_sound(&self.music[previous].1);
+                }
+                return true;
+            }
+        };
         let next = requested.or_else(|| {
-            (0..self.music.len())
-                .map(|offset| (start + offset) % self.music.len())
-                .find(|index| {
-                    playlist
-                        .get((self.music[*index].0 - 20128) as usize)
-                        .copied()
-                        .unwrap_or(false)
-                })
+            self.music
+                .iter()
+                .position(|track| track.0 == 20128 + title as i16)
         });
         let Some(index) = next else {
             if let Some(previous) = self.current_music.take() {
                 stop_sound(&self.music[previous].1);
             }
-            return;
+            return false;
         };
         if let Some(previous) = current {
             stop_sound(&self.music[previous].1);
@@ -169,6 +209,7 @@ impl Audio {
         );
         self.current_music.set(Some(index));
         self.music_until.set(now + self.music[index].2);
+        false
     }
     /// The resource id of the music playing now.
     pub fn current_resource(&self) -> Option<i16> {
@@ -197,8 +238,9 @@ impl Audio {
         self.tick_sounds(macroquad::time::get_time());
     }
 
-    /// Plays the queued sounds whose time has come; a negative resource id plays
-    /// the sound of its positive.
+    /// Plays the queued sounds whose time has come, and the next ambient sound when
+    /// the one before it has finished; a negative resource id plays the sound of
+    /// its positive.
     pub fn tick_sounds(&self, now: f64) {
         let mut pending = self.pending_sounds.borrow_mut();
         while pending.front().is_some_and(|(at, _)| *at <= now) {
@@ -212,6 +254,66 @@ impl Audio {
                     },
                 );
             }
+        }
+        self.advance_ambient(now);
+    }
+
+    /// Starts the ambient sound when its channel is idle, then keeps the cycle going.
+    ///
+    /// Original: startsoundcycle
+    pub fn start_ambient(&self, now: f64) {
+        let busy = self.ambient_busy(now);
+        if !self.sounds.contains_key(&AMBIENT_SOUND) {
+            return;
+        }
+        if !busy {
+            self.ambient.borrow_mut().queue.push_back(AMBIENT_SOUND);
+            self.advance_ambient(now);
+        }
+        self.sustain_ambient(now);
+    }
+
+    /// Clears the ambient channel's queue and, when the channel is busy, queues the
+    /// two sounds that follow the first behind what is playing.
+    ///
+    /// Original: sustainsoundcycle
+    pub fn sustain_ambient(&self, now: f64) {
+        let busy = self.ambient_busy(now);
+        self.ambient.borrow_mut().queue.clear();
+        if busy {
+            for id in AMBIENT_FOLLOWERS {
+                if self.sounds.contains_key(&id) {
+                    self.ambient.borrow_mut().queue.push_back(id);
+                }
+            }
+        }
+        self.advance_ambient(now);
+    }
+
+    /// Whether the ambient channel is playing a sound or has one queued.
+    fn ambient_busy(&self, now: f64) -> bool {
+        let channel = self.ambient.borrow();
+        now < channel.playing_until || !channel.queue.is_empty()
+    }
+
+    /// Plays the next queued ambient sound once the one before it has finished.
+    fn advance_ambient(&self, now: f64) {
+        let mut channel = self.ambient.borrow_mut();
+        if now < channel.playing_until {
+            return;
+        }
+        let Some(id) = channel.queue.pop_front() else {
+            return;
+        };
+        if let Some((sound, seconds)) = self.sounds.get(&id) {
+            play_sound(
+                sound,
+                PlaySoundParams {
+                    looped: false,
+                    volume: self.volume.get(),
+                },
+            );
+            channel.playing_until = now + seconds;
         }
     }
 

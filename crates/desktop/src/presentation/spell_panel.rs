@@ -25,6 +25,7 @@ pub(super) fn draw(assets: &Assets, playback: &Playback) {
     {
         plot(texture, CAST);
     }
+    draw_aim(assets, playback.missile_icon);
     match playback.result_slot {
         Some(ResultSlot::Spell { icon, area }) => spell_icon(assets, icon, area),
         Some(ResultSlot::Target { icon, size }) => {
@@ -63,6 +64,16 @@ pub(crate) fn draw_info(assets: &Assets, info: &SpellInfo) {
     }
     spell_icon(assets, info.icon, info.area);
     text(assets, info);
+}
+
+/// Plots the icon combatchoice keeps in the cast rectangle while targets are chosen; a missing
+/// cicn draws nothing.
+///
+/// Original: combatchoice
+pub(crate) fn draw_aim(assets: &Assets, icon: Option<i16>) {
+    if let Some(texture) = icon.and_then(|icon| assets.icons.get(&icon)) {
+        plot(texture, CAST);
+    }
 }
 
 /// Draws the spell's result icon; an area spell adds cicn 14022 in its top left

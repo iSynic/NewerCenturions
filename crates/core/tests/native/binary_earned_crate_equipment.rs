@@ -196,18 +196,22 @@ fn outdoor_wear_replacement_compaction_and_enhanced_preparation_match_native() {
         } else {
             let mut public = initial.clone();
             let feedback = equipment::equip(&mut public, &content, member, slot).unwrap();
+            // The level message plays its own warning sound and follows the warnings.
+            let heard = result.sounds.len() - usize::from(result.level_refusal.is_some());
             assert_eq!(
                 feedback,
-                result
-                    .sounds
-                    .into_iter()
-                    .map(|resource_id| Event::Sound { resource_id })
+                result.sounds[..heard]
+                    .iter()
+                    .map(|&resource_id| Event::Sound { resource_id })
                     .chain(
                         result
                             .warnings
-                            .into_iter()
-                            .map(|warning| Event::CollectionRejected { warning })
+                            .iter()
+                            .map(|&warning| Event::CollectionRejected { warning })
                     )
+                    .chain(result.level_refusal.map(|level| Event::Feedback(
+                        centurions_core::feedback::GameFeedback::EquipmentLevel { level }
+                    )))
                     .collect::<Vec<_>>()
             );
             assert_party(&public.warriors, &case["worn"]);

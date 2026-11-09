@@ -1,11 +1,13 @@
-//! The ammunition popup (MENU 1000) from the Items ammunition button.
+//! The ammunition popup (MENU 1000) from the Items ammunition button and the
+//! combat Load control.
 //!
 //! An item without a caliber warns 3. Otherwise the first entry unloads the
 //! item or says why it cannot, followed by every reserve with rounds that
 //! matches the caliber and, outside combat, a divider, three headings and every
 //! reserve with rounds, to show its information. The chosen entry unloads,
 //! loads through the FitAmmunition rules, or shows the reserve's description.
-//! Loading or unloading redraws the Items rows.
+//! Loading or unloading redraws the Items rows. The combat Load control offers
+//! the popup for the first equipped firearm and changes no Items rows.
 use super::inventory_opening::{admit, check_scroll, redraw};
 use super::item_information::{Shown, load};
 use crate::ammunition::definition;
@@ -182,19 +184,50 @@ pub(crate) fn choose(
             crate::feedback::GameFeedback::Warning { index: 3 },
         )]);
     }
+    let entry = chosen_entry(state, content, owner, slot, item)?;
+    state.globals.inventory_scroll = scroll as u16;
+    let (events, update) = apply_entry(state, content, owner, slot, entry)?;
+    if update {
+        redraw(state, content, owner, scroll, 0, 10)?;
+    }
+    Ok(events)
+}
+
+/// The enabled popup entry that MENU 1000 item `item` stands for.
+fn chosen_entry(
+    state: &Session,
+    content: &Content,
+    owner: usize,
+    slot: usize,
+    item: u16,
+) -> Result<AmmunitionEntry, RuleError> {
     let (_, entries) = ammunition_menu(state, content, owner, slot)?;
-    let entry = usize::from(item)
+    Ok(usize::from(item)
         .checked_sub(1)
         .and_then(|index| entries.get(index))
         .filter(|entry| entry.enabled())
         .ok_or_else(|| RuleError::Invalid("ammunition menu item is not an enabled entry".into()))?
-        .clone();
+        .clone())
+}
+
+/// Carries out a chosen popup entry on an inventory slot: unloading returns the rounds to the
+/// reserve, a reserve is fitted through the FitAmmunition rules, and an information entry shows
+/// the reserve. Returns the events and whether the rounds changed.
+///
+/// Original: loadammoproc
+fn apply_entry(
+    state: &mut Session,
+    content: &Content,
+    owner: usize,
+    slot: usize,
+    entry: AmmunitionEntry,
+) -> Result<(Vec<Event>, bool), RuleError> {
+    let record = state.warriors[owner].record().inventory_slot(slot);
     let loaded = record.ammunition_id()?;
     if entry == AmmunitionEntry::Unload && !(200..400).contains(&loaded) {
         return Err("loaded ammunition outside the reserve table".into());
     }
-    state.globals.inventory_scroll = scroll as u16;
-    let (events, update) = match entry {
+    let result = match entry {
         AmmunitionEntry::Unload => {
             // The reserve gains the rounds, then the magazine and the loaded
             // ammunition clear.
@@ -246,8 +279,71 @@ pub(crate) fn choose(
         }
         _ => unreachable!("disabled entries are refused above"),
     };
-    if update {
-        redraw(state, content, owner, scroll, 0, 10)?;
+    Ok(result)
+}
+
+/// What the combat Load control does for a warrior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoadControl {
+    /// No firearm is worn, so nothing happens.
+    Inert,
+    /// A firearm is worn but no inventory slot is an equipped firearm: the click
+    /// sound plays and no rule state changes.
+    Click,
+    /// The popup opens for the first equipped firearm slot.
+    Popup { slot: usize },
+}
+
+/// The combat Load control for a warrior: with a firearm worn, the first
+/// inventory slot of category 15 that is equipped offers the ammunition popup.
+///
+/// Original: combatchoice
+pub fn load_control(state: &Session, warrior: usize) -> Result<LoadControl, RuleError> {
+    let warrior = state.warriors.get(warrior).ok_or("warrior outside squad")?;
+    if warrior.record().equipped_weapon()? == 0 {
+        return Ok(LoadControl::Inert);
     }
+    Ok(warrior
+        .inventory()?
+        .iter()
+        .position(|item| item.category_code() == 15 && item.equipped() != 0)
+        .map_or(LoadControl::Click, |slot| LoadControl::Popup { slot }))
+}
+
+/// The choice made in the popup the combat Load control opened. The warrior must be
+/// the one whose turn it is and the slot the control's own slot. Unloading and fitting
+/// follow the Items rules without redrawing Items rows, and the action then settles.
+///
+/// Original: loadammoproc
+pub(crate) fn choose_combat(
+    state: &mut Session,
+    content: &Content,
+    owner: usize,
+    slot: usize,
+    item: u16,
+) -> Result<Vec<Event>, RuleError> {
+    if state.phase != Phase::Combat
+        || state
+            .exploration
+            .as_ref()
+            .is_none_or(|p| p.presentation.is_some())
+        || state
+            .combat
+            .as_ref()
+            .and_then(crate::combat::Combat::active_body)
+            != Some(owner as i16)
+    {
+        return Err("the Load control requires the active warrior's turn".into());
+    }
+    if load_control(state, owner)? != (LoadControl::Popup { slot }) {
+        return Err("the Load control offers a different slot".into());
+    }
+    let entry = chosen_entry(state, content, owner, slot, item)?;
+    let (mut events, _) = apply_entry(state, content, owner, slot, entry)?;
+    events.extend(crate::combat::runtime::finish_player_action(
+        state,
+        content,
+        owner as i16,
+    )?);
     Ok(events)
 }

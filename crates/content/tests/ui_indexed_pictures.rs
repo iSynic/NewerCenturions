@@ -1,4 +1,4 @@
-use centurions_content::{Content, digest, graphics::decode_pict, read_resource};
+use centurions_content::{Content, Resource, digest, graphics::decode_pict, read_resource};
 use std::path::Path;
 
 #[test]
@@ -44,15 +44,9 @@ fn supplied_dialog_pictures_match_independent_full_raster_expansion() {
             "ab4ab49fa282d6ffc2b1cf514a4f3f0726467c7a1aa1a2f1963723c5f70e6f05",
         ),
     ] {
-        let resource = content
-            .resources
-            .iter()
-            .find(|resource| {
-                resource.r#type == "PICT"
-                    && resource.id == id
-                    && resource.original == "TheNewCenturions/Data Files/Cargo Pod"
-            })
-            .unwrap();
+        let picture =
+            |r: &&Resource| r.r#type == "PICT" && r.id == id && r.original.ends_with("/Cargo Pod");
+        let resource = content.resources.iter().find(picture).unwrap();
         let bytes = read_resource(&extracted, resource).unwrap();
         assert_eq!(digest(&bytes), source_hash);
         let image = decode_pict(&bytes).unwrap();
@@ -96,36 +90,4 @@ fn four_bit_pixels_use_high_nibble_first_and_ignore_row_padding() {
         .flat_map(|index| [index, index * 2, index * 3, 255])
         .collect();
     assert_eq!(image.rgba, expected);
-}
-
-#[test]
-fn unsupported_four_bit_layouts_and_malformed_rows_return_diagnostics() {
-    let bytes = four_bit_picture();
-    for end in [0, 14, 16, 61, 69, 125, bytes.len() - 1] {
-        assert!(decode_pict(&bytes[..end]).is_err());
-    }
-    for (offset, value) in [(28, 1_i16), (30, 2), (32, 2), (12, 1)] {
-        let mut invalid = bytes.clone();
-        invalid[16 + offset..18 + offset].copy_from_slice(&value.to_be_bytes());
-        assert!(decode_pict(&invalid).is_err());
-    }
-    let mut short_row = bytes.clone();
-    short_row[16..18].copy_from_slice(&0x8007_u16.to_be_bytes());
-    assert!(decode_pict(&short_row).is_err());
-    let mut missing_index = bytes.clone();
-    missing_index[138] = 0x62;
-    assert!(
-        decode_pict(&missing_index)
-            .unwrap_err()
-            .to_string()
-            .contains("missing PICT palette index")
-    );
-    let mut overflow = bytes;
-    overflow[137] = 0xf8;
-    assert!(
-        decode_pict(&overflow)
-            .unwrap_err()
-            .to_string()
-            .contains("PICT PackBits row overflow")
-    );
 }

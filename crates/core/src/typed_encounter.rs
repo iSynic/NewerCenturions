@@ -189,6 +189,8 @@ pub fn begin_actions(state: &mut Session, content: &Content) -> Result<Vec<Event
 
 /// Handles a click while the physical actions are chosen: toggles one of eight actions, confirms
 /// the choice against the encounter's required actions, or cancels.
+///
+/// Original: actionpicker
 pub fn action_control(
     state: &mut Session,
     content: &Content,

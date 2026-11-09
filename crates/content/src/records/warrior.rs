@@ -25,6 +25,13 @@ impl Warrior {
 pub struct WarriorRecord<'a>(&'a [u8]);
 
 impl<'a> WarriorRecord<'a> {
+    /// The record format word that opens the record; a character of the current
+    /// format holds a positive value.
+    ///
+    /// Original: bandaid
+    pub fn version(&self) -> Result<i16, ContentError> {
+        word(self.0, 0)
+    }
     /// The warrior's slot in the battle order; -1 once defeated.
     pub fn position(&self) -> Result<i16, ContentError> {
         word(self.0, 0x20)

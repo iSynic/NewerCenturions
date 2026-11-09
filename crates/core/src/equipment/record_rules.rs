@@ -21,8 +21,30 @@ pub struct EquipmentResult {
     pub sounds: Vec<i16>,
     pub warnings: Vec<i16>,
     pub record: Option<InventoryRecord>,
+    /// The level the warrior lacks for the item, when the wear was refused for it; the player is
+    /// told the level the item needs.
+    pub level_refusal: Option<i16>,
     /// Ordered party-wide writes for the Session caller to apply.
     pub(crate) global_writes: Vec<super::GlobalWrite>,
+}
+
+impl EquipmentResult {
+    /// The sounds the player hears apart from the level message's own warning sound, which that
+    /// message plays itself.
+    pub(crate) fn sounds_before_level_message(&self) -> &[i16] {
+        match self.level_refusal {
+            Some(_) => &self.sounds[..self.sounds.len().saturating_sub(1)],
+            None => &self.sounds,
+        }
+    }
+
+    /// The message telling the player the level the item needs, when the wear was refused for it.
+    /// It comes after the sounds and warnings of the wear.
+    pub(crate) fn level_message(&self) -> Option<crate::Event> {
+        self.level_refusal.map(|level| {
+            crate::Event::Feedback(crate::feedback::GameFeedback::EquipmentLevel { level })
+        })
+    }
 }
 
 /// The refusal given when an item rule needs a service the reconstruction does not carry.
@@ -268,6 +290,8 @@ pub(crate) fn drop(
 }
 
 /// Drops the item in a slot, taking it off first without the usual refusal when it is worn.
+///
+/// Original: forcedropitem
 pub(crate) fn force_drop(
     warrior: &mut Warrior,
     slot: usize,
@@ -365,7 +389,14 @@ pub fn wear(
 }
 
 /// Wears the item in a slot, using the caller's retained item record in place of the slot's own
-/// when given. Returns the warrior, sounds, warnings and party-wide writes.
+/// when given. The sounds are the ones the player hears, including the warning sound of the level
+/// message. A warrior who cannot use the item is refused with warning 29, then an item of a
+/// class above 23 with warning 48, then a warrior below the item's required level with the level
+/// message. On success the item's own sound plays, or its impact sound when it has none. A
+/// computer-controlled warrior in a battle is told nothing and hears nothing. Returns the
+/// warrior, sounds, warnings and party-wide writes.
+///
+/// Original: wear
 pub(super) fn wear_silently(
     warrior: &Warrior,
     content: &Content,
@@ -386,25 +417,26 @@ pub(super) fn wear_silently(
             sounds: vec![],
             warnings: vec![],
             record: inventory_record.cloned(),
+            level_refusal: None,
             global_writes: vec![],
         });
     }
     let definition = item_definition(content, item.id())?;
+    let announce = !(in_combat && warrior.record().computer_control()? != 0);
     let mut result = EquipmentResult {
         warrior: warrior.clone(),
         changed: false,
         sounds: vec![],
         warnings: vec![],
         record: inventory_record.cloned(),
+        level_refusal: None,
         global_writes: vec![],
     };
     if !can_use(warrior, definition, mission)? {
-        result.warnings.push(29);
-        result.sounds.push(6000);
-        return Ok(result);
-    }
-    if warrior.record().level()? < i16::from(item.required_level()) {
-        result.sounds.push(6000);
+        if announce {
+            result.warnings.push(29);
+            result.sounds.push(6000);
+        }
         return Ok(result);
     }
     let worn = crate::editor_items::silent_fit(
@@ -416,7 +448,14 @@ pub(super) fn wear_silently(
         inventory_record.unwrap_or(&item),
     )?;
     result.warrior = worn.warrior;
-    result.warnings = worn.warnings;
+    if announce {
+        result.warnings = worn.warnings;
+        result.level_refusal = worn.level_refusal;
+        if worn.level_refusal.is_some() {
+            // The level message carries the warning sound with it.
+            result.sounds.push(6000);
+        }
+    }
     result.global_writes = worn.global_writes;
     result.record = inventory_record.map(|_| worn.record);
     if InventorySlots(&result.warrior.bytes).equipped(slot) == 0 {
@@ -428,7 +467,17 @@ pub(super) fn wear_silently(
         result.warrior.record_mut().set_action_points(ap);
     }
     result.changed = true;
-    result.sounds.push(ItemDefinition(definition).sound()?);
+    if announce {
+        let definition = ItemDefinition(definition);
+        let sound = if definition.sound()? != 0 {
+            definition.sound()?
+        } else {
+            definition.impact_sound()?
+        };
+        if sound != 0 {
+            result.sounds.push(sound);
+        }
+    }
     Ok(result)
 }
 
@@ -467,6 +516,7 @@ pub(super) fn remove_silently(
             sounds: vec![],
             warnings: vec![145],
             record: inventory_record.cloned(),
+            level_refusal: None,
             global_writes: vec![],
         });
     }
@@ -476,6 +526,7 @@ pub(super) fn remove_silently(
         sounds: vec![ItemDefinition(item_definition(content, item.id())?).sound()?],
         warnings: vec![],
         record: inventory_record.cloned(),
+        level_refusal: None,
         global_writes: vec![],
     };
     if let Some(record) = inventory_record {

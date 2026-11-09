@@ -41,9 +41,21 @@ fn visible(
 ) -> Result<bool, RuleError> {
     let mission = turn_state::mission(state, content)?;
     if let Some(combat) = &state.combat {
-        return combat::lifecycle::can_see(combat, mission, from, to, 0);
+        return combat::lifecycle::can_see(
+            combat,
+            mission,
+            from,
+            to,
+            state.command_preferences.animation_delay,
+        );
     }
-    super::firearm_selection::visible(turn_state::map(state)?, mission, from, to)
+    super::firearm_selection::visible(
+        turn_state::map(state)?,
+        mission,
+        from,
+        to,
+        state.command_preferences.animation_delay,
+    )
 }
 /// Chooses the acting monster's target. A target that is no longer eligible is replaced by a random
 /// eligible body; a target the monster cannot see is replaced by the next eligible body in order.

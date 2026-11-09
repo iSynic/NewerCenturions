@@ -1,25 +1,44 @@
 use crate::story::allies::ALLY_BYTES;
 use crate::{Event, RuleError, Session};
 use centurions_content::combat::MONSTER_BYTES;
+use centurions_content::records::MapNote;
 use centurions_content::{Content, span, ui, word};
 
-/// Shows a note the party holds: its record and text. Refused when the note is not held, when a
-/// note without a picture names a map the scenario lacks, or when its picture is not installed.
+/// Shows a note the party holds: its record and text. A nonzero show value names a movie, which
+/// replaces everything else and needs no map, picture or text. Refused when the note is not held,
+/// when the movie is not installed, when a note without a picture names a map the scenario lacks
+/// or draws its section in cells of no size, or when its picture is not installed.
+///
+/// Original: showmap
 pub fn note(state: &Session, content: &Content, index: usize) -> Result<Vec<Event>, RuleError> {
     if state.notes.get(index).copied().unwrap_or(0) == 0 {
         return Err(crate::RuleError::Refused { feedback: vec![] });
     }
     let map = state.land(content).ok_or("note scenario unavailable")?;
-    let record = span(&map.map_notes, index * 340, 340)?.to_vec();
-    if word(&record, 66)? == 0 && state.map(content, i32::from(word(&record, 64)?)).is_none() {
-        return Err("note map unavailable".into());
+    let record = span(&map.map_notes, index * MapNote::BYTES, MapNote::BYTES)?.to_vec();
+    let view = MapNote(&record);
+    if view.show()? != 0 {
+        if !map.movies.contains_key(&view.show()?) {
+            return Err("note movie unavailable in installed resources".into());
+        }
+        return Ok(vec![Event::NoteViewed {
+            index,
+            record,
+            text: String::new(),
+        }]);
     }
-    let picture = word(&record, 66)?;
-    if picture != 0
-        && !content
-            .resources
-            .iter()
-            .any(|resource| resource.r#type == "PICT" && resource.id == picture)
+    let picture = view.picture()?;
+    if picture == 0 {
+        if state.map(content, i32::from(view.level()?)).is_none() {
+            return Err("note map unavailable".into());
+        }
+        if view.icon_size()? == 0 {
+            return Err("note map section has cells of no size".into());
+        }
+    } else if !content
+        .resources
+        .iter()
+        .any(|resource| resource.r#type == "PICT" && resource.id == picture)
     {
         return Err("note picture unavailable in installed resources".into());
     }

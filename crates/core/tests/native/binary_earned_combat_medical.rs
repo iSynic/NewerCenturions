@@ -159,6 +159,7 @@ fn native_living_heals_and_cancel_match_complete_medical_rule_state() {
             &mut state.random,
             &pending(case),
             &target,
+            0,
         )
         .unwrap();
         let mut expected = before.clone();
@@ -294,7 +295,8 @@ fn native_range_and_admission_failures_are_atomic() {
             &MedicalTarget::LivingPoint {
                 x: position.0,
                 y: position.1
-            }
+            },
+            0,
         ),
         Err(RuleError::Refused { feedback }) if feedback == vec![centurions_core::feedback::GameFeedback::Combat {
             kind: centurions_core::feedback::CombatRefusal::OutOfRange,

@@ -106,6 +106,7 @@ fn four_native_target_continuations_match_at_the_medical_boundary() {
             &mut state.random,
             &pending,
             &target,
+            0,
         )
         .unwrap();
         assert_party(&state.warriors, &expected);
@@ -215,7 +216,8 @@ fn native_item_admission_and_invalid_targeting_are_atomic() {
                 .unwrap(),
             &mut state.random,
             &pending,
-            &target
+            &target,
+            0,
         )
         .is_err()
     );

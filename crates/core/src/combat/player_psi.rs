@@ -40,13 +40,16 @@ pub const OUTDOOR_TARGET_SPELLS: &[i16] = &[
 /// Psi powers the party menu casts that last on the whole party.
 pub const PARTY_SPELLS: &[i16] = &[1102, 1103, 1407, 1501, 1507, 1605, 3101, 3103, 3406, 3606];
 mod admission;
-use admission::packet;
+pub(crate) use admission::packet;
 pub use admission::{
-    CastAdmission, CastRequest, admission, can_cast, cost, in_range, mode_allowed, range,
+    CastAdmission, CastRequest, admission, can_cast, cell_distance, cost, in_range, mode_allowed,
+    range,
 };
 mod party;
-pub(crate) use party::prepare_party;
 pub use party::{PartyCastRequest, PartyCastResult, cast_party, validate_party};
+pub(crate) use party::{
+    charge_party, prepare_party, require_outdoor_effect, require_outdoor_spell,
+};
 mod validation;
 pub(crate) use validation::selected_body;
 use validation::validate_target;

@@ -183,7 +183,7 @@ fn done(state: &Session, ui: &UiState) -> Action {
 /// Draws the loot grid, the recipients, the message box, the share, credits and
 /// the item under the pointer.
 ///
-/// Original: booty
+/// Original: booty, updatebootymoney, updatebooty
 pub fn draw(
     content: &Content,
     state: &Session,
@@ -259,17 +259,33 @@ pub fn draw(
                 class_label: ui.preferences.enabled(crate::preferences::pref::APPEND_MOS),
                 conditions_left: None,
                 automatic: false,
+                // booty clears the combat flag before it draws the recipients.
+                in_combat: false,
             },
         );
         assets.text(&warrior.name, 549., y + 20., 12, YELLOW);
-        for (offset, x) in [(0x3c, 628.), (0x9d6, 698.), (0x9d8, 752.)] {
-            assets.text(
-                &word(&warrior.bytes, offset).unwrap_or(0).to_string(),
-                x,
-                y + 44.,
-                12,
-                YELLOW,
-            );
+        // Each warrior's row shows the movement allowed (the movement figure plus
+        // its bonus), the load carried and the load capacity, which sits five
+        // pixels further left once it needs five digits.
+        let record = warrior.record();
+        let movement = record
+            .movement_max()
+            .unwrap_or(0)
+            .wrapping_add(record.movement_bonus().unwrap_or(0));
+        let capacity = word(&warrior.bytes, 0x9d8).unwrap_or(0) as u16;
+        let readouts = [
+            (movement.to_string(), 628.),
+            (
+                (word(&warrior.bytes, 0x9d6).unwrap_or(0) as u16).to_string(),
+                698.,
+            ),
+            (
+                capacity.to_string(),
+                if capacity <= 9999 { 752. } else { 747. },
+            ),
+        ];
+        for (text, x) in readouts {
+            assets.text(&text, x, y + 44., 12, YELLOW);
         }
         assets.text(
             &warrior
@@ -400,7 +416,7 @@ pub fn draw(
 
 /// A loot cell's text, in the classic QuickDraw colors showp selects.
 ///
-/// Original: showp
+/// Original: showp, stringplus
 fn draw_cell(assets: &Assets, cell: &centurions_content::records::loot_cell::LootCell, icon: Rect) {
     use centurions_content::records::loot_cell::{CellAnchor, CellColor};
     if let Some(texture) = cell.caliber_icon.and_then(|id| assets.icons.get(&id)) {

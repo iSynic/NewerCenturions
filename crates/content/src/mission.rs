@@ -61,6 +61,9 @@ pub struct StoryTables {
     pub door_scripts: Vec<u8>,
     /// `Data SD2`: the scenario's dialogue, 256 bytes a message.
     pub dialogue: Vec<u8>,
+    /// `Data OD`: the captions a question can give its answers, 25 bytes each; absent when the
+    /// scenario level has no such file.
+    pub option_texts: Option<Vec<u8>>,
     /// `Data TD`: the treasure records.
     pub treasure: Vec<u8>,
     /// `Data SD`: the shop records.
@@ -83,6 +86,9 @@ pub struct StoryTables {
     pub typed_encounters: Vec<u8>,
     /// The scenario's `TEXT` resources by id, the movies a story script plays.
     pub movies: std::collections::BTreeMap<i16, String>,
+    /// The style runs of each movie's text, by `TEXT` id; a movie without a style
+    /// resource has none.
+    pub movie_styles: std::collections::BTreeMap<i16, Vec<crate::text_runs::TextRun>>,
     /// The battle, monster, encounter and attack tables.
     pub combat: Option<crate::combat::CombatContent>,
     /// `Data DES`: the creature descriptions, 256 bytes each.
@@ -96,6 +102,8 @@ pub struct StoryTables {
     /// The labels the note list shows before the party has identified a note, from
     /// `STR# -101` of the scenario.
     pub unknown_note_labels: Vec<String>,
+    /// `Layout`: which land lies beside which; absent when the scenario level has no such file.
+    pub layout: Option<crate::layout::Layout>,
 }
 
 impl Deref for OpeningMission {
@@ -419,6 +427,7 @@ impl OpeningMission {
                 profiles: read("TheNewCenturions/Data Files/Data MOS")?,
                 door_scripts: read(&format!("{SCENARIO}Data ED3"))?,
                 dialogue: read(&format!("{SCENARIO}Data SD2"))?,
+                option_texts: read(&format!("{SCENARIO}Data OD")).ok(),
                 treasure: read(&format!("{SCENARIO}Data TD"))?,
                 shops: read(&format!("{SCENARIO}Data SD"))?,
                 prologue: String::new(),
@@ -430,6 +439,7 @@ impl OpeningMission {
                 menus: read(&format!("{SCENARIO}Data ED"))?,
                 typed_encounters: read(&format!("{SCENARIO}Data ED2"))?,
                 movies: Default::default(),
+                movie_styles: Default::default(),
                 combat: Some(crate::combat::CombatContent {
                     encounters: read(&format!("{SCENARIO}Data EDCD"))?,
                     battles: read(&format!("{SCENARIO}Data BD"))?,
@@ -447,6 +457,9 @@ impl OpeningMission {
                 map_notes: read(&format!("{SCENARIO}Data MD2"))?,
                 note_labels: vec![],
                 unknown_note_labels: vec![],
+                layout: read(&format!("{SCENARIO}Layout"))
+                    .ok()
+                    .map(|bytes| crate::layout::Layout::read(&bytes)),
             }),
         })
     }
@@ -492,6 +505,11 @@ impl OpeningMission {
             tile
         };
         word(&self.map_stats, usize::from(normalized as u16) * 40 + 2)
+    }
+
+    /// Whether the tile stops the party's sight: 1 for a wall.
+    pub fn sight_blocker(&self, tile: i16) -> Result<i16, ContentError> {
+        self.tile_word(tile, 12)
     }
 
     /// The sound the party's step makes on the tile.

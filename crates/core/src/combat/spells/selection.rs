@@ -173,6 +173,7 @@ pub(super) fn best_choice(
 }
 
 /// A monster's spell targets: the bodies in reach and the cells the spell is aimed at.
+#[allow(clippy::too_many_arguments)]
 pub fn select_targets(
     combat: &Combat,
     warriors: &[Warrior],
@@ -181,12 +182,13 @@ pub fn select_targets(
     caster_index: usize,
     packet: &[u8],
     random: &mut RandomState,
+    delay: i16,
 ) -> Result<SpellSelection, RuleError> {
     if !super::is_support(packet)? {
         validate_direct(packet)?;
     }
     select_targets_impl(
-        (combat, MapAliases::of_mission(mission)),
+        (combat, MapAliases::of_mission(mission), delay),
         warriors,
         mission,
         areas,
@@ -204,12 +206,13 @@ pub(crate) fn select_targets_beside(
     caster_index: usize,
     packet: &[u8],
     random: &mut RandomState,
+    delay: i16,
 ) -> Result<SpellSelection, RuleError> {
     if !super::is_support(packet)? {
         validate_direct(packet)?;
     }
     select_targets_impl(
-        (combat, land_aliases(mission, land)),
+        (combat, land_aliases(mission, land), delay),
         warriors,
         mission,
         &mission.areas,
@@ -227,12 +230,13 @@ pub(crate) fn select_firearm_targets_beside(
     caster_index: usize,
     prepared: &firearm::PreparedFirearm,
     random: &mut RandomState,
+    delay: i16,
 ) -> Result<SpellSelection, RuleError> {
     if prepared.packet.len() != 58 || SpellInfoRecord(&prepared.packet).defense_category() != 9 {
         return Err(RuleError::Invalid("firearm target packet".into()));
     }
     select_targets_impl(
-        (combat, land_aliases(mission, land)),
+        (combat, land_aliases(mission, land), delay),
         warriors,
         mission,
         &mission.areas,
@@ -243,6 +247,7 @@ pub(crate) fn select_firearm_targets_beside(
 }
 
 /// A monster's targets for a firearm shot, with the shot count of the prepared firearm.
+#[allow(clippy::too_many_arguments)]
 pub fn select_firearm_targets(
     combat: &Combat,
     warriors: &[Warrior],
@@ -251,12 +256,13 @@ pub fn select_firearm_targets(
     caster_index: usize,
     prepared: &firearm::PreparedFirearm,
     random: &mut RandomState,
+    delay: i16,
 ) -> Result<SpellSelection, RuleError> {
     if prepared.packet.len() != 58 || SpellInfoRecord(&prepared.packet).defense_category() != 9 {
         return Err(RuleError::Invalid("firearm target packet".into()));
     }
     select_targets_impl(
-        (combat, MapAliases::of_mission(mission)),
+        (combat, MapAliases::of_mission(mission), delay),
         warriors,
         mission,
         areas,
@@ -268,6 +274,7 @@ pub fn select_firearm_targets(
 
 /// A monster's targets for the prepared attack: the shot count is used only for a defense category
 /// 9 shot.
+#[allow(clippy::too_many_arguments)]
 pub fn select_spell_info_targets(
     combat: &Combat,
     warriors: &[Warrior],
@@ -276,6 +283,7 @@ pub fn select_spell_info_targets(
     caster_index: usize,
     prepared: &firearm::PreparedFirearm,
     random: &mut RandomState,
+    delay: i16,
 ) -> Result<SpellSelection, RuleError> {
     if prepared.packet.len() != 58 {
         return Err(RuleError::Invalid("retained target packet".into()));
@@ -283,7 +291,7 @@ pub fn select_spell_info_targets(
     let count =
         (SpellInfoRecord(&prepared.packet).defense_category() == 9).then_some(prepared.shots);
     select_targets_impl(
-        (combat, MapAliases::of_mission(mission)),
+        (combat, MapAliases::of_mission(mission), delay),
         warriors,
         mission,
         areas,
@@ -295,7 +303,7 @@ pub fn select_spell_info_targets(
 
 /// Chooses a monster's targets over the live battle.
 pub(super) fn select_targets_impl(
-    (combat, aliases): (&Combat, MapAliases<'_>),
+    (combat, aliases, delay): (&Combat, MapAliases<'_>, i16),
     warriors: &[Warrior],
     mission: &centurions_content::mission::OpeningMission,
     areas: &[u8],
@@ -304,7 +312,7 @@ pub(super) fn select_targets_impl(
     random: &mut RandomState,
 ) -> Result<SpellSelection, RuleError> {
     select_from_view(
-        &view::LiveSelection(combat, aliases),
+        &view::LiveSelection(combat, aliases, delay),
         warriors,
         mission,
         areas,

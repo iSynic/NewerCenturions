@@ -5,7 +5,7 @@ use crate::{
     presentation::{self, UiState},
 };
 use centurions_content::Content;
-use centurions_core::{Command, Event, Session, apply};
+use centurions_core::{Command, Event, Phase, Session, apply};
 
 /// Returns whether automatic scheduling must stop after a failed action.
 pub fn execute(
@@ -21,8 +21,21 @@ pub fn execute(
     let previous_round = state.combat.as_ref().map(|c| c.combat_round);
     let previous_session = state.combat.is_some().then(|| state.clone());
     let previous_view = crate::combat_controls::origin(state, ui);
+    let ambient = audio.filter(|_| application.audio.sound && field_button(&command));
+    let step = matches!(command, Command::Move { .. });
+    if let Some(audio) = ambient
+        && ambient_cycle(state, content)
+    {
+        audio.start_ambient(macroquad::time::get_time());
+    }
     match apply(application.command(command), state, content) {
         Ok(mut events) => {
+            if let Some(audio) = ambient
+                && step
+                && ambient_cycle(state, content)
+            {
+                audio.sustain_ambient(macroquad::time::get_time());
+            }
             present_success(
                 &input,
                 state,
@@ -42,6 +55,30 @@ pub fn execute(
             input.enemy || automatic_turn
         }
     }
+}
+
+/// Whether `command` is one the field screen's button handler carries out.
+///
+/// Original: buttonchoice
+fn field_button(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Move { .. }
+            | Command::FieldControl { .. }
+            | Command::Encounter
+            | Command::OpenShop
+    )
+}
+
+/// Whether the ambient sound cycle runs: the party is exploring a land whose terrain set
+/// passes five minutes per step.
+///
+/// Original: startsoundcycle, sustainsoundcycle
+fn ambient_cycle(state: &Session, content: &Content) -> bool {
+    state.phase == Phase::Exploration
+        && state
+            .land(content)
+            .is_some_and(|land| land.minutes_per_tick == 5)
 }
 
 /// Settles the screen after a command succeeds: clears the entry and selection
@@ -111,6 +148,7 @@ fn present_success(
         .iter()
         .any(|event| matches!(event, Event::MissionEnded { .. }));
     // The field shown is the one before the command until its steps have played.
+    let aim_offset = crate::targeting::aim_offset(previous_session.as_ref().unwrap_or(state), ui);
     let playback = previous_session
         .filter(|_| !ended && state.combat.is_some())
         .and_then(|session| {
@@ -131,6 +169,7 @@ fn present_success(
                     batched_effects: ui
                         .preferences
                         .enabled(crate::preferences::pref::FASTER_SCAN_RESOLUTION),
+                    aim_offset,
                     item_value: state
                         .globals
                         .loaded_items
@@ -204,6 +243,7 @@ impl InputEffects {
                 | Command::CastPsiOnWarrior { .. }
                 | Command::CastEncounterPsi { .. }
                 | Command::CastPartyPsi { .. }
+                | Command::FastSpell { .. }
                 | Command::BeginPsiSelection { .. }
                 | Command::FirePreparedPsi { .. }
                 | Command::FirePreparedPsiOnWarrior { .. }

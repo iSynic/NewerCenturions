@@ -1,8 +1,21 @@
 //! Hud presentation.
 use super::{Action, Control, UiState, equipped_ammunition_reserve, field};
-use crate::{assets::Assets, layout};
+use crate::{assets::Assets, game_strings, layout};
+use centurions_content::Warrior;
 use centurions_core::{Command, Phase, Presentation, Session};
 use macroquad::prelude::*;
+
+/// The picture of the turn light of a warrior whose turn is still to come.
+const TURN_LIGHT_ORDINARY: i16 = 147;
+/// The picture of the turn light of a warrior whose turn has passed or who is out of the
+/// battle order.
+const TURN_LIGHT_LOW: i16 = 150;
+/// The torch's first picture; the eight pictures follow in turn.
+const TORCH_ICON: i16 = 146;
+/// The party effect icons: eight pictures for each of the party effects 1 to 8.
+const PARTY_EFFECT_ICONS: i16 = 13992;
+/// How many ticks (sixtieths of a second) each picture of the party effect animation lasts.
+const ANIMATION_TICKS: f64 = 10.;
 /// Draws the squad's rows beside the map (portrait, name, action points, stamina and
 /// psi points) and their controls. Returns the selected warrior.
 pub(super) fn roster(
@@ -71,6 +84,7 @@ pub(super) fn roster(
         ] {
             assets.text(&field(value), rect.x + x, rect.y + 44., 12, YELLOW);
         }
+        turn_light(state, assets, w, rect);
         if index == selected {
             draw_rectangle_lines(rect.x, rect.y, 308., 50., 1., YELLOW);
         }
@@ -90,6 +104,114 @@ pub(super) fn roster(
         });
     }
     selected
+}
+
+/// Draws the light in a squad row during a battle: the low picture once the battle order
+/// has passed the warrior's place or when the warrior has none, the ordinary picture while
+/// the warrior's turn is still to come.
+///
+/// Original: updatelight
+fn turn_light(state: &Session, assets: &Assets, warrior: &Warrior, row: Rect) {
+    let Some(combat) = state
+        .combat
+        .as_ref()
+        .filter(|_| state.phase == Phase::Combat)
+    else {
+        return;
+    };
+    let place = warrior.record().position().unwrap_or(-1);
+    let passed = combat.battle_order_index as i16 > place || place == -1;
+    assets.panel(
+        if passed {
+            TURN_LIGHT_LOW
+        } else {
+            TURN_LIGHT_ORDINARY
+        },
+        Rect::new(row.x + 57., row.y + 9., 9., 9.),
+    );
+}
+
+/// Prints the warrior's special skill ratings, each with its bonus, over the capture button
+/// while the button is available: the first skill, then the second or, when the warrior has
+/// none, the game's dashes.
+///
+/// Original: updatecontrols
+pub(super) fn capture_skills(state: &Session, assets: &Assets, selected: usize) {
+    let Some(warrior) = state.warriors.get(selected) else {
+        return;
+    };
+    let record = warrior.record();
+    let rating = |skill: usize| {
+        record
+            .spec(skill)
+            .unwrap_or(0)
+            .wrapping_add(record.special_skill_bonus(skill).unwrap_or(0))
+    };
+    let x = layout::ORIGIN_LEFT + 388.;
+    let top = layout::MENU_BAR + layout::ORIGIN_TOP - layout::LARGE_FIELD_SHIFT;
+    assets.text(&rating(0).to_string(), x, top + 445., 10, YELLOW);
+    let second = if record.spec(1).unwrap_or(0) > 0 {
+        rating(1).to_string()
+    } else {
+        assets
+            .game_text
+            .text(game_strings::NO_SPECIAL_SKILL, true)
+            .unwrap_or_default()
+    };
+    assets.text(&second, x, top + 454., 10, YELLOW);
+}
+
+/// The picture the party effect animation shows: it steps through eight pictures, one every
+/// ten ticks.
+fn animation_frame() -> i16 {
+    ((get_time() * 60. / ANIMATION_TICKS) as u64 % 8) as i16
+}
+
+/// The value of party effect `index` (0 is the torch, 1 to 8 the timed party effects).
+fn party_effect(state: &Session, index: usize) -> i16 {
+    centurions_content::word(&state.party_condition, index * 2).unwrap_or(0)
+}
+
+/// Draws the animated party indicators on the field screen: the torch, rising with its
+/// remaining light, and the icon of each timed party effect in a grid of two rows of four.
+///
+/// Original: tickcheck
+pub(super) fn party_effects(state: &Session, assets: &Assets) {
+    let frame = animation_frame();
+    let light = party_effect(state, 0);
+    if light != 0 {
+        let bias = (((light >> 1) as u16 >> 8) >> 6) as i16;
+        let quarter = light.wrapping_add(bias) >> 2;
+        let top = (layout::ORIGIN_TOP as i32 + 367 - i32::from(quarter)).max(331);
+        if let Some(texture) = assets.icons.get(&(TORCH_ICON + frame)) {
+            crate::assets::texture_in(
+                texture,
+                Rect::new(
+                    layout::ORIGIN_LEFT + 526.,
+                    layout::MENU_BAR + top as f32,
+                    16.,
+                    30.,
+                ),
+            );
+        }
+    }
+    let mut at = vec2(
+        layout::ORIGIN_LEFT + 327.,
+        layout::MENU_BAR + layout::ORIGIN_TOP + 330. - layout::LARGE_FIELD_SHIFT,
+    );
+    for effect in 1..=8_usize {
+        at.x += 39.;
+        if effect == 5 {
+            at += vec2(-156., 40.);
+        }
+        if party_effect(state, effect) != 0
+            && let Some(texture) = assets
+                .icons
+                .get(&(PARTY_EFFECT_ICONS + ((effect as i16) << 3) + frame))
+        {
+            crate::assets::icon_in(texture, at);
+        }
+    }
 }
 
 /// Draws the party's position and fatigue bar while exploring, and the time of

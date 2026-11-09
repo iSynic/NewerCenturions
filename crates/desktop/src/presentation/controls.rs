@@ -4,22 +4,13 @@ use crate::assets::Assets;
 use centurions_content::{ContentError, Warrior};
 use macroquad::prelude::*;
 
-/// Fills the scenario text's ^1 through ^6 with the squad members' names; the
-/// name of a warrior who has fallen is replaced by the last one still standing.
+/// Fills the scenario text's name tokens with the squad members' names; a text whose member
+/// records cannot be read is shown as written.
+///
+/// Original: textbox
 pub(crate) fn authored_text(text: &str, warriors: &[Warrior]) -> String {
-    let mut text = text.to_owned();
-    for index in 0..warriors.len() {
-        let selected = if warriors[index].stamina().unwrap_or(0) < 1 {
-            (0..warriors.len())
-                .rev()
-                .find(|i| warriors[*i].stamina().unwrap_or(0) > 0)
-                .unwrap_or(index)
-        } else {
-            index
-        };
-        text = text.replace(&format!("^{}", index + 1), &warriors[selected].name);
-    }
-    text
+    centurions_core::story::text::substitute_names(text, warriors)
+        .unwrap_or_else(|_| text.to_owned())
 }
 /// Draws a labelled button, grey when it is not available, and adds its control.
 pub(super) fn button(

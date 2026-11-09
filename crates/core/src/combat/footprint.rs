@@ -277,6 +277,8 @@ pub fn neighbor_scan(monster: &MonsterRecord) -> Result<(i16, i16), RuleError> {
 /// is farther along x than y, a heading with a y part has an even chance of dropping it; otherwise
 /// a new y part is drawn and then possibly a new x part. When it is not, a heading with an x part
 /// drops it, and one without draws new x and y parts.
+///
+/// Original: shift
 pub(crate) fn shift_direction(
     position: (i16, i16),
     target: (i16, i16),

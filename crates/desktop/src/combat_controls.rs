@@ -7,6 +7,9 @@ use crate::{
 use centurions_core::{Command, Session};
 use macroquad::prelude::*;
 
+/// The Load control's place on the combat panel.
+pub(crate) const LOAD: Rect = Rect::new(78., 546., 45., 16.);
+
 /// The combat panel's buttons that change the tactical view.
 #[derive(Clone, Copy, Debug)]
 pub enum ViewAction {
@@ -27,6 +30,20 @@ pub struct View {
     /// WaitNextEvent loop takes a mouseDown or keyDown.
     pub reveal: bool,
     pub move_target: bool,
+    /// Set while the panel shows the body the player centred or stepped to: the
+    /// information repaint, which reads out the range to the body.
+    information: bool,
+    /// The command-click hold sweeping bodies, while the button is down.
+    peek: Option<Peek>,
+    /// The body a released peek left in the panel, with the turn it belongs to.
+    shown: Option<(i16, (i16, usize))>,
+}
+
+/// A held command-click: the body the sweep is on and whether it has moved off the
+/// acting body.
+struct Peek {
+    current: i16,
+    swept: bool,
 }
 
 impl View {
@@ -41,12 +58,75 @@ impl View {
         }
     }
 
+    /// Whether the panel is repainting for a body the player centred or stepped to
+    /// this turn.
+    ///
+    /// Original: combatupdate2
+    pub fn information(&self, state: &Session) -> bool {
+        self.peek.is_some()
+            || self.held_body(state).is_some()
+            || state.combat.as_ref().is_some_and(|c| {
+                self.information && self.turn == Some((c.combat_round, c.battle_order_index))
+            })
+    }
+
+    /// The body a released peek left in the panel for this turn.
+    fn held_body(&self, state: &Session) -> Option<i16> {
+        let c = state.combat.as_ref()?;
+        self.shown
+            .filter(|(_, turn)| *turn == (c.combat_round, c.battle_order_index))
+            .map(|(body, _)| body)
+    }
+
+    /// The body the combat information panel shows: the one a peek is on or has left
+    /// in the panel, else the one the view is on. The Items and Conditions buttons
+    /// open the pop-up of this body.
+    ///
+    /// Original: combatinfo
+    pub fn shown(&self, state: &Session) -> Option<i16> {
+        if let Some(peek) = self.peek.as_ref().filter(|peek| peek.swept) {
+            return Some(peek.current);
+        }
+        self.held_body(state).or_else(|| self.selected(state))
+    }
+
+    /// The body a held peek frames on the battlefield in place of the acting body.
+    pub fn peeked(&self) -> Option<i16> {
+        self.peek.as_ref().map(|peek| peek.current)
+    }
+
+    /// Whether the peek is on a body whose guarding byte is set, which shows the
+    /// shield cursor.
+    ///
+    /// Original: combatinfo
+    pub fn shield(&self, state: &Session) -> bool {
+        let Some(peek) = self.peek.as_ref().filter(|peek| peek.swept) else {
+            return false;
+        };
+        let Some(combat) = state.combat.as_ref() else {
+            return false;
+        };
+        if (0..9).contains(&peek.current) {
+            return state
+                .warriors
+                .get(peek.current as usize)
+                .is_some_and(|warrior| warrior.record().guarding().unwrap_or(0) != 0);
+        }
+        combat
+            .roster
+            .records
+            .get((peek.current - 10) as usize)
+            .is_some_and(|monster| monster.record().guarding() != 0)
+    }
+
     /// Centres the view on a battlefield point for the rest of the turn.
     pub fn pan(&mut self, state: &Session, point: (i16, i16)) {
         if let Some(c) = &state.combat {
             self.turn = Some((c.combat_round, c.battle_order_index));
             self.point = Some(point);
             self.move_target = false;
+            self.information = false;
+            self.shown = None;
         }
     }
 
@@ -66,6 +146,11 @@ impl View {
             return;
         }
         self.point = None;
+        self.shown = None;
+        self.information = matches!(
+            action,
+            ViewAction::Center | ViewAction::Next | ViewAction::Previous
+        );
         match action {
             ViewAction::Center => {
                 self.body = c.active_body();
@@ -110,6 +195,135 @@ impl View {
     }
 }
 
+impl View {
+    /// Starts a peek on the acting body; false when there is none to start from.
+    fn begin_peek(&mut self, state: &Session) -> bool {
+        let Some(combat) = state.combat.as_ref() else {
+            return false;
+        };
+        let Some(acting) = combat.active_body() else {
+            return false;
+        };
+        if combat.capture_actor.is_some() || self.reveal || self.move_target {
+            return false;
+        }
+        self.peek = Some(Peek {
+            current: acting,
+            swept: false,
+        });
+        true
+    }
+
+    /// Moves a held peek to `body` when it differs from the body it is on.
+    fn sweep_peek(&mut self, body: i16) {
+        if let Some(peek) = self.peek.as_mut()
+            && peek.current != body
+        {
+            peek.current = body;
+            peek.swept = true;
+        }
+    }
+
+    /// Ends the peek. The panel keeps the last body shown unless a spell is being
+    /// readied, when it shows the acting warrior again.
+    fn end_peek(&mut self, state: &Session) {
+        let Some(peek) = self.peek.take() else { return };
+        let Some(combat) = state.combat.as_ref() else {
+            return;
+        };
+        self.shown = (peek.swept && combat.in_spell == 0).then_some((
+            peek.current,
+            (combat.combat_round, combat.battle_order_index),
+        ));
+    }
+}
+
+/// The body on the battlefield cell `point`, as the field map names it: a warrior
+/// below nine or a creature from ten to a hundred and ten.
+fn body_on(state: &Session, point: (i16, i16)) -> Option<i16> {
+    let combat = state.combat.as_ref()?;
+    let index = centurions_content::mission::OpeningMission::index(
+        i32::from(point.0 + combat.field.map_shift.0 + 5),
+        i32::from(point.1 + combat.field.map_shift.1 + 5),
+    )
+    .ok()?;
+    let body = combat.field.tiles[index].wrapping_abs();
+    let present = if (0..9).contains(&body) {
+        state.warriors.get(body as usize).is_some()
+    } else {
+        (10..=110).contains(&body) && combat.roster.records.get((body - 10) as usize).is_some()
+    };
+    present.then_some(body)
+}
+
+/// Command-click and hold on the battlefield previews the information of each body
+/// the pointer sweeps over: the body is framed, the panel shows it and a guarding
+/// body brings up the shield cursor. Releasing the button ends the preview. Returns
+/// whether the preview owns this frame's input.
+///
+/// Original: combatinfo
+pub fn peek(state: &Session, ui: &mut UiState, pointer: Option<Vec2>) -> bool {
+    if state.combat.is_none() {
+        ui.combat_view.peek = None;
+        return false;
+    }
+    if ui.combat_view.peek.is_some() {
+        if !is_mouse_button_down(MouseButton::Left) {
+            ui.combat_view.end_peek(state);
+            return true;
+        }
+    } else {
+        let allowed = ui.inspection.is_none() || crate::targeting::active(state, ui);
+        if !(is_mouse_button_pressed(MouseButton::Left)
+            && crate::application::command_modifier()
+            && allowed
+            && pointer.is_some_and(|point| crate::layout::MAP.contains(point))
+            && ui.combat_view.begin_peek(state))
+        {
+            return false;
+        }
+    }
+    if let Some(point) = pointer.filter(|point| crate::layout::MAP.contains(*point))
+        && let Some(cell) = map_position(state, ui, point)
+        && let Some(body) = body_on(state, cell)
+    {
+        ui.combat_view.sweep_peek(body);
+    }
+    true
+}
+
+/// Draws the shield cursor in place of the pointer while a peek is on a guarding
+/// body, and the cursor that counts the targets still to pick while targets are chosen; the
+/// sword cursor is the pointer itself.
+///
+/// Original: combatinfo, updatespell
+pub fn draw_peek_cursor(
+    state: &Session,
+    assets: &crate::assets::Assets,
+    ui: &UiState,
+    pointer: Option<Vec2>,
+) {
+    let counting = ui
+        .targeting
+        .count_cursor
+        .take()
+        .and_then(|id| assets.count_cursors.get(&id));
+    let shield = assets
+        .shield_cursor
+        .as_ref()
+        .filter(|_| ui.combat_view.shield(state))
+        .or(counting);
+    show_mouse(shield.is_none());
+    if let (Some((texture, hotspot)), Some(point)) = (shield, pointer) {
+        draw_texture(
+            texture,
+            point.x - f32::from(hotspot.0),
+            point.y - f32::from(hotspot.1),
+            WHITE,
+        );
+    }
+}
+
 /// The battlefield cell at the view's top left: the playback's view while it
 /// runs, otherwise centred on the panned point or the selected body.
 pub fn origin(state: &Session, ui: &UiState) -> Option<(i16, i16)> {
@@ -142,11 +356,7 @@ pub fn centered(c: &centurions_core::combat::Combat, point: (i16, i16)) -> (i16,
 
 /// The combat panel's button controls (PICT 153), enabled for the acting
 /// warrior's current choices.
-pub fn buttons(
-    state: &Session,
-    content: &centurions_content::Content,
-    selected: usize,
-) -> Vec<Control> {
+pub fn buttons(state: &Session, selected: usize) -> Vec<Control> {
     let actor = state
         .combat
         .as_ref()
@@ -235,10 +445,7 @@ pub fn buttons(
                 enabled: !firearm,
             }),
         ),
-        (
-            Rect::new(78., 546., 45., 16.),
-            input::refill_action(state, content, actor),
-        ),
+        (LOAD, input::refill_action(state, actor)),
         (
             Rect::new(125., 546., 178., 16.),
             Action::Open(Inspection::Weapons),
@@ -266,12 +473,7 @@ pub fn buttons(
 
 /// The action a combat key press stands for (G, D, F, W and so on, one for
 /// each panel button), if its button is available.
-pub fn shortcut(
-    key: KeyCode,
-    state: &Session,
-    content: &centurions_content::Content,
-    selected: usize,
-) -> Option<Action> {
+pub fn shortcut(key: KeyCode, state: &Session, selected: usize) -> Option<Action> {
     let index = match key {
         KeyCode::G => 0,
         KeyCode::D => 1,
@@ -292,7 +494,7 @@ pub fn shortcut(
         KeyCode::L => 18,
         _ => return None,
     };
-    buttons(state, content, selected)
+    buttons(state, selected)
         .get(index)
         .map(|c| c.action.clone())
 }

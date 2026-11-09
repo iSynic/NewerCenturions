@@ -267,6 +267,7 @@ pub fn import(
     state.warriors = (0..count)
         .map(|i| {
             let mut warrior = Warrior::read(&info.bytes(0x448aa0 + i as u32 * 3138, 3138)?)?;
+            warrior.require_current_format()?;
             if let Some(original) = content
                 .warriors
                 .iter()

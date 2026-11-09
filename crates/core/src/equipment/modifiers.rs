@@ -244,8 +244,8 @@ pub(super) fn conditions(
     fit: Fit,
 ) -> Result<(), RuleError> {
     let removing = fit == Fit::Remove;
-    // Removal leaves condition 99 alone while wearing sets it, a quirk the game
-    // has; removal is not the inverse of wear.
+    // Item effect 99 clears the condition on wear but not on removal, unlike effects 60 to 98
+    // which clear it both times; removal is not the inverse of wear.
     if definition.effect > 59 && definition.effect < if removing { 99 } else { 100 } {
         Stat::Condition(definition.effect_amount).write(warrior, 0)?;
     }

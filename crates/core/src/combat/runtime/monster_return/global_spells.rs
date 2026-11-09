@@ -131,6 +131,7 @@ fn targeted(
         &state.globals.monsters,
         &state.globals.battlefield,
         &state.globals.warrior_table,
+        state.command_preferences.animation_delay,
     )?;
     let selection = spells::select_spell_from_view(
         &view,

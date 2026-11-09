@@ -249,6 +249,8 @@ impl Inventory {
 }
 
 /// The owner's portrait, name, carried weight, capacity and item count under a list.
+///
+/// Original: updateshopwings
 fn draw_owner_footer(assets: &Assets, warrior: &Warrior, side: usize, item_count: usize) {
     let layout = &SIDE_LAYOUT[side];
     let portrait = warrior.record().portrait().unwrap_or(0);

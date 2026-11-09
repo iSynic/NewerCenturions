@@ -15,8 +15,9 @@ const ROSTER_UP: usize = 17;
 const ROSTER_DOWN: usize = 18;
 
 impl Application {
-    /// Carries out the Modify Squad choices: add and remove warriors, marching
-    /// order, roster scrolling, difficulty and ending the mission.
+    /// Carries out the Modify Squad choices: add, remove and erase warriors, the
+    /// restrictions dialog, marching order, roster scrolling, difficulty and ending
+    /// the mission.
     pub(super) fn handle_squad(
         &mut self,
         action: ApplicationAction,
@@ -136,13 +137,32 @@ impl Application {
                     self.squad.remove(i);
                 }
             }
-            // Item 16 asks STR# 135 question 3 before minus deletes the warrior file;
-            // the roster has no deletion, so nothing changes.
+            // Item 16 asks STR# 135 question 3 for the selected roster warrior.
             ApplicationAction::EraseWarrior => {
-                return Err(centurions_core::RuleError::Unsupported {
-                    action: "erase warrior",
-                    dependency: "warrior roster deletion",
-                });
+                let kept = self.warriors(content);
+                self.selection
+                    .selected
+                    .filter(|i| !self.squad.contains(i))
+                    .and_then(|i| kept.get(i))
+                    .filter(|warrior| !warrior.name.is_empty())
+                    .ok_or("Erase Warrior needs a roster warrior.")?;
+                if self.roster.is_none() {
+                    return Err("warrior roster missing".into());
+                }
+                self.selection.erase_question = true;
+                events.push(Event::Sound { resource_id: 20005 });
+            }
+            ApplicationAction::EraseAnswer(answer) => {
+                if !self.selection.erase_question {
+                    return Err("Erase Warrior question is not open.".into());
+                }
+                let selected = self.selection.selected.ok_or("No warrior is selected.")?;
+                if answer {
+                    self.erase_warrior(selected)?;
+                }
+                // The question ends the selection whichever way it is answered.
+                self.selection.erase_question = false;
+                self.selection.selected = None;
             }
             // Item 20 opens StandardGetFile for a warrior file to copy into :Warriors:.
             ApplicationAction::ImportWarrior => {
@@ -151,7 +171,6 @@ impl Application {
                     dependency: "warrior file import",
                 });
             }
-            // Item 33 runs viewrestrictions, DLOG -7931.
             // Item 17 subtracts five from the first listed slot and item 18 adds
             // five, then a negative result becomes zero.
             ApplicationAction::RosterScroll(down) => {
@@ -162,10 +181,19 @@ impl Application {
                 };
             }
             ApplicationAction::ViewRestrictions => {
-                return Err(centurions_core::RuleError::Unsupported {
-                    action: "view restrictions",
-                    dependency: "party restrictions dialog",
-                });
+                if self
+                    .squad_level(content, state)
+                    .is_none_or(|level| level.restrictions.is_none())
+                {
+                    return Err("The level has no party restrictions.".into());
+                }
+                self.selection.restrictions = true;
+            }
+            ApplicationAction::CloseRestrictions => {
+                if !self.selection.restrictions {
+                    return Err("Party restrictions are not open.".into());
+                }
+                self.selection.restrictions = false;
             }
             ApplicationAction::Done => {
                 let warriors = self
@@ -270,6 +298,31 @@ impl Application {
             .as_ref()
             .map_or(&content.warriors, |r| &r.warriors)
     }
+    /// Erases roster warrior `index` from the reconstruction's own roster, which keeps the
+    /// squad on the same warriors and the roster list on the same rows. Nothing changes unless the
+    /// roster accepts the erasure.
+    ///
+    /// Original: minus
+    fn erase_warrior(&mut self, index: usize) -> Result<(), centurions_core::RuleError> {
+        let roster = self.roster.as_mut().ok_or("warrior roster missing")?;
+        let identity = roster
+            .warriors
+            .get(index)
+            .ok_or("Squad roster index missing.")?
+            .original_sha256
+            .clone();
+        roster.remove(&identity)?;
+        for member in &mut self.squad {
+            if *member > index {
+                *member -= 1;
+            }
+        }
+        if index < self.selection.roster_top {
+            self.selection.roster_top -= 1;
+        }
+        Ok(())
+    }
+
     /// Ends the mission, stores the squad's records in the roster and returns to the
     /// title.
     pub(super) fn finish_mission(
@@ -360,7 +413,7 @@ impl Application {
 
     /// The roster of warriors not in the squad, thirteen rows from the top.
     ///
-    /// Original: partyselect
+    /// Original: partyselect, plus
     fn roster_list(
         &self,
         content: &Content,
@@ -451,6 +504,7 @@ impl Application {
                         .combat
                         .as_ref()
                         .is_some_and(|combat| combat.do_auto.get(i).copied().unwrap_or(false)),
+                    in_combat: state.combat.is_some(),
                 },
             );
             assets.text(&warrior.name, origin.x + 420., top + 22., 12, YELLOW);
@@ -561,6 +615,71 @@ impl Application {
             crate::assets::texture_in(icon, Rect::new(origin.x + 221., origin.y + 22., 50., 50.));
         }
         assets.panel(132, Rect::new(origin.x + 221., origin.y + 172., 50., 50.));
+    }
+
+    /// Draws the Scenario Restrictions dialog (DLOG -7931) over the squad screen: the
+    /// restriction text, the party size and level limits, and a check box beside each race and
+    /// M.O.S. name, checked when the level bans it. A click on an enabled item or Return closes it.
+    ///
+    /// Original: viewrestrictions
+    pub(super) fn draw_restrictions(
+        &self,
+        content: &Content,
+        state: &Session,
+        assets: &Assets,
+        controls: &mut Vec<Control>,
+    ) {
+        let Some(limits) = self
+            .squad_level(content, state)
+            .and_then(|level| level.restrictions.as_deref())
+            .map(centurions_content::records::PartyRestrictions)
+        else {
+            return;
+        };
+        let id = crate::assets::RESTRICTIONS_DIALOG;
+        assets.draw_dialog(id);
+        let item = |number: usize| assets.dialog_rect(id, number);
+        assets.dialog_text(
+            &limits.description().unwrap_or_default().replace('\r', "\n"),
+            item(4),
+        );
+        for (number, value) in [
+            (65, limits.maximum_warriors()),
+            (66, limits.maximum_level()),
+        ] {
+            assets.dialog_text(&value.unwrap_or(0).to_string(), item(number));
+        }
+        let strings = |table: i16| {
+            assets
+                .character_strings
+                .get(&table)
+                .and_then(|bytes| centurions_content::ui::string_list(bytes).ok())
+                .unwrap_or_default()
+        };
+        let (races, classes) = (strings(129), strings(131));
+        for t in 0..30 {
+            for (box_item, label_item, flag, names) in [
+                (5 + t, 67 + t, limits.race_flag(t), &races),
+                (35 + t, 97 + t, limits.mos_flag(t), &classes),
+            ] {
+                assets.panel(
+                    if flag.unwrap_or(0) != 0 { 179 } else { 180 },
+                    item(box_item),
+                );
+                assets.dialog_text(names.get(t).map_or("", String::as_str), item(label_item));
+            }
+        }
+        // A click on an enabled item answers the dialog; the disabled backdrop picture ignores it
+        // and the off-dialog default button is answered by Return.
+        for (index, dialog_item) in assets.dialogs[&id].iter().enumerate() {
+            if index > 0 && index < 126 && dialog_item.kind & 0x80 == 0 {
+                controls.push(Control {
+                    rect: item(index + 1),
+                    enabled: true,
+                    action: Action::Application(ApplicationAction::CloseRestrictions),
+                });
+            }
+        }
     }
 
     /// The recommended and total levels and the View Restrictions button.

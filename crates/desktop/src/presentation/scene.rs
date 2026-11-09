@@ -25,7 +25,7 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
     let selected = draw_frame_panels(content, state, assets, ui, &mut controls);
     if state.phase != Phase::SquadSelection {
         if state.phase == Phase::Combat {
-            combat_controls_strip(content, state, assets, ui, selected, &mut controls);
+            combat_controls_strip(state, assets, ui, selected, &mut controls);
         }
         if state.phase == Phase::Exploration {
             field_controls_strip(state, assets, selected, &mut controls);
@@ -47,6 +47,23 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
         control.enabled &= crate::input::available(state, ui.selected, &control.action);
     }
     controls
+}
+
+/// Prints the story's message in the message box, over PICT 221 during combat, and leaves no
+/// control standing.
+///
+/// Original: textbox
+fn story_message(state: &Session, assets: &Assets, text: &str, controls: &mut Vec<Control>) {
+    if state.phase == Phase::Combat {
+        assets.panel(221, layout::MESSAGE);
+    }
+    controls.clear();
+    assets.wrapped(
+        &authored_text(text, &state.warriors),
+        layout::MESSAGE_TEXT,
+        12,
+        16.,
+    );
 }
 
 /// The area the pending Psi spell affects, drawn under the previewed map cell.
@@ -115,6 +132,9 @@ fn draw_frame_panels(
     assets.panel(224, layout::INFORMATION);
     let selected = hud::roster(state, assets, ui, controls);
     hud::clock(state, assets);
+    if state.phase == Phase::Exploration {
+        hud::party_effects(state, assets);
+    }
     hud::information(state, assets, selected);
     let mission_ready = state.phase != Phase::SquadSelection;
     let (items_rect, conditions_rect) = if state.phase == Phase::Combat {
@@ -125,17 +145,22 @@ fn draw_frame_panels(
             assets.main_controls[&control::SHOW_CONDITIONS],
         )
     };
-    if state.phase == Phase::Combat {
-        draw_combat_information(
-            content,
-            state,
-            assets,
-            ui.combat_view.selected(state).unwrap_or(selected as i16),
-        );
+    let shown = (state.phase == Phase::Combat)
+        .then(|| ui.combat_view.shown(state).unwrap_or(selected as i16));
+    if let Some(body) = shown {
+        draw_combat_information(content, state, assets, ui, body);
     }
+    // Items and Conditions open the pop-up of the creature in the panel.
+    let creature = shown.filter(|body| *body >= 10);
     for (rect, inspection) in [
-        (items_rect, Inspection::Items),
-        (conditions_rect, Inspection::Conditions),
+        (
+            items_rect,
+            creature.map_or(Inspection::Items, Inspection::CreatureItems),
+        ),
+        (
+            conditions_rect,
+            creature.map_or(Inspection::Conditions, Inspection::CreatureConditions),
+        ),
     ] {
         let action = Action::Open(inspection);
         controls.push(Control {
@@ -150,7 +175,6 @@ fn draw_frame_panels(
 /// The combat control strip: capture and Psi availability, the turn buttons,
 /// automatic-mode controls and the playing spell's panel.
 fn combat_controls_strip(
-    content: &Content,
     state: &Session,
     assets: &Assets,
     ui: &UiState,
@@ -166,13 +190,16 @@ fn combat_controls_strip(
         },
         assets.main_controls[&control::REPAIR],
     );
+    if capture {
+        hud::capture_skills(state, assets, selected);
+    }
     if !crate::input::available(state, selected, &Action::Open(Inspection::Psi)) {
         assets.panel(
             layout::DISABLED_CONTROL_PICT,
             assets.main_controls[&control::SCAN],
         );
     }
-    let mut buttons = crate::combat_controls::buttons(state, content, selected);
+    let mut buttons = crate::combat_controls::buttons(state, selected);
     for button in &mut buttons {
         match button.action {
             Action::Open(Inspection::Weapons) => {
@@ -205,6 +232,7 @@ fn combat_controls_strip(
     }
     controls.extend(buttons);
     crate::combat_controls::draw_automatic(state, assets, controls);
+    ui.inventory.draw_load_popup(assets, controls);
     if let Some(playback) = &ui.playback {
         super::spell_panel::draw(assets, playback);
     }
@@ -284,23 +312,18 @@ fn draw_story_presentation(
             false
         }
         Presentation::Dialogue { text, .. } => {
-            // textbox replaces the combat panel with PICT 221.
-            if state.phase == Phase::Combat {
-                assets.panel(221, layout::MESSAGE);
-            }
-            controls.clear();
-            assets.wrapped(
-                &authored_text(text, &state.warriors),
-                layout::MESSAGE_TEXT,
-                12,
-                16.,
-            );
+            story_message(state, assets, text, controls);
             false
         }
-        Presentation::Question { text, .. } | Presentation::Avoidance { text, .. } => {
-            crate::story_dialogs::question(
+        Presentation::Question { text, .. } => {
+            story_message(state, assets, text, controls);
+            crate::story_dialogs::question_strip(content, state, assets, controls);
+            false
+        }
+        Presentation::Avoidance { text, .. } => {
+            story_message(state, assets, text, controls);
+            crate::story_dialogs::plain_question_strip(
                 assets,
-                &authored_text(text, &state.warriors),
                 Action::Command(Command::Choose { answer: true }),
                 Action::Command(Command::Choose { answer: false }),
                 controls,
@@ -317,12 +340,10 @@ fn draw_story_presentation(
             );
             false
         }
-        Presentation::Menu { id, text, labels } => {
+        Presentation::Menu { text, labels, .. } => {
             crate::story_dialogs::menu(
-                content,
                 state,
                 assets,
-                *id,
                 &authored_text(text, &state.warriors),
                 labels,
                 controls,

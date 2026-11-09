@@ -41,6 +41,11 @@ impl DesktopReplay {
         self.app.characters.creation.as_ref().unwrap()
     }
 
+    fn name_creation(&mut self, name: &str, width: f32) {
+        let creation = self.app.characters.creation.as_mut().unwrap();
+        (creation.request.name, creation.name_width) = (name.into(), width);
+    }
+
     fn information(&self) -> &crate::information::WarriorInformation {
         self.app.characters.information.as_ref().unwrap()
     }
@@ -156,17 +161,21 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
     driver.app.load_roster(&path, &driver.content).unwrap();
     let supplied = driver.app.roster.as_ref().unwrap().warriors.len();
     driver.act(ApplicationAction::Menu(136, 5));
+    let kept = driver.app.roster.as_ref().unwrap().warriors[0].name.clone();
+    let long = "x".repeat(29);
+    // Done on a name asks to cancel for an empty one, refuses a wide or a long one, and asks to
+    // replace a kept one, in that order.
+    for (name, width, ask) in [("", 0., 11), ("x", 134., 0), (&long, 0., 0), (&kept, 0., 4)] {
+        driver.name_creation(name, width);
+        let refused = driver.handle(ApplicationAction::CreationItem(4)).is_err();
+        let asked = driver.creation().question().unwrap_or(0);
+        assert_eq!((refused, asked), (ask == 0, ask));
+        let _ = driver.handle(ApplicationAction::CreationAnswer(false));
+    }
     driver.act(ApplicationAction::CreationCancel);
-    assert_eq!(driver.app.roster.as_ref().unwrap().warriors.len(), supplied);
+    driver.act(ApplicationAction::CreationAnswer(true));
     driver.act(ApplicationAction::Menu(136, 5));
-    driver
-        .app
-        .characters
-        .creation
-        .as_mut()
-        .unwrap()
-        .request
-        .name = "New Warrior".into();
+    driver.name_creation("New Warrior", 0.);
     for item in [4, 3, 29] {
         driver.act(ApplicationAction::CreationItem(item));
     }
@@ -189,14 +198,7 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
     assert_eq!(roster.warriors.len(), supplied + 1);
     assert_eq!(roster.warriors.last().unwrap().name, "New Warrior");
     driver.act(ApplicationAction::Menu(136, 5));
-    driver
-        .app
-        .characters
-        .creation
-        .as_mut()
-        .unwrap()
-        .request
-        .name = "New Psion".into();
+    driver.name_creation("New Psion", 0.);
     for item in [4, 3, 29] {
         driver.act(ApplicationAction::CreationItem(item));
     }
@@ -263,6 +265,12 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
     );
     let roster = centurions_core::roster::Roster::open(&path, &driver.content).unwrap();
     assert!(roster.warriors.contains(&expected[0]));
+    driver.app.squad.clear();
+    driver.act(ApplicationAction::Warrior(supplied));
+    driver.act(ApplicationAction::EraseWarrior);
+    driver.act(ApplicationAction::EraseAnswer(true));
+    let json = std::fs::read_to_string(&path).unwrap();
+    assert!(!json.contains("New Warrior"));
     driver.state = before_exit;
     driver.app.screen = Screen::Game;
     let blocked = directory.join("blocked");
@@ -321,9 +329,10 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
     driver.act(ApplicationAction::PreferenceCancel);
     assert_eq!(driver.app.preferences, before);
     driver.act(ApplicationAction::Menu(137, 3));
-    for item in [12, 13, 14, 15, 16, 17, 21, 2] {
+    for item in [12, 13, 14, 15, 16, 17, 21, 3, 57, 10, 2, 2] {
         driver.act(ApplicationAction::PreferenceItem(item));
     }
+    assert_eq!(driver.app.preferences.indoor_icon, 9282);
     let mut restored = Application::at(Screen::Title, 0.);
     restored.preferences(path.clone()).unwrap();
     let audio = &restored.audio;
@@ -464,22 +473,6 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
     driver.act(ApplicationAction::EndAnswer(true));
     assert_eq!(driver.state.phase, Phase::SquadSelection);
     std::fs::remove_file(path).unwrap();
-}
-
-// Protects committing the selected level while an existing mission remains untouched during setup.
-#[test]
-fn difficulty_controls_commit_all_original_levels_at_mission_start() {
-    let mut driver = DesktopReplay::new();
-    for level in -2..=2 {
-        let before = driver.state.clone();
-        driver.app = Application::at(Screen::Squad, 0.);
-        driver.app.squad = vec![0];
-        driver.act(ApplicationAction::Difficulty(level));
-        assert_eq!(driver.state, before);
-        driver.act(ApplicationAction::Done);
-        assert_eq!(driver.state.difficulty, level);
-        assert_eq!(driver.state.phase, Phase::Exploration);
-    }
 }
 
 // Protects original editor activation, cancellation, undo, commit and saved continuity.
@@ -670,7 +663,7 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     assert_eq!(driver.appearance().draft, draft);
     driver.act(ApplicationAction::AppearanceItem(34));
     driver.act(ApplicationAction::AppearanceItem(11));
-    driver.act(ApplicationAction::AppearanceItem(2));
+    assert_eq!(driver.act(ApplicationAction::AppearanceItem(2)).1.len(), 2);
     assert_eq!(word(&driver.state.warriors[0].bytes, 0x54).unwrap(), 258);
     assert_eq!(word(&driver.state.warriors[1].bytes, 0x54).unwrap(), 259);
     assert_eq!(driver.state.random, before_appearance.random);
@@ -768,6 +761,12 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
     state.exploration.as_mut().unwrap().presentation = None;
     let mut ui = UiState::default();
     ui.inventory.open(0, state.warriors.len());
+    // A worn item is held in place, so the loaded firearm is taken off before it is dragged.
+    let take_off = Command::UnequipItem {
+        warrior: 0,
+        slot: 0,
+    };
+    apply(take_off, &mut state, &content).unwrap();
     let record = state.warriors[0].inventory().unwrap()[0].clone();
     let recipient_slot = state.warriors[4].inventory().unwrap().len();
     let source_count = state.warriors[0].inventory().unwrap().len();

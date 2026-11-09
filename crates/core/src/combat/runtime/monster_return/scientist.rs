@@ -24,6 +24,7 @@ impl OutOfCombat<'_> {
             &self.state.globals.monsters,
             &self.state.globals.battlefield,
             &self.state.globals.warrior_table,
+            self.state.command_preferences.animation_delay,
         )
     }
 }

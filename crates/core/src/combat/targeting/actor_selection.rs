@@ -34,7 +34,7 @@ fn position(combat: &Combat, body: i16) -> Result<(i16, i16), RuleError> {
 /// Chooses whom a monster aims at. It keeps its current target if that is still eligible, else
 /// draws a random eligible body (an error if none turns up). If the target is out of sight it scans
 /// the bodies in order for one that is eligible, not excluded and in sight. When none remains the
-/// monster is left with no target (-1).
+/// monster is left with no target (-1). Sight is tested with the animation delay preference.
 ///
 /// Original: combat
 pub(crate) fn select_actor_target(
@@ -43,6 +43,7 @@ pub(crate) fn select_actor_target(
     mission: &OpeningMission,
     random: &mut RandomState,
     body: i16,
+    delay: i16,
 ) -> Result<i16, RuleError> {
     let actor = body
         .checked_sub(10)
@@ -70,7 +71,7 @@ pub(crate) fn select_actor_target(
             mission,
             position(combat, body)?,
             position(combat, target)?,
-            0,
+            delay,
         )? {
             return Ok(target);
         }

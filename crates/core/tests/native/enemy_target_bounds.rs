@@ -30,7 +30,7 @@ fn unknown_retained_target_scan_stops_without_extra_random_draws() {
     // This historical frame omits inactive backing; its original scan reached
     // body197. Preserve the known RNG prefix, without inventing a target record.
     assert!(matches!(
-        select_enemy_target(&mut combat, &warriors, &mission, &mut random, 13),
+        select_enemy_target(&mut combat, &warriors, &mission, &mut random, 13, 0),
         Err(centurions_core::RuleError::Unsupported {
             action: "combat.retained_npc",
             ..

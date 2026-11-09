@@ -91,7 +91,7 @@ pub(crate) fn visit(
         remaining: 0,
     });
     if parameter <= 0 {
-        show(state)?;
+        show(state, content)?;
         Ok(true)
     } else {
         Ok(false)
@@ -178,9 +178,17 @@ pub(crate) fn visit_restricted(
     Ok(())
 }
 
-/// Puts the shop window up after pooling the party's money.
-pub(super) fn show(state: &mut Session) -> Result<(), RuleError> {
+/// Puts the shop window up after pooling the party's money. The selected warrior's pack is
+/// tidied and the load weighed again, so the shop sees the pack's true weight.
+///
+/// Original: seeshop, Showitems, change
+pub(super) fn show(state: &mut Session, content: &Content) -> Result<(), RuleError> {
     crate::party::pool_credits(&mut state.warriors, &mut state.party_currency)?;
+    let shopper = state.globals.health_context.char_select_new;
+    if let Some(warrior) = state.warriors.get_mut(shopper) {
+        crate::items::compact(warrior)?;
+        crate::equipment::calculate_weight(warrior, content)?;
+    }
     state
         .exploration
         .as_mut()
@@ -190,7 +198,7 @@ pub(super) fn show(state: &mut Session) -> Result<(), RuleError> {
 }
 
 /// Opens the shop window for the shop the party is visiting.
-pub(crate) fn open(state: &mut Session) -> Result<Vec<Event>, RuleError> {
+pub(crate) fn open(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     if state.phase != Phase::Exploration
         || state
             .shop_access
@@ -203,7 +211,7 @@ pub(crate) fn open(state: &mut Session) -> Result<Vec<Event>, RuleError> {
     {
         return Err(RuleError::Refused { feedback: vec![] });
     }
-    show(state)?;
+    show(state, content)?;
     Ok(vec![Event::StoryPresented])
 }
 
@@ -244,6 +252,8 @@ pub(crate) fn command_allowed(command: &Command) -> bool {
             | Command::InspectInventory { .. }
             | Command::BuyItem { .. }
             | Command::SellItem { .. }
+            | Command::EquipItem { .. }
+            | Command::UnequipItem { .. }
             | Command::Continue
             | Command::Reload { .. }
             | Command::ViewWarrior { .. }

@@ -6,6 +6,7 @@ pub mod creation;
 pub mod feedback;
 pub mod item_display;
 pub mod loot_recovery;
+pub mod music;
 pub mod original_save;
 pub mod outdoor_psi;
 pub mod reference_views;
@@ -49,6 +50,8 @@ pub mod rules {
     }
 
     /// Whether a value lies between two limits, both included.
+    ///
+    /// Original: twixt
     pub fn inclusive_range(value: i16, minimum: i16, maximum: i16) -> bool {
         value >= minimum && value <= maximum
     }
@@ -60,6 +63,8 @@ pub mod rules {
     }
 
     /// A random number from the minimum up to the maximum, both included, from a drawn value.
+    ///
+    /// Original: randrange
     pub fn random_range(minimum: i16, maximum: i16, quickdraw_value: i16) -> i16 {
         minimum
             .wrapping_add(random_bound(
@@ -71,6 +76,8 @@ pub mod rules {
 
     /// What a step costs: half the tile's cost (rounded toward zero) less one, no lower than zero,
     /// plus one for each axis the step moves along.
+    ///
+    /// Original: getmovecost
     pub fn movement_cost(tile_cost: i16, dx: i8, dy: i8) -> i16 {
         let sign = (tile_cost as u16 >> 15) as i16;
         let cost = (tile_cost.wrapping_add(sign) >> 1).wrapping_sub(1);
@@ -110,7 +117,9 @@ pub mod editor_items;
 pub mod equipment;
 mod exploration;
 pub mod party;
-pub use exploration::{BootyTally, needs_spell_confirmation, typed_record};
+pub use exploration::{
+    BootyTally, field_origin, needs_spell_confirmation, question_label_words, typed_record,
+};
 pub mod clinic;
 pub mod field_controls;
 mod item_modifiers;

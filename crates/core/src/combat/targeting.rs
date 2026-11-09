@@ -5,6 +5,8 @@ use crate::{Event, RuleError, Session};
 use centurions_content::{Content, Warrior, records::ItemDefinition};
 use serde::{Deserialize, Serialize};
 mod actor_selection;
+pub mod aim;
+pub mod readout;
 pub mod target_picks;
 pub(crate) use actor_selection::select_actor_target;
 

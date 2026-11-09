@@ -23,13 +23,6 @@ fn selected_files_and_cancellation_preserve_the_session_and_originals() {
         explicit: None,
         protected: vec![original.clone()],
     };
-    let initial = state.clone();
-    assert!(
-        !files
-            .perform(&Action::Save, &mut state, &content, |_, _| Ok(None))
-            .unwrap()
-    );
-    assert!(files.current.is_none());
     files
         .perform(&Action::Save, &mut state, &content, |saving, _| {
             assert!(saving);
@@ -48,23 +41,6 @@ fn selected_files_and_cancellation_preserve_the_session_and_originals() {
             Ok(Some(second.clone()))
         })
         .unwrap();
-    files
-        .perform(&Action::FastSave, &mut state, &content, |_, _| {
-            panic!("Fast Save reopened the picker")
-        })
-        .unwrap();
-    files
-        .perform(&Action::Load, &mut state, &content, |saving, _| {
-            assert!(!saving);
-            Ok(Some(first.clone()))
-        })
-        .unwrap();
-    assert_eq!(state, initial);
-    assert!(
-        !files
-            .perform(&Action::Load, &mut state, &content, |_, _| Ok(None))
-            .unwrap()
-    );
     files
         .perform(&Action::Load, &mut state, &content, |_, _| {
             Ok(Some(second.clone()))

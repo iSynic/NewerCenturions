@@ -13,6 +13,7 @@
 use crate::combat_flight::{FlightFrame, FlightFrames};
 use centurions_core::{
     Event, Flight, Session, SpellArea, SpellInfo,
+    combat::targeting::aim::facing_icon,
     combat::{Combat, footprint},
     feedback::GameFeedback,
 };
@@ -70,6 +71,9 @@ pub struct Settings {
     /// The item value after the command, which showresults prints with cicns 165
     /// and 166.
     pub item_value: i16,
+    /// The last chosen target cell relative to the warrior who last acted, which turns a
+    /// firearm's missile icon.
+    pub aim_offset: (i16, i16),
 }
 
 /// One ray crossing: its first and last event, the walk step that crossed it and
@@ -231,6 +235,9 @@ pub struct Playback {
     /// until the controls are redrawn after the command. showspellinfo replaces
     /// it for a category-9 spell.
     pub cast_icon: Option<i16>,
+    /// The icon missileset plots over the cast rectangle for a firearm of caliber 16 or 18,
+    /// turned toward the last chosen cell; kept like `cast_icon`.
+    pub missile_icon: Option<i16>,
     /// The result rectangle, kept like `cast_icon`.
     pub result_slot: Option<ResultSlot>,
     /// showspellinfo's name and number, kept like `cast_icon`.
@@ -241,6 +248,7 @@ pub struct Playback {
     /// leaves view cells 1..8; showresults' centerfield passes the current
     /// centre, so it only redraws.
     pub view: Option<(i16, i16)>,
+    aim_offset: (i16, i16),
     steps: VecDeque<Step>,
     until: f64,
 }
@@ -764,6 +772,8 @@ impl<'a> Builder<'a> {
                 effect: None,
                 flight: None,
                 cast_icon: None,
+                missile_icon: None,
+                aim_offset: self.settings.aim_offset,
                 result_slot: None,
                 spell_info: None,
                 framed: None,
@@ -823,6 +833,9 @@ impl Playback {
                 });
                 if info.firearm {
                     self.cast_icon = info.weapon_icon;
+                }
+                if info.missile {
+                    self.missile_icon = Some(facing_icon(info.look, self.aim_offset));
                 }
                 self.spell_info = Some(info);
             }

@@ -52,6 +52,8 @@ pub(crate) fn validate_selection(state: &Session) -> Result<(), RuleError> {
 /// Whether the warrior whose turn it is can try to disable or capture: the first special skill
 /// above zero, attacks above one, and an adjacent living opposing monster that is a working machine
 /// (mechanical state 1) or, with the second skill, one with the capture flag set.
+///
+/// Original: checkformechanicalunits
 pub fn available(state: &Session) -> bool {
     let Some(combat) = &state.combat else {
         return false;

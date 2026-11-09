@@ -39,6 +39,57 @@ pub(crate) fn log_pressed_keys(input_log: &Option<String>) {
     }
 }
 
+/// The party looks at the land again whenever its square or its Wizard Eye changes, before the
+/// field map is drawn.
+///
+/// Original: centerpictlarge
+pub(crate) fn look_at_land(state: &mut Session, content: &Content, ui: &mut UiState) {
+    let Some(position) = state.exploration.as_ref() else {
+        return;
+    };
+    let eye = state
+        .party_condition
+        .get(8..10)
+        .map_or([0; 2], |bytes| [bytes[0], bytes[1]]);
+    let key = (position.map, position.x, position.y, eye);
+    if state.phase != centurions_core::Phase::Exploration || ui.sight == Some(key) {
+        return;
+    }
+    ui.sight = Some(key);
+    if let Err(error) =
+        centurions_core::apply(centurions_core::Command::RevealSight, state, content)
+    {
+        ui.failure(error);
+    }
+}
+
+/// Draws the next music title from the game's random numbers: the command advances the rule
+/// generator, and a copy of the generator before it names the title drawn. The search through the
+/// playlist may give up; a refused command leaves the music as it is.
+///
+/// Original: submitmusic
+pub(crate) fn change_music(
+    state: &mut Session,
+    content: &Content,
+    playlist: [bool; centurions_core::music::TITLES],
+    ui: &mut UiState,
+) -> crate::audio::MusicDraw {
+    use crate::audio::MusicDraw;
+    let mut drawn = state.random.clone();
+    let title = centurions_core::music::choose_title(&mut drawn, &playlist);
+    match centurions_core::apply(
+        centurions_core::Command::ChangeMusic { playlist },
+        state,
+        content,
+    ) {
+        Ok(_) => title.map_or(MusicDraw::GaveUp, MusicDraw::Drawn),
+        Err(error) => {
+            ui.failure(error);
+            MusicDraw::Refused
+        }
+    }
+}
+
 /// Switches drawing assets when the session's scenario or level changes.
 pub(crate) fn select_render_context(
     content: &Content,
@@ -89,7 +140,11 @@ pub(crate) fn advance_playback(ui: &mut UiState, audio: Option<&Audio>) {
     }
 }
 
-/// Plays the next feedback sound and holds feedback for its duration.
+/// Plays the next feedback sound. A sound with a negative id plays to its end
+/// before feedback continues (a short pause when sound is off); a positive id
+/// starts the sound and feedback continues at once.
+///
+/// Original: sound
 pub(crate) fn play_feedback_sound(
     application: &Application,
     ui: &mut UiState,
@@ -102,12 +157,12 @@ pub(crate) fn play_feedback_sound(
         && let Some(resource_id) = event.sound()
     {
         ui.feedback.until = get_time()
-            + if application.audio.sound && application.audio.volume != 0 {
-                audio.duration(resource_id)
-            } else if resource_id < 0 {
-                20. / 60.
-            } else {
+            + if resource_id >= 0 {
                 0.
+            } else if application.audio.sound && application.audio.volume != 0 {
+                audio.duration(resource_id)
+            } else {
+                20. / 60.
             };
         if application.audio.sound {
             audio.play(&[event]);

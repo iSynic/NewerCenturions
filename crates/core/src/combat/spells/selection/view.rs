@@ -39,8 +39,8 @@ pub(crate) trait SelectionView {
     ) -> Result<Option<usize>, RuleError>;
 }
 
-/// Target selection over the live battle.
-pub(super) struct LiveSelection<'a>(pub &'a Combat, pub MapAliases<'a>);
+/// Target selection over the live battle, with the animation delay preference its sight lines use.
+pub(super) struct LiveSelection<'a>(pub &'a Combat, pub MapAliases<'a>, pub i16);
 
 impl SelectionView for LiveSelection<'_> {
     /// The monster at `index` in the live battle.
@@ -76,7 +76,7 @@ impl SelectionView for LiveSelection<'_> {
         from: (i16, i16),
         to: (i16, i16),
     ) -> Result<bool, RuleError> {
-        crate::combat::lifecycle::can_see(self.0, mission, from, to, 0)
+        crate::combat::lifecycle::can_see(self.0, mission, from, to, self.2)
     }
     /// The body whose cell the area is best aimed at, over the live battlefield.
     fn best_choice(

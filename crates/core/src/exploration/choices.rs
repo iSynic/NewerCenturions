@@ -210,6 +210,25 @@ pub fn choose(
     run_script(state, content)
 }
 
+/// The words that name the two answers of the question on show. A question whose first word is
+/// zero has no captions of its own and asks with plain Yes and No.
+///
+/// Original: question2
+pub fn question_label_words(state: &Session, content: &Content) -> Option<(i16, i16)> {
+    let Some(Presentation::Question { extra, .. }) =
+        state.exploration.as_ref()?.presentation.as_ref()
+    else {
+        return None;
+    };
+    let map = active_map(state, content).ok()?;
+    let record = ExtraTable(&map.combat.as_ref()?.encounters)
+        .record(*extra as usize)
+        .ok()?;
+    typed_encounter::question_labels(record)
+        .ok()
+        .filter(|(first, _)| *first != 0)
+}
+
 /// Steps the party back out of the square it just entered.
 pub(super) fn back_out(position: &mut Exploration) -> Result<Event, RuleError> {
     let [dx, dy] = position.last_move;

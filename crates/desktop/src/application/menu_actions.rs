@@ -6,7 +6,11 @@ use centurions_core::{Command, Event, Session, apply};
 use macroquad::prelude::*;
 
 impl Application {
-    /// Carries out a chosen menu item, refusing items that are not available now.
+    /// Carries out a chosen menu item, refusing items that are not available now. While the squad's
+    /// equipment is held, Squad Order only flashes the refusal and starts no ordering. A choice of
+    /// an encounter menu that is no longer offered sounds the error.
+    ///
+    /// Original: HandleMenuChoice, encounter
     pub(super) fn handle_menu_actions(
         &mut self,
         action: ApplicationAction,
@@ -16,6 +20,11 @@ impl Application {
         let mut next = None;
         let mut events = Vec::new();
         match action {
+            ApplicationAction::RefuseMenuEntry => {
+                events.push(Event::Sound {
+                    resource_id: centurions_core::feedback::ERROR_SOUND,
+                });
+            }
             ApplicationAction::Menu(id, item) => {
                 if !self.supported(id, item, state) {
                     return Err(centurions_core::RuleError::Refused { feedback: vec![] });
@@ -75,6 +84,8 @@ impl Application {
                                     ally: *ally,
                                     record: record.clone(),
                                     description: description.clone(),
+                                    icon_start: None,
+                                    icon_next: Default::default(),
                                 })
                             } else {
                                 None
@@ -91,6 +102,14 @@ impl Application {
                                 first: 125,
                                 last: 125,
                             },
+                        ));
+                    }
+                    (menu::CHARACTER, character::SQUAD_ORDER)
+                        if state.confiscated.as_ref().is_some_and(|held| held.active) =>
+                    {
+                        // The squad keeps its places while its equipment is held.
+                        events.push(Event::Feedback(
+                            centurions_core::confiscation::squad_order_refusal(),
                         ));
                     }
                     (menu::CHARACTER, character::SQUAD_ORDER) => {

@@ -6,8 +6,10 @@ use centurions_content::{
     records::{EquipmentStat, InventoryModifier as Modifier, InventorySlotsMut, ItemDefinition},
 };
 mod ammunition_menu;
-pub(crate) use ammunition_menu::choose as choose_ammunition;
-pub use ammunition_menu::{AmmunitionEntry, ammunition_menu};
+pub use ammunition_menu::{AmmunitionEntry, LoadControl, ammunition_menu, load_control};
+pub(crate) use ammunition_menu::{
+    choose as choose_ammunition, choose_combat as choose_combat_ammunition,
+};
 mod inventory_detail;
 pub(crate) use inventory_detail::quick_info;
 mod inventory_opening;
@@ -43,6 +45,8 @@ pub(crate) fn sort_loot(items: &mut [InventoryRecord]) -> Option<InventoryRecord
 /// Tidies a warrior's pack: worn items move to the front with the worn firearm first, the worn
 /// melee weapon second and the worn shield battery (category 20) third, and the unused slots are
 /// cleared.
+///
+/// Original: compactitems
 pub fn compact(warrior: &mut Warrior) -> Result<(), RuleError> {
     compact_inner(warrior, None)
 }

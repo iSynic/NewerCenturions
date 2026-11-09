@@ -148,6 +148,8 @@ pub enum CombatRefusal {
 
 impl CombatRefusal {
     /// The text the game flashes for this refusal.
+    ///
+    /// Original: combaterrors
     pub fn address(self) -> u32 {
         match self {
             Self::NeedTarget => 0x403daa,

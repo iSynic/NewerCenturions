@@ -3,6 +3,8 @@
 use crate::RuleError;
 
 /// A price as a percentage of a cost; a sale is paid at most the full cost.
+///
+/// Original: itemcost
 pub(super) fn percentage_price(cost: i32, percent: i16, selling: bool) -> Result<i32, RuleError> {
     let absolute = (cost as f32).abs();
     let percent = if selling { percent.min(100) } else { percent };

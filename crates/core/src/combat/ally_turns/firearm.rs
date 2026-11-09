@@ -109,6 +109,8 @@ struct Live<'a> {
     random: &'a mut RandomState,
     buffers: &'a mut crate::ammunition::LoadedItems,
     attack_count: &'a mut i16,
+    /// The animation delay preference that lengthens the sight line's step count.
+    delay: i16,
 }
 
 impl ScientistWorld for Live<'_> {
@@ -175,7 +177,7 @@ impl ScientistWorld for Live<'_> {
         from: (i16, i16),
         to: (i16, i16),
     ) -> Result<bool, RuleError> {
-        lifecycle::can_see(self.c, mission, from, to, 0)
+        lifecycle::can_see(self.c, mission, from, to, self.delay)
     }
     /// The body whose turn it is.
     fn active_body(&self) -> Result<Option<i16>, RuleError> {
@@ -224,6 +226,7 @@ pub(crate) fn fire(
     buffers: &mut crate::ammunition::LoadedItems,
     display_writers: bool,
     attack_count: &mut i16,
+    delay: i16,
 ) -> Result<bool, RuleError> {
     let mut world = Live {
         c: combat,
@@ -231,6 +234,7 @@ pub(crate) fn fire(
         random,
         buffers,
         attack_count,
+        delay,
     };
     Ok(fire_in(&mut world, mission, items, events, actor, display_writers)? == Shot::Fired)
 }

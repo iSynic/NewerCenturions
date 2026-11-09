@@ -25,6 +25,8 @@ pub(super) fn movement_tile(
 /// Builds the battle map from the thirty-by-thirty stretch of land around the party: each land
 /// square becomes a three-by-three block of tiles. When a step takes five minutes (outdoors),
 /// foliage is scattered over open ground, drawing random numbers.
+///
+/// Original: combatmap
 pub fn build_tactical_map(
     mission: &centurions_content::mission::OpeningMission,
     position: (i32, i32),

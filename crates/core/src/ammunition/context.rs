@@ -90,6 +90,8 @@ fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
 }
 
 /// The definition of an item, with its type made positive.
+///
+/// Original: loadammo
 pub fn definition(content: &Content, id: i16) -> Result<Vec<u8>, RuleError> {
     item_definition(&content.items, id)
 }

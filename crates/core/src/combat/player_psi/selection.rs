@@ -222,6 +222,7 @@ pub(crate) fn begin_targeting(
             target: Some(combat.squad.pos[actor]),
             rotation: 0,
         },
+        state.command_preferences.animation_delay,
     )?;
     let packet = spells::load_packet(
         &map.combat.as_ref().ok_or("Psi content missing")?.attacks,
@@ -333,6 +334,7 @@ pub fn admit_target(
             target: Some(point),
             rotation: 0,
         },
+        state.command_preferences.animation_delay,
     )?;
     player_psi::selected_body(combat, &state.warriors, point)
 }

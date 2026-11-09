@@ -72,6 +72,8 @@ pub use medical::{begin_learned_heal, begin_medical_item, select_medical_target,
 pub(crate) use medical::{refresh_active_item_context, refresh_item_context};
 mod party_psi;
 pub use party_psi::party_psi;
+mod fast_spell;
+pub use fast_spell::fast_spell;
 mod ammunition;
 pub use ammunition::fit_ammunition;
 mod shooting;

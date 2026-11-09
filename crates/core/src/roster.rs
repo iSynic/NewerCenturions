@@ -74,6 +74,30 @@ impl Roster {
         }
         Ok(())
     }
+    /// Whether a warrior of this name is already kept; names compare without regard to case,
+    /// as warrior files do on the original's disks.
+    ///
+    /// Original: Name
+    pub fn holds_name(&self, name: &str) -> bool {
+        let wanted = name.to_lowercase();
+        self.warriors
+            .iter()
+            .any(|warrior| warrior.name.to_lowercase() == wanted)
+    }
+    /// Stores new warriors in the roster; a kept warrior of the same name is replaced by them.
+    ///
+    /// Original: Name
+    pub fn store_replacing_names(&mut self, warriors: &[Warrior]) -> Result<(), RuleError> {
+        let mut next = self.clone();
+        next.warriors.retain(|kept| {
+            !warriors
+                .iter()
+                .any(|new| new.name.to_lowercase() == kept.name.to_lowercase())
+        });
+        next.store(warriors)?;
+        *self = next;
+        Ok(())
+    }
     /// Stores warriors in the roster; a warrior already there is replaced.
     pub fn store(&mut self, warriors: &[Warrior]) -> Result<(), RuleError> {
         let mut next = self.clone();
@@ -89,6 +113,25 @@ impl Roster {
                 next.warriors.push(warrior.clone());
             }
         }
+        next.validate()?;
+        if let Some(path) = &next.path {
+            atomic_write(path, &serde_json::to_vec_pretty(&next)?)?;
+        }
+        *self = next;
+        Ok(())
+    }
+    /// Erases a warrior from the roster. The reconstruction's own roster is the only store
+    /// touched; a warrior that is not kept is refused and nothing changes.
+    ///
+    /// Original: minus
+    pub fn remove(&mut self, original_sha256: &str) -> Result<(), RuleError> {
+        let mut next = self.clone();
+        let index = next
+            .warriors
+            .iter()
+            .position(|w| w.original_sha256 == original_sha256)
+            .ok_or_else(|| RuleError::Invalid("warrior not in roster".into()))?;
+        next.warriors.remove(index);
         next.validate()?;
         if let Some(path) = &next.path {
             atomic_write(path, &serde_json::to_vec_pretty(&next)?)?;
@@ -130,7 +173,10 @@ pub fn mission_records(state: &Session, content: &Content) -> Result<Vec<Warrior
     Ok(records)
 }
 
-/// Checks a warrior's record: its name matches the record and its original checksum is well formed.
+/// Checks a warrior's record: its name matches the record, its original checksum is well formed and
+/// it is of the current format, not an old-format character.
+///
+/// Original: bandaid
 fn validate_warrior(warrior: &Warrior) -> Result<(), RuleError> {
     if Warrior::read(&warrior.bytes)?.name != warrior.name
         || warrior.original_sha256.len() != 64
@@ -141,6 +187,7 @@ fn validate_warrior(warrior: &Warrior) -> Result<(), RuleError> {
     {
         return Err(RuleError::Invalid("invalid roster warrior".into()));
     }
+    warrior.require_current_format()?;
     warrior.inventory()?;
     Ok(())
 }

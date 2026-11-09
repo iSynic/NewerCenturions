@@ -81,6 +81,20 @@ pub(crate) fn prepare_party(
         return Err(RuleError::Invalid("outdoor psi input size".into()));
     }
     let packet = validate_party(warriors, mission, disabled, request)?;
+    charge_party(warriors, memory, buffs, packet, request)
+}
+
+/// Spends the psi points of a power already known to be castable outside combat and remembers the
+/// cast.
+///
+/// Original: buttonchoice
+pub(crate) fn charge_party(
+    warriors: &[Warrior],
+    memory: &[u8],
+    buffs: &[u8],
+    packet: Vec<u8>,
+    request: PartyCastRequest,
+) -> Result<PartyCastResult, RuleError> {
     let actor = &warriors[request.warrior];
     let charge = cost(&packet, request.power)?;
     let identity = spell_identity(request.spell);
@@ -118,16 +132,7 @@ pub fn validate_party(
     disabled: u8,
     request: PartyCastRequest,
 ) -> Result<Vec<u8>, RuleError> {
-    if (!PARTY_SPELLS.contains(&request.spell)
-        && !OUTDOOR_PARTY_SPELLS.contains(&request.spell)
-        && !OUTDOOR_TARGET_SPELLS.contains(&request.spell))
-        || !(1..=7).contains(&request.power)
-    {
-        return Err(RuleError::Unsupported {
-            action: "psi.party",
-            dependency: "other outdoor learned spell or power",
-        });
-    }
+    require_outdoor_spell(request)?;
     if !(1..=6).contains(&warriors.len()) {
         return Err(RuleError::Invalid("outdoor psi input size".into()));
     }
@@ -163,18 +168,39 @@ pub fn validate_party(
             feedback: vec![crate::feedback::GameFeedback::Warning { index: 22 }],
         });
     }
-    if !((SpellInfoRecord(&packet).is_party_duration()
-        && matches!(SpellInfoRecord(&packet).effect()?, 0..=9 | 110))
-        || (SpellInfoRecord(&packet).target_type() == 11
-            && matches!(SpellInfoRecord(&packet).effect()?, 0 | 70))
-        || (matches!(SpellInfoRecord(&packet).target_type(), 0 | 1 | 3 | 4 | 9)
-            && (matches!(SpellInfoRecord(&packet).effect()?, 1..=40 | 57 | 64))))
-    {
-        return Err(RuleError::Invalid("psi unavailable outdoors".into()));
-    }
+    require_outdoor_effect(&packet)?;
     let charge = cost(&packet, request.power)?;
     if actor.psi_points()? < charge {
         return Err(RuleError::Invalid("insufficient psi".into()));
     }
     Ok(packet)
+}
+
+/// Refuses a spell or power level that the party cannot cast outside combat.
+pub(crate) fn require_outdoor_spell(request: PartyCastRequest) -> Result<(), RuleError> {
+    if (!PARTY_SPELLS.contains(&request.spell)
+        && !OUTDOOR_PARTY_SPELLS.contains(&request.spell)
+        && !OUTDOOR_TARGET_SPELLS.contains(&request.spell))
+        || !(1..=7).contains(&request.power)
+    {
+        return Err(RuleError::Unsupported {
+            action: "psi.party",
+            dependency: "other outdoor learned spell or power",
+        });
+    }
+    Ok(())
+}
+
+/// Refuses a spell whose effect the party cannot cast outside combat.
+pub(crate) fn require_outdoor_effect(packet: &[u8]) -> Result<(), RuleError> {
+    if !((SpellInfoRecord(packet).is_party_duration()
+        && matches!(SpellInfoRecord(packet).effect()?, 0..=9 | 110))
+        || (SpellInfoRecord(packet).target_type() == 11
+            && matches!(SpellInfoRecord(packet).effect()?, 0 | 70))
+        || (matches!(SpellInfoRecord(packet).target_type(), 0 | 1 | 3 | 4 | 9)
+            && (matches!(SpellInfoRecord(packet).effect()?, 1..=40 | 57 | 64))))
+    {
+        return Err(RuleError::Invalid("psi unavailable outdoors".into()));
+    }
+    Ok(())
 }

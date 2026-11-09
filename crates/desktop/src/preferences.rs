@@ -1,6 +1,7 @@
 use crate::{
     application::ApplicationAction,
     assets::Assets,
+    preference_icon::IconPicker,
     presentation::{Action, Control},
 };
 use macroquad::prelude::*;
@@ -85,11 +86,37 @@ impl Preferences {
         serde_json::json!({"controls":self.controls, "indoor_icon":self.indoor_icon})
     }
 }
-/// The Preferences dialog (DITL 167): a draft of the choices and the one whose
-/// description is shown.
+/// What a click in the Preferences dialog leads to: the sound it makes, whether the choices are
+/// accepted, and whether the indoor squad icon picker closes.
+pub struct Taken {
+    pub sound: i16,
+    pub accepted: bool,
+    pub closes_picker: bool,
+}
+impl Taken {
+    /// A click that makes `sound` and leaves the dialog open.
+    pub fn staying(sound: i16) -> Self {
+        Self {
+            sound,
+            accepted: false,
+            closes_picker: false,
+        }
+    }
+    /// A click on Done in the icon picker.
+    pub fn closing(sound: i16) -> Self {
+        Self {
+            closes_picker: true,
+            ..Self::staying(sound)
+        }
+    }
+}
+
+/// The Preferences dialog (DITL 167): a draft of the choices, the one whose
+/// description is shown, and the indoor squad icon picker while it is open over the dialog.
 pub struct Dialog {
     pub draft: Preferences,
     pub description: Option<usize>,
+    picker: Option<IconPicker>,
 }
 impl Dialog {
     /// Opens the dialog on a copy of `preferences`.
@@ -97,25 +124,53 @@ impl Dialog {
         Self {
             draft: preferences.clone(),
             description: None,
+            picker: None,
         }
     }
     /// Carries out a click on a dialog item: toggling a checkbox and showing its
-    /// description. Returns true for OK.
-    pub fn item(&mut self, item: usize) -> Result<bool, centurions_core::RuleError> {
+    /// description, opening the indoor squad icon picker, or accepting the choices. While the
+    /// picker is open the click goes to it.
+    ///
+    /// Original: preference
+    pub fn item(&mut self, item: usize) -> Result<Taken, centurions_core::RuleError> {
+        if let Some(picker) = &mut self.picker {
+            let taken = picker.handle(item, &mut self.draft)?;
+            if taken.closes_picker {
+                self.picker = None;
+            }
+            return Ok(taken);
+        }
         match item {
-            2 => return Ok(true),
+            2 => {
+                return Ok(Taken {
+                    accepted: true,
+                    ..Taken::staying(141)
+                });
+            }
+            3 => self.picker = Some(IconPicker::new()),
             9..=22 if item != 19 => {
                 self.draft.controls[item - 9] = !self.draft.controls[item - 9];
                 self.description = Some(item - 9);
             }
             _ => return Err(centurions_core::RuleError::Refused { feedback: vec![] }),
         }
-        Ok(false)
+        Ok(Taken::staying(141))
+    }
+    /// Closes the icon picker if it is open; returns whether it was.
+    pub fn close_picker(&mut self) -> bool {
+        self.picker.take().is_some()
     }
     /// Draws the Preferences dialog (DITL 167): each checkbox in its on (PICT 179) or off
-    /// (PICT 180) look with its label, and the description of the last one changed.
+    /// (PICT 180) look with its label, the squad icon of the preferences, and the description
+    /// of the last choice changed; or the icon picker while it is open.
+    ///
+    /// Original: preference
     pub fn draw(&self, assets: &Assets, controls: &mut Vec<Control>) {
         controls.clear();
+        if let Some(picker) = &self.picker {
+            picker.draw(&self.draft, assets, controls);
+            return;
+        }
         assets.draw_dialog(167);
         for item in (9..=22).filter(|i| *i != 19) {
             let rect = assets.dialog_rect(167, item);
@@ -132,6 +187,10 @@ impl Dialog {
             ));
         }
         controls.push(control(2, assets.dialog_rect(167, 2)));
+        controls.push(control(3, assets.dialog_rect(167, 3)));
+        if let Some(icon) = assets.icons.get(&self.draft.indoor_icon) {
+            crate::assets::texture_in(icon, assets.dialog_rect(167, 4));
+        }
         if let Some(description) = self
             .description
             .and_then(|i| assets.preference_descriptions.get(i))

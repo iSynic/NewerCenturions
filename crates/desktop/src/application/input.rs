@@ -52,7 +52,7 @@ impl Application {
         if let Some(action) = self.help_input(controls, pointer) {
             return action;
         }
-        if let Some(action) = self.creation_input(controls, pointer) {
+        if let Some(action) = self.creation_input(assets, controls, pointer) {
             return action;
         }
         if let Some(action) = self.appearance_input(controls, pointer) {
@@ -183,9 +183,22 @@ impl Application {
         Some(enabled_click(controls, pointer))
     }
 
-    /// The squad screen's cancel key and roster wheel; anything else falls through.
+    /// The squad screen's cancel key and roster wheel, which wait while the Erase Warrior question
+    /// or the restrictions dialog is open; anything else falls through.
     fn squad_input(&self) -> Handled {
-        if self.screen == Screen::Squad && self.help.page.is_none() {
+        if self.screen == Screen::Squad
+            && self.selection.restrictions
+            && (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter))
+        {
+            return Some(Some(Action::Application(
+                ApplicationAction::CloseRestrictions,
+            )));
+        }
+        if self.screen == Screen::Squad
+            && self.help.page.is_none()
+            && !self.selection.restrictions
+            && !self.selection.erase_question
+        {
             if is_key_pressed(KeyCode::Escape) {
                 return Some(Some(Action::Application(ApplicationAction::SquadCancel)));
             }
@@ -220,12 +233,22 @@ impl Application {
         Some(None)
     }
 
-    /// The new warrior screens: Escape cancels, typing fills in the name, Return presses the
-    /// stage's Done, and clicks answer the current stage.
-    fn creation_input(&mut self, controls: &[Control], pointer: Option<Vec2>) -> Handled {
+    /// The new warrior screens: Escape asks whether to cancel, typing fills in the name, Return presses the
+    /// stage's Done, and clicks answer the current stage. A name is a Pascal string of at most 255
+    /// characters; the name dialog measures it in its 15-point text.
+    fn creation_input(
+        &mut self,
+        assets: &Assets,
+        controls: &[Control],
+        pointer: Option<Vec2>,
+    ) -> Handled {
         let editing = self.characters.editor.is_some();
         let creation = self.characters.creation.as_mut()?;
-        if editing || creation.stage == crate::creation::Stage::Keep {
+        if creation.question().is_some() {
+            while get_char_pressed().is_some() {}
+            return None;
+        }
+        if editing {
             return None;
         }
         if is_key_pressed(KeyCode::Escape) {
@@ -233,13 +256,14 @@ impl Application {
         }
         if creation.stage == crate::creation::Stage::Name {
             while let Some(character) = get_char_pressed() {
-                if !character.is_control() && creation.request.name.chars().count() < 30 {
+                if !character.is_control() && creation.request.name.chars().count() < 255 {
                     creation.request.name.push(character);
                 }
             }
             if is_key_pressed(KeyCode::Backspace) {
                 creation.request.name.pop();
             }
+            creation.name_width = assets.text_width(&creation.request.name, 15);
         }
         if is_key_pressed(KeyCode::Enter) {
             let item = match creation.stage {
@@ -342,8 +366,8 @@ impl Application {
         Some(enabled_click(controls, pointer))
     }
 
-    /// The yes/no questions: keeping a created warrior, quit, help reset, editor,
-    /// end of game and escape. The yes/no questions answer only to Y and N; the
+    /// The yes/no questions: keeping a created warrior, cancelling or replacing one, erasing one,
+    /// quit, help reset, editor, end of game and escape. The yes/no questions answer only to Y and N; the
     /// escape question answers to E and S, and Escape stays.
     ///
     /// Original: question, question3
@@ -352,12 +376,13 @@ impl Application {
             .characters
             .creation
             .as_ref()
-            .is_some_and(|c| c.stage == crate::creation::Stage::Keep);
+            .is_some_and(|c| c.question().is_some());
         if !(keeping
             || self.questions.quit
             || self.questions.help_reset
             || self.characters.editor_question
             || self.selection.end_question
+            || self.selection.erase_question
             || self.questions.escape)
         {
             return None;
@@ -367,6 +392,8 @@ impl Application {
                 ApplicationAction::CreationAnswer(answer)
             } else if self.questions.escape {
                 ApplicationAction::EscapeAnswer(answer)
+            } else if self.selection.erase_question {
+                ApplicationAction::EraseAnswer(answer)
             } else if self.selection.end_question {
                 ApplicationAction::EndAnswer(answer)
             } else if self.characters.editor_question {
@@ -399,6 +426,7 @@ impl Application {
                             | ApplicationAction::HelpResetAnswer(_)
                             | ApplicationAction::EditorAnswer(_)
                             | ApplicationAction::EndAnswer(_)
+                            | ApplicationAction::EraseAnswer(_)
                             | ApplicationAction::EscapeAnswer(_)
                             | ApplicationAction::CreationAnswer(_)
                     )

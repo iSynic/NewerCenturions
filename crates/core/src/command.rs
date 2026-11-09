@@ -47,6 +47,13 @@ pub enum Command {
     ViewNote {
         index: usize,
     },
+    /// The party looks at the land from its square, as the field map is drawn.
+    RevealSight,
+    /// The music changes track: the game draws its random numbers for the next title from the
+    /// playlist, whatever else is going on.
+    ChangeMusic {
+        playlist: [bool; crate::music::TITLES],
+    },
     WithPreferences {
         command: Box<Command>,
         preferences: CommandPreferences,
@@ -250,6 +257,13 @@ pub enum Command {
         row: usize,
         item: u16,
     },
+    /// The item chosen from the ammunition popup (MENU 1000) that the combat Load
+    /// control opened for the warrior's firearm in `slot`.
+    ChooseCombatAmmunition {
+        warrior: usize,
+        slot: usize,
+        item: u16,
+    },
     /// Option-dragging a shop window row shows its information: `stock` marks a
     /// shop cell, otherwise `slot` is the member's inventory slot.
     ShowDraggedItemInformation {
@@ -361,6 +375,11 @@ pub enum Command {
         warrior: usize,
         spell: i16,
         power: i16,
+    },
+    /// Command with a digit key: casts the selected warrior's preset scan (slot 1 to 10; the 0 key
+    /// is slot 10) outside combat.
+    FastSpell {
+        slot: u8,
     },
     Reload {
         warrior: usize,

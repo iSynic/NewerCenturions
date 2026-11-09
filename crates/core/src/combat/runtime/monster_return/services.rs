@@ -48,6 +48,7 @@ pub(super) fn firearm(state: &mut Session, content: &Content) -> Result<FirearmO
             &mut globals.buffers,
             true,
             &mut globals.attack_count,
+            globals.animation_delay,
         )?;
         if fired {
             FireOutcome::Physical

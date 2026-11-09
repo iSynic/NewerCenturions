@@ -2,7 +2,7 @@
 use super::{
     collect_item, drop, item_definition, race_movement, remove_silently, unsupported, wear_silently,
 };
-use crate::{Event, Phase, RuleError, Session, combat, items};
+use crate::{Event, Phase, Presentation, RuleError, Session, combat, items};
 use centurions_content::mission::OpeningMission;
 use centurions_content::records::ItemDefinition;
 use centurions_content::{Content, InventoryRecord};
@@ -18,17 +18,18 @@ pub(super) fn mission<'a>(
 }
 
 /// Checks that an item action is allowed: the warrior must be in the squad, no message may be
-/// showing and, in battle, the warrior must be the one acting, with an action point left when the
-/// action costs one.
+/// showing (the shop window leaves wearing and removing available) and, in battle, the warrior
+/// must be the one acting, with an action point left when the action costs one.
 pub(super) fn admission(state: &Session, warrior: usize, needs_ap: bool) -> Result<(), RuleError> {
     if warrior >= state.warriors.len() {
         return Err("inventory warrior outside squad".into());
     }
     if !matches!(state.phase, Phase::Exploration | Phase::Combat)
-        || state
-            .exploration
-            .as_ref()
-            .is_some_and(|p| p.presentation.is_some())
+        || state.exploration.as_ref().is_some_and(|p| {
+            p.presentation
+                .as_ref()
+                .is_some_and(|page| *page != Presentation::Shop)
+        })
     {
         return Err(RuleError::Refused { feedback: vec![] });
     }
@@ -159,7 +160,10 @@ pub fn take_crate(
     Ok(events(result.sounds, result.warnings))
 }
 
-/// Wears the item in one of the warrior's slots.
+/// Wears the item in one of the warrior's slots. In the shop window the warrior's load is weighed
+/// again afterwards.
+///
+/// Original: choice, wear
 pub fn equip(
     state: &mut Session,
     content: &Content,
@@ -186,23 +190,51 @@ pub fn equip(
     if let Some(record) = result.record.take() {
         state.globals.inventory_record = record;
     }
+    let mut effects = events(
+        result.sounds_before_level_message().to_vec(),
+        result.warnings.clone(),
+    );
+    effects.extend(result.level_message());
     if !result.changed {
         state.warriors[warrior] = result.warrior;
         state.load_item(content, item_id)?;
-        return Ok(events(result.sounds, result.warnings));
+        return Ok(effects);
     }
     items::compact(&mut result.warrior)?;
     state.warriors[warrior] = result.warrior;
     state.load_item(content, item_id)?;
+    reweigh_in_shop(state, content, warrior)?;
     let selected = state.globals.health_context.char_select_new;
     let mut health =
         crate::story::health::reselected_context(selected, &state.globals.health_context);
     health.affected[warrior] = 1;
     state.globals.health_context = health;
-    Ok(events(result.sounds, result.warnings))
+    Ok(effects)
 }
 
-/// Takes the item in one of the warrior's slots off.
+/// Weighs a warrior's load again when the shop window is showing, as the window does after the
+/// warrior's equipment changes.
+///
+/// Original: change
+fn reweigh_in_shop(
+    state: &mut Session,
+    content: &Content,
+    warrior: usize,
+) -> Result<(), RuleError> {
+    if state
+        .exploration
+        .as_ref()
+        .is_some_and(|p| p.presentation == Some(Presentation::Shop))
+    {
+        super::calculate_weight(&mut state.warriors[warrior], content)?;
+    }
+    Ok(())
+}
+
+/// Takes the item in one of the warrior's slots off. In the shop window the warrior's load is
+/// weighed again afterwards.
+///
+/// Original: choice, removeitem
 pub fn unequip(
     state: &mut Session,
     content: &Content,
@@ -236,6 +268,7 @@ pub fn unequip(
     items::compact(&mut result.warrior)?;
     state.warriors[warrior] = result.warrior;
     state.load_item(content, item_id)?;
+    reweigh_in_shop(state, content, warrior)?;
     let health = &mut state.globals.health_context;
     health.affected[warrior] = 1;
     Ok(events(result.sounds, result.warnings))

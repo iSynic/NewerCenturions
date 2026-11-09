@@ -309,7 +309,7 @@ pub fn select_weapon(
         .ok_or("combat weapon moved unexpectedly")?;
     state.load_item(content, selected.id())?;
     state.globals.inventory_record = selected.clone();
-    let mut worn = crate::equipment::wear(
+    let worn = crate::equipment::wear(
         &state.warriors[member],
         content,
         state.land(content).ok_or("weapon map missing")?,
@@ -318,15 +318,16 @@ pub fn select_weapon(
     )?;
     state.apply_equipment_globals(&worn.global_writes)?;
     events.extend(
-        worn.sounds
-            .drain(..)
-            .map(|resource_id| Event::Sound { resource_id }),
+        worn.sounds_before_level_message()
+            .iter()
+            .map(|&resource_id| Event::Sound { resource_id }),
     );
     events.extend(
         worn.warnings
-            .drain(..)
-            .map(|index| Event::Feedback(GameFeedback::Warning { index })),
+            .iter()
+            .map(|&index| Event::Feedback(GameFeedback::Warning { index })),
     );
+    events.extend(worn.level_message());
     state.warriors[member] = worn.warrior;
     let warriors = &mut state.warriors[member];
     let ap = warriors.record().action_points()?.wrapping_sub(1);

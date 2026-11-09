@@ -169,6 +169,8 @@ impl SurvivorSelection {
 /// and the fight conditions are cleared. Returns the dialog of surviving friends, highest stamina
 /// first with the ones who must stay moved ahead. The ones who must stay are ticked, then the first
 /// ten rows are ticked up to the limit. None when nobody qualifies.
+///
+/// Original: bodycount
 pub fn prepare_survivors(
     records: &mut [MonsterRecord],
 ) -> Result<Option<SurvivorSelection>, RuleError> {

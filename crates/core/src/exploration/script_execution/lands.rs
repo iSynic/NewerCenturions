@@ -29,8 +29,9 @@ pub(super) fn execute(
     let extra = ExtraTable(extras).record(parameter as usize)?;
     state.globals.extra_record = extra.to_vec();
     match operation {
-        // Writes the target land's tile set and light level. Only land 0 loads
-        // as the target, a deliberate original quirk (see
+        // Writes the target land's tile set and light level. Only land 0 loads as the
+        // target: the original passes a non-zero land number to the loader in the wrong
+        // half of a long, so it asks for a land that does not exist (see
         // docs/source-notes/rules.md). The closing load reloads the current
         // land's tile properties (Session::land).
         Operation::ChangeLandTiles => {
@@ -343,7 +344,9 @@ pub(super) fn activate_destination(state: &mut Session) -> Result<bool, RuleErro
 
 /// Makes another land the one the party is in, saving the land it leaves; nothing happens when it
 /// is the current land.
-pub(super) fn enter_land(
+///
+/// Original: saveland
+pub(in crate::exploration) fn enter_land(
     state: &mut Session,
     content: &Content,
     target: i32,

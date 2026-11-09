@@ -11,8 +11,11 @@ pub mod combat;
 pub mod game_text;
 pub mod graphics;
 pub mod installation;
+pub mod layout;
 pub mod mission;
+pub mod question_options;
 pub mod records;
+pub mod text_runs;
 pub mod tile_sets;
 pub mod ui;
 
@@ -20,6 +23,11 @@ pub use bytes::word;
 
 /// Size of a warrior record.
 pub const WARRIOR_BYTES: usize = 0xc42;
+/// The two messages shown for a character of the old format.
+const OLD_FORMAT_WARRIOR_MESSAGES: [&str; 2] = [
+    "Some of these characters are of the old format and are not compatible with this version. (Click)",
+    "You will have to create new characters.  This program must now quit. (Click)",
+];
 /// Size of an item definition.
 pub const ITEM_BYTES: usize = 150;
 /// Size of one item a warrior carries.
@@ -89,6 +97,17 @@ impl Warrior {
             original_sha256: digest(bytes),
             bytes: bytes.to_vec(),
         })
+    }
+
+    /// Refuses a warrior of the old format, whose record opens with a word below 1, with
+    /// the messages the original shows before it quits.
+    ///
+    /// Original: bandaid
+    pub fn require_current_format(&self) -> Result<(), ContentError> {
+        if self.record().version()? < 1 {
+            return Err(ContentError::Invalid(OLD_FORMAT_WARRIOR_MESSAGES.join(" ")));
+        }
+        Ok(())
     }
 
     /// The warrior's current stamina.

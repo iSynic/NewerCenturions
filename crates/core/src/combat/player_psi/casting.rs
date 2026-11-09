@@ -64,7 +64,11 @@ pub(crate) fn cast_with_buffs(
         mission,
         disabled,
         request,
-        (context.body, context.land.with_tutorial(mission)),
+        (
+            context.body,
+            context.land.with_tutorial(mission),
+            context.animation_delay,
+        ),
     )?;
     if memory.len() != 480 {
         return Err(RuleError::Invalid("psi memory size".into()));
@@ -159,7 +163,11 @@ pub(crate) fn cast_prepared_at(
         mission,
         state.psi_disabled,
         request,
-        (body, map_alias::session_map_aliases!(state, mission)),
+        (
+            body,
+            map_alias::session_map_aliases!(state, mission),
+            state.command_preferences.animation_delay,
+        ),
     )?;
     let context = CastContext {
         movement_gate: state.bandage_ready,

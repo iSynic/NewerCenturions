@@ -3,6 +3,9 @@ use super::{Application, ApplicationAction, HandleOutcome, Screen};
 use centurions_content::Content;
 use centurions_core::{Command, Event, Phase, Session, apply};
 
+/// Warning 20: previously saved games will not reflect the new appearance.
+const APPEARANCE_SAVED_WARNING: i16 = 20;
+
 impl Application {
     /// Carries out the choices on the warrior editor, appearance picker, item
     /// editor, scan picker and new warrior creation screens.
@@ -16,6 +19,15 @@ impl Application {
         let mut events = Vec::new();
         match action {
             ApplicationAction::CreationCancel => {
+                if let Some(creation) = self
+                    .characters
+                    .creation
+                    .as_mut()
+                    .filter(|creation| !creation.read_only)
+                {
+                    creation.ask = Some(crate::creation::Ask::Cancel);
+                    return Ok(HandleOutcome::Complete(next, events));
+                }
                 self.characters.creation = None;
                 if self.characters.information.is_some() {
                     return Ok(HandleOutcome::Return(next, events));
@@ -37,13 +49,25 @@ impl Application {
                     .as_ref()
                     .ok_or("Creation is not open.")?;
                 if creation.stage != crate::creation::Stage::Keep {
-                    return Err("Creation confirmation is not open.".into());
+                    let creation = self
+                        .characters
+                        .creation
+                        .as_mut()
+                        .ok_or("Creation is not open.")?;
+                    match creation.answer(answer, state, content)? {
+                        crate::creation::Answered::Cancelled => {
+                            self.characters.creation = None;
+                            self.characters.editor = None;
+                        }
+                        crate::creation::Answered::Continue(answered) => events = answered,
+                    }
+                    return Ok(HandleOutcome::Complete(next, events));
                 }
                 if answer {
                     self.roster
                         .as_mut()
                         .unwrap()
-                        .store(&creation.draft.warriors)?;
+                        .store_replacing_names(&creation.draft.warriors)?;
                 }
                 self.characters.creation = None;
             }
@@ -56,13 +80,14 @@ impl Application {
                 {
                     if matches!(item, 1 | 2 | 56) {
                         self.characters.creation = None;
+                        events.push(Event::Sound { resource_id: 214 });
                     } else if matches!(item, 57 | 58 | 74) {
-                        events = self
-                            .characters
-                            .creation
-                            .as_mut()
-                            .unwrap()
-                            .item(item, state, content)?;
+                        events = self.characters.creation.as_mut().unwrap().item(
+                            item,
+                            state,
+                            content,
+                            self.roster.as_ref().unwrap(),
+                        )?;
                     }
                     return Ok(HandleOutcome::Return(next, events));
                 }
@@ -71,7 +96,7 @@ impl Application {
                     .creation
                     .as_mut()
                     .ok_or("Creation is not open.")?;
-                events = creation.item(item, state, content)?;
+                events = creation.item(item, state, content, self.roster.as_ref().unwrap())?;
                 if creation.stage == crate::creation::Stage::Scans {
                     let mut editor = crate::editor::WarriorEditor::new(&creation.draft, 0)?;
                     editor.free = false;
@@ -89,7 +114,7 @@ impl Application {
                     editor.draft.validate(content)?;
                     *state = editor.draft.clone();
                     self.characters.appearance = None;
-                    events.push(Event::Sound { resource_id: 141 });
+                    events = Self::appearance_saved();
                 } else {
                     events = editor.handle(item, content)?;
                 }
@@ -194,6 +219,20 @@ impl Application {
             _ => unreachable!("application action routed to wrong screen"),
         }
         Ok(HandleOutcome::Complete(next, events))
+    }
+
+    /// What closing the portrait or icon picker leads to: the picker's closing sound and the
+    /// warning that previously saved games will not reflect the change, which follows every
+    /// closing, whether or not anything changed.
+    ///
+    /// Original: modify
+    fn appearance_saved() -> Vec<Event> {
+        vec![
+            Event::Sound { resource_id: 141 },
+            Event::Feedback(centurions_core::feedback::GameFeedback::Warning {
+                index: APPEARANCE_SAVED_WARNING,
+            }),
+        ]
     }
 
     /// Completes a new warrior's creation once its scans are chosen, taking the

@@ -33,6 +33,10 @@ pub(super) struct SquadScreen {
     pub(super) roster_top: usize,
     pub(super) order: Option<Vec<usize>>,
     pub(super) end_question: bool,
+    /// The Erase Warrior question (STR# 135 question 3) is waiting for an answer.
+    pub(super) erase_question: bool,
+    /// The Scenario Restrictions dialog is open.
+    pub(super) restrictions: bool,
     pub(super) selected: Option<usize>,
     pub(super) member: Option<usize>,
     pub(super) difficulty: i16,
@@ -45,6 +49,8 @@ impl SquadScreen {
             roster_top: 0,
             order: None,
             end_question: false,
+            erase_question: false,
+            restrictions: false,
             selected: None,
             member: None,
             difficulty: 0,

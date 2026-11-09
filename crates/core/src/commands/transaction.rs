@@ -122,7 +122,7 @@ fn normalize(mut command: Command, state: &Session) -> Result<Option<Command>, R
     Ok(Some(command))
 }
 
-/// How a command is treated once it has run: whether it only changes targeting, returns from an
+/// How a command is treated once it has run: whether it only changes targeting or sight, returns from an
 /// out-of-combat getup, edits warriors or items, or is a melee or physical action.
 struct ExecutionKind {
     targeting_only: bool,
@@ -155,6 +155,8 @@ impl ExecutionKind {
                 | Command::BeginPsiTargeting { .. }
                 | Command::AdjustTargetQuantity { .. }
                 | Command::ClearPsiTargets
+                | Command::RevealSight
+                | Command::ChangeMusic { .. }
         );
         let editing = matches!(
             command,

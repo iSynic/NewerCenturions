@@ -6,7 +6,10 @@ use crate::{
     presentation::{Action, Control},
 };
 use centurions_content::Content;
-use centurions_core::{Command, Session, items::AmmunitionEntry};
+use centurions_core::{
+    Command, Session,
+    items::{AmmunitionEntry, LoadControl},
+};
 use macroquad::prelude::*;
 
 /// The button's place in the Items strip and its PICT 6 source.
@@ -23,6 +26,10 @@ pub(super) struct Popup {
     row: usize,
     item: i16,
     entries: Vec<AmmunitionEntry>,
+    /// The control the popup rises from.
+    anchor: Rect,
+    /// Opened by the combat Load control, which names the slot in `row`.
+    combat: bool,
 }
 
 impl Inventory {
@@ -50,6 +57,8 @@ impl Inventory {
                             row,
                             item,
                             entries,
+                            anchor: BUTTON,
+                            combat: false,
                         });
                         None
                     }
@@ -62,8 +71,34 @@ impl Inventory {
                     })),
                 }
             }
+            InventoryAction::CombatLoad(warrior) => {
+                let LoadControl::Popup { slot } =
+                    centurions_core::items::load_control(state, warrior).ok()?
+                else {
+                    return None;
+                };
+                let (item, entries) =
+                    centurions_core::items::ammunition_menu(state, content, warrior, slot).ok()?;
+                self.ammunition = Some(Popup {
+                    warrior,
+                    scroll: 0,
+                    row: slot,
+                    item,
+                    entries,
+                    anchor: crate::combat_controls::LOAD,
+                    combat: true,
+                });
+                None
+            }
             InventoryAction::AmmunitionItem(item) => {
                 let popup = self.ammunition.take()?;
+                if popup.combat {
+                    return Some(Action::Command(Command::ChooseCombatAmmunition {
+                        warrior: popup.warrior,
+                        slot: popup.row,
+                        item,
+                    }));
+                }
                 if let Some(AmmunitionEntry::Information { description, .. }) =
                     popup.entries.get(usize::from(item).checked_sub(1)?)
                 {
@@ -81,6 +116,32 @@ impl Inventory {
                 self.ammunition = None;
                 None
             }
+        }
+    }
+
+    /// Whether the popup the combat Load control opened is showing.
+    pub(crate) fn load_popup_open(&self) -> bool {
+        self.ammunition.as_ref().is_some_and(|popup| popup.combat)
+    }
+
+    /// Closes the combat Load popup once its warrior no longer has the turn.
+    pub(crate) fn close_stale_load_popup(&mut self, state: &Session) {
+        if let Some(popup) = &self.ammunition
+            && popup.combat
+            && state
+                .combat
+                .as_ref()
+                .and_then(centurions_core::combat::Combat::active_body)
+                != Some(popup.warrior as i16)
+        {
+            self.ammunition = None;
+        }
+    }
+
+    /// Draws the popup the combat Load control opened, if showing.
+    pub(crate) fn draw_load_popup(&self, assets: &Assets, controls: &mut Vec<Control>) {
+        if self.load_popup_open() {
+            self.draw_ammunition(assets, controls);
         }
     }
 
@@ -121,8 +182,8 @@ impl Inventory {
             .fold(160., f32::max)
             .min(600.);
         let height = items.len() as f32 * ROW + 4.;
-        let x = BUTTON.x.min(800. - width);
-        let y = (BUTTON.y - height).max(20.);
+        let x = popup.anchor.x.min(800. - width);
+        let y = (popup.anchor.y - height).max(20.);
         draw_rectangle(x, y, width, height, Color::from_rgba(238, 238, 238, 255));
         draw_rectangle_lines(x, y, width, height, 1., BLACK);
         for (index, item) in items.iter().enumerate() {

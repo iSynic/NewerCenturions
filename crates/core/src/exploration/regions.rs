@@ -6,6 +6,9 @@ use crate::{Event, Presentation, RandomState, RuleError, ScriptState, Session, r
 use centurions_content::Content;
 use centurions_content::records::{RegionTable, RegionTableMut};
 
+/// Tutorial 106, shown as a question is put to the player.
+const QUESTION_TUTORIAL: usize = 106;
+
 /// Rolls the random battle of the region the party stands in, if any, returning the battle and the
 /// advantage it starts with. A region that would run an event script or an avoidance question is
 /// not supported here.
@@ -142,7 +145,9 @@ pub(super) fn regional_selection_chance(
 }
 
 /// Starts what a region roll gave: the battle, the region's event script, or the avoidance question
-/// with its dialogue and sound.
+/// with its dialogue and sound, then the question's own sound and tutorial.
+///
+/// Original: timeclick, question2
 pub(super) fn apply_region(
     state: &mut Session,
     content: &Content,
@@ -171,6 +176,11 @@ pub(super) fn apply_region(
             });
             Ok(vec![
                 Event::Sound { resource_id: sound },
+                Event::Sound { resource_id: 20005 },
+                Event::Feedback(crate::feedback::GameFeedback::Tutorial {
+                    first: QUESTION_TUTORIAL,
+                    last: QUESTION_TUTORIAL,
+                }),
                 Event::StoryPresented,
             ])
         }

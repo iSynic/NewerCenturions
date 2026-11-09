@@ -100,6 +100,7 @@ fn actual_actor_target_charge_and_resolution_match_native_complete_boundaries() 
         6,
         &packet,
         &mut actual,
+        0,
     )
     .unwrap();
     assert!(selected.cast);

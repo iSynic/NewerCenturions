@@ -23,6 +23,14 @@ impl SpellField<'_> {
     pub fn spell(&self) -> Result<i16, ContentError> {
         word(self.0, 8)
     }
+    /// The kind of lingering field the attack laid down; it picks the field's picture.
+    pub fn kind(&self) -> Result<i16, ContentError> {
+        word(self.0, 10)
+    }
+    /// The area pattern number the field was laid with, counting from 1; the byte is signed.
+    pub fn shape(&self) -> i16 {
+        i16::from(self.0[14] as i8)
+    }
     /// The turn added to the area pattern number when the attack can rotate; zero otherwise.
     pub fn rotation(&self) -> u8 {
         self.0[17]

@@ -46,14 +46,21 @@ impl Fields<'_> {
         let text = indexed_string(self.strings, resource, index)?;
         Ok(encoding_rs::MACINTOSH.decode(text.payload()).0.into_owned())
     }
-    /// DialogNumNZ: empty for zero, an explicit '+' for positive values.
+    /// A signed number in a field: see `signed_or_blank`.
     fn signed(&mut self, item: u16, value: i16) {
-        let text = match value {
-            0 => String::new(),
-            1.. => format!("+{value}"),
-            _ => value.to_string(),
-        };
-        self.set(item, text);
+        self.set(item, signed_or_blank(value));
+    }
+}
+
+/// A number as the dialogs show a bonus: blank for zero, an explicit `+` for a positive value
+/// and `-` for a negative one.
+///
+/// Original: DialogNumNZ
+pub fn signed_or_blank(value: i16) -> String {
+    match value {
+        0 => String::new(),
+        1.. => format!("+{value}"),
+        _ => value.to_string(),
     }
 }
 

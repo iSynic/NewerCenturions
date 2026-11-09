@@ -97,15 +97,29 @@ pub fn range(packet: &[u8], power: i16) -> Result<i16, RuleError> {
         .wrapping_abs())
 }
 
-/// Whether a cell is within the range of another, measured as a straight line cut to whole cells.
-pub fn in_range(from: (i16, i16), to: (i16, i16), range: i16) -> bool {
+/// The straight-line distance between two cells, cut to whole cells.
+fn straight_distance(from: (i16, i16), to: (i16, i16)) -> f64 {
     let dx = f64::from(to.0.wrapping_sub(from.0));
     let dy = f64::from(to.1.wrapping_sub(from.1));
-    (dx * dx + dy * dy).sqrt().trunc() <= f64::from(range)
+    (dx * dx + dy * dy).sqrt().trunc()
+}
+
+/// Whether a cell is within the range of another, measured as a straight line cut to whole cells.
+///
+/// Original: checkrange, getrangetobody
+pub fn in_range(from: (i16, i16), to: (i16, i16), range: i16) -> bool {
+    straight_distance(from, to) <= f64::from(range)
+}
+
+/// The distance in whole cells the range readout shows from one cell to another.
+///
+/// Original: flashrange
+pub fn cell_distance(from: (i16, i16), to: (i16, i16)) -> i16 {
+    straight_distance(from, to) as i32 as i16
 }
 
 /// The spell's attack packet from the mission's attack table.
-pub(super) fn packet(mission: &OpeningMission, spell: i16) -> Result<Vec<u8>, RuleError> {
+pub(crate) fn packet(mission: &OpeningMission, spell: i16) -> Result<Vec<u8>, RuleError> {
     let tables = mission
         .combat
         .as_ref()

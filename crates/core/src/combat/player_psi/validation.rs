@@ -15,6 +15,7 @@ pub fn validate(
     mission: &OpeningMission,
     disabled: u8,
     request: CastRequest,
+    delay: i16,
 ) -> Result<(), RuleError> {
     validate_target(
         combat,
@@ -22,11 +23,12 @@ pub fn validate(
         mission,
         disabled,
         request,
-        (None, MapAliases::of_mission(mission)),
+        (None, MapAliases::of_mission(mission), delay),
     )
 }
 
 /// Checks a psi command aimed at a warrior.
+#[allow(clippy::too_many_arguments)]
 pub fn validate_warrior(
     combat: &Combat,
     warriors: &[Warrior],
@@ -35,6 +37,7 @@ pub fn validate_warrior(
     spell: i16,
     power: i16,
     warrior: usize,
+    delay: i16,
 ) -> Result<(), RuleError> {
     let target = *combat
         .squad
@@ -52,20 +55,20 @@ pub fn validate_warrior(
             power,
             target: Some(target),
         },
-        (Some(warrior as i16), MapAliases::of_mission(mission)),
+        (Some(warrior as i16), MapAliases::of_mission(mission), delay),
     )
 }
 
 /// Checks a psi command: a power battle offers at power level 1 to 7, cast by the active warrior
 /// who may cast, knows it and has the psi points, in range and in sight, and aimed at the kind of
-/// target the power takes.
+/// target the power takes. Sight is tested with the animation delay preference.
 pub(super) fn validate_target(
     combat: &Combat,
     warriors: &[Warrior],
     mission: &OpeningMission,
     disabled: u8,
     request: CastRequest,
-    (body, aliases): (Option<i16>, MapAliases<'_>),
+    (body, aliases, delay): (Option<i16>, MapAliases<'_>, i16),
 ) -> Result<(), RuleError> {
     if !COMBAT_SPELLS.contains(&request.spell) || !(1..=7).contains(&request.power) {
         return Err(RuleError::Unsupported {
@@ -133,7 +136,7 @@ pub(super) fn validate_target(
     }
     let center = crate::combat::records::grid_point(target, combat.field.map_shift);
     if SpellInfoRecord(&packet).range_base() + SpellInfoRecord(&packet).range_per_power() > 0
-        && !lifecycle::can_see(combat, mission, from, target, 0)?
+        && !lifecycle::can_see(combat, mission, from, target, delay)?
     {
         return Err(RuleError::Refused {
             feedback: vec![crate::feedback::GameFeedback::Combat {

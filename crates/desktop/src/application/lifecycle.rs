@@ -2,7 +2,7 @@
 use super::{Application, ApplicationAction, HandleOutcome, Screen};
 use crate::presentation::Action;
 use centurions_content::Content;
-use centurions_core::{Command, Phase, Session, apply};
+use centurions_core::{Command, Phase, Presentation, Session, apply};
 
 impl Application {
     /// Carries out the choices on the logo, introduction, About box, occupied-cell
@@ -52,7 +52,16 @@ impl Application {
             ApplicationAction::SkipLogo => self.screen = Screen::Title,
             ApplicationAction::CloseIntro => {
                 self.screen = self.intro.intro_return;
-                if self.intro.prologue.take().is_some() {
+                let prologue = self.intro.prologue.take().is_some();
+                if prologue
+                    && matches!(
+                        state
+                            .exploration
+                            .as_ref()
+                            .and_then(|p| p.presentation.as_ref()),
+                        Some(Presentation::Prologue { .. })
+                    )
+                {
                     next = Some(Action::Command(Command::Continue));
                 }
             }

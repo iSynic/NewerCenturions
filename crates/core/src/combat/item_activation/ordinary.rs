@@ -170,7 +170,13 @@ pub(crate) fn admit(
     let attack = SpellInfoRecord(packet);
     let map = state.land(content).ok_or("prepared item map missing")?;
     if attack.range_base().wrapping_add(attack.range_per_power()) > 0
-        && !lifecycle::can_see(combat, map, from, point, 0)?
+        && !lifecycle::can_see(
+            combat,
+            map,
+            from,
+            point,
+            state.command_preferences.animation_delay,
+        )?
     {
         return refusal(crate::feedback::CombatRefusal::Blocked);
     }
