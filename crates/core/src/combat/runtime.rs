@@ -32,6 +32,7 @@ mod out_of_combat_getup;
 mod out_of_combat_spell;
 pub(crate) mod reward_cleanup;
 pub(crate) use movement_return::answer_out_of_combat_walk;
+use movement_return::do_reload;
 pub use movement_return::{CombatReturn, MoveFrame, OutOfCombatWalkChoice};
 pub(crate) use movement_return::{MovePlan, begin as begin_move};
 pub mod neighbor_scan;

@@ -12,16 +12,20 @@ use centurions_content::records::TypedEncounterRecord;
 use centurions_core::{Command, Phase, Presentation, Session};
 use macroquad::prelude::*;
 
+/// The colour of the screen behind the windows.
+const BACKGROUND: Color = Color::new(41. / 255., 42. / 255., 0., 1.);
+
 /// Draws the game screen: the map, effects, story picture, squad rows, panels,
 /// combat or exploration controls, and any dialog on top. Returns the controls
 /// the player can click.
 pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -> Vec<Control> {
-    clear_background(Color::from_rgba(41, 42, 0, 255));
+    clear_background(BACKGROUND);
     let mut controls = Vec::new();
     map(content, state, assets, ui);
     draw_outdoor_effect(state, assets, ui);
     draw_story_picture(assets, ui);
     draw_psi_target(content, state, assets, ui);
+    hide_beyond_field(ui);
     let selected = draw_frame_panels(content, state, assets, ui, &mut controls);
     if state.phase != Phase::SquadSelection {
         if state.phase == Phase::Combat {
@@ -49,6 +53,18 @@ pub fn draw(content: &Content, state: &Session, assets: &Assets, ui: &UiState) -
     controls
 }
 
+/// The small field window shows ten cells square: anything drawn past it, where the large
+/// window reaches, is covered.
+fn hide_beyond_field(ui: &UiState) {
+    let (map, field) = (layout::MAP, ui.field_window());
+    if field == map {
+        return;
+    }
+    let (right, below) = (map.right() - field.right(), map.bottom() - field.bottom());
+    draw_rectangle(field.right(), map.y, right, map.h, BACKGROUND);
+    draw_rectangle(map.x, field.bottom(), field.w, below, BACKGROUND);
+}
+
 /// Prints the story's message in the message box, over PICT 221 during combat, and leaves no
 /// control standing.
 ///
@@ -58,11 +74,12 @@ fn story_message(state: &Session, assets: &Assets, text: &str, controls: &mut Ve
         assets.panel(221, layout::MESSAGE);
     }
     controls.clear();
-    assets.wrapped(
+    assets.wrapped_color(
         &authored_text(text, &state.warriors),
         layout::MESSAGE_TEXT,
         12,
-        16.,
+        crate::assets::line_height(12),
+        YELLOW,
     );
 }
 
@@ -94,7 +111,7 @@ fn draw_psi_target(content: &Content, state: &Session, assets: &Assets, ui: &UiS
                 layout::MAP.x + f32::from(point.0 - 3 - vx) * 32. - 2.,
                 layout::MAP.y + f32::from(point.1 - 3 - vy) * 32. - 2.,
             ),
-            layout::MAP,
+            ui.field_window(),
         );
     }
 }
@@ -129,7 +146,10 @@ fn draw_frame_panels(
     } else {
         assets.panel(176, Rect::new(468., 449., 332., 139.));
     }
-    assets.panel(224, layout::INFORMATION);
+    assets.panel(224, layout::INFORMATION_PICTURE);
+    if state.phase != Phase::Combat && ui.large_field() {
+        draw_strips(assets);
+    }
     let selected = hud::roster(state, assets, ui, controls);
     hud::clock(state, assets);
     if state.phase == Phase::Exploration {
@@ -172,6 +192,21 @@ fn draw_frame_panels(
     selected
 }
 
+/// The 800 by 600 window's strips outside combat: one under the field and two along the bottom
+/// of the screen, the second cut off at the screen's right edge.
+///
+/// Original: updatemain
+fn draw_strips(assets: &Assets) {
+    for (x, y) in [(0., 436.), (0., 589.)] {
+        assets.panel(layout::STRIP, Rect::new(x, y, 480., 11.));
+    }
+    assets.panel_part(
+        layout::STRIP,
+        Rect::new(0., 0., 320., 11.),
+        Rect::new(480., 589., 320., 11.),
+    );
+}
+
 /// The combat control strip: capture and Psi availability, the turn buttons,
 /// automatic-mode controls and the playing spell's panel.
 fn combat_controls_strip(
@@ -193,7 +228,9 @@ fn combat_controls_strip(
     if capture {
         hud::capture_skills(state, assets, selected);
     }
-    if !crate::input::available(state, selected, &Action::Open(Inspection::Psi)) {
+    if !crate::input::available(state, selected, &Action::Open(Inspection::Psi))
+        || !crate::input::psi_ready(state, selected)
+    {
         assets.panel(
             layout::DISABLED_CONTROL_PICT,
             assets.main_controls[&control::SCAN],
@@ -262,7 +299,7 @@ fn field_controls_strip(
     for (id, action) in crate::input::field_buttons(state) {
         let rect = assets.main_controls[&id];
         let enabled = crate::input::available(state, selected, &action);
-        if !enabled {
+        if !enabled || (id == control::SCAN && !crate::input::psi_ready(state, selected)) {
             assets.panel(layout::DISABLED_CONTROL_PICT, rect);
         }
         controls.push(Control {
@@ -295,6 +332,7 @@ fn draw_story_presentation(
     else {
         return;
     };
+    let placement = crate::placement::Placement::new(ui.large_field());
     let needs_continue = match p {
         Presentation::Messages { pages, .. } => {
             if state.phase == Phase::Combat {
@@ -302,11 +340,12 @@ fn draw_story_presentation(
             }
             controls.clear();
             if let Some((_, text)) = pages.first() {
-                assets.wrapped(
+                assets.wrapped_color(
                     &authored_text(text, &state.warriors),
                     layout::MESSAGE_TEXT,
                     12,
-                    16.,
+                    crate::assets::line_height(12),
+                    YELLOW,
                 );
             }
             false
@@ -317,13 +356,14 @@ fn draw_story_presentation(
         }
         Presentation::Question { text, .. } => {
             story_message(state, assets, text, controls);
-            crate::story_dialogs::question_strip(content, state, assets, controls);
+            crate::story_dialogs::question_strip(content, state, assets, placement, controls);
             false
         }
         Presentation::Avoidance { text, .. } => {
             story_message(state, assets, text, controls);
             crate::story_dialogs::plain_question_strip(
                 assets,
+                placement,
                 Action::Command(Command::Choose { answer: true }),
                 Action::Command(Command::Choose { answer: false }),
                 controls,
@@ -344,6 +384,7 @@ fn draw_story_presentation(
             crate::story_dialogs::menu(
                 state,
                 assets,
+                placement,
                 &authored_text(text, &state.warriors),
                 labels,
                 controls,
@@ -399,7 +440,7 @@ fn draw_story_presentation(
         }
         Presentation::Loot | Presentation::Shop => true,
         Presentation::Clinic { .. } => false,
-        Presentation::Survivors | Presentation::ScriptPause => false,
+        Presentation::Survivors | Presentation::ScriptPause | Presentation::Note { .. } => false,
         Presentation::ClinicEntry { .. } => true,
     };
     if needs_continue {
@@ -430,12 +471,21 @@ fn draw_overlay(
     ui: &UiState,
     controls: &mut Vec<Control>,
 ) -> bool {
+    if state.encounter_actions.is_none() {
+        ui.ticked_actions.set([false; 8]);
+    }
     if state
         .exploration
         .as_ref()
         .is_some_and(|p| p.presentation == Some(Presentation::Shop))
     {
-        ui.inventory.draw(content, state, assets, controls);
+        ui.inventory.draw(
+            content,
+            state,
+            assets,
+            ui.preferences.enabled(crate::preferences::pref::APPEND_MOS),
+            controls,
+        );
         return true;
     }
     if crate::collection::active(state, ui) && state.promotion.is_none() {
@@ -452,7 +502,14 @@ fn draw_overlay(
         .and_then(|p| p.presentation.as_ref())
     {
         controls.clear();
-        draw_clinic(state, assets, *member, *percent, controls);
+        draw_clinic(
+            state,
+            assets,
+            crate::placement::Placement::new(ui.large_field()),
+            *member,
+            *percent,
+            controls,
+        );
         if ui.inspection.is_none() {
             return true;
         }
@@ -467,7 +524,7 @@ fn draw_overlay(
         return true;
     }
     if let Some(selected) = state.encounter_actions {
-        draw_encounter_actions(content, state, assets, selected, controls);
+        draw_encounter_actions(content, state, assets, ui, selected, controls);
         return true;
     }
     if let Some(inspection) = ui.inspection {
@@ -480,7 +537,13 @@ fn draw_overlay(
             return true;
         }
         if inspection == Inspection::Items {
-            ui.inventory.draw(content, state, assets, controls);
+            ui.inventory.draw(
+                content,
+                state,
+                assets,
+                ui.preferences.enabled(crate::preferences::pref::APPEND_MOS),
+                controls,
+            );
             return true;
         }
         if inspection == Inspection::Weapons {
@@ -497,41 +560,55 @@ fn draw_overlay(
     false
 }
 
-/// Dialog 148, the physical-action selection with its checkboxes.
+/// Dialog 148, the physical-action selection with its checkboxes, at the right beside the squad
+/// rows. Each box first shows the box picture; a ticked box shows the tick inside it, and a box
+/// ticked and then cleared shows the empty box picture inside it.
+///
+/// Original: actionpicker
 fn draw_encounter_actions(
     content: &Content,
     state: &Session,
     assets: &Assets,
+    ui: &UiState,
     selected: [bool; 8],
     controls: &mut Vec<Control>,
 ) {
     controls.clear();
-    assets.draw_dialog(148);
+    let origin = crate::placement::Placement::new(ui.large_field()).action_picker();
+    let item = |number: usize| assets.dialog_rect_at(148, number, origin);
+    assets.draw_dialog_at(148, origin);
+    let mut ticked = ui.ticked_actions.get();
     if let Ok(record) = centurions_core::typed_record(state, content) {
         for (index, chosen) in selected.into_iter().enumerate() {
-            assets.panel(156, assets.dialog_rect(148, index + 9));
-            let checkbox = assets.dialog_rect(148, index + 1);
+            assets.panel(156, item(index + 9));
+            let checkbox = item(index + 1);
             assets.panel(179, checkbox);
+            ticked[index] |= chosen;
+            let inside = Rect::new(
+                checkbox.x + 2.,
+                checkbox.y + 2.,
+                checkbox.w - 4.,
+                checkbox.h - 4.,
+            );
             if chosen {
-                draw_rectangle(
-                    checkbox.x + 2.,
-                    checkbox.y + 2.,
-                    checkbox.w - 4.,
-                    checkbox.h - 4.,
-                    YELLOW,
-                );
+                assets.panel(layout::TICKED_BOX, inside);
+            } else if ticked[index] {
+                assets.panel(layout::EMPTY_BOX, inside);
             }
             let label = TypedEncounterRecord(&record).action_label(index);
             let text =
                 centurions_content::ui::c_string(&label[1..1 + usize::from(label[0]).min(39)]);
-            assets.dialog_text(&text, assets.dialog_rect(148, index + 19));
+            assets.dialog_text(&text, item(index + 19));
         }
     }
-    for item in 9..=18 {
+    ui.ticked_actions.set(ticked);
+    for number in 9..=18 {
         controls.push(Control {
-            rect: assets.dialog_rect(148, item),
+            rect: item(number),
             enabled: true,
-            action: Action::Command(Command::EncounterActionControl { item: item as u16 }),
+            action: Action::Command(Command::EncounterActionControl {
+                item: number as u16,
+            }),
         });
     }
 }

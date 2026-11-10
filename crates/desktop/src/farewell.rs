@@ -1,5 +1,5 @@
 //! The farewell panel shown while the game quits.
-use crate::{assets::Assets, audio::Audio, layout};
+use crate::{assets::Assets, audio::Audio, placement::Placement};
 use centurions_core::Event;
 use macroquad::prelude::*;
 
@@ -34,11 +34,15 @@ impl Farewell {
         Self { started: now }
     }
 
-    /// Draws the farewell panel until its time has passed, then an empty screen.
-    pub fn draw(&self, assets: &Assets, now: f64) {
+    /// Draws the farewell panel one pixel in from the game window's corner until its time has
+    /// passed, then an empty screen.
+    ///
+    /// Original: quitgame
+    pub fn draw(&self, assets: &Assets, placement: Placement, now: f64) {
         clear_background(BLACK);
         if (now - self.started) * crate::TICKS_PER_SECOND < PANEL_TICKS {
-            assets.panel(FAREWELL_PICTURE, layout::DIALOG_FRAME);
+            let corner = placement.farewell();
+            assets.panel(FAREWELL_PICTURE, Rect::new(corner.x, corner.y, 640., 460.));
         }
     }
 

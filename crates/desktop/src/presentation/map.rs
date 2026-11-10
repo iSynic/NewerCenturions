@@ -33,8 +33,11 @@ pub(super) fn terrain(assets: &Assets, terrain: u8, tile: i16, x: f32, y: f32) {
         );
     }
 }
-/// Draws the 15 by 13 cells of the map around the party, or around the combat
-/// view while a battle is on.
+/// Draws the cells of the map in the field window around the party, or around
+/// the combat view while a battle is on: 15 by 13 on the large view, 10 by 10 on
+/// the small one.
+///
+/// Original: centerpictlarge, centerpictsmall
 pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiState) {
     let Some(position) = &state.exploration else {
         return;
@@ -43,18 +46,21 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
         return;
     };
     let combat = state.combat.as_ref();
+    let large = ui.large_field();
+    let window = ui.field_window();
     let (vx, vy) = combat
         .and_then(|_| crate::combat_controls::origin(state, ui))
         .map(|(x, y)| (i32::from(x), i32::from(y)))
-        .unwrap_or(layout::outdoor_origin(position.x, position.y));
+        .unwrap_or(layout::outdoor_origin(position.x, position.y, large));
     // Reveal Friends draws every body even in capture mode.
     let capturing = combat.is_some_and(|c| c.capture_actor.is_some())
         && !(ui.combat_view.reveal && ui.playback.is_none());
     let targets = combat
-        .map(|c| super::bodies::capture_targets(state, c, (vx, vy)))
+        .map(|c| super::bodies::capture_targets(state, c, (vx, vy), large))
         .unwrap_or_default();
-    for y in 0..13 {
-        for x in 0..15 {
+    let (columns, rows) = ((window.w / 32.) as i32, (window.h / 32.) as i32);
+    for y in 0..rows {
+        for x in 0..columns {
             let sx = layout::MAP.x + x as f32 * 32.;
             let sy = layout::MAP.y + y as f32 * 32.;
             if let Some(c) = combat {
@@ -128,13 +134,13 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
         }
     }
     if combat.is_none() {
-        buildings(assets, mission, position, (vx, vy));
-        object_icons(assets, mission, position, (vx, vy));
+        buildings(assets, mission, position, (vx, vy), large);
+        object_icons(assets, mission, position, (vx, vy), large);
     }
     if let Some(c) = combat {
         super::fields::draw(state, content, c, assets, (vx, vy));
         super::bodies::draw(state, c, assets, ui, (vx, vy));
-        super::range_lines::draw_edges(state, c, (vx, vy));
+        super::range_lines::draw_edges(state, c, (vx, vy), window);
     }
     if let (Some(c), Some(playback)) = (combat, &ui.playback)
         && let Some(icon) = playback.icon
@@ -187,19 +193,23 @@ pub(super) fn map(content: &Content, state: &Session, assets: &Assets, ui: &UiSt
 /// value is the picture 23000 plus the value, anchored by its own size at the
 /// bottom right of its cell and spilling up and left over the neighbouring
 /// cells, with white left out. The cells from the view origin over 22 rows and
-/// columns are visited, rows outermost, so a building below or to the right of
-/// the window can reach into it and a later building covers an earlier one. A
-/// cell the party has not seen draws the blank tile instead of its building.
+/// columns (17 on the small view) are visited, rows outermost, so a building
+/// below or to the right of the window can reach into it and a later building
+/// covers an earlier one. A cell the party has not seen draws the blank tile
+/// instead of its building.
 ///
-/// Original: centerpictlarge
+/// Original: centerpictlarge, centerpictsmall
 fn buildings(
     assets: &Assets,
     mission: &centurions_content::mission::OpeningMission,
     position: &Exploration,
     (vx, vy): (i32, i32),
+    large: bool,
 ) {
-    for y in vy..vy + 22 {
-        for x in vx..vx + 22 {
+    let window = layout::field_window(large);
+    let span = if large { 22 } else { 17 };
+    for y in vy..vy + span {
+        for x in vx..vx + span {
             if x > 89 || y > 89 {
                 continue;
             }
@@ -208,7 +218,7 @@ fn buildings(
                 continue;
             }
             if position.sight_hidden(x, y) {
-                if (x - vx) < 15 && (y - vy) < 13 {
+                if ((x - vx) as f32) < window.w / 32. && ((y - vy) as f32) < window.h / 32. {
                     let sx = layout::MAP.x + (x - vx) as f32 * 32.;
                     let sy = layout::MAP.y + (y - vy) as f32 * 32.;
                     terrain(assets, mission.terrain, HIDDEN_TILE, sx, sy);
@@ -228,26 +238,29 @@ fn buildings(
                     texture.width(),
                     texture.height(),
                 ),
-                layout::MAP,
+                window,
             );
         }
     }
 }
 
-/// Draws the icon of each negative object value after the buildings: the land's
-/// background tile first for a value above -500, so a building reaching into the
-/// cell is covered, then the icon of the value's magnitude. A cell the party has
-/// not seen draws the blank tile alone.
+/// Draws the icon of each negative object value in the field window after the
+/// buildings: the land's background tile first for a value above -500, so a
+/// building reaching into the cell is covered, then the icon of the value's
+/// magnitude. On the large view a cell the party has not seen draws the blank
+/// tile alone; the small view draws the icon whatever the party has seen.
 ///
-/// Original: centerpictlarge
+/// Original: centerpictlarge, centerpictsmall
 fn object_icons(
     assets: &Assets,
     mission: &centurions_content::mission::OpeningMission,
     position: &Exploration,
     (vx, vy): (i32, i32),
+    large: bool,
 ) {
-    for y in 0..13 {
-        for x in 0..15 {
+    let window = layout::field_window(large);
+    for y in 0..(window.h / 32.) as i32 {
+        for x in 0..(window.w / 32.) as i32 {
             let (cx, cy) = (vx + x, vy + y);
             if cx > 89 || cy > 89 {
                 continue;
@@ -258,7 +271,7 @@ fn object_icons(
             }
             let sx = layout::MAP.x + x as f32 * 32.;
             let sy = layout::MAP.y + y as f32 * 32.;
-            if position.sight_hidden(cx, cy) {
+            if large && position.sight_hidden(cx, cy) {
                 terrain(assets, mission.terrain, HIDDEN_TILE, sx, sy);
                 continue;
             }
@@ -347,7 +360,7 @@ pub(super) fn draw_outdoor_effect(state: &Session, assets: &Assets, ui: &UiState
     let Some(position) = state.exploration.as_ref() else {
         return;
     };
-    let (vx, vy) = layout::outdoor_origin(position.x, position.y);
+    let (vx, vy) = layout::outdoor_origin(position.x, position.y, ui.large_field());
     let size = f32::from(effect.size);
     crate::assets::texture_in(
         texture,

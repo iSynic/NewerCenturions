@@ -229,7 +229,8 @@ pub fn location_targeting(state: &Session, content: &Content) -> bool {
 }
 
 /// Checks that the body is a living target in range and in sight, that the warrior has two attacks
-/// left, and that the ammunition is there unless it is already paid for.
+/// left, or one when he is on automatic and has just refitted, and that the ammunition is there
+/// unless it is already paid for.
 pub(crate) fn admit(
     state: &Session,
     content: &Content,
@@ -277,7 +278,8 @@ pub(crate) fn admit(
         return Err(refused(crate::feedback::CombatRefusal::Blocked));
     }
     let warrior = &state.warriors[actor as usize];
-    if warrior.record().action_points()? < 2 {
+    let refitted = state.globals.reload_shot != 0 && warrior.record().computer_control()? != 0;
+    if warrior.record().action_points()? < if refitted { 1 } else { 2 } {
         return Err(RuleError::Refused { feedback: vec![] });
     }
     if !paid && warrior.record().inventory_quantity(p.slot)? < p.rounds {

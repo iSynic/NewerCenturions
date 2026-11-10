@@ -1,8 +1,12 @@
 use crate::{assets::Assets, presentation::Action};
 use centurions_content::{Content, InventoryRecord};
 use centurions_core::{Command, RuleError, Session};
+pub use items_choice::RowGesture;
 use macroquad::prelude::*;
-use std::{cell::RefCell, collections::BTreeMap};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, VecDeque},
+};
 /// The item list rows already built for each item record and its definition.
 type ItemRows = BTreeMap<Vec<u8>, Vec<(i32, String)>>;
 /// The item information panel already built for an item record.
@@ -15,6 +19,34 @@ type ItemDetail = (
 const DOUBLE_CLICK_SECONDS: f64 = 0.35;
 /// The pause between repeats of the worn-item warning while the button stays down, in seconds.
 const WARNING_REPEAT_SECONDS: f64 = 20. / 60.;
+
+/// Whether the Items window is open: one warrior's own pack, not the trade or shop window and
+/// not a crate or a battle's booty.
+///
+/// Original: items
+pub fn in_items_window(state: &Session, ui: &crate::presentation::UiState) -> bool {
+    ui.inspection == Some(crate::presentation::Inspection::Items)
+        && ui.inventory.items_window(state)
+        && !crate::collection::active(state, ui)
+}
+
+/// Whether warnings sit where the Items window moves them: from its opening until Done or Trade
+/// leaves it, even when Trade is then refused.
+///
+/// Original: items, warn
+pub fn in_items(state: &Session, ui: &crate::presentation::UiState) -> bool {
+    in_items_window(state, ui) && ui.inventory.initems
+}
+
+/// Whether the trade window is open: two warriors' packs side by side away from a shop.
+///
+/// Original: seeshop, Showitems
+pub fn in_trade(state: &Session, ui: &crate::presentation::UiState) -> bool {
+    ui.inspection == Some(crate::presentation::Inspection::Items)
+        && ui.inventory.trade
+        && !Inventory::shop(state)
+        && !crate::collection::active(state, ui)
+}
 
 /// A choice on the Items screen: a warrior, an item, scrolling, transferring,
 /// stockpiling, shopping, refitting, ammunition and item information.
@@ -44,8 +76,31 @@ pub enum InventoryAction {
     Shop,
     Category(usize),
     Done,
-    /// CNTL 140 opens showiteminfo on the selected display row.
+    /// The Items window's View button (CNTL 140) opens showiteminfo on the highlighted row.
     Information,
+    /// The trade window's item button (CNTL 133) leaves for the Items window.
+    ItemsWindow,
+    /// The field's Trade button opens the trade window.
+    OpenTrade,
+    /// The Items window's rows (CNTL 162), before the click is placed on a row.
+    List,
+    /// A click placed on the Items window's rows.
+    Row {
+        point: Vec2,
+        gesture: RowGesture,
+    },
+    /// An arrow key moves the Items window's highlight by a row.
+    Step(i16),
+    /// The space bar wears or removes the highlighted item.
+    Toggle,
+    /// The Items window's Use, Weapon, Drop, Join, Split, Trade and portrait buttons.
+    Use,
+    Weapon,
+    Drop,
+    Join,
+    Split,
+    Trade,
+    View,
     CloseInformation,
     /// DLOG 149 item 1 (squad users) or item 2 (warrior item types).
     UseList(bool),
@@ -93,6 +148,24 @@ pub struct Inventory {
     use_list: Option<(bool, bool, Vec<u8>)>,
     /// An open ammunition popup.
     ammunition: Option<ammunition::Popup>,
+    /// Whether the trade window shows rather than the Items window.
+    pub trade: bool,
+    /// Whether the next opening shows the trade window.
+    trade_request: bool,
+    /// Whether the Items window still counts as open for placing warnings.
+    initems: bool,
+    /// The display rows the highlight has left, which keep cicn 173 at their left.
+    unhighlighted: u16,
+    /// Where the last row click landed, for a double-click.
+    last_point: Vec2,
+    /// The sounds the last choice made.
+    sounds: Vec<i16>,
+    /// Actions the last choice leaves for the frames after it.
+    follow_up: VecDeque<Action>,
+    /// Preference item 12, Drop Item Protection.
+    pub drop_protection: bool,
+    /// The item count when Drop was pressed, until the drop's result is seen.
+    dropped: Option<usize>,
 }
 impl Default for Inventory {
     /// The first two warriors, nothing selected.
@@ -115,6 +188,15 @@ impl Default for Inventory {
             information_fields: RefCell::new(None),
             use_list: None,
             ammunition: None,
+            trade: false,
+            trade_request: false,
+            initems: false,
+            unhighlighted: 0,
+            last_point: Vec2::ZERO,
+            sounds: vec![],
+            follow_up: VecDeque::new(),
+            drop_protection: false,
+            dropped: None,
         }
     }
 }
@@ -150,9 +232,77 @@ impl Inventory {
         self.information = None;
         self.use_list = None;
         self.ammunition = None;
+        self.unhighlighted = 0;
+        self.trade = std::mem::take(&mut self.trade_request);
+        self.initems = !self.trade;
+    }
+    /// Opens the trade window, two warriors' packs side by side, on warrior `selected` and the next
+    /// one of `count`.
+    ///
+    /// Original: seeshop
+    pub fn open_trade(&mut self, selected: usize, count: usize) {
+        self.trade_request = true;
+        self.open(selected, count);
+    }
+    /// Whether the next opening shows the trade window.
+    pub fn trade_requested(&self) -> bool {
+        self.trade_request
+    }
+    /// Whether the item information window or the ammunition popup is open over the window.
+    pub fn popup_open(&self) -> bool {
+        self.information.is_some() || self.ammunition.is_some()
+    }
+    /// The sounds the last choice made, for the game to play.
+    pub fn take_sounds(&mut self) -> Vec<i16> {
+        std::mem::take(&mut self.sounds)
+    }
+    /// The next action a choice left for a later frame.
+    pub fn take_follow_up(&mut self) -> Option<Action> {
+        self.follow_up.pop_front()
+    }
+    /// After Drop, a dropped item that leaves the highlight past the last item on a row below the
+    /// first moves the highlight up a row; an empty slot puts the highlight and the scrolling back
+    /// at the top.
+    ///
+    /// Original: items
+    pub fn observe(&mut self, events: &[centurions_core::Event]) {
+        use centurions_core::{Event, feedback::GameFeedback};
+        let Some(count) = self.dropped.take() else {
+            return;
+        };
+        if events.contains(&Event::Sound { resource_id: 655 }) {
+            if self.scroll[0] + self.display_row.max(0) as usize + 1 == count
+                && self.display_row > 0
+            {
+                self.unhighlighted |= 1 << self.display_row;
+                self.display_row -= 1;
+            }
+        } else if count != 0
+            && !events
+                .iter()
+                .any(|event| matches!(event, Event::Feedback(GameFeedback::Warning { .. })))
+        {
+            self.unhighlighted |= 1 << self.display_row.clamp(0, items_window::ROWS as i16 - 1);
+            self.display_row = 0;
+            self.scroll[0] = 0;
+        }
+    }
+    /// The highlighted row once the rows are redrawn: a row past the last item moves to the last
+    /// item, or to the top row when there is none.
+    ///
+    /// Original: updateitems
+    fn settled_row(&self, count: usize) -> i16 {
+        if count as i16 <= self.display_row {
+            (count as i16 - 1).max(0)
+        } else {
+            self.display_row
+        }
     }
     /// Carries out a choice on the Items screen, returning the action for the game
-    /// to take, if any.
+    /// to take, if any. A second-owner portrait gives warning 158 while a limited stock is being
+    /// taken.
+    ///
+    /// Original: choice
     pub fn handle(
         &mut self,
         action: InventoryAction,
@@ -168,9 +318,31 @@ impl Inventory {
             return Ok(self.handle_ammunition(action, state, content));
         }
         match action {
+            OpenTrade => {
+                self.trade_request = true;
+                return Ok(Some(Action::Open(crate::presentation::Inspection::Items)));
+            }
+            ItemsWindow => return Ok(self.leave_for_items(state)),
+            _ => {}
+        }
+        if self.items_window(state) {
+            let count = self.items(state, content, 0)?.len();
+            let settled = self.settled_row(count);
+            if settled != self.display_row {
+                self.unhighlighted |= 1 << self.display_row.clamp(0, 10);
+                self.display_row = settled;
+            }
+            return self.handle_items(action, state, content, now);
+        }
+        match action {
             Warrior { side, member } => {
                 if side > 1 || member >= state.warriors.len() {
                     return Err("inventory warrior outside squad".into());
+                }
+                // The second owner cannot change while a limited stock is being taken.
+                if side == 1 && state.globals.limited_stock != 0 {
+                    self.warning = Some(158);
+                    return Ok(None);
                 }
                 let scroll = self.scroll[side];
                 self.members[side] = member;
@@ -241,24 +413,26 @@ impl Inventory {
                     .clamp(0, count.saturating_sub(9) as i32)
                     as usize;
             }
-            Information => {
-                let warrior = self.members[0];
-                let row = self.display_row.max(0) as usize;
-                let count = self.items(state, content, 0)?.len();
-                if count == 0 {
-                    return Ok(None);
-                }
-                self.information = Some((warrior, self.scroll[0] + row));
-                self.information_item = None;
-                return Ok(Some(Action::Command(Command::ShowItemInformation {
-                    warrior,
-                    scroll: self.scroll[0],
-                    row,
-                    quick_info: self.quick_info,
-                })));
-            }
-            CloseInformation | UseList(_) | Ammunition | AmmunitionItem(_) | CloseAmmunition
-            | CombatLoad(_) => {}
+            Information
+            | CloseInformation
+            | UseList(_)
+            | Ammunition
+            | AmmunitionItem(_)
+            | CloseAmmunition
+            | CombatLoad(_)
+            | ItemsWindow
+            | OpenTrade
+            | List
+            | Row { .. }
+            | Step(_)
+            | Toggle
+            | Use
+            | Weapon
+            | Drop
+            | Join
+            | Split
+            | Trade
+            | View => {}
             Wear { side, slot } => {
                 if side > 1 || (side == 1 && Self::shop(state)) {
                     return Ok(None);
@@ -625,7 +799,8 @@ pub(crate) fn draw_detail_plan(
                     .position(|byte| *byte == 0)
                     .unwrap_or(bytes.len())];
                 let text = centurions_content::ui::c_string(bytes);
-                assets.wrapped_color(&text, rectangle(rect), size, size as f32 + 2., color);
+                let leading = crate::assets::line_height(size);
+                assets.wrapped_color(&text, rectangle(rect), size, leading, color);
             }
             _ => {}
         }
@@ -635,4 +810,7 @@ pub(crate) fn draw_detail_plan(
 mod ammunition;
 mod detail;
 mod information;
+mod items_choice;
+mod items_window;
+mod portraits;
 mod view;

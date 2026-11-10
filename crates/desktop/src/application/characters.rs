@@ -18,22 +18,6 @@ impl Application {
         let next = None;
         let mut events = Vec::new();
         match action {
-            ApplicationAction::CreationCancel => {
-                if let Some(creation) = self
-                    .characters
-                    .creation
-                    .as_mut()
-                    .filter(|creation| !creation.read_only)
-                {
-                    creation.ask = Some(crate::creation::Ask::Cancel);
-                    return Ok(HandleOutcome::Complete(next, events));
-                }
-                self.characters.creation = None;
-                if self.characters.information.is_some() {
-                    return Ok(HandleOutcome::Return(next, events));
-                }
-                self.characters.editor = None;
-            }
             ApplicationAction::CreationChoice(choice) => {
                 events = self
                     .characters
@@ -63,11 +47,19 @@ impl Application {
                     }
                     return Ok(HandleOutcome::Complete(next, events));
                 }
+                let roster = self.roster.as_mut().unwrap();
                 if answer {
-                    self.roster
-                        .as_mut()
-                        .unwrap()
-                        .store_replacing_names(&creation.draft.warriors)?;
+                    let kept = creation
+                        .draft
+                        .warriors
+                        .iter()
+                        .map(centurions_core::roster::new_warrior_record)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    roster.save_characters(&kept)?;
+                } else {
+                    // Discarding takes the new warrior's name out of the roster, erasing a kept
+                    // warrior of that name the player agreed to replace.
+                    roster.minus(&creation.request.name, true)?;
                 }
                 self.characters.creation = None;
             }
@@ -86,7 +78,7 @@ impl Application {
                             item,
                             state,
                             content,
-                            self.roster.as_ref().unwrap(),
+                            self.roster.as_mut().unwrap(),
                         )?;
                     }
                     return Ok(HandleOutcome::Return(next, events));
@@ -96,7 +88,7 @@ impl Application {
                     .creation
                     .as_mut()
                     .ok_or("Creation is not open.")?;
-                events = creation.item(item, state, content, self.roster.as_ref().unwrap())?;
+                events = creation.item(item, state, content, self.roster.as_mut().unwrap())?;
                 if creation.stage == crate::creation::Stage::Scans {
                     let mut editor = crate::editor::WarriorEditor::new(&creation.draft, 0)?;
                     editor.free = false;

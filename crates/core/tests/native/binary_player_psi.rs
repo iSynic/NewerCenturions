@@ -417,11 +417,13 @@ fn player_psi_admission_matches_16_native_gates_without_mutation() {
             &warriors,
             case.n::<i16>("member"),
             u8::from(case.n::<bool>("disabled")),
+            false,
+            true,
         )
         .unwrap();
         assert_eq!(admission.allowed, case.n::<i64>("allowed") != 0);
         let sounds: Vec<_> = case.n::<Vec<i16>>("sounds");
-        assert_eq!(admission.sounds, sounds);
+        assert_eq!(admission.warnings, sounds);
         let actual: Vec<_> = support::record_bytes(&warriors);
         assert_bytes(&actual, &case.bytes("after"), "admission unchanged");
     }

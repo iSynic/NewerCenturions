@@ -16,7 +16,9 @@ const NOT_ENOUGH_SPELL_POINTS: u32 = 0x403ede;
 /// loaded first. A cost above the warrior's psi points shows the not-enough-spell-points text with
 /// its sound and changes nothing more. A scan that cannot be cast in camp, or a preset with no
 /// power, only sounds the refusal. Otherwise the psi points are spent, the warrior is marked as
-/// having acted and the cast goes on as if Scan had been chosen with those settings.
+/// having acted and the cast goes on as if Scan had been chosen with those settings, without the
+/// Psi control asking again whether he may cast. The spell is marked as coming from psi memory, and
+/// the paid fast spell stays marked until the cast is resolved.
 ///
 /// Original: checkkeypad
 pub fn fast_spell(
@@ -47,6 +49,8 @@ pub fn fast_spell(
         Err(_) if power == 0 => None,
         Err(error) => return Err(error),
     };
+    state.globals.fast_spell = 0;
+    state.globals.memory_spell = 1;
     if let Some(packet) = &packet {
         state.globals.spell_info = packet.clone();
         state.globals.cast_identity = identity;
@@ -85,5 +89,6 @@ pub fn fast_spell(
         request,
     )?;
     state.globals.health_context.affected[warrior] = 1;
+    state.globals.fast_spell = 1;
     begin_cast(state, content, warrior, spell, power, result)
 }

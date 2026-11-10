@@ -166,7 +166,8 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
     resolve(state, content)
 }
 
-/// Resolves the outdoor cast on the chosen targets and clears the pending selection.
+/// Resolves the outdoor cast on the chosen targets and clears the pending selection; a psi cast
+/// also ends the marks of a memory spell and a paid fast spell.
 fn resolve(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let pending = state
         .outdoor_psi
@@ -181,14 +182,16 @@ fn resolve(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleErr
             let offset = pending.actor * 80 + 72 + index * 2;
             memory[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
         }
-        return Ok(story_spell::resolve_party_outdoors(
+        let outcome = story_spell::resolve_party_outdoors(
             state,
             content,
             &packet,
             pending.spell,
             pending.power,
-        )?
-        .events);
+        )?;
+        state.globals.memory_spell = 0;
+        state.globals.fast_spell = 0;
+        return Ok(outcome.events);
     }
     let outcome =
         story_spell::resolve_outdoors(state, content, &packet, pending.spell, pending.power)?;

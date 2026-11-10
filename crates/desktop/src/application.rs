@@ -29,6 +29,8 @@ pub enum ApplicationAction {
     EraseWarrior,
     /// The answer to the Erase Warrior question.
     EraseAnswer(bool),
+    /// The answer to the question asked before a member carrying mission items is removed.
+    RemoveAnswer(bool),
     ImportWarrior,
     ViewRestrictions,
     /// A click on an enabled item of the Scenario Restrictions dialog, or Return, closes it.
@@ -53,7 +55,6 @@ pub enum ApplicationAction {
     OpenItemEditor(usize, usize),
     ItemEditorItem(usize),
     Playlist(usize),
-    SquadCancel,
     OrderMember(usize),
     OrderCancel,
     EndAnswer(bool),
@@ -61,9 +62,7 @@ pub enum ApplicationAction {
     CreationItem(usize),
     CreationChoice(i16),
     CreationAnswer(bool),
-    CreationCancel,
     PreferenceItem(usize),
-    PreferenceCancel,
     CreatureItem(usize),
     CloseNote,
     ExchangeChoice(Option<bool>),
@@ -81,12 +80,16 @@ pub struct Application {
     pub selected_scenario: Option<String>,
     scenario_names: Vec<String>,
     pub roster: Option<centurions_core::roster::Roster>,
+    /// The warrior index supplied with the installation, which lists a new roster.
+    pub supplied_index: Vec<centurions_content::IndexSlot>,
     combat_information: bool,
     pub end_after_save: bool,
     pub preferences: crate::preferences::Preferences,
     preferences_dialog: Option<crate::preferences::Dialog>,
     pub screen: Screen,
     pub quit: bool,
+    /// The program ends without its farewell once the warnings shown have been read.
+    pub fatal_exit: bool,
     pub quit_after_save: bool,
     pub editing: bool,
     pub audio: crate::audio::Settings,
@@ -94,7 +97,8 @@ pub struct Application {
     pub menu_bar: menus::MenuBar,
     pub show_hover: bool,
     pub help: crate::help::Help,
-    pub squad: Vec<usize>,
+    /// The warriors chosen in the squad dialog, in member order.
+    pub squad: Vec<centurions_content::Warrior>,
     /// Requests the diagnostic rule trace written by `--audit-log`.
     pub trace: bool,
     characters: screen_state::CharacterScreens,
@@ -143,18 +147,8 @@ impl Application {
                 self.notes.open = Some(crate::note::Note {
                     record: record.clone(),
                     text: text.clone(),
-                    scroll: 0.,
                 });
             }
-        }
-    }
-    /// Where a warning box is anchored: the editors place it 80 pixels in and down,
-    /// every other screen just below the menu bar.
-    pub fn warning_origin(&self) -> Vec2 {
-        if self.characters.editor.is_some() || self.characters.item_editor.is_some() {
-            vec2(80., 80.)
-        } else {
-            vec2(0., 20.)
         }
     }
 
@@ -174,12 +168,14 @@ impl Application {
             selected_scenario: None,
             scenario_names: vec!["The Thunder of Guns".into()],
             roster: None,
+            supplied_index: Vec::new(),
             combat_information: false,
             end_after_save: false,
             preferences: crate::preferences::Preferences::default(),
             preferences_dialog: None,
             screen,
             quit: false,
+            fatal_exit: false,
             quit_after_save: false,
             editing: false,
             audio: crate::audio::Settings::default(),
@@ -234,6 +230,21 @@ impl Application {
         Ok(())
     }
 
+    /// Shows again a note a script is waiting on, as when a saved game is opened while it was up.
+    pub fn reopen_note(&mut self, state: &Session, content: &Content) {
+        if self.screen != Screen::Game || self.notes.open.is_some() {
+            return;
+        }
+        if let Some(Presentation::Note { index }) = state
+            .exploration
+            .as_ref()
+            .and_then(|p| p.presentation.as_ref())
+            && let Ok(events) = centurions_core::reference_views::note(state, content, *index)
+        {
+            self.observe(&events);
+        }
+    }
+
     /// Opens the introduction text, returning to `return_to` when it closes; a
     /// `prologue` shows that text resource in place of the introduction.
     fn open_intro(&mut self, return_to: Screen, prologue: Option<i16>) {
@@ -265,6 +276,7 @@ impl Application {
             || self.selection.order.is_some()
             || self.selection.end_question
             || self.selection.erase_question
+            || self.selection.remove_question.is_some()
             || self.questions.escape
             || self.characters.creation.is_some()
             || self.preferences_dialog.is_some()
@@ -289,7 +301,10 @@ impl Application {
             self.notes.unknown_labels = map.unknown_note_labels.clone();
         }
         if self.roster.is_none() {
-            self.roster = Some(centurions_core::roster::Roster::supplied(content));
+            self.roster = Some(centurions_core::roster::Roster::supplied(
+                content,
+                &self.supplied_index,
+            ));
         }
         let preferences_changed = matches!(
             action,
@@ -312,13 +327,11 @@ impl Application {
             | ApplicationAction::InformationItem(_)) => {
                 self.handle_information(action, state, content)?
             }
-            action @ (ApplicationAction::PreferenceCancel
-            | ApplicationAction::PreferenceItem(_)
+            action @ (ApplicationAction::PreferenceItem(_)
             | ApplicationAction::Playlist(_)
             | ApplicationAction::HelpResetAnswer(_)
             | ApplicationAction::Help(_)) => self.handle_settings(action, state, content)?,
-            action @ (ApplicationAction::CreationCancel
-            | ApplicationAction::CreationChoice(_)
+            action @ (ApplicationAction::CreationChoice(_)
             | ApplicationAction::CreationAnswer(_)
             | ApplicationAction::CreationItem(_)
             | ApplicationAction::AppearanceItem(_)
@@ -332,7 +345,6 @@ impl Application {
             }
             action @ (ApplicationAction::EndAnswer(_)
             | ApplicationAction::EndSaved
-            | ApplicationAction::SquadCancel
             | ApplicationAction::OrderCancel
             | ApplicationAction::OrderMember(_)
             | ApplicationAction::Difficulty(_)
@@ -342,6 +354,7 @@ impl Application {
             | ApplicationAction::Remove
             | ApplicationAction::EraseWarrior
             | ApplicationAction::EraseAnswer(_)
+            | ApplicationAction::RemoveAnswer(_)
             | ApplicationAction::ImportWarrior
             | ApplicationAction::ViewRestrictions
             | ApplicationAction::CloseRestrictions

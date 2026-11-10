@@ -25,9 +25,11 @@ enum Mode {
     Reveal,
 }
 
-/// The edge strokes centerfieldlarge leaves around the view.
-pub(super) fn draw_edges(state: &Session, combat: &Combat, view: (i32, i32)) {
-    draw(state, combat, view, Mode::Edge);
+/// The edge strokes the field redraw leaves around the view of the field window.
+///
+/// Original: centerfieldlarge, centerfieldsmall
+pub(super) fn draw_edges(state: &Session, combat: &Combat, view: (i32, i32), window: Rect) {
+    draw(state, combat, view, Mode::Edge, window);
 }
 
 /// Reveal Friends' lines, drawn after the panels they cross.
@@ -41,11 +43,12 @@ pub(super) fn draw_reveal(state: &Session, ui: &super::UiState) {
     ) else {
         return;
     };
-    draw(state, combat, (i32::from(vx), i32::from(vy)), Mode::Reveal);
+    let view = (i32::from(vx), i32::from(vy));
+    draw(state, combat, view, Mode::Reveal, ui.field_window());
 }
 
 /// Original: showrange
-fn draw(state: &Session, combat: &Combat, (vx, vy): (i32, i32), mode: Mode) {
+fn draw(state: &Session, combat: &Combat, (vx, vy): (i32, i32), mode: Mode, field: Rect) {
     // centerfieldlarge only calls showrange while the queue's current body is
     // a warrior.
     let Some(current) = combat.active_body().filter(|body| (0..9).contains(body)) else {
@@ -86,7 +89,7 @@ fn draw(state: &Session, combat: &Combat, (vx, vy): (i32, i32), mode: Mode) {
             (i32::from(x) - vx) * 32 + if size < 2 { 16 } else { 0 },
             (i32::from(y) - vy) * 32 + if size == 0 || size == 2 { 16 } else { 0 },
         );
-        line(start, end, color, mode);
+        line(start, end, color, mode, field);
     }
     // Warriors in combat; a faction makes red, a skipped turn blue.
     for (index, warrior) in state.warriors.iter().enumerate() {
@@ -109,14 +112,16 @@ fn draw(state: &Session, combat: &Combat, (vx, vy): (i32, i32), mode: Mode) {
             ((i32::from(x) - vx) * 32 + 16, (i32::from(y) - vy) * 32 + 16),
             color,
             mode,
+            field,
         );
     }
 }
 
 /// LineTo in patCopy: the pen rectangle at each point of the line, kept where the
-/// mode's port shows it. Coordinates are relative to the window's content.
-fn line((x0, y0): (i32, i32), (x1, y1): (i32, i32), color: Color, mode: Mode) {
-    let (width, height) = (layout::MAP.w as i32, layout::MAP.h as i32);
+/// mode's port shows it: the field window's border for the edge strokes. Coordinates are
+/// relative to the window's content.
+fn line((x0, y0): (i32, i32), (x1, y1): (i32, i32), color: Color, mode: Mode, field: Rect) {
+    let (width, height) = (field.w as i32, field.h as i32);
     let window = (
         layout::SIZE.x as i32,
         layout::SIZE.y as i32 - layout::MAP.y as i32,

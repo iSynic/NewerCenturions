@@ -823,3 +823,20 @@ pub(crate) const BIG: [u8; 64 * 64 * 4] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
+
+/// The small icon as a one-colour silhouette for the menu bar: white wherever the icon is at
+/// least half opaque and clear elsewhere, so drawing it in a colour gives that colour's shape.
+pub(crate) fn silhouette() -> [u8; 16 * 16 * 4] {
+    let mut shape = [0; 16 * 16 * 4];
+    for (pixel, source) in shape
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(SMALL.as_chunks::<4>().0)
+    {
+        if source[3] >= 128 {
+            pixel.fill(255);
+        }
+    }
+    shape
+}

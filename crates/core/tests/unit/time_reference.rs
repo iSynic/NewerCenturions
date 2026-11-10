@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::decode;
+use crate::test_support::{command_resumed, decode};
 use centurions_content::WARRIOR_BYTES;
 use centurions_content::{Warrior, word};
 use std::fs;
@@ -17,12 +17,8 @@ fn calendar_content(schedule: Vec<u8>) -> Content {
     let mut items = vec![vec![0; 150]; 801];
     items[800] = decode(fixture["food_definition"].as_str().unwrap());
     Content {
-        tutorials: vec![],
         identity: "calendar".into(),
-        warriors: vec![],
         items,
-        resources: vec![],
-        original_services: None,
         scenario: Some(centurions_content::mission::ScenarioContent::single(
             centurions_content::mission::OpeningMission {
                 name: "calendar".into(),
@@ -43,6 +39,7 @@ fn calendar_content(schedule: Vec<u8>) -> Content {
                 }),
             },
         )),
+        ..Content::default()
     }
 }
 
@@ -168,21 +165,6 @@ fn hourly_protection_and_word_clock_survive_byte_time_and_saved_commands() {
         assert_eq!((p.day, p.hour, p.minute), (i16::MIN, clock.0, clock.1));
         fs::remove_file(path).unwrap();
     }
-}
-
-/// One step east from a saved copy and from the live state must agree.
-fn command_resumed(
-    path: &std::path::Path,
-    state: &mut Session,
-    content: &Content,
-    command: Command,
-) -> Vec<Event> {
-    save(path, state, content).unwrap();
-    let mut resumed = load(path, content).unwrap();
-    let events = apply(command.clone(), state, content).unwrap();
-    assert_eq!(apply(command, &mut resumed, content).unwrap(), events);
-    assert_eq!(*state, resumed);
-    events
 }
 
 #[test]

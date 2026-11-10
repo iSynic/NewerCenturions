@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 mod exchange;
 mod firing;
+pub(in crate::combat::runtime) use firing::do_reload;
 mod melee;
 
 /// The offer made to the player at an occupied cell: to exchange places or attack, or only to

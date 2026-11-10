@@ -194,11 +194,14 @@ pub fn action(
     if crate::targeting::active(state, ui) {
         return crate::targeting::input(state, content, ui, controls, pointer);
     }
+    if crate::inventory::in_items_window(state, ui) {
+        return items_window_input(ui, controls, pointer);
+    }
     if state
         .exploration
         .as_ref()
         .is_some_and(|p| p.presentation == Some(Presentation::Shop))
-        || ui.inspection == Some(Inspection::Items) && !crate::collection::active(state, ui)
+        || crate::inventory::in_trade(state, ui)
     {
         if ui
             .inventory
@@ -251,6 +254,51 @@ pub fn action(
         .filter(|action| available(state, ui.selected, action))
 }
 
+/// The Items window's input: a click on the rows is placed on its row with the Command or Option
+/// key it was made with, the keys press their buttons, and the wheel scrolls the rows.
+///
+/// Original: items
+fn items_window_input(
+    ui: &mut UiState,
+    controls: &[Control],
+    pointer: Option<Vec2>,
+) -> Option<Action> {
+    use crate::inventory::{InventoryAction, RowGesture};
+    let option = is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt);
+    if is_mouse_button_pressed(MouseButton::Left)
+        && let Some(point) = pointer
+    {
+        let control = topmost(controls, point);
+        let list = control.is_some_and(|control| {
+            matches!(control.action, Action::Inventory(InventoryAction::List))
+        });
+        if list || (option && !ui.inventory.popup_open()) {
+            let gesture = if option {
+                RowGesture::Option
+            } else if crate::application::command_modifier() {
+                RowGesture::Command
+            } else {
+                RowGesture::Click
+            };
+            return Some(Action::Inventory(InventoryAction::Row { point, gesture }));
+        }
+        return control.and_then(|control| control.enabled.then(|| control.action.clone()));
+    }
+    if !ui.inventory.popup_open()
+        && let Some(action) = ui.inventory.items_key()
+    {
+        return Some(Action::Inventory(action));
+    }
+    let delta = mouse_wheel().1;
+    if delta != 0. {
+        return Some(Action::Inventory(InventoryAction::Scroll {
+            side: 0,
+            delta: if delta > 0. { -1 } else { 1 },
+        }));
+    }
+    None
+}
+
 /// Physical-action selection control that accepts the chosen actions (Enter): item 17.
 const ENCOUNTER_ACTIONS_ACCEPT: u16 = 17;
 /// Physical-action selection control that cancels the selection (Escape): item 18.
@@ -275,7 +323,10 @@ pub fn field_buttons(state: &Session) -> Vec<(i16, Action)> {
             }),
         ),
         (control::SCAN, Action::Open(Inspection::Psi)),
-        (control::TRADE, Action::Open(Inspection::Items)),
+        (
+            control::TRADE,
+            Action::Inventory(crate::inventory::InventoryAction::OpenTrade),
+        ),
         (control::ENCOUNTER, Action::Command(Command::Encounter)),
         (
             control::SEARCH,
@@ -293,6 +344,12 @@ pub fn field_buttons(state: &Session) -> Vec<(i16, Action)> {
             control::HEAL,
             Action::Command(Command::FieldControl {
                 action: Field::Heal,
+            }),
+        ),
+        (
+            control::TORCH,
+            Action::Command(Command::FieldControl {
+                action: Field::Torch,
             }),
         ),
     ];
@@ -319,6 +376,19 @@ pub fn field_buttons(state: &Session) -> Vec<(i16, Action)> {
         },
     );
     controls
+}
+
+/// Whether the acting warrior may cast now, which the Psi control's picture shows.
+///
+/// Original: updatecontrols
+pub fn psi_ready(state: &Session, selected: usize) -> bool {
+    centurions_core::combat::player_psi::can_cast(
+        &state.warriors,
+        crate::acting::acting_warrior(state, selected) as i16,
+        state.psi_disabled,
+        state.combat.is_some(),
+    )
+    .unwrap_or(false)
 }
 
 /// Whether `action` can be chosen now for the acting warrior; during capture only
@@ -369,17 +439,12 @@ pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
             centurions_core::combat::capture::available(state)
         }
         Action::CombatView(_) | Action::PanCombat(..) => free && state.phase == Phase::Combat,
+        // The Psi control can always be pressed; the press itself asks whether the warrior may
+        // cast. The encounter's Psi button opens only for a warrior who can.
         Action::Open(Inspection::Psi) => {
-            (free
-                || state.exploration.as_ref().is_some_and(|position| {
-                    matches!(position.presentation, Some(Presentation::Typed { .. }))
-                }))
-                && centurions_core::combat::player_psi::can_cast(
-                    &state.warriors,
-                    member as i16,
-                    state.psi_disabled,
-                )
-                .unwrap_or(false)
+            free || state.exploration.as_ref().is_some_and(|position| {
+                matches!(position.presentation, Some(Presentation::Typed { .. }))
+            }) && psi_ready(state, selected)
         }
         Action::Open(Inspection::Bandage) => free && state.bandage_ready != 0,
         Action::Open(Inspection::FireTargets) => {
@@ -419,7 +484,10 @@ pub fn available(state: &Session, selected: usize, action: &Action) -> bool {
             | Command::SetFirearmMode { .. }
             | Command::EndTurn,
         ) => free,
-        Action::Inventory(crate::inventory::InventoryAction::CombatLoad(_)) => free,
+        Action::Inventory(
+            crate::inventory::InventoryAction::CombatLoad(_)
+            | crate::inventory::InventoryAction::OpenTrade,
+        ) => free,
         Action::Command(Command::ChooseWarrior { index }) => *index < state.warriors.len(),
         _ => true,
     }
@@ -566,7 +634,7 @@ fn capture_input(state: &Session, ui: &mut UiState, pointer: Option<Vec2>) -> Fl
     }
     if is_mouse_button_pressed(MouseButton::Left)
         && let Some(p) = pointer
-        && layout::MAP.contains(p)
+        && ui.field_window().contains(p)
         && let Some((x, y)) = crate::combat_controls::map_position(state, ui, p)
     {
         return Flow::Done(Some(Action::Command(Command::CombatClick { x, y })));
@@ -591,7 +659,7 @@ fn move_target_input(state: &Session, ui: &UiState, pointer: Option<Vec2>) -> Fl
     }
     if is_mouse_button_pressed(MouseButton::Left)
         && let Some(p) = pointer
-        && layout::MAP.contains(p)
+        && ui.field_window().contains(p)
         && let Some((vx, vy)) = crate::combat_controls::origin(state, ui)
     {
         return Flow::Done(Some(Action::PanCombat(
@@ -781,21 +849,9 @@ fn presentation_keys(
             None
         });
     }
-    if let Presentation::Menu { labels, .. } = p {
-        for (index, key) in [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4]
-            .into_iter()
-            .enumerate()
-        {
-            if index < labels.len() && is_key_pressed(key) {
-                return Flow::Done(Some(crate::story_dialogs::menu_slot_action(
-                    &state.globals.encounter_headers,
-                    index,
-                )));
-            }
-        }
-        return Flow::Done(
-            is_key_pressed(KeyCode::Escape).then_some(Action::Command(Command::CancelMenu)),
-        );
+    // The encounter menu takes only clicks: its modal loop has no keys.
+    if matches!(p, Presentation::Menu { .. }) {
+        return Flow::Done(None);
     }
     if matches!(p, Presentation::Typed { .. }) {
         return Flow::Done(typed_entry_input(state, content, ui));
@@ -815,7 +871,10 @@ fn presentation_keys(
     )
 }
 
-/// Typing into a scenario text-entry prompt.
+/// Typing into a scenario text-entry prompt; Return presses Done. Neither the typed encounter
+/// dialog nor the word entry has a cancel key.
+///
+/// Original: encounter2, getword
 fn typed_entry_input(
     state: &Session,
     content: &centurions_content::Content,
@@ -823,7 +882,7 @@ fn typed_entry_input(
 ) -> Option<Action> {
     if !ui.typed_entry || !crate::story_dialogs::text_entry_available(state, content) {
         while get_char_pressed().is_some() {}
-        return is_key_pressed(KeyCode::Escape).then_some(Action::Command(Command::CancelMenu));
+        return None;
     }
     while let Some(character) = get_char_pressed() {
         if ui.typed_text.chars().count() < 40
@@ -834,9 +893,6 @@ fn typed_entry_input(
     }
     if is_key_pressed(KeyCode::Backspace) {
         ui.typed_text.pop();
-    }
-    if is_key_pressed(KeyCode::Escape) {
-        return Some(Action::TextEntry(false));
     }
     is_key_pressed(KeyCode::Enter).then(|| {
         Action::Command(Command::SubmitText {
@@ -947,11 +1003,11 @@ fn movement_input(state: &Session, ui: &mut UiState, pointer: Option<Vec2>) -> O
         ui.movement.stop_pointer();
     } else if state.phase == Phase::Exploration
         && is_mouse_button_down(MouseButton::Left)
-        && let Some(point) = pointer.filter(|point| layout::MAP.contains(*point))
+        && let Some(point) = pointer.filter(|point| ui.field_window().contains(*point))
     {
         let x = ((point.x - layout::MAP.x) / 32.) as i32;
         let y = ((point.y - layout::MAP.y) / 32.) as i32;
-        let direction = match outdoor_move(state, x, y) {
+        let direction = match outdoor_move(state, x, y, ui.large_field()) {
             Some(Action::Command(Command::Move { dx, dy })) => (dx, dy),
             _ => (0, 0),
         };
@@ -972,7 +1028,7 @@ fn movement_input(state: &Session, ui: &mut UiState, pointer: Option<Vec2>) -> O
     }
     if is_mouse_button_pressed(MouseButton::Left)
         && let Some(p) = pointer
-        && layout::MAP.contains(p)
+        && ui.field_window().contains(p)
     {
         let x = ((p.x - layout::MAP.x) / 32.) as i32;
         let y = ((p.y - layout::MAP.y) / 32.) as i32;
@@ -980,15 +1036,15 @@ fn movement_input(state: &Session, ui: &mut UiState, pointer: Option<Vec2>) -> O
             let (x, y) = crate::combat_controls::map_position(state, ui, p)?;
             return Some(Action::Command(Command::CombatClick { x, y }));
         } else {
-            return outdoor_move(state, x, y);
+            return outdoor_move(state, x, y, ui.large_field());
         }
     }
     None
 }
 /// The step toward the clicked outdoor cell, if it is not the party's own.
-fn outdoor_move(state: &Session, x: i32, y: i32) -> Option<Action> {
+fn outdoor_move(state: &Session, x: i32, y: i32, large: bool) -> Option<Action> {
     let position = state.exploration.as_ref()?;
-    let (vx, vy) = crate::layout::outdoor_origin(position.x, position.y);
+    let (vx, vy) = crate::layout::outdoor_origin(position.x, position.y, large);
     let dx = (x + vx - position.x).signum() as i8;
     let dy = (y + vy - position.y).signum() as i8;
     (dx != 0 || dy != 0).then_some(Action::Command(Command::Move { dx, dy }))

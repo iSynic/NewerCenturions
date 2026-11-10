@@ -20,18 +20,23 @@ impl Application {
         ui: &UiState,
     ) -> Vec<Control> {
         let mut controls = Vec::new();
+        let large = self
+            .preferences
+            .enabled(crate::preferences::pref::SCREEN_800_X_600);
+        let placement = crate::placement::Placement::new(large);
         match self.screen {
             Screen::Game => controls = presentation::draw(content, state, assets, ui),
             Screen::Logo => {
                 clear_background(BLACK);
-                assets.panel(19, crate::layout::DIALOG_FRAME);
+                let logo = placement.logo();
+                assets.panel(19, Rect::new(logo.x, logo.y, 640., 460.));
             }
             Screen::Title => {
                 clear_background(BLACK);
                 assets.panel(187, crate::layout::DIALOG_FRAME);
             }
             Screen::Squad => self.draw_squad(content, state, assets, &mut controls),
-            Screen::Intro => self.intro.draw(content, state, assets),
+            Screen::Intro => self.intro.draw(content, state, assets, large),
         }
         if self.screen != Screen::Logo && self.screen != Screen::Intro {
             self.draw_menus(state, assets, &mut controls);
@@ -41,16 +46,16 @@ impl Application {
             self.draw_restrictions(content, state, assets, &mut controls);
         } else if let Some(note) = &self.notes.open {
             controls.clear();
-            note.draw(state, content, assets);
+            note.draw(state, content, assets, placement);
         } else if let Some(creature) = &self.creature {
             controls.clear();
-            creature.draw(assets, &mut controls);
+            creature.draw(assets, placement, &mut controls);
         } else if let Some(creation) = &self.characters.creation
             && self.characters.editor.is_none()
             && creation.stage != crate::creation::Stage::Keep
         {
             controls.clear();
-            creation.draw(content, assets, &mut controls);
+            creation.draw(content, assets, placement, &mut controls);
         } else if let Some(editor) = &self.characters.appearance {
             controls.clear();
             editor.draw(assets, &mut controls);
@@ -59,7 +64,7 @@ impl Application {
             editor.draw(content, assets, &mut controls);
         } else if let Some(editor) = &self.characters.editor {
             controls.clear();
-            editor.draw(content, assets, &mut controls);
+            editor.draw(content, assets, placement, &mut controls);
         } else if let Some(info) = &self.characters.information {
             controls.clear();
             info.draw(state, assets, &mut controls);
@@ -71,30 +76,31 @@ impl Application {
                 crate::status_popup::draw(state, assets, ui, &mut controls);
             }
         } else if self.screen == Screen::Game && state.phase == Phase::Exploration {
+            // While warriors can be edited, PICT 234 covers the Items window's View button,
+            // which then edits the highlighted item.
             if self.editing
-                && ui.inspection == Some(presentation::Inspection::Items)
-                && let Some((side, slot)) = ui.inventory.selected
+                && crate::inventory::in_items_window(state, ui)
+                && !ui.inventory.popup_open()
             {
-                let member = ui.inventory.members[side];
-                let rect = Rect::new(724., 558., 70., 35.);
+                let (member, slot) = ui.inventory.highlighted_slot();
                 crate::presentation::push_panel_control(
                     assets,
                     &mut controls,
                     234,
-                    rect,
+                    ui.inventory.view_button(),
                     true,
                     Action::Application(ApplicationAction::OpenItemEditor(member, slot)),
                 );
             }
-            for (index, _) in state.warriors.iter().enumerate().filter(|_| {
-                ui.inspection.is_none()
+            // A click on the selected warrior's portrait cell views the warrior.
+            for (index, _) in state.warriors.iter().enumerate().filter(|(index, _)| {
+                *index == ui.selected
+                    && ui.inspection.is_none()
                     && centurions_core::field_controls::free(state)
                     && !crate::targeting::active(state, ui)
             }) {
-                let mut rect = crate::layout::row(index);
-                rect.w = 50.;
                 controls.push(Control {
-                    rect,
+                    rect: crate::layout::roster_cell(index),
                     enabled: true,
                     action: Action::Application(ApplicationAction::OpenInformation(index)),
                 });
@@ -158,6 +164,7 @@ impl Application {
             };
             draw_choice_dialog(
                 assets,
+                placement,
                 choices.map(|(item, address, choice)| {
                     (item, address, ApplicationAction::ExchangeChoice(choice))
                 }),
@@ -167,6 +174,7 @@ impl Application {
         if self.questions.escape {
             draw_choice_dialog(
                 assets,
+                placement,
                 [
                     (
                         1,
@@ -196,6 +204,8 @@ impl Application {
     /// The yes/no question window: keeping a created warrior, erasing a warrior, end
     /// of game, editor, help reset or quit. The escape question has its own window,
     /// drawn with the choice dialogs.
+    ///
+    /// Original: question
     fn draw_question(&self, state: &Session, assets: &Assets, controls: &mut Vec<Control>) {
         let creation_question = self.characters.creation.as_ref().and_then(|c| c.question());
         let keeping = creation_question.is_some();
@@ -205,86 +215,87 @@ impl Application {
             || self.characters.editor_question
             || self.selection.end_question
             || self.selection.erase_question
+            || self.selection.remove_question.is_some()
         {
-            let origin = vec2(0., 20.);
-            draw_texture_ex(
-                &assets.panels[&214],
-                origin.x,
-                origin.y,
-                WHITE,
-                DrawTextureParams {
-                    source: Some(Rect::new(140., 167., 358., 195.)),
-                    ..Default::default()
-                },
-            );
-            assets.panel(182, Rect::new(origin.x + 22., origin.y + 23., 320., 84.));
-            assets.wrapped(
-                &assets.questions[if let Some(question) = creation_question {
-                    question - 1
+            let question = &assets.questions[if let Some(question) = creation_question {
+                question - 1
+            } else if self.selection.erase_question {
+                2
+            } else if self.selection.remove_question.is_some() {
+                12
+            } else if self.selection.end_question {
+                if state.phase == Phase::Combat { 9 } else { 0 }
+            } else if self.characters.editor_question {
+                18
+            } else if self.questions.help_reset {
+                8
+            } else if state.phase == Phase::Combat {
+                9
+            } else {
+                0
+            }];
+            let answer = |answer| {
+                Action::Application(if keeping {
+                    ApplicationAction::CreationAnswer(answer)
+                } else if self.questions.escape {
+                    ApplicationAction::EscapeAnswer(answer)
                 } else if self.selection.erase_question {
-                    2
+                    ApplicationAction::EraseAnswer(answer)
+                } else if self.selection.remove_question.is_some() {
+                    ApplicationAction::RemoveAnswer(answer)
                 } else if self.selection.end_question {
-                    if state.phase == Phase::Combat { 9 } else { 0 }
+                    ApplicationAction::EndAnswer(answer)
                 } else if self.characters.editor_question {
-                    18
+                    ApplicationAction::EditorAnswer(answer)
                 } else if self.questions.help_reset {
-                    8
-                } else if state.phase == Phase::Combat {
-                    9
+                    ApplicationAction::HelpResetAnswer(answer)
                 } else {
-                    0
-                }],
-                Rect::new(origin.x + 32., origin.y + 44., 294., 72.),
-                14,
-                18.,
+                    ApplicationAction::QuitAnswer(answer)
+                })
+            };
+            crate::story_dialogs::question_window(
+                assets,
+                question,
+                answer(true),
+                answer(false),
+                controls,
             );
-            for (id, x, answer) in [(2, 66., true), (4, 208., false)] {
-                let rect = Rect::new(origin.x + x, origin.y + 127., 70., 35.);
-                crate::presentation::push_panel_control(
-                    assets,
-                    controls,
-                    id,
-                    rect,
-                    true,
-                    Action::Application(if keeping {
-                        ApplicationAction::CreationAnswer(answer)
-                    } else if self.questions.escape {
-                        ApplicationAction::EscapeAnswer(answer)
-                    } else if self.selection.erase_question {
-                        ApplicationAction::EraseAnswer(answer)
-                    } else if self.selection.end_question {
-                        ApplicationAction::EndAnswer(answer)
-                    } else if self.characters.editor_question {
-                        ApplicationAction::EditorAnswer(answer)
-                    } else if self.questions.help_reset {
-                        ApplicationAction::HelpResetAnswer(answer)
-                    } else {
-                        ApplicationAction::QuitAnswer(answer)
-                    }),
-                );
-            }
         }
     }
 }
 
-/// Dialog 136 with each item's button cleared to black and labelled from the
-/// game's own strings.
+/// The question strip (dialog 136) beside the information box, with the game's own strings as the
+/// captions of its two halves: the left half's caption goes into the strip's first parameter and
+/// the right half's into the second.
+///
+/// Original: question3
 fn draw_choice_dialog(
     assets: &Assets,
+    placement: crate::placement::Placement,
     choices: [(usize, u32, ApplicationAction); 2],
     controls: &mut Vec<Control>,
 ) {
     controls.clear();
-    assets.draw_dialog(136);
-    for (item, address, action) in choices {
-        let label = assets.game_text.text(address, true).unwrap_or_default();
-        let rect = assets.dialog_rect(136, item);
-        draw_rectangle(rect.x + 2., rect.y + 2., rect.w - 4., rect.h - 4., BLACK);
-        assets.dialog_text(&label, rect);
+    let origin = placement.question_strip();
+    let caption = |half: usize| {
+        choices
+            .iter()
+            .find(|(item, ..)| *item == half)
+            .and_then(|(_, address, _)| assets.game_text.text(*address, true).ok())
+            .unwrap_or_default()
+    };
+    let (left, right) = (caption(LEFT_HALF), caption(RIGHT_HALF));
+    assets.draw_dialog_with_parameters(136, origin, &[&left, &right]);
+    for (item, _, action) in choices {
         controls.push(Control {
-            rect,
+            rect: assets.dialog_rect_at(136, item, origin),
             enabled: true,
             action: Action::Application(action),
         });
     }
 }
+
+/// The strip's item for its left half.
+const LEFT_HALF: usize = 2;
+/// The strip's item for its right half.
+const RIGHT_HALF: usize = 1;

@@ -9,7 +9,7 @@ const APPLICATION_PICTURES: &[i16] = &[
     179, 180, 181, 182, 183, 187, 195, 203, 204, 214, 215, 216, 221, 222, 233, 234, 235, 15, 16,
     133, 134, 136, 137, 138, 144, 147, 148, 150, 152, 153, 156, 167, 170, 175, 190, 191, 202, 193,
     194, 145, 201, 161, 176, 184, 198, 207, 230, 232, 212, 213, 226, 227, 216, 402, 403, 163, 229,
-    231, 401,
+    231, 401, 146, 192, 206,
 ];
 
 /// The colour cursor combatinfo shows over a guarding body: 'crsr' 132.
@@ -29,11 +29,15 @@ const DIALOG_IDS: &[i16] = &[
     133,
     136,
     137,
+    140,
+    143,
     144,
     147,
     148,
     149,
+    150,
     153,
+    156,
     157,
     158,
     159,
@@ -55,7 +59,7 @@ pub const RESTRICTIONS_DIALOG: i16 = -7931;
 const SQUAD_DIALOG_ITEMS: i16 = 145;
 
 /// Main-window 'CNTL' resources other than the 300..=309 and 190..=195 ranges.
-const MAIN_CONTROL_IDS: [i16; 7] = [142, 154, 155, 166, 167, 168, 169];
+const MAIN_CONTROL_IDS: [i16; 8] = [142, 154, 155, 166, 167, 168, 169, 175];
 
 /// Every main-window 'CNTL' the desktop places.
 fn main_control_ids() -> impl Iterator<Item = i16> {
@@ -72,6 +76,8 @@ struct Dialogs {
 }
 
 /// The executable's 'vers' 1 short version string.
+///
+/// Original: GetVersStr
 fn load_executable_version(content: &Content, extracted: &Path) -> Result<String, ContentError> {
     let version = content
         .resources
@@ -204,6 +210,7 @@ struct Loaded {
     menu_bar: Option<Vec<i16>>,
     font: Option<Font>,
     movie_background: Option<Texture2D>,
+    list_background: Option<Texture2D>,
     button_pens: [Option<graphics::Image>; 2],
     names: HashMap<i16, String>,
     spell_names: HashMap<i16, String>,
@@ -334,11 +341,15 @@ impl Loaded {
                 &read_resource(extracted, resource)?,
             )?);
         }
-        if cargo && resource.r#type == "ppat" && resource.id == 131 {
+        if cargo && resource.r#type == "ppat" && matches!(resource.id, 131 | 134) {
             let image = graphics::decode_pattern(&read_resource(extracted, resource)?)?;
             let texture = Texture2D::from_rgba8(image.width, image.height, &image.rgba);
             texture.set_filter(FilterMode::Nearest);
-            self.movie_background = Some(texture);
+            if resource.id == 131 {
+                self.movie_background = Some(texture);
+            } else {
+                self.list_background = Some(texture);
+            }
         }
         if cargo && resource.r#type == "MENU" {
             let menu = ui::menu(&read_resource(extracted, resource)?)
@@ -360,6 +371,8 @@ impl Loaded {
     }
 
     /// Terrain, panel and dialog pictures, portraits, icons and target patterns.
+    ///
+    /// Original: allocatebuilding
     fn load_textures(
         &mut self,
         resource: &centurions_content::Resource,
@@ -483,6 +496,8 @@ pub struct Assets {
     base_panels: HashMap<i16, Texture2D>,
     base_icons: HashMap<i16, Texture2D>,
     pub movie_background: Texture2D,
+    /// 'ppat' 134, which the Items window's rows are erased with.
+    pub list_background: Texture2D,
     /// The button pens ToolBoxInit loads: 'ppat' 133 (light) and 136 (dark).
     pub button_pens: [Option<graphics::Image>; 2],
     pub menus: HashMap<i16, ui::Menu>,
@@ -490,7 +505,8 @@ pub struct Assets {
     pub font: Font,
     original_font: Font,
     pub menu_font: Font,
-    symbol_font: Font,
+    /// The Apple menu's title: the game's icon as a silhouette, tinted like the menu text.
+    pub menu_icon: Texture2D,
     pub music_ids: Vec<i16>,
     pub names: HashMap<i16, String>,
     pub spell_names: HashMap<i16, String>,
@@ -533,6 +549,38 @@ pub fn texture_in(texture: &Texture2D, rect: Rect) {
             ..Default::default()
         },
     );
+}
+
+/// Fills `rect` with a pixel pattern, its tiles lined up on the port's origin `anchor` as
+/// QuickDraw lines a pattern up on its port.
+pub fn fill_pattern(texture: &Texture2D, rect: Rect, anchor: Vec2) {
+    let (width, height) = (texture.width(), texture.height());
+    let first = vec2(
+        anchor.x + ((rect.x - anchor.x) / width).floor() * width,
+        anchor.y + ((rect.y - anchor.y) / height).floor() * height,
+    );
+    let mut y = first.y;
+    while y < rect.bottom() {
+        let mut x = first.x;
+        while x < rect.right() {
+            let tile = Rect::new(x, y, width, height);
+            if let Some(clip) = tile.intersect(rect) {
+                draw_texture_ex(
+                    texture,
+                    clip.x,
+                    clip.y,
+                    WHITE,
+                    DrawTextureParams {
+                        dest_size: Some(clip.size()),
+                        source: Some(Rect::new(clip.x - x, clip.y - y, clip.w, clip.h)),
+                        ..Default::default()
+                    },
+                );
+            }
+            x += width;
+        }
+        y += height;
+    }
 }
 
 /// Draws `texture` as a 32 by 32 icon with its top left at `origin`.
@@ -597,6 +645,7 @@ impl Assets {
             menu_bar,
             font,
             movie_background,
+            list_background,
             button_pens,
             names,
             spell_names,
@@ -662,10 +711,16 @@ impl Assets {
             panels,
             movie_background: movie_background
                 .ok_or_else(|| ContentError::Invalid("movie pixel pattern 131 missing".into()))?,
+            list_background: list_background
+                .ok_or_else(|| ContentError::Invalid("list pixel pattern 134 missing".into()))?,
             button_pens,
             menus,
             menu_bar,
-            symbol_font: font.clone(),
+            menu_icon: {
+                let texture = Texture2D::from_rgba8(16, 16, &crate::app_icon::silhouette());
+                texture.set_filter(FilterMode::Nearest);
+                texture
+            },
             original_font: font.clone(),
             menu_font: std::env::var_os("WINDIR")
                 .and_then(|root| std::fs::read(Path::new(&root).join("Fonts/segoeui.ttf")).ok())
@@ -777,12 +832,11 @@ impl Assets {
         self.icons = icons;
         Ok(())
     }
-    /// The title shown in the menu bar for a menu; the Apple menu's title is the
-    /// Apple symbol.
+    /// The title shown in the menu bar for a menu; the Apple menu's title is drawn as the
+    /// game's icon in place of its Apple character, so its text is empty.
     pub fn menu_title(&self, resource_id: i16) -> Option<&str> {
         let title = self.menus.get(&resource_id)?.title.as_str();
-        // Textile sfnt 30600 maps the Apple character to glyph 210 in its Unicode cmap.
-        Some(if title == "\u{14}" { "\u{f8ff}" } else { title })
+        Some(if title == "\u{14}" { "" } else { title })
     }
     /// The name stored under `id`, empty if there is none.
     pub fn name(&self, id: i16) -> String {
@@ -826,6 +880,23 @@ impl Assets {
         self.transparent.borrow_mut().insert(id, texture.clone());
         Some(texture)
     }
+    /// Copies `source`, in picture pixels, of picture `id` to `dest` with its white pixels left
+    /// out, as CopyBits' transparent mode does.
+    pub fn transparent_part(&self, id: i16, source: Rect, dest: Rect) {
+        if let Some(texture) = self.transparent_picture(id) {
+            draw_texture_ex(
+                &texture,
+                dest.x,
+                dest.y,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(vec2(dest.w, dest.h)),
+                    source: Some(source),
+                    ..Default::default()
+                },
+            );
+        }
+    }
     /// Draws the whole of picture `id` scaled into `rect`.
     pub fn panel(&self, id: i16, rect: Rect) {
         if let Some(texture) = self.panels.get(&id) {
@@ -841,16 +912,14 @@ impl Assets {
             );
         }
     }
-    /// Where dialog `id` sits in the window: centred, below the menu bar.
+    /// Where dialog `id` sits when the game never moves it and its resource centres it on the
+    /// screen.
     pub fn dialog_origin(&self, id: i16) -> Vec2 {
-        let size = self
-            .dialog_sizes
-            .get(&id)
-            .copied()
-            .unwrap_or(vec2(640., 460.));
-        vec2(
-            ((800. - size.x) / 2.).max(0.),
-            20. + ((580. - size.y) / 2.).max(0.),
+        crate::placement::centred(
+            self.dialog_sizes
+                .get(&id)
+                .copied()
+                .unwrap_or(vec2(640., 460.)),
         )
     }
     /// Dialog `id`'s item number `item` (counting from 1) as a window rectangle.
@@ -868,27 +937,55 @@ impl Assets {
             (bottom - top) as f32,
         )
     }
-    /// Draws dialog `id` centred in the window.
+    /// Draws dialog `id` where its resource centres it on the screen.
     pub fn draw_dialog(&self, id: i16) {
         self.draw_dialog_at(id, self.dialog_origin(id));
     }
     /// Draws dialog `id` with its top left at `origin`: its pictures, then its
     /// static text. Text that holds a parameter mark is left for the caller to draw.
     pub fn draw_dialog_at(&self, id: i16, origin: Vec2) {
-        self.draw_dialog_items(id, origin, None);
+        self.draw_dialog_items(id, origin, self.dialog_sizes[&id], None, None);
+    }
+    /// Draws dialog `id` as `draw_dialog_at` does over the pixel pattern its window's background
+    /// is set to instead of black.
+    ///
+    /// Original: BackPixPat, DrawDialog
+    pub fn draw_patterned_dialog(&self, id: i16, origin: Vec2, background: &Texture2D) {
+        self.draw_dialog_items(id, origin, self.dialog_sizes[&id], None, Some(background));
+    }
+    /// Draws dialog `id` as `draw_dialog_at` does in a window resized to `size`, which shows only
+    /// the items inside it.
+    ///
+    /// Original: SizeWindow
+    pub fn draw_sized_dialog(&self, id: i16, origin: Vec2, size: Vec2) {
+        self.draw_dialog_items(id, origin, size, None, None);
     }
     /// Draws dialog `id` as `draw_dialog_at` does, with the parameter marks of its static text
     /// (`^0` to `^3`) replaced by `parameters`.
     ///
     /// Original: ParamText
     pub fn draw_dialog_with_parameters(&self, id: i16, origin: Vec2, parameters: &[&str]) {
-        self.draw_dialog_items(id, origin, Some(parameters));
+        self.draw_dialog_items(id, origin, self.dialog_sizes[&id], Some(parameters), None);
     }
-    /// Draws the dialog's pictures and static text; `parameters` fills its parameter marks, and
-    /// without them text holding a mark is left out.
-    fn draw_dialog_items(&self, id: i16, origin: Vec2, parameters: Option<&[&str]>) {
-        let size = self.dialog_sizes[&id];
-        draw_rectangle(origin.x, origin.y, size.x, size.y, BLACK);
+    /// Draws the dialog's pictures and static text inside a window of `size` over black or the
+    /// window's background pattern; `parameters` fills its parameter marks, and without them text
+    /// holding a mark is left out.
+    fn draw_dialog_items(
+        &self,
+        id: i16,
+        origin: Vec2,
+        size: Vec2,
+        parameters: Option<&[&str]>,
+        background: Option<&Texture2D>,
+    ) {
+        match background {
+            Some(pattern) => fill_pattern(
+                pattern,
+                Rect::new(origin.x, origin.y, size.x, size.y),
+                origin,
+            ),
+            None => draw_rectangle(origin.x, origin.y, size.x, size.y, BLACK),
+        }
         let port = Rect::new(origin.x, origin.y, size.x, size.y);
         for (i, item) in self.dialogs[&id].iter().enumerate() {
             let rect = self.dialog_rect_at(id, i + 1, origin);
@@ -943,27 +1040,39 @@ impl Assets {
     pub fn menu_text(&self, text: &str, x: f32, y: f32, size: u16, color: Color) {
         self.draw_text(text, x, y, size, color, &self.menu_font);
     }
-    /// Prints `text` in `font`; the Apple symbol comes from the symbol font.
+    /// Prints `text` in `font`.
     fn draw_text(&self, text: &str, x: f32, y: f32, size: u16, color: Color, font: &Font) {
         draw_text_ex(
             text,
             x,
             y,
             TextParams {
-                font: Some(if text == "\u{f8ff}" {
-                    &self.symbol_font
-                } else {
-                    font
-                }),
+                font: Some(font),
                 font_size: size,
                 color,
                 ..Default::default()
             },
         );
     }
-    /// Dialog text: 12-point yellow on 14-pixel lines.
+    /// Prints `text` in bold at baseline `(x, y)` in the game font: each glyph is struck twice a
+    /// pixel apart and the line advances a pixel further for each character, as QuickDraw's
+    /// synthesised bold does.
+    pub fn bold_text(&self, text: &str, x: f32, y: f32, size: u16, color: Color) {
+        let mut left = x;
+        for character in text.chars() {
+            let glyph = character.to_string();
+            self.text(&glyph, left, y, size, color);
+            self.text(&glyph, left + 1., y, size, color);
+            left += self.bold_width(&glyph, size);
+        }
+    }
+    /// The width of `text` in the synthesised bold of the game font.
+    pub fn bold_width(&self, text: &str, size: u16) -> f32 {
+        self.text_width(text, size) + text.chars().count() as f32
+    }
+    /// Dialog text: 12-point yellow on the game font's 12-point lines.
     pub fn dialog_text(&self, text: &str, rect: Rect) -> f32 {
-        self.wrapped_color(text, rect, 12, 14., YELLOW)
+        self.wrapped_color(text, rect, 12, line_height(12), YELLOW)
     }
     /// Word-wraps white `text` into `rect`; returns the height used.
     pub fn wrapped(&self, text: &str, rect: Rect, size: u16, line_height: f32) -> f32 {
@@ -980,6 +1089,40 @@ impl Assets {
         line_height: f32,
         color: Color,
     ) -> f32 {
+        self.wrap(text, rect, size, line_height, color, false)
+    }
+    /// Word-wraps `text` in bold into `rect` on the game font's lines for `size`; returns the
+    /// height used.
+    pub fn bold_wrapped(&self, text: &str, rect: Rect, size: u16, color: Color) -> f32 {
+        self.wrap(text, rect, size, line_height(size), color, true)
+    }
+    /// Word-wraps `text` into `rect` with the first baseline one em below its top, in plain or
+    /// synthesised bold; returns the height used.
+    fn wrap(
+        &self,
+        text: &str,
+        rect: Rect,
+        size: u16,
+        line_height: f32,
+        color: Color,
+        bold: bool,
+    ) -> f32 {
+        let width = |line: &str| {
+            if bold {
+                self.bold_width(line, size)
+            } else {
+                self.text_width(line, size)
+            }
+        };
+        let print = |line: &str, y: f32| {
+            if y <= rect.y + rect.h {
+                if bold {
+                    self.bold_text(line, rect.x, y, size, color);
+                } else {
+                    self.text(line, rect.x, y, size, color);
+                }
+            }
+        };
         let mut y = rect.y + f32::from(size);
         let mut line = String::new();
         let paragraphs = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -990,12 +1133,8 @@ impl Assets {
                 } else {
                     format!("{line} {word}")
                 };
-                if measure_text(&proposed, Some(&self.font), size, 1.).width > rect.w
-                    && !line.is_empty()
-                {
-                    if y <= rect.y + rect.h {
-                        self.text(&line, rect.x, y, size, color);
-                    }
+                if width(&proposed) > rect.w && !line.is_empty() {
+                    print(&line, y);
                     y += line_height;
                     line.clear();
                 }
@@ -1004,12 +1143,17 @@ impl Assets {
                 }
                 line.push_str(word);
             }
-            if y <= rect.y + rect.h {
-                self.text(&line, rect.x, y, size, color);
-            }
+            print(&line, y);
             y += line_height;
             line.clear();
         }
         y - rect.y
     }
+}
+
+/// The distance between lines of the game font at `size` points: the em, the descent and the
+/// leading of its font record, each rounded to whole pixels.
+pub fn line_height(size: u16) -> f32 {
+    let size = u32::from(size);
+    (size + (size * 512 + 1023) / 2048 + (size * 171 + 1024) / 2048) as f32
 }

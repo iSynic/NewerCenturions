@@ -16,8 +16,15 @@ const TORCH_ICON: i16 = 146;
 const PARTY_EFFECT_ICONS: i16 = 13992;
 /// How many ticks (sixtieths of a second) each picture of the party effect animation lasts.
 const ANIMATION_TICKS: f64 = 10.;
-/// Draws the squad's rows beside the map (portrait, name, action points, stamina and
-/// psi points) and their controls. Returns the selected warrior.
+/// Draws the squad's rows beside the map and their controls, returning the selected warrior. Each
+/// row puts PICT 1 behind the portrait box and PICT 189 behind the text, plots the portrait with
+/// its marks, and prints in yellow the name in bold, the actions per round, the psi points (a
+/// maximum of zero shows the short dashes), the stamina, and the shield chance, shield points and
+/// armor; a pool below its maximum takes the below-maximum colour, a value above 999 is drawn at
+/// size 10, and the size a stamina above 999 sets carries on to the last three numbers. A click on
+/// a row's portrait cell selects the warrior.
+///
+/// Original: updateprep, updatepictbox, updatecharshort, buttonchoice
 pub(super) fn roster(
     state: &Session,
     assets: &Assets,
@@ -25,71 +32,71 @@ pub(super) fn roster(
     controls: &mut Vec<Control>,
 ) -> usize {
     let selected = crate::acting::acting_slot(state, ui.selected);
+    let left = layout::ORIGIN_LEFT;
     for (index, w) in state.warriors.iter().enumerate() {
-        let rect = layout::row(index);
-        assets.panel(189, Rect::new(rect.x + 50., rect.y, 260., 50.));
-        if let Ok(id) = w.record().portrait()
-            && let Some(texture) = assets.portraits.get(&id)
-        {
-            crate::assets::texture_in(texture, Rect::new(rect.x + 2., rect.y + 2., 46., 46.));
-        }
-        let name = if ui.preferences.enabled(crate::preferences::pref::APPEND_MOS) {
-            let mos = w.record().mos().unwrap_or(0);
-            let names = assets
-                .character_strings
-                .get(&131)
-                .and_then(|b| centurions_content::ui::string_list(b).ok())
-                .unwrap_or_default();
-            names
-                .get(mos.saturating_sub(1) as usize)
-                .filter(|n| !n.is_empty())
-                .map_or_else(|| w.name.clone(), |n| format!("{} {n}", w.name))
-        } else {
-            w.name.clone()
-        };
-        assets.text(&name, rect.x + 87., rect.y + 21., 12, YELLOW);
-        assets.text(
-            &field(if state.phase == Phase::Combat {
-                w.record().action_points()
-            } else {
-                w.record().actions_per_round()
-            }),
-            rect.x + 281.,
-            rect.y + 21.,
-            12,
-            WHITE,
-        );
-        assets.text(
-            &field(w.record().stamina()),
-            rect.x + 99.,
-            rect.y + 44.,
-            12,
-            SKYBLUE,
-        );
-        assets.text(
-            &if w.record().psi_points_max().ok() == Some(0) {
-                "---".into()
-            } else {
-                field(w.record().psi_points())
+        let record = w.record();
+        let top = layout::ROW_Y + index as f32 * layout::ROW_HEIGHT;
+        assets.panel(189, Rect::new(left + 380., top, 260., layout::ROW_HEIGHT));
+        assets.panel(1, Rect::new(left + 320., top, 60., layout::ROW_HEIGHT));
+        crate::portrait::draw(
+            assets,
+            w,
+            vec2(left + 339., top + 9.),
+            crate::portrait::Marks {
+                class_label: ui.preferences.enabled(crate::preferences::pref::APPEND_MOS),
+                conditions: Some((left + 574., 2.)),
+                automatic: state
+                    .combat
+                    .as_ref()
+                    .is_some_and(|combat| combat.do_auto.get(index).copied().unwrap_or(false)),
+                in_combat: state.combat.is_some(),
             },
-            rect.x + 148.,
-            rect.y + 44.,
+        );
+        let line = top + 22.;
+        let baseline = top + 44.;
+        assets.bold_text(&w.name, left + 420., line, 12, YELLOW);
+        assets.text(
+            &field(record.actions_per_round()),
+            left + 610.,
+            line,
             12,
-            WHITE,
+            YELLOW,
+        );
+        let maximum = record.psi_points_max().unwrap_or(0);
+        if maximum == 0 {
+            let dashes = assets
+                .game_text
+                .text(game_strings::NO_PSI_SHORT, true)
+                .unwrap_or_default();
+            assets.text(&dashes, left + 466., baseline, 12, YELLOW);
+        } else {
+            pool(
+                assets,
+                record.psi_points().unwrap_or(0),
+                maximum,
+                vec2(left + 466., baseline),
+            );
+        }
+        let stamina = record.stamina().unwrap_or(0);
+        let size = pool(
+            assets,
+            stamina,
+            record.stamina_max().unwrap_or(0),
+            vec2(left + 427., baseline),
         );
         for (value, x) in [
-            (w.record().shield_chance(), 208.),
-            (w.record().shield_points(), 247.),
-            (w.record().armor_rating(), 294.),
+            (record.shield_chance(), 524.),
+            (record.shield_points(), 563.),
+            (record.armor_rating(), 609.),
         ] {
-            assets.text(&field(value), rect.x + x, rect.y + 44., 12, YELLOW);
+            assets.text(&field(value), left + x, baseline, size, YELLOW);
         }
-        turn_light(state, assets, w, rect);
+        turn_light(state, assets, w, vec2(left + 387., top + 9.));
         if index == selected {
-            draw_rectangle_lines(rect.x, rect.y, 308., 50., 1., YELLOW);
+            super::bevel::press_square(assets, selection_cell(index), true);
         }
         controls.push(Control {
-            rect,
+            rect: layout::roster_cell(index),
             enabled: true,
             action: if state.exploration.as_ref().is_some_and(|p| {
                 matches!(
@@ -106,12 +113,40 @@ pub(super) fn roster(
     selected
 }
 
+/// Prints a pool's value: in the below-maximum colour while it is below its maximum, at size 10
+/// above 999. Returns the size, which the numbers drawn after it keep.
+///
+/// Original: updatecharshort
+fn pool(assets: &Assets, value: i16, maximum: i16, at: Vec2) -> u16 {
+    let color = if value < maximum {
+        layout::POOL_BELOW_MAXIMUM
+    } else {
+        YELLOW
+    };
+    let size = if value > 999 { 10 } else { 12 };
+    assets.text(&value.to_string(), at.x, at.y, size, color);
+    size
+}
+
+/// The square of squad row `index` the selection marker presses: the portrait's square, in the
+/// game window's rows of 50 pixels from its top.
+///
+/// Original: updatecontrols
+fn selection_cell(index: usize) -> Rect {
+    Rect::new(
+        layout::ORIGIN_LEFT + 330.,
+        layout::ROW_Y + index as f32 * layout::ROW_HEIGHT,
+        layout::ROW_HEIGHT,
+        layout::ROW_HEIGHT,
+    )
+}
+
 /// Draws the light in a squad row during a battle: the low picture once the battle order
 /// has passed the warrior's place or when the warrior has none, the ordinary picture while
 /// the warrior's turn is still to come.
 ///
 /// Original: updatelight
-fn turn_light(state: &Session, assets: &Assets, warrior: &Warrior, row: Rect) {
+fn turn_light(state: &Session, assets: &Assets, warrior: &Warrior, at: Vec2) {
     let Some(combat) = state
         .combat
         .as_ref()
@@ -127,7 +162,7 @@ fn turn_light(state: &Session, assets: &Assets, warrior: &Warrior, row: Rect) {
         } else {
             TURN_LIGHT_ORDINARY
         },
-        Rect::new(row.x + 57., row.y + 9., 9., 9.),
+        Rect::new(at.x, at.y, 9., 9.),
     );
 }
 

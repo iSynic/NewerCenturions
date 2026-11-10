@@ -125,20 +125,12 @@ impl Application {
                         ));
                     }
                     (menu::CHARACTER, character::MODIFY_SQUAD) => {
-                        self.roster
-                            .as_mut()
-                            .unwrap()
-                            .store(&centurions_core::roster::mission_records(state, content)?)?;
-                        self.squad = state
-                            .warriors
-                            .iter()
-                            .map(|w| {
-                                self.warriors(content)
-                                    .iter()
-                                    .position(|r| r.original_sha256 == w.original_sha256)
-                                    .ok_or("Squad warrior missing from roster.")
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
+                        // Each member's row is blanked by minus until plus lists it again.
+                        let roster = self.roster.as_mut().unwrap();
+                        for warrior in &state.warriors {
+                            roster.minus(&warrior.name, false)?;
+                        }
+                        self.squad = state.warriors.clone();
                         self.selection.modify_squad = true;
                         self.screen = Screen::Squad;
                         self.selection.selected = None;
@@ -188,7 +180,7 @@ impl Application {
                     (menu::GAME, game::FAST_SAVE) => next = Some(Action::FastSave),
                     (menu::GAME, game::QUIT) => {
                         if self.screen == Screen::Title {
-                            self.quit = true;
+                            self.quit_game(state, content)?;
                         } else {
                             self.questions.quit = true;
                             events.push(Event::Sound { resource_id: 20005 });
@@ -210,12 +202,14 @@ impl Application {
                         self.open_intro(self.screen, None)
                     }
                     (menu::MISSION, mission::FIRST_SCENARIO..=mission::LAST_SCENARIO) => {
-                        self.selected_scenario = Some(
-                            self.scenario_names
-                                .get(item - mission::FIRST_SCENARIO)
-                                .ok_or("scenario menu entry missing")?
-                                .clone(),
-                        );
+                        let name = self
+                            .scenario_names
+                            .get(item - mission::FIRST_SCENARIO)
+                            .ok_or("scenario menu entry missing")?
+                            .clone();
+                        // The choice is kept with the preferences the next time they are written.
+                        self.help.settings["last_scenario"] = name.clone().into();
+                        self.selected_scenario = Some(name);
                     }
                     (menu::PREFERENCES, preferences::SET_PREFERENCES) => {
                         self.preferences_dialog =

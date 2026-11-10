@@ -48,13 +48,12 @@ pub fn begin(
         .combat
         .as_ref()
         .ok_or_else(|| RuleError::Invalid("combat tables missing".into()))?;
-    let encounter = centurions_content::span(
+    let encounter = crate::exploration::read_extra(
+        &mut state.globals,
         &tables.encounters,
-        usize::from(encounter_id.unsigned_abs()) * 10,
-        10,
-    )?;
-    state.globals.extra_record = encounter.to_vec();
-    let plan = encounter_battle(encounter, &mut state.random)?;
+        encounter_id.unsigned_abs(),
+    );
+    let plan = encounter_battle(&encounter, &mut state.random)?;
     let mut effects = vec![];
     let sound = plan.sound;
     if sound != 0 {
@@ -151,13 +150,13 @@ fn begin_group_return(
                 .map,
         )
         .ok_or_else(|| RuleError::Invalid("map missing".into()))?;
-    let extra = centurions_content::span(
-        &map.combat.as_ref().unwrap().encounters,
-        parameter.unsigned_abs() as usize * 10,
-        10,
-    )?;
-    state.globals.extra_record = extra.to_vec();
-    let plan = crate::story::party::group_encounter(extra, &mut state.random)?;
+    let tables = map.combat.as_ref().ok_or("combat tables missing")?;
+    let extra = crate::exploration::read_extra(
+        &mut state.globals,
+        &tables.encounters,
+        parameter.unsigned_abs(),
+    );
+    let plan = crate::story::party::group_encounter(&extra, &mut state.random)?;
     let additional = if treasure {
         Some(runtime::SelectedBattleTreasure::new(
             state,
@@ -209,14 +208,14 @@ pub fn begin_npc(
     let map = content
         .map(position.map)
         .ok_or_else(|| RuleError::Invalid("map missing".into()))?;
-    let extra = centurions_content::span(
-        &map.combat.as_ref().unwrap().encounters,
-        parameter.unsigned_abs() as usize * 10,
-        10,
-    )?;
-    state.globals.extra_record = extra.to_vec();
+    let tables = map.combat.as_ref().ok_or("combat tables missing")?;
+    let extra = crate::exploration::read_extra(
+        &mut state.globals,
+        &tables.encounters,
+        parameter.unsigned_abs(),
+    );
     let mut start = crate::story::npc_battle::NpcBattleStart::capture(
-        extra,
+        &extra,
         &script.record,
         i16::from(script.cursor),
     )?;

@@ -6,8 +6,9 @@ use macroquad::prelude::*;
 
 impl Application {
     /// Carries out the choices in the preferences dialog, music playlist and popup
-    /// help. Turning popup help off closes the page, plays its sound and then
-    /// flashes the original confirmation message.
+    /// help. A preferences choice takes effect at once and the dialog has no cancel; OK saves the
+    /// preferences. Turning popup help off closes the page, plays its sound and then flashes the
+    /// original confirmation message.
     ///
     /// Original: firstt
     pub(super) fn handle_settings(
@@ -19,32 +20,28 @@ impl Application {
         let next = None;
         let mut events = Vec::new();
         match action {
-            ApplicationAction::PreferenceCancel => {
-                if self
-                    .preferences_dialog
-                    .as_mut()
-                    .is_some_and(|dialog| dialog.close_picker())
-                {
-                    events.push(Event::Sound { resource_id: 141 });
-                } else {
-                    self.preferences_dialog = None;
-                }
-            }
             ApplicationAction::PreferenceItem(item) => {
                 let dialog = self
                     .preferences_dialog
                     .as_mut()
                     .ok_or("Preferences are not open.")?;
                 let taken = dialog.item(item)?;
+                // Each pass writes the choices to the preferences at once; the screen size takes
+                // effect only when OK closes the dialog.
+                let screen = crate::preferences::pref::SCREEN_800_X_600 - 9;
+                let large = self.preferences.controls[screen];
+                self.preferences = dialog.draft.clone();
                 if taken.accepted {
                     let settings = self.help.settings.clone();
                     self.help.settings["native"] = dialog.draft.encode();
                     if let Err(error) = self.help.save() {
                         self.help.settings = settings;
+                        self.preferences.controls[screen] = large;
                         return Err(error.into());
                     }
-                    self.preferences = dialog.draft.clone();
                     self.preferences_dialog = None;
+                } else {
+                    self.preferences.controls[screen] = large;
                 }
                 events.push(Event::Sound {
                     resource_id: taken.sound,
@@ -91,6 +88,13 @@ impl Application {
         Ok(HandleOutcome::Complete(next, events))
     }
 
+    /// Whether the Preferences dialog is open; the window follows its choices only once OK closes
+    /// it.
+    ///
+    /// Original: preference
+    pub fn preferences_open(&self) -> bool {
+        self.preferences_dialog.is_some()
+    }
     /// Records whether the window hides the desktop, in the preferences and in an
     /// open preferences dialog.
     pub fn window_mode(&mut self, fullscreen: bool) {
@@ -99,12 +103,17 @@ impl Application {
             dialog.draft.controls[crate::preferences::pref::HIDE_THE_DESKTOP - 9] = fullscreen;
         }
     }
-    /// Reads the saved preferences, volume, music volume, speed and playlist from `path`. A
-    /// missing or out-of-range sound volume becomes 5, music volume then follows the sound
-    /// volume, and speed becomes 5.
+    /// Reads the saved preferences, volume, music volume, speed, playlist and last scenario chosen
+    /// from `path`. A missing or out-of-range sound volume becomes 5, music volume then follows the
+    /// sound volume, and speed becomes 5. A last scenario that is no longer installed is not
+    /// chosen.
     pub fn preferences(&mut self, path: std::path::PathBuf) -> Result<(), String> {
         self.help.preferences(path)?;
         let settings = &self.help.settings;
+        self.selected_scenario = settings["last_scenario"]
+            .as_str()
+            .filter(|name| self.scenario_names.iter().any(|known| known == name))
+            .map(str::to_owned);
         self.preferences = crate::preferences::Preferences::decode(&settings["native"])?;
         self.audio.volume = settings["volume"]
             .as_u64()

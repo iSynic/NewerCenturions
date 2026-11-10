@@ -4,7 +4,7 @@ use crate::{
     assets::Assets,
     presentation::{Action, Control},
 };
-use centurions_core::{Phase, Session};
+use centurions_core::{Phase, Presentation, Session};
 use macroquad::prelude::*;
 
 /// The menu the player has pulled down, its open submenu and how far its items are scrolled.
@@ -45,6 +45,8 @@ pub(super) mod menu {
     pub mod apple {
         /// "About New Centurions…".
         pub const ABOUT: usize = 1;
+        /// "Print Order Form", which the menu bar does not show.
+        pub const ORDER_FORM: usize = 2;
     }
     pub mod game {
         /// "Load A Saved Game".
@@ -132,9 +134,16 @@ pub(super) mod menu {
 
 impl Application {
     /// Whether menu item `item` of menu `id` can be chosen now; none can while a
-    /// dialog is open.
+    /// dialog is open, the encounter menu and the typed encounter dialog among them.
     pub(super) fn supported(&self, id: i16, item: usize, state: &Session) -> bool {
-        if self.about
+        let modal_presentation = state.exploration.as_ref().is_some_and(|p| {
+            matches!(
+                p.presentation,
+                Some(Presentation::Menu { .. } | Presentation::Typed { .. })
+            )
+        });
+        if modal_presentation
+            || self.about
             || self.screen == Screen::Squad
             || self.questions.quit
             || self.questions.help_reset
@@ -218,21 +227,25 @@ impl Application {
         }
     }
 
-    /// The menu bar's titles laid out left to right, each with its rectangle.
+    /// The menu bar's titles laid out left to right, each with its rectangle; the Apple menu's
+    /// title is as wide as the icon that stands for it.
     pub(super) fn headings(&self, assets: &Assets) -> Vec<(i16, Rect)> {
         let mut x = 8.;
         assets
             .menu_bar
             .iter()
             .map(|id| {
-                let width = measure_text(
-                    assets.menu_title(*id).unwrap_or(""),
-                    Some(&assets.menu_font),
-                    12,
-                    1.,
-                )
-                .width
-                    + 16.;
+                let width = if *id == menu::APPLE {
+                    assets.menu_icon.width()
+                } else {
+                    measure_text(
+                        assets.menu_title(*id).unwrap_or(""),
+                        Some(&assets.menu_font),
+                        12,
+                        1.,
+                    )
+                    .width
+                } + 16.;
                 let rect = Rect::new(x, 0., width, 20.);
                 x += width;
                 (*id, rect)
@@ -241,24 +254,30 @@ impl Application {
     }
 
     /// Draws the menu bar across the top of the window and the pulled-down menu, and
-    /// adds a control for each choosable item.
+    /// adds a control for each choosable item. The Apple menu's title is the game's icon in the
+    /// colour of the menu text.
     pub(super) fn draw_menus(&self, state: &Session, assets: &Assets, controls: &mut Vec<Control>) {
         draw_rectangle(0., 0., 800., 20., Color::from_rgba(238, 238, 238, 255));
         for (id, rect) in self.headings(assets) {
             if self.menu_bar.menu == Some(id) {
                 draw_rectangle(rect.x, rect.y, rect.w, rect.h, DARKBLUE);
             }
-            assets.menu_text(
-                assets.menu_title(id).unwrap_or(""),
-                rect.x + 8.,
-                14.,
-                12,
-                if self.menu_bar.menu == Some(id) {
-                    WHITE
-                } else {
-                    BLACK
-                },
-            );
+            let color = if self.menu_bar.menu == Some(id) {
+                WHITE
+            } else {
+                BLACK
+            };
+            if id == menu::APPLE {
+                draw_texture(&assets.menu_icon, rect.x + 8., 2., color);
+            } else {
+                assets.menu_text(
+                    assets.menu_title(id).unwrap_or(""),
+                    rect.x + 8.,
+                    14.,
+                    12,
+                    color,
+                );
+            }
             if self.menu_bar.menu == Some(id) {
                 let (bounds, rows) = self.dropdown(id, vec2(rect.x, 20.), state, assets, controls);
                 if let Some(sub) = self.menu_bar.submenu
@@ -289,6 +308,8 @@ impl Application {
 
     /// The items of menu `id`, with the scenario names, archive names, held-over allies or note
     /// labels filled in where the menu lists them; a note not yet found shows its unknown label.
+    /// The Apple menu shows only About: Print Order Form and the divider before the desk
+    /// accessories are left out.
     ///
     /// Original: updatemapmenu
     pub(super) fn menu_items(
@@ -298,6 +319,9 @@ impl Application {
         assets: &Assets,
     ) -> centurions_content::ui::Menu {
         let mut menu = assets.menus[&id].clone();
+        if id == menu::APPLE {
+            menu.items.truncate(menu::apple::ORDER_FORM - 1);
+        }
         if id == menu::PREFERENCES {
             for (item, suffix) in menu
                 .items

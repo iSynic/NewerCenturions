@@ -1,9 +1,12 @@
 //! Noon and midnight food consumption, healing and terminal return.
-use crate::{Event, RuleError, Session, feedback::GameFeedback, items, story_health::HealthEvent};
+use crate::{Event, RuleError, Session, feedback::GameFeedback, story_health::HealthEvent};
 use centurions_content::{
     Content,
-    records::{Condition, ItemDefinition, WarriorRecord},
+    records::{Condition, WarriorRecord},
 };
+
+/// The party's rations.
+const FOOD: i16 = 800;
 
 /// Heals each warrior whose stamina is above -10 and below the maximum: a quarter of their level
 /// (their full level for race 3), at least 1, plus any regeneration. Each eats a ration first, and
@@ -26,7 +29,7 @@ pub(super) fn recover(
         } else {
             level / 4
         } as i8;
-        if !consume_food(state, content)? {
+        if !crate::story::inventory::use_party_charge(state, content, FOOD)? {
             amount /= 2;
         }
         let healing = i16::from(amount.max(1)).wrapping_add(
@@ -74,36 +77,4 @@ pub(super) fn recover(
         }
     }
     Ok(())
-}
-
-/// Eats one charge of food (item 800) from the first warrior who carries any, removing the item
-/// when its last charge goes and it is discarded when empty. Returns false when there is none.
-fn consume_food(state: &mut Session, content: &Content) -> Result<bool, RuleError> {
-    for warrior in &mut state.warriors {
-        for (slot, item) in warrior.inventory()?.iter().enumerate() {
-            if item.id() != 800 {
-                continue;
-            }
-            let quantity = item.charge()?;
-            if quantity <= 0 {
-                return Ok(false);
-            }
-            let definition = content
-                .items
-                .get(800)
-                .ok_or_else(|| RuleError::Invalid("food definition unavailable".into()))?;
-            let weight = ItemDefinition(definition).charge_weight()?;
-            let carried = warrior.record().load()?.wrapping_sub(weight);
-            warrior.record_mut().set_load(carried);
-            warrior
-                .record_mut()
-                .set_inventory_quantity(slot, quantity - 1);
-            if quantity == 1 && ItemDefinition(definition).discarded_when_empty()? != 0 {
-                items::remove_inventory_slot(warrior, slot)?;
-            }
-            state.load_item(content, 800)?;
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }

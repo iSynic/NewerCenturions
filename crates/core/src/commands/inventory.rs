@@ -189,6 +189,36 @@ pub(super) fn execute(
         Command::UseItem { warrior, slot } => exploration::use_item(state, content, warrior, slot),
         Command::AddToCrate { item } => insert(item, &mut state.crate_items, true),
         Command::AddToBooty { item } => insert(item, &mut state.booty_list, false),
+        Command::PressUse {
+            warrior,
+            scroll,
+            row,
+        } => items::press_use(state, content, warrior, (scroll, row)),
+        Command::CloseItems { warrior } => items::close_items(state, warrior),
+        Command::DropToCrate {
+            warrior,
+            scroll,
+            row,
+            command_key,
+            protected,
+        } => items::drop_to_crate(
+            state,
+            content,
+            warrior,
+            (scroll, row),
+            command_key,
+            protected,
+        ),
+        Command::JoinItems {
+            warrior,
+            scroll,
+            row,
+        } => items::join_items(state, content, warrior, (scroll, row)),
+        Command::SplitItem {
+            warrior,
+            scroll,
+            row,
+        } => items::split_item(state, content, warrior, (scroll, row)),
         _ => unreachable!("command routed to wrong subsystem"),
     }
 }

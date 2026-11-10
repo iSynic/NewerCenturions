@@ -85,19 +85,7 @@ pub fn ammunition_menu(
     let fixed = first == AmmunitionEntry::Fixed;
     let mut entries = vec![first];
     let mut reserves = vec![];
-    for reserve in 0..=200 {
-        // Reserve 200 lies past the table and shares the first loot-quality
-        // bytes; the game reads it as a reserve all the same.
-        let stock = match reserve {
-            200 => match state.globals.loot_quality.as_deref() {
-                Some(quality) => i32::from_be_bytes(quality[..4].try_into().unwrap()),
-                None => continue,
-            },
-            _ => state.ammunition[reserve],
-        };
-        if stock <= 0 {
-            continue;
-        }
+    for (reserve, stock) in stocked_reserves(state) {
         let ammo = definition(content, reserve as i16 + 200)?;
         let ammo = ItemDefinition(&ammo);
         let (description, units) = (ammo.description_id()?, ammo.supplies_shield_energy()?);
@@ -132,9 +120,62 @@ pub fn ammunition_menu(
     Ok((ItemDefinition(&item).description_id()?, entries))
 }
 
+/// Each reserve with rounds and its stock, in reserve order. Reserve 200 lies past the table and
+/// shares the first loot-quality bytes; the game reads it as a reserve all the same.
+fn stocked_reserves(state: &Session) -> impl Iterator<Item = (usize, i32)> + '_ {
+    (0..=200).filter_map(|reserve| {
+        let stock = match reserve {
+            200 => i32::from_be_bytes(
+                state.globals.loot_quality.as_deref()?[..4]
+                    .try_into()
+                    .ok()?,
+            ),
+            _ => state.ammunition[reserve],
+        };
+        (stock > 0).then_some((reserve, stock))
+    })
+}
+
+/// Closing the popup without a choice keeps what building it loaded: the slot's item, and as the
+/// ammunition the last reserve with rounds, or the loaded ammunition when no reserve has any.
+/// When the loaded ammunition cannot be unloaded a draw of one or two picks clip sound 404 or 405,
+/// drawn whether or not the sound is on, and the Items rows are redrawn. Returns the events and
+/// whether the rows are redrawn.
+///
+/// Original: loadammoproc
+fn cancel(
+    state: &mut Session,
+    content: &Content,
+    owner: usize,
+    slot: usize,
+) -> Result<(Vec<Event>, bool), RuleError> {
+    let (_, entries) = ammunition_menu(state, content, owner, slot)?;
+    let record = state.warriors[owner].record().inventory_slot(slot);
+    let loaded = record.ammunition_id()?;
+    let ammunition = stocked_reserves(state)
+        .last()
+        .map(|(reserve, _)| reserve as i16 + 200)
+        .or((loaded != 0).then_some(loaded));
+    state.load_item(content, record.id())?;
+    if let Some(id) = ammunition {
+        let ammo = definition(content, id)?;
+        let projected = match state.combat.as_mut() {
+            Some(combat) => &mut combat.weapon_traits,
+            None => &mut state.globals.weapon_traits,
+        };
+        projected.load_ammunition(&ammo)?;
+        state.globals.loaded_items.ammo = Some(ammo);
+    }
+    if entries.first() != Some(&AmmunitionEntry::Fixed) {
+        return Ok((vec![], false));
+    }
+    let sound = 403 + state.random.bound(2);
+    Ok((vec![Event::Sound { resource_id: sound }], true))
+}
+
 /// The Items ammunition button and its popup choice. `item` is the chosen
 /// MENU 1000 item; zero stands for the warning path of an item without a
-/// caliber.
+/// caliber, or for the popup closed without a choice.
 pub(crate) fn choose(
     state: &mut Session,
     content: &Content,
@@ -184,9 +225,13 @@ pub(crate) fn choose(
             crate::feedback::GameFeedback::Warning { index: 3 },
         )]);
     }
-    let entry = chosen_entry(state, content, owner, slot, item)?;
     state.globals.inventory_scroll = scroll as u16;
-    let (events, update) = apply_entry(state, content, owner, slot, entry)?;
+    let (events, update) = if item == 0 {
+        cancel(state, content, owner, slot)?
+    } else {
+        let entry = chosen_entry(state, content, owner, slot, item)?;
+        apply_entry(state, content, owner, slot, entry)?
+    };
     if update {
         redraw(state, content, owner, scroll, 0, 10)?;
     }
@@ -310,9 +355,10 @@ pub fn load_control(state: &Session, warrior: usize) -> Result<LoadControl, Rule
         .map_or(LoadControl::Click, |slot| LoadControl::Popup { slot }))
 }
 
-/// The choice made in the popup the combat Load control opened. The warrior must be
-/// the one whose turn it is and the slot the control's own slot. Unloading and fitting
-/// follow the Items rules without redrawing Items rows, and the action then settles.
+/// The choice made in the popup the combat Load control opened; item zero closes it without a
+/// choice. The warrior must be the one whose turn it is and the slot the control's own slot.
+/// Unloading and fitting follow the Items rules without redrawing Items rows, and the action then
+/// settles.
 ///
 /// Original: loadammoproc
 pub(crate) fn choose_combat(
@@ -338,8 +384,12 @@ pub(crate) fn choose_combat(
     if load_control(state, owner)? != (LoadControl::Popup { slot }) {
         return Err("the Load control offers a different slot".into());
     }
-    let entry = chosen_entry(state, content, owner, slot, item)?;
-    let (mut events, _) = apply_entry(state, content, owner, slot, entry)?;
+    let (mut events, _) = if item == 0 {
+        cancel(state, content, owner, slot)?
+    } else {
+        let entry = chosen_entry(state, content, owner, slot, item)?;
+        apply_entry(state, content, owner, slot, entry)?
+    };
     events.extend(crate::combat::runtime::finish_player_action(
         state,
         content,

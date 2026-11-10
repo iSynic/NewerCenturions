@@ -39,6 +39,19 @@ impl LoadedItems {
         Ok(context)
     }
 
+    /// Loads an item's definition as the item being worked on with its type as stored, and returns
+    /// its caliber word. An id past the five item tables of 200 leaves the item already loaded.
+    ///
+    /// Original: loaditemnotype
+    pub(crate) fn load_item_keeping_type(&mut self, items: &[Vec<u8>], id: i16) -> Option<i16> {
+        let record = items
+            .get(usize::from(id.unsigned_abs()))
+            .filter(|record| id.unsigned_abs() < 1000 && record.len() == ITEM_BYTES)?;
+        let caliber = word(record, 32).ok()?;
+        self.item = Some(record.clone());
+        Some(caliber)
+    }
+
     /// Loads item 0 as the item, its ammunition and its weapon, the weapon copy having no
     /// immunity class.
     pub(crate) fn load_natural(&mut self, items: &[Vec<u8>]) -> Result<(), RuleError> {
@@ -91,7 +104,7 @@ fn put_word(bytes: &mut [u8], offset: usize, value: i16) {
 
 /// The definition of an item, with its type made positive.
 ///
-/// Original: loadammo
+/// Original: loadammo, loaditemcompare
 pub fn definition(content: &Content, id: i16) -> Result<Vec<u8>, RuleError> {
     item_definition(&content.items, id)
 }

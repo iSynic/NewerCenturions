@@ -39,6 +39,11 @@ impl UiState {
                             resource_id: 141,
                         });
                 }
+                for resource_id in self.inventory.take_sounds() {
+                    self.feedback
+                        .queue
+                        .push_back(centurions_core::feedback::GameFeedback::Sound { resource_id });
+                }
                 Ok(result)
             }
             other => Ok(other),
@@ -111,6 +116,7 @@ impl UiState {
     /// Takes in the events of a command: messages and sounds to show, delays, and
     /// outdoor effects to play.
     pub fn events(&mut self, events: &[Event]) {
+        self.inventory.observe(events);
         for event in events {
             if matches!(event, Event::ItemUpgraded { .. }) {
                 self.inventory.selected = None;

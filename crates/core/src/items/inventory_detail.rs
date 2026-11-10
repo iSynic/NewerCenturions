@@ -32,7 +32,7 @@ pub(crate) fn quick_info(
 /// Loads an item spell in 1101..3999: its `spell_info`, identity and health effect.
 ///
 /// Original: loadspell2
-pub(super) fn load_spell(
+pub(crate) fn load_spell(
     state: &mut Session,
     content: &Content,
     spell: i16,

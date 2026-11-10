@@ -81,7 +81,7 @@ pub(super) fn compare_outdoor_centers() -> Vec<ViewportCase> {
                 case["origin"][0].as_i64().unwrap() as i32,
                 case["origin"][1].as_i64().unwrap() as i32,
             );
-            assert_eq!(crate::layout::outdoor_origin(x, y), expected);
+            assert_eq!(crate::layout::outdoor_origin(x, y, true), expected);
             ((x, y), expected)
         })
         .collect()

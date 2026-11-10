@@ -11,6 +11,10 @@ pub const DEACTIVATE_WARRIOR_EDIT: u32 = 0x403658;
 pub const START_MUSIC: u32 = 0x40355e;
 /// Pascal " ---" (a maximum Psi of zero).
 pub const NO_PSI: u32 = 0x400a76;
+/// Pascal " ---" (a maximum Psi of zero in a squad row beside the map).
+pub const NO_PSI_SHORT: u32 = 0x400a70;
+/// Pascal "" (an empty readout in the Items window's warrior panel).
+pub const BLANK: u32 = 0x400a75;
 /// Pascal "---" (the capture button's second special skill when the warrior has none).
 pub const NO_SPECIAL_SKILL: u32 = 0x400a6c;
 /// Pascal "No Special Attacks".

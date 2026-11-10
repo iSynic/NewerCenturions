@@ -1,5 +1,5 @@
 //! The Items screen: the two item lists, their categories and controls.
-use super::{Inventory, InventoryAction};
+use super::{Inventory, InventoryAction, portraits::STOCKPILE};
 use crate::{
     assets::Assets,
     presentation::{Action, Control},
@@ -8,15 +8,23 @@ use centurions_content::{Content, InventoryRecord, Warrior};
 use centurions_core::Session;
 use macroquad::prelude::*;
 impl Inventory {
-    /// Draws the Items screen: both warriors' lists with their portraits and
-    /// scroll bars and the controls.
+    /// Draws the Items window, or the trade or shop window: both warriors' lists with their
+    /// portraits and scroll bars and the controls, each where the window's controls and pictures
+    /// put it. `class_label` is the Append M.O.S. To Portrait preference.
+    ///
+    /// Original: Showitems, change, Display
     pub fn draw(
         &self,
         content: &Content,
         state: &Session,
         assets: &Assets,
+        class_label: bool,
         controls: &mut Vec<Control>,
     ) {
+        if self.items_window(state) {
+            self.draw_items_window(content, state, assets, class_label, controls);
+            return;
+        }
         controls.clear();
         draw_rectangle(0., 20., 800., 580., WHITE);
         assets.panel(170, Rect::new(343., 20., 114., 387.));
@@ -24,7 +32,8 @@ impl Inventory {
         assets.panel(227, Rect::new(0., 407., 80., 73.));
         assets.panel(227, Rect::new(720., 407., 80., 73.));
         assets.panel(226, Rect::new(0., 480., 800., 120.));
-        for side in 0..2 {
+        let mut counts = [0; 2];
+        for (side, count) in counts.iter_mut().enumerate() {
             let Some(warrior) = state
                 .warriors
                 .get(self.members[if Self::shop(state) { 0 } else { side }])
@@ -32,6 +41,7 @@ impl Inventory {
                 continue;
             };
             let records = self.items(state, content, side).unwrap_or_default();
+            *count = records.len();
             for (row, (slot, item)) in records.iter().skip(self.scroll[side]).take(9).enumerate() {
                 self.draw_item_row(content, assets, side, row, *slot, item, controls);
             }
@@ -41,72 +51,25 @@ impl Inventory {
             draw_owner_footer(assets, warrior, side, records.len());
         }
         for (side, layout) in SIDE_LAYOUT.iter().enumerate() {
-            for (y, delta) in [(20., -1), (384., 1)] {
-                let rect = Rect::new(layout.scroll, y, 16., 20.);
-                crate::presentation::push_panel_control(
-                    assets,
-                    controls,
-                    if delta < 0 { 179 } else { 183 },
-                    rect,
-                    true,
-                    Action::Inventory(InventoryAction::Scroll { side, delta }),
-                );
-            }
-        }
-        for member in 0..if Self::shop(state) { 0 } else { 6 } {
-            assets.panel(154, Rect::new(375., 20. + member as f32 * 50., 50., 50.));
-        }
-        let mos_names = assets
-            .character_strings
-            .get(&131)
-            .and_then(|bytes| centurions_content::ui::string_list(bytes).ok())
-            .unwrap_or_default();
-        for (member, warrior) in state.warriors.iter().enumerate() {
-            for side in 0..if Self::shop(state) { 1 } else { 2 } {
-                let rect = Rect::new(
-                    342. + side as f32 * 52. + (member % 3) as f32 * 24.,
-                    408. + (member / 3) as f32 * 24.,
-                    22.,
-                    22.,
-                );
-                if let Some(image) = assets
-                    .portraits
-                    .get(&warrior.record().portrait().unwrap_or(0))
-                {
-                    crate::assets::texture_in(image, rect);
-                }
+            let bar = layout.scroll;
+            crate::presentation::scroll_bar::draw(
+                bar,
+                self.scroll[side] as i32,
+                counts[side].saturating_sub(9) as i32,
+            );
+            for (y, delta) in [(bar.y, -1), (bar.bottom() - 16., 1)] {
                 controls.push(Control {
-                    rect,
+                    rect: Rect::new(bar.x, y, bar.w, 16.),
                     enabled: true,
-                    action: Action::Inventory(InventoryAction::Warrior { side, member }),
-                });
-            }
-            if Self::shop(state) {
-                continue;
-            }
-            let y = 20. + member as f32 * 50.;
-            if let Some(image) = assets
-                .portraits
-                .get(&warrior.record().portrait().unwrap_or(0))
-            {
-                crate::assets::icon_in(image, vec2(383., y + 8.));
-            }
-            if let Ok(mos) = warrior.record().mos()
-                && let Some(name) = mos_names.get(mos.wrapping_sub(1) as usize)
-            {
-                let name: String = name.chars().take(7).collect();
-                assets.text(&name, 380., y + 47., 10, YELLOW);
-            }
-            for side in 0..if Self::shop(state) { 1 } else { 2 } {
-                controls.push(Control {
-                    rect: Rect::new(375. + side as f32 * 25., y, 25., 50.),
-                    enabled: true,
-                    action: Action::Inventory(InventoryAction::Warrior { side, member }),
+                    action: Action::Inventory(InventoryAction::Scroll { side, delta }),
                 });
             }
         }
+        if !Self::shop(state) {
+            Self::draw_column(state, assets, class_label);
+        }
+        self.draw_credits(state, assets);
         if Self::shop(state) {
-            assets.text(&state.party_currency.to_string(), 507., 446., 12, YELLOW);
             if let Some((side, slot)) = self.selected
                 && let Ok(item) = self.record(state, content, side, slot)
                 && let Ok(price) =
@@ -142,27 +105,25 @@ impl Inventory {
                 assets,
                 controls,
                 202,
-                Rect::new(183., 411., 102., 40.),
+                ENTER_SHOP,
                 state
                     .shop_access
                     .as_ref()
                     .is_some_and(|a| a.level == state.scenario_level),
                 Action::Inventory(InventoryAction::Shop),
             );
-            self.draw_ammunition_button(assets, controls);
         }
-        assets.panel(175, Rect::new(375., 320., 50., 37.));
+        self.draw_strips(state, assets, controls);
+        let stockpile = (!Self::shop(state)).then_some((STOCKPILE, InventoryAction::Stockpile));
         for (rect, action) in [
-            (Rect::new(663., 412., 50., 39.), InventoryAction::Done),
-            (Rect::new(375., 357., 50., 25.), InventoryAction::Refit(0)),
-            (Rect::new(375., 382., 50., 25.), InventoryAction::Refit(1)),
-            (Rect::new(375., 320., 50., 37.), InventoryAction::Stockpile),
-            // CNTL 140, the info button in the PICT 148 strip.
-            (
-                Rect::new(609., 412., 47., 35.),
-                InventoryAction::Information,
-            ),
-        ] {
+            (DONE, InventoryAction::Done),
+            (REFIT[0], InventoryAction::Refit(0)),
+            (REFIT[1], InventoryAction::Refit(1)),
+            (ITEMS_WINDOW, InventoryAction::ItemsWindow),
+        ]
+        .into_iter()
+        .chain(stockpile)
+        {
             controls.push(Control {
                 rect,
                 enabled: if Self::shop(state) && matches!(action, InventoryAction::Refit(1)) {
@@ -173,7 +134,7 @@ impl Inventory {
                             action,
                             InventoryAction::Done
                                 | InventoryAction::Refit(_)
-                                | InventoryAction::Information
+                                | InventoryAction::ItemsWindow
                         )
                 },
                 action: Action::Inventory(action),
@@ -186,7 +147,6 @@ impl Inventory {
             self.detail(content, map, &item, side == 1 && Self::shop(state), assets);
         }
         self.draw_information(content, state, assets, controls);
-        self.draw_ammunition(assets, controls);
     }
 
     /// One item row: its icon, name, quantity with loaded ammunition, and stats.
@@ -248,6 +208,36 @@ impl Inventory {
     }
 }
 
+impl Inventory {
+    /// Draws the party's credits in the PICT 148 strip, in yellow at 12
+    /// points: the pooled total, which away from a shop is the pool and what
+    /// every member carries.
+    ///
+    /// Original: Display
+    fn draw_credits(&self, state: &Session, assets: &Assets) {
+        let mut credits = state.party_currency;
+        if !Self::shop(state) {
+            for warrior in &state.warriors {
+                credits = credits
+                    .wrapping_add(i32::from(warrior.record().carried_credits().unwrap_or(0)));
+            }
+        }
+        assets.text(&credits.to_string(), 505., 447., 12, YELLOW);
+    }
+}
+
+/// CNTL 144, Enter Shop, covered by PICT 202 away from a shop.
+const ENTER_SHOP: Rect = Rect::new(183., 411., 102., 40.);
+/// CNTL 141, Done.
+const DONE: Rect = Rect::new(663., 412., 50., 39.);
+/// CNTL 133, the item button in the PICT 148 strip, which leaves for the Items window.
+const ITEMS_WINDOW: Rect = Rect::new(600., 412., 59., 39.);
+/// CNTL 138 and 139, the two Refit buttons in PICT 170.
+const REFIT: [Rect; 2] = [
+    Rect::new(375., 357., 50., 25.),
+    Rect::new(375., 382., 50., 25.),
+];
+
 /// The owner's portrait, name, carried weight, capacity and item count under a list.
 ///
 /// Original: updateshopwings
@@ -283,7 +273,8 @@ struct SideLayout {
     name: f32,
     /// Left edge of the weight and count panel.
     edge: f32,
-    scroll: f32,
+    /// The list's scroll bar: CNTL 128 on the left, 129 on the right.
+    scroll: Rect,
     price: f32,
 }
 
@@ -295,7 +286,7 @@ const SIDE_LAYOUT: [SideLayout; 2] = [
         portrait: 97.,
         name: 151.,
         edge: 0.,
-        scroll: 349.,
+        scroll: Rect::new(352., 28., 16., 371.),
         price: 241.,
     },
     SideLayout {
@@ -303,7 +294,7 @@ const SIDE_LAYOUT: [SideLayout; 2] = [
         portrait: 455.,
         name: 503.,
         edge: 720.,
-        scroll: 435.,
+        scroll: Rect::new(434., 28., 16., 371.),
         price: 188.,
     },
 ];

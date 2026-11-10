@@ -33,10 +33,6 @@ pub struct Targeting {
     pub count_cursor: std::cell::Cell<Option<i16>>,
 }
 
-/// The last column of the view the target loop reads the pointer in.
-const LAST_COLUMN: i16 = 14;
-/// The last row of the view the target loop reads the pointer in.
-const LAST_ROW: i16 = 13;
 /// The text size of the range readout.
 const READOUT_SIZE: u16 = 17;
 /// The readout's baseline, and the left edges of the distance and of the maximum range.
@@ -57,13 +53,15 @@ pub fn active(state: &Session, ui: &UiState) -> bool {
 }
 
 /// The view cell under the pointer: the pointer's cell counted from the view's top left, with
-/// negative offsets taken toward zero and the cell held inside the view.
+/// negative offsets taken toward zero and the cell held inside the view, up to column 14 and row
+/// 13 on the large field and to column and row 9 on the small one.
 ///
 /// Original: combatchoice
-fn view_cell(pointer: Vec2) -> (i16, i16) {
+fn view_cell(pointer: Vec2, large: bool) -> (i16, i16) {
+    let large = i16::from(large);
     (
-        (((pointer.x - layout::MAP.x) / 32.) as i16).clamp(0, LAST_COLUMN),
-        (((pointer.y - layout::MAP.y) / 32.) as i16).clamp(0, LAST_ROW),
+        (((pointer.x - layout::MAP.x) / 32.) as i16).clamp(0, 9 + 5 * large),
+        (((pointer.y - layout::MAP.y) / 32.) as i16).clamp(0, 9 + 4 * large),
     )
 }
 
@@ -199,7 +197,7 @@ pub fn input(
     if state.combat.is_some()
         && let Some(point) = pointer
     {
-        ui.targeting.hover = view_cell(point);
+        ui.targeting.hover = view_cell(point, ui.large_field());
     }
     if !ui.targeting.medical_cancel
         && state.combat.is_some()
@@ -210,7 +208,7 @@ pub fn input(
                 Some(Inspection::FireTargets | Inspection::PsiTargets)
             ))
     {
-        if let Some(pointer) = pointer.filter(|point| layout::MAP.contains(*point))
+        if let Some(pointer) = pointer.filter(|point| ui.field_window().contains(*point))
             && let Some(point) = crate::combat_controls::map_position(state, ui, pointer)
         {
             ui.targeting.estimate_target = body_at(state, point);
@@ -224,7 +222,7 @@ pub fn input(
     }
     if ui.inspection == Some(Inspection::PsiTargets) {
         ui.psi.preview = pointer
-            .filter(|point| layout::MAP.contains(*point))
+            .filter(|point| ui.field_window().contains(*point))
             .and_then(|point| crate::combat_controls::map_position(state, ui, point));
         if is_key_pressed(KeyCode::Enter)
             && let Some((spell, _)) = ui.psi.choice
@@ -279,10 +277,10 @@ pub fn input(
             return control.enabled.then(|| control.action.clone());
         }
         if !ui.targeting.medical_cancel
-            && layout::MAP.contains(pointer)
+            && ui.field_window().contains(pointer)
             && let Some(point) = crate::combat_controls::map_position(state, ui, pointer)
         {
-            ui.targeting.cursor = view_cell(pointer);
+            ui.targeting.cursor = view_cell(pointer, ui.large_field());
             return map_action(state, content, ui, point);
         }
     }
@@ -459,7 +457,7 @@ fn cell_marker(
             rect.x -= 16.;
         }
         if let Some(image) = assets.icons.get(&(15000 + rank as i16)) {
-            crate::presentation::plot_clipped(image, rect, layout::MAP);
+            crate::presentation::plot_clipped(image, rect, ui.field_window());
         }
     }
 }
@@ -492,7 +490,7 @@ pub fn draw(
     if ui.targeting.medical_cancel {
         crate::feedback::draw_message(
             assets,
-            Vec2::ZERO,
+            false,
             &GameFeedback::Flash {
                 address: crate::game_strings::ABORT_CHARGE_QUESTION,
                 x: 30,
@@ -502,7 +500,13 @@ pub fn draw(
             },
         );
         let (yes, no) = abort_answers(state);
-        crate::story_dialogs::plain_question_strip(assets, yes, no, controls);
+        crate::story_dialogs::plain_question_strip(
+            assets,
+            crate::placement::Placement::new(ui.large_field()),
+            yes,
+            no,
+            controls,
+        );
         return;
     }
     if state.outdoor_psi.is_some() {
@@ -518,7 +522,13 @@ pub fn draw(
         } else {
             assets.warnings.get(46).cloned().unwrap_or_default()
         };
-        assets.wrapped_color(&prompt, layout::MESSAGE_TEXT, 12, 16., YELLOW);
+        assets.wrapped_color(
+            &prompt,
+            layout::MESSAGE_TEXT,
+            12,
+            crate::assets::line_height(12),
+            YELLOW,
+        );
         crate::story_dialogs::portraits(state, assets, controls, |warrior| {
             Some(Action::Command(Command::SelectOutdoorPsiTarget { warrior }))
         });

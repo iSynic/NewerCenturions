@@ -112,6 +112,7 @@ pub(super) fn execute(
             power,
         } => combat::runtime::party_psi(state, content, warrior, spell, power),
         Command::FastSpell { slot } => combat::runtime::fast_spell(state, content, slot),
+        Command::PressPsi => combat::player_psi::press(state),
         Command::CastPsiOnWarrior {
             warrior,
             spell,

@@ -45,16 +45,10 @@ pub(super) fn execute(
         Operation::UndoLastStep => {
             // Undoing the last step returns before event persistence and the
             // destination.
-            position.x -= i32::from(position.last_move[0]);
-            position.y -= i32::from(position.last_move[1]);
-            OpeningMission::index(position.x, position.y)?;
             position.script = None;
             state.movement_continuation = None;
             state.time_continuation = None;
-            effects.push(Event::Moved {
-                x: position.x,
-                y: position.y,
-            });
+            effects.extend(crate::exploration::boat::move_party(state, -1)?);
             if turn_owns {
                 effects.extend(super::super::finish_dispatch(state, content)?.unwrap_or_default());
             }
@@ -89,7 +83,7 @@ pub(super) fn execute(
         // creature category. Records past the battle roster count as empty.
         Operation::DestroyCategories => {
             if state.phase == crate::Phase::Combat {
-                let extra = load_extra(
+                let extra = &load_extra(
                     &mut state.globals,
                     map,
                     ExtraIndex::Magnitude(parameter),
@@ -146,7 +140,7 @@ pub(super) fn execute(
                         .into(),
                 )
             };
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Magnitude(parameter),
@@ -181,7 +175,7 @@ pub(super) fn execute(
             script.restart_from(&map.script(target)?);
         }
         Operation::SelectedSpell | Operation::PartySpell => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Magnitude(parameter),
@@ -199,7 +193,7 @@ pub(super) fn execute(
             }
         }
         Operation::SelectPartyBySave => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Magnitude(parameter),
@@ -232,7 +226,7 @@ pub(super) fn execute(
         Operation::EditSchedule => {
             let extra_index = usize::try_from(parameter)
                 .map_err(|_| RuleError::Invalid("negative schedule extra index".into()))?;
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Exact(extra_index),

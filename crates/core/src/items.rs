@@ -11,9 +11,10 @@ pub(crate) use ammunition_menu::{
     choose as choose_ammunition, choose_combat as choose_combat_ammunition,
 };
 mod inventory_detail;
-pub(crate) use inventory_detail::quick_info;
+pub(crate) use inventory_detail::{load_spell, quick_info};
 mod inventory_opening;
 mod item_information;
+mod pack_controls;
 pub(crate) use inventory_opening::{
     calcw, highlight as highlight_inventory_row, open as open_inventory,
     scroll as scroll_inventory, switch as switch_inventory_owner,
@@ -24,6 +25,26 @@ pub(crate) use item_information::{
     show as show_item_information, show_dragged as show_dragged_item_information,
     show_loot as show_loot_item_information,
 };
+pub(crate) use pack_controls::{
+    close as close_items, drop as drop_to_crate, join as join_items, press_use, split as split_item,
+};
+
+/// The damage per hit the Items window's warrior panel shows for an owner's firearm or melee
+/// weapon.
+///
+/// Original: updatecharinfo, calcdamage
+pub fn sheet_damage(
+    state: &Session,
+    content: &Content,
+    owner: usize,
+    firearm: bool,
+) -> Result<i16, RuleError> {
+    let warrior = state
+        .warriors
+        .get(owner)
+        .ok_or("sheet warrior outside squad")?;
+    crate::combat::estimates::sheet_damage(warrior, content, &state.globals.loaded_items, firearm)
+}
 
 /// Sorts loot by category, highest first. Returns the last record moved up,
 /// which booty leaves behind as the inventory record.

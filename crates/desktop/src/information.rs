@@ -129,7 +129,8 @@ impl WarriorInformation {
                         f32::from(bottom - top),
                     );
                     if rect.intersect(port).is_some() {
-                        assets.wrapped_color(text, rect, *size, f32::from(*size) + 2., YELLOW);
+                        let leading = crate::assets::line_height(*size);
+                        assets.wrapped_color(text, rect, *size, leading, YELLOW);
                     }
                 }
             }
@@ -145,7 +146,7 @@ impl WarriorInformation {
                 &text,
                 assets.dialog_rect(177, item as usize),
                 size,
-                14.,
+                crate::assets::line_height(size),
                 YELLOW,
             );
         }

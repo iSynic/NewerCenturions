@@ -37,7 +37,7 @@ pub(super) fn start(state: &mut Session, content: &Content) -> Result<Vec<Event>
         phase: BoatPhase::Finish,
     };
     if event {
-        effects.extend(move_party(state)?);
+        effects.extend(move_party(state, 1)?);
         let ticks = if tile < 0 {
             1
         } else {
@@ -119,7 +119,7 @@ pub(super) fn answer(state: &mut Session, answer: bool) -> Result<Vec<Event>, Ru
         }
         state.globals.boat = u8::from(boarding);
         if boarding {
-            effects.extend(move_party(state)?);
+            effects.extend(move_party(state, 1)?);
         }
         let position = state.exploration.as_mut().unwrap();
         let index = OpeningMission::index(position.x, position.y)?;
@@ -130,21 +130,42 @@ pub(super) fn answer(state: &mut Session, answer: bool) -> Result<Vec<Event>, Ru
     Ok(effects)
 }
 
-/// Moves the party one square in the direction of its last step and breaks camp.
-fn move_party(state: &mut Session) -> Result<Vec<Event>, RuleError> {
-    let position = state.exploration.as_mut().unwrap();
+/// Moves the party `distance` squares along the direction of its last step: one forward, or one
+/// back to undo a step. Any move breaks camp and leaves the clinic and the shop. The direction is
+/// remembered as the party's last move, which a retreat goes back along.
+///
+/// Original: moveparty
+pub(crate) fn move_party(state: &mut Session, distance: i8) -> Result<Vec<Event>, RuleError> {
+    let position = state.exploration.as_mut().ok_or("party move map missing")?;
     let [dx, dy] = position.last_move;
-    let x = position.x.wrapping_add(i32::from(dx));
-    let y = position.y.wrapping_add(i32::from(dy));
+    let x = position
+        .x
+        .wrapping_add(i32::from(dx.wrapping_mul(distance)));
+    let y = position
+        .y
+        .wrapping_add(i32::from(dy.wrapping_mul(distance)));
     OpeningMission::index(x, y)?;
     position.x = x;
     position.y = y;
-    if let Some(control) = state.field_controls.as_mut() {
-        control.camping = false;
-        control.clinic = None;
+    state.globals.last_party_move = [dx, dy];
+    if distance != 0 {
+        if let Some(control) = state.field_controls.as_mut() {
+            control.camping = false;
+            control.clinic = None;
+        }
+        state.shop_access = None;
     }
-    state.shop_access = None;
     Ok(vec![Event::Moved { x, y }])
+}
+
+/// Recentres the view on the party without moving it, which remembers the direction of its last
+/// step as the party's last move.
+///
+/// Original: moveparty
+pub(crate) fn recentre(state: &mut Session) {
+    if let Some(position) = &state.exploration {
+        state.globals.last_party_move = position.last_move;
+    }
 }
 
 /// Finishes a boat step: the party moves if the land allows it, the sound and time of the step
@@ -165,7 +186,7 @@ fn finish(
     if (!boat && map.movement_blocker(pending.property)? == 0 && boarding != 2)
         || (boat && boarding == 2)
     {
-        effects.extend(move_party(state)?);
+        effects.extend(move_party(state, 1)?);
     }
     let (sound, ticks) = if pending.tile < 0 {
         (82, 3)

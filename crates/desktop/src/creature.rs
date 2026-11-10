@@ -28,18 +28,26 @@ impl Creature {
     /// the check boxes of a monster page leave the rectangle of the last box.
     ///
     /// Original: beast
-    pub fn draw(&self, assets: &Assets, controls: &mut Vec<Control>) {
-        assets.draw_dialog(158);
+    pub fn draw(
+        &self,
+        assets: &Assets,
+        placement: crate::placement::Placement,
+        controls: &mut Vec<Control>,
+    ) {
+        let origin = placement.creature_page();
+        let item = |number: usize| assets.dialog_rect_at(158, number, origin);
+        assets.draw_dialog_at(158, origin);
         for number in [1, 2, 3, 4] {
             controls.push(Control {
-                rect: assets.dialog_rect(158, number),
+                rect: item(number),
                 enabled: true,
                 action: Action::Application(ApplicationAction::CreatureItem(number)),
             });
         }
         let r = &self.record;
         let field = |number, text: String| {
-            assets.wrapped_color(&text, assets.dialog_rect(158, number), 10, 12., YELLOW);
+            let rect = item(number);
+            assets.wrapped_color(&text, rect, 10, crate::assets::line_height(10), YELLOW);
         };
         field(
             7,
@@ -50,20 +58,18 @@ impl Creature {
             field(number, word(r, offset).unwrap_or(0).to_string());
         }
         let icon = word(r, 80).unwrap_or(0);
-        assets.panel(142, assets.dialog_rect(158, 37));
+        assets.panel(142, item(37));
         let size = word(r, 16).unwrap_or(0);
         let across = if matches!(size, 0 | 2) { 16. } else { 0. };
         let down = if size.unsigned_abs() < 2 { 16. } else { 0. };
-        let start = self
-            .icon_start
-            .unwrap_or_else(|| assets.dialog_rect(158, 37));
+        let start = self.icon_start.unwrap_or_else(|| item(37));
         if let Some(texture) = assets.icons.get(&icon) {
             crate::assets::texture_in(texture, inset(start, across, down));
         }
         self.icon_next.set(Some(if self.ally {
             inset(start, across, down)
         } else {
-            assets.dialog_rect(158, 45)
+            item(45)
         }));
         if word(r, 78).unwrap_or(0) != 0 {
             for (number, address) in [(8, 0x40406a), (9, 0x404062), (10, 0x40405a)] {
@@ -116,20 +122,17 @@ impl Creature {
         field(27, special);
         if !self.ally {
             for i in 0..8 {
-                self.mark(assets, 29 + i, r[168 + i] != 0);
+                self.mark(assets, &item, 29 + i, r[168 + i] != 0);
             }
             for i in 1..8 {
-                self.mark(assets, 38 + i, (r[139 + i] as i8) < 0);
-                self.mark(assets, 45 + i, (r[139 + i] as i8) > 100);
+                self.mark(assets, &item, 38 + i, (r[139 + i] as i8) < 0);
+                self.mark(assets, &item, 45 + i, (r[139 + i] as i8) > 100);
             }
         }
     }
     /// Draws a check box in its on (PICT 179) or off (PICT 180) look at dialog item `number`.
-    fn mark(&self, assets: &Assets, number: usize, checked: bool) {
-        assets.panel(
-            if checked { 179 } else { 180 },
-            assets.dialog_rect(158, number),
-        );
+    fn mark(&self, assets: &Assets, item: &impl Fn(usize) -> Rect, number: usize, checked: bool) {
+        assets.panel(if checked { 179 } else { 180 }, item(number));
     }
 }
 

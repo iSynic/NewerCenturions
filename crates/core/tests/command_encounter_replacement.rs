@@ -32,8 +32,7 @@ fn encounter_replacement_preserves_original_read_and_write_strides_across_reload
         }
         expected[426..426 + header].copy_from_slice(&replaced);
         let mut state = support::mission_session(&content);
-        let source = &content.map(0).unwrap().menus;
-        let tail = source.as_chunks::<426>().1;
+        let tail = content.map(0).unwrap().menus.as_chunks::<426>().1;
         assert_eq!(
             &state.globals.encounter_headers.header(false)[..tail.len()],
             tail

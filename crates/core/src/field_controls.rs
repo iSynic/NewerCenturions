@@ -1,6 +1,8 @@
 //! The outdoor control buttons and the search for secrets.
 use crate::{Content, Event, Phase, RuleError, Session, feedback::GameFeedback, story_allies};
-use centurions_content::records::{EnemyRecord, EnemyRecordMut, WarriorRecord};
+use centurions_content::records::{
+    EnemyRecord, EnemyRecordMut, ItemDefinition, SpellInfoRecord, WarriorRecord,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
@@ -13,6 +15,8 @@ pub enum Action {
     Rest,
     Heal,
     Clinic,
+    /// The torch control, which burns a charge of the party's torch.
+    Torch,
 }
 
 /// The outdoor controls' state: whether the party is camping, whether search mode is on, the
@@ -73,7 +77,8 @@ pub(crate) fn validate(state: &Session) -> Result<(), RuleError> {
 /// Starts a control button's action, refused when the controls are not free or steps are still
 /// queued. The button's tutorial page is shown first, even when the action is then refused:
 /// Search and Heal are refused with a warning above fatigue 134. Camp, Rest, Search and Heal queue
-/// their steps and run them; Clinic enters the clinic at the recorded price percentage.
+/// their steps and run them; Clinic enters the clinic at the recorded price percentage; Torch burns
+/// a charge of the party's torch and casts its spell.
 pub(crate) fn start(
     state: &mut Session,
     content: &Content,
@@ -87,6 +92,9 @@ pub(crate) fn start(
     {
         return Err(RuleError::Refused { feedback: vec![] });
     }
+    if action == Action::Torch {
+        return torch(state, content);
+    }
     let fatigue = state.exploration.as_ref().unwrap().fatigue;
     let tutorial = match action {
         Action::Camp => Some(4),
@@ -94,7 +102,7 @@ pub(crate) fn start(
         Action::Search => Some(6),
         Action::SearchMode => Some(7),
         Action::Heal => Some(8),
-        Action::Clinic => None,
+        Action::Clinic | Action::Torch => None,
     };
     let feedback: Vec<_> = tutorial
         .into_iter()
@@ -118,6 +126,7 @@ pub(crate) fn start(
     }
     let control = state.field_controls.get_or_insert_default();
     let mut events: Vec<_> = feedback.into_iter().map(Event::Feedback).collect();
+    let mut camp_changed = false;
     match action {
         Action::SearchMode => {
             control.searching = !control.searching;
@@ -130,6 +139,7 @@ pub(crate) fn start(
             events.push(Event::Feedback(crate::feedback::camp_flash(0x403f24)));
         }
         Action::Camp => {
+            camp_changed = true;
             control.camping = !control.camping;
             if control.camping {
                 control.clinic = None;
@@ -167,10 +177,52 @@ pub(crate) fn start(
                 .pending
                 .extend([Step::Time(1), Step::Region(4), Step::Heal]);
         }
-        Action::Clinic => unreachable!(),
+        Action::Clinic | Action::Torch => unreachable!(),
+    }
+    if camp_changed {
+        // Making camp forgets the last step before the view recentres; breaking camp keeps it.
+        if state.field_controls.as_ref().is_some_and(|c| c.camping) {
+            state.exploration.as_mut().unwrap().last_move = [0; 2];
+        }
+        crate::exploration::boat::recentre(state);
     }
     state.exploration.as_mut().unwrap().last_move = [0; 2];
     events.extend(resume(state, content)?);
+    Ok(events)
+}
+
+/// The party's torch.
+const TORCH: i16 = 801;
+
+/// The torch control burns a charge of the first torch the party carries and casts the spell the
+/// torch holds, at the power its effect word gives, with the spell's sound. Nothing happens when no
+/// one carries a torch with a charge left.
+///
+/// Original: buttonchoice
+fn torch(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
+    if !crate::story::inventory::use_party_charge(state, content, TORCH)? {
+        return Err(RuleError::Refused { feedback: vec![] });
+    }
+    state.load_item(content, TORCH)?;
+    let item = ItemDefinition(
+        state
+            .globals
+            .loaded_items
+            .item
+            .as_deref()
+            .ok_or("torch definition missing")?,
+    );
+    let spell = item.spell()?;
+    let power = item.effect_selector()?.wrapping_abs();
+    crate::items::load_spell(state, content, spell)?;
+    state.globals.attack_count = power;
+    let packet = state.globals.spell_info.clone();
+    let mut events = vec![Event::Sound {
+        resource_id: SpellInfoRecord(&packet).impact_sound()?,
+    }];
+    events.extend(
+        crate::story::spell::resolve_outdoors(state, content, &packet, spell, power)?.events,
+    );
     Ok(events)
 }
 
@@ -232,8 +284,11 @@ pub(crate) fn resume(state: &mut Session, content: &Content) -> Result<Vec<Event
     Ok(events)
 }
 
-/// Breaks camp when the party moves: time passes, the region is checked, and the move follows.
-/// Returns nothing when the party is not camping.
+/// Breaks camp when the party moves: the view recentres, remembering the last step, then time
+/// passes, the region is checked, and the move follows. Returns nothing when the party is not
+/// camping.
+///
+/// Original: buttonchoice
 pub(crate) fn leave_camp(
     state: &mut Session,
     content: &Content,
@@ -244,6 +299,8 @@ pub(crate) fn leave_camp(
         && control.camping
     {
         control.camping = false;
+        crate::exploration::boat::recentre(state);
+        let control = state.field_controls.as_mut().unwrap();
         control.pending.extend([
             Step::Time(5),
             Step::Time(10),
@@ -273,16 +330,27 @@ pub(crate) fn automatic_search(state: &mut Session) -> bool {
 
 /// Each warrior who can heal and cast spends 10 psi points, while holding more than 9, on every
 /// squad member or held-over ally hurt but above -10 stamina, healing a random 1 to 8. Squad
-/// members of race 3 are not healed.
+/// members of race 3 are not healed. While psi is disabled each healer is refused with warning
+/// 113.
 fn heal(state: &mut Session, content: &Content, events: &mut Vec<Event>) -> Result<(), RuleError> {
     for caster in 0..state.warriors.len() {
-        if !state.warriors[caster].record().can_heal()
-            || !crate::combat::player_psi::can_cast(
-                &state.warriors,
-                caster as i16,
-                state.psi_disabled,
-            )?
-        {
+        if !state.warriors[caster].record().can_heal() {
+            continue;
+        }
+        let admission = crate::combat::player_psi::admission(
+            &state.warriors,
+            caster as i16,
+            state.psi_disabled,
+            false,
+            state.combat.is_some(),
+        )?;
+        events.extend(
+            admission
+                .warnings
+                .into_iter()
+                .map(|index| Event::Feedback(GameFeedback::Warning { index })),
+        );
+        if !admission.allowed {
             continue;
         }
         for target in 0..state.warriors.len() + state.held_over {

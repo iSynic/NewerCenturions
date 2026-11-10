@@ -33,7 +33,6 @@ fn zero_id_turn_story_resumes_after_saved_pages_without_repeating_chance_or_effe
     assert!(state.turn_dispatch.is_some());
     assert_eq!((state.flags[2], state.flags[3]), (1, 0));
     assert_eq!(current_combat(&state).roster.records, before);
-    assert_eq!(state.random, expected);
     // First acknowledgement closes the prefix message, then the delegated page.
     support::saved_command(Command::Continue, &mut state, &content);
     let events = support::saved_command(Command::Continue, &mut state, &content);

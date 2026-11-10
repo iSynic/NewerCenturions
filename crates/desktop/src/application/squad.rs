@@ -42,14 +42,6 @@ impl Application {
                 }
             }
             ApplicationAction::EndSaved => self.finish_mission(state, content)?,
-            ApplicationAction::SquadCancel => {
-                self.screen = if self.selection.modify_squad {
-                    Screen::Game
-                } else {
-                    Screen::Title
-                };
-                self.selection.modify_squad = false;
-            }
             ApplicationAction::OrderCancel => self.selection.order = None,
             ApplicationAction::OrderMember(member) => {
                 let order = self
@@ -90,33 +82,72 @@ impl Application {
                 self.selection.difficulty = level;
                 events.push(Event::Sound { resource_id: 144 });
             }
+            // A roster row plays 145 and opens its warrior file; a row with no warrior leaves the
+            // index by minus and warns 38.
             ApplicationAction::Warrior(i) => {
-                self.selection.selected = Some(i);
-                self.selection.member = None;
+                events.push(Event::Sound { resource_id: 145 });
+                let roster = self.roster.as_mut().ok_or("warrior roster missing")?;
+                if roster.listed(i).is_none() {
+                    let name = roster
+                        .index
+                        .get(i)
+                        .map(|slot| slot.name.clone())
+                        .unwrap_or_default();
+                    roster.minus(&name, false)?;
+                    events.push(warning(38));
+                } else {
+                    self.selection.selected = Some(i);
+                    self.selection.member = None;
+                }
             }
             ApplicationAction::Member(i) => self.selection.member = Some(i),
             ApplicationAction::Add => {
-                if let Some(i) = self.selection.selected
+                let restrictions = self
+                    .squad_level(content, state)
+                    .and_then(|level| level.restrictions.as_deref());
+                let roster = self.roster.as_mut().ok_or("warrior roster missing")?;
+                if let Some(row) = self.selection.selected
                     && self.squad.len() < 6
-                    && !self.squad.contains(&i)
+                    && let Some(slot) = roster
+                        .index
+                        .get(row)
+                        .filter(|slot| !slot.name.is_empty())
+                        .cloned()
                 {
-                    if let Some(restrictions) = self
-                        .squad_level(content, state)
-                        .and_then(|level| level.restrictions.as_deref())
-                    {
-                        let warrior = self
-                            .warriors(content)
-                            .get(i)
-                            .ok_or("Squad roster index missing.")?;
-                        centurions_core::roster::admit_to_squad(
+                    // A listed name with no warrior warns 38; outside a restricted level the name
+                    // also leaves the index.
+                    let Some(warrior) = roster.listed(row).cloned() else {
+                        if restrictions.is_none() {
+                            roster.minus(&slot.name, false)?;
+                        }
+                        events.push(warning(38));
+                        return Ok(HandleOutcome::Complete(next, events));
+                    };
+                    // A warrior the level does not allow is refused and the restrictions shown.
+                    if let Some(restrictions) = restrictions
+                        && let Err(error) = centurions_core::roster::admit_to_squad(
                             restrictions,
-                            warrior,
+                            &warrior,
+                            slot.level,
                             self.squad.len(),
-                        )?;
+                        )
+                    {
+                        let centurions_core::RuleError::Refused { feedback } = error else {
+                            return Err(error);
+                        };
+                        events.extend(feedback.into_iter().map(Event::Feedback));
+                        self.selection.restrictions = true;
+                        return Ok(HandleOutcome::Complete(next, events));
                     }
-                    self.squad.push(i);
+                    // A warrior of the old format is refused with warning 73.
+                    if warrior.record().version()? < 1 {
+                        events.push(warning(73));
+                        return Ok(HandleOutcome::Complete(next, events));
+                    }
+                    // minus blanks the added warrior's row until plus lists it again.
+                    roster.minus(&warrior.name, false)?;
+                    self.squad.push(warrior);
                     self.selection.member = Some(self.squad.len() - 1);
-                    // The roster selection clears once minus blanks its row.
                     self.selection.selected = None;
                     events.push(Event::Sound { resource_id: 141 });
                 }
@@ -133,22 +164,34 @@ impl Application {
                         }],
                     });
                 }
-                if i < self.squad.len() {
-                    self.squad.remove(i);
+                // A member carrying mission items warns 100 and asks question 13 first, as
+                // saving the member leaves those items behind.
+                if let Some(warrior) = self.squad.get(i) {
+                    if centurions_core::roster::carries_temporary_items(content, warrior)? {
+                        self.selection.remove_question = Some(i);
+                        events.push(warning(100));
+                        events.push(Event::Sound { resource_id: 20005 });
+                    } else {
+                        self.remove_member(i, state, content)?;
+                    }
+                }
+            }
+            ApplicationAction::RemoveAnswer(answer) => {
+                let i = self
+                    .selection
+                    .remove_question
+                    .take()
+                    .ok_or("Remove question is not open.")?;
+                if answer {
+                    self.remove_member(i, state, content)?;
                 }
             }
             // Item 16 asks STR# 135 question 3 for the selected roster warrior.
             ApplicationAction::EraseWarrior => {
-                let kept = self.warriors(content);
                 self.selection
                     .selected
-                    .filter(|i| !self.squad.contains(i))
-                    .and_then(|i| kept.get(i))
-                    .filter(|warrior| !warrior.name.is_empty())
+                    .and_then(|row| self.listed_name(row))
                     .ok_or("Erase Warrior needs a roster warrior.")?;
-                if self.roster.is_none() {
-                    return Err("warrior roster missing".into());
-                }
                 self.selection.erase_question = true;
                 events.push(Event::Sound { resource_id: 20005 });
             }
@@ -196,27 +239,7 @@ impl Application {
                 self.selection.restrictions = false;
             }
             ApplicationAction::Done => {
-                let warriors = self
-                    .squad
-                    .iter()
-                    .map(|i| {
-                        self.warriors(content)
-                            .get(*i)
-                            .map(|record| {
-                                if self.selection.modify_squad {
-                                    state
-                                        .warriors
-                                        .iter()
-                                        .find(|w| w.original_sha256 == record.original_sha256)
-                                        .unwrap_or(record)
-                                        .clone()
-                                } else {
-                                    record.clone()
-                                }
-                            })
-                            .ok_or("Squad roster index missing.")
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                let warriors = self.squad.clone();
                 if self.selection.modify_squad {
                     if warriors.is_empty() {
                         return Err(centurions_core::RuleError::Refused {
@@ -225,12 +248,16 @@ impl Application {
                             }],
                         });
                     }
-                    events = apply(Command::ReplaceSquad { warriors }, state, content)?;
+                    let mut candidate = state.clone();
+                    events = apply(Command::ReplaceSquad { warriors }, &mut candidate, content)?;
+                    self.return_squad()?;
+                    *state = candidate;
                     self.selection.modify_squad = false;
                     self.screen = Screen::Game;
                 } else if self.squad.is_empty() {
                     self.screen = Screen::Title;
                 } else {
+                    self.check_scenario_owner(content)?;
                     let mut candidate = Session::new(content);
                     candidate.random = state.random.clone();
                     candidate.library_random_seed = state.library_random_seed;
@@ -263,6 +290,7 @@ impl Application {
                         Ok(events)
                     })
                     .map_err(|e| e.to_string())?;
+                    self.return_squad()?;
                     *state = candidate;
                     self.screen = Screen::Game;
                 }
@@ -285,41 +313,69 @@ impl Application {
         }
         self.archives =
             centurions_core::reference_views::archive_entries(&Session::new(content), content)?;
-        self.roster = Some(centurions_core::roster::Roster::open(path, content)?);
+        self.roster = Some(centurions_core::roster::Roster::open(
+            path,
+            content,
+            &self.supplied_index,
+        )?);
         Ok(())
     }
-    /// The warriors the squad may be chosen from: the roster's if one is open,
-    /// otherwise the scenario's supplied warriors.
-    pub(super) fn warriors<'a>(
-        &'a self,
-        content: &'a Content,
-    ) -> &'a [centurions_content::Warrior] {
+    /// The name the roster list shows in `row`; none for a blank row.
+    fn listed_name(&self, row: usize) -> Option<&str> {
         self.roster
-            .as_ref()
-            .map_or(&content.warriors, |r| &r.warriors)
+            .as_ref()?
+            .index
+            .get(row)
+            .map(|slot| slot.name.as_str())
+            .filter(|name| !name.is_empty())
     }
-    /// Erases roster warrior `index` from the reconstruction's own roster, which keeps the
-    /// squad on the same warriors and the roster list on the same rows. Nothing changes unless the
-    /// roster accepts the erasure.
+    /// Erases the warrior listed in `row` from the reconstruction's own roster: its row is left
+    /// blank and the rows below stay where they are. Nothing changes unless the roster accepts
+    /// the erasure.
     ///
     /// Original: minus
-    fn erase_warrior(&mut self, index: usize) -> Result<(), centurions_core::RuleError> {
-        let roster = self.roster.as_mut().ok_or("warrior roster missing")?;
-        let identity = roster
-            .warriors
-            .get(index)
+    fn erase_warrior(&mut self, row: usize) -> Result<(), centurions_core::RuleError> {
+        let name = self
+            .listed_name(row)
             .ok_or("Squad roster index missing.")?
-            .original_sha256
+            .to_owned();
+        self.roster
+            .as_mut()
+            .ok_or("warrior roster missing")?
+            .minus(&name, true)
+    }
+    /// Takes a member out of the squad: plus lists the warrior again in the first blank row and
+    /// the member is then saved to the roster. Nothing changes unless the saved record can be made.
+    ///
+    /// Original: partyselect, savecharacter
+    fn remove_member(
+        &mut self,
+        member: usize,
+        state: &Session,
+        content: &Content,
+    ) -> Result<(), centurions_core::RuleError> {
+        let warrior = self
+            .squad
+            .get(member)
+            .ok_or("Squad member missing.")?
             .clone();
-        roster.remove(&identity)?;
-        for member in &mut self.squad {
-            if *member > index {
-                *member -= 1;
-            }
-        }
-        if index < self.selection.roster_top {
-            self.selection.roster_top -= 1;
-        }
+        let record = centurions_core::roster::saved_record(state, content, &warrior, member)?;
+        let roster = self.roster.as_mut().ok_or("warrior roster missing")?;
+        roster.plus(std::slice::from_ref(&warrior))?;
+        roster.save_characters(&[record])?;
+        self.squad.remove(member);
+        Ok(())
+    }
+    /// Lists the chosen warriors in the roster again as the squad dialog closes: each in turn takes
+    /// the first blank row.
+    ///
+    /// Original: partyselect, plus
+    pub(super) fn return_squad(&mut self) -> Result<(), centurions_core::RuleError> {
+        self.roster
+            .as_mut()
+            .ok_or("warrior roster missing")?
+            .plus(&self.squad)?;
+        self.squad.clear();
         Ok(())
     }
 
@@ -335,32 +391,12 @@ impl Application {
         self.roster
             .as_mut()
             .ok_or("warrior roster missing")?
-            .store(&centurions_core::roster::mission_records(state, content)?)?;
+            .save_characters(&centurions_core::roster::mission_records(state, content)?)?;
         *state = next;
         self.selection.end_question = false;
         self.end_after_save = false;
         self.screen = Screen::Title;
         Ok(())
-    }
-
-    /// The party records partyselect shows: the live squad while modifying it,
-    /// otherwise the roster records.
-    fn squad_record<'a>(
-        &'a self,
-        content: &'a Content,
-        state: &'a Session,
-        index: usize,
-    ) -> Option<&'a centurions_content::Warrior> {
-        let record = self.warriors(content).get(index)?;
-        Some(if self.selection.modify_squad {
-            state
-                .warriors
-                .iter()
-                .find(|w| w.original_sha256 == record.original_sha256)
-                .unwrap_or(record)
-        } else {
-            record
-        })
     }
 
     /// The level partyselect reads its recommended levels and Data RI for.
@@ -405,13 +441,14 @@ impl Application {
             WHITE,
         );
         self.roster_list(content, assets, origin, controls);
-        let levels = self.member_rows(content, state, assets, origin, controls);
+        let levels = self.member_rows(state, assets, origin, controls);
         self.button_column(assets, origin, controls);
         self.level_block(content, state, assets, origin, levels, controls);
         self.difficulty_block(assets, origin, controls);
     }
 
-    /// The roster of warriors not in the squad, thirteen rows from the top.
+    /// The warrior index, thirteen rows from the top: each row's name and level word, a blank row
+    /// left empty.
     ///
     /// Original: partyselect, plus
     fn roster_list(
@@ -421,28 +458,28 @@ impl Application {
         origin: Vec2,
         controls: &mut Vec<Control>,
     ) {
-        // Each added warrior is blanked from the index by minus, so its row
-        // stays empty until plus returns it.
-        for (i, warrior) in self
-            .warriors(content)
-            .iter()
-            .enumerate()
-            .skip(self.selection.roster_top)
-            .take(13)
-        {
-            let row = i - self.selection.roster_top;
+        let supplied;
+        let roster = match &self.roster {
+            Some(roster) => roster,
+            None => {
+                supplied = centurions_core::roster::Roster::supplied(content, &self.supplied_index);
+                &supplied
+            }
+        };
+        // Thirteen rows from the first listed slot; a row past the end of the index is blank.
+        for row in 0..13 {
+            let i = self.selection.roster_top + row;
             let rect = Rect::new(origin.x + 12., origin.y + 30. + row as f32 * 20., 155., 14.);
-            let listed = !self.squad.contains(&i);
-            if listed {
+            if let Some(slot) = roster.index.get(i).filter(|slot| !slot.name.is_empty()) {
                 // yellowColor for the selection, cyanColor otherwise.
                 let color = if self.selection.selected == Some(i) {
                     YELLOW
                 } else {
                     crate::layout::CYAN
                 };
-                assets.text(&warrior.name, rect.x, rect.y + 12., 12, color);
+                assets.text(&slot.name, rect.x, rect.y + 12., 12, color);
                 assets.text(
-                    &warrior.record().level().unwrap_or(0).to_string(),
+                    &slot.level.to_string(),
                     origin.x + 184.,
                     rect.y + 12.,
                     12,
@@ -451,7 +488,7 @@ impl Application {
             }
             controls.push(Control {
                 rect,
-                enabled: listed,
+                enabled: true,
                 action: Action::Application(ApplicationAction::Warrior(i)),
             });
         }
@@ -462,7 +499,6 @@ impl Application {
     /// Original: partyselect
     fn member_rows(
         &self,
-        content: &Content,
         state: &Session,
         assets: &Assets,
         origin: Vec2,
@@ -472,9 +508,6 @@ impl Application {
         let member = self.selection.member.unwrap_or(0);
         let mut levels = 0_i16;
         for (i, warrior) in self.squad.iter().enumerate() {
-            let Some(warrior) = self.squad_record(content, state, *warrior) else {
-                continue;
-            };
             let record = warrior.record();
             let top = origin.y + 50. * i as f32;
             levels = levels.wrapping_add(record.level().unwrap_or(0));
@@ -499,7 +532,7 @@ impl Application {
                     class_label: self
                         .preferences
                         .enabled(crate::preferences::pref::APPEND_MOS),
-                    conditions_left: Some(origin.x + 573.),
+                    conditions: Some((origin.x + 573., 3.)),
                     automatic: state
                         .combat
                         .as_ref()
@@ -569,24 +602,17 @@ impl Application {
     /// Original: partyselect
     fn button_column(&self, assets: &Assets, origin: Vec2, controls: &mut Vec<Control>) {
         let item = |number: usize| assets.dialog_rect_at(145, number, origin);
-        let add = self
+        let listed = self
             .selection
             .selected
-            .is_some_and(|i| !self.squad.contains(&i))
-            && self.squad.len() < 6;
+            .is_some_and(|row| self.listed_name(row).is_some());
+        let add = listed && self.squad.len() < 6;
         // Edit (item 16) acts on a selected roster warrior; Import (item 20)
         // has no precondition.
         for (id, y, enabled, action) in [
             (160, 22., add, ApplicationAction::Add),
             (7, 72., !self.squad.is_empty(), ApplicationAction::Remove),
-            (
-                158,
-                122.,
-                self.selection
-                    .selected
-                    .is_some_and(|i| !self.squad.contains(&i)),
-                ApplicationAction::EraseWarrior,
-            ),
+            (158, 122., listed, ApplicationAction::EraseWarrior),
             (168, 222., true, ApplicationAction::Done),
             (183, 272., true, ApplicationAction::ImportWarrior),
         ] {
@@ -725,44 +751,30 @@ impl Application {
         }
     }
 
-    /// The difficulty choices, their check box and the squad notes.
+    /// The difficulty choices with a check box each, the chosen one marked, and the squad notes,
+    /// all in the squad dialog's own text items.
+    ///
+    /// Original: partyselect
     fn difficulty_block(&self, assets: &Assets, origin: Vec2, controls: &mut Vec<Control>) {
-        assets.text(
-            assets.squad_text[66].trim_end(),
-            origin.x + 233.,
-            origin.y + 360.,
-            12,
-            YELLOW,
-        );
-        for (i, name) in assets.squad_text[67].lines().enumerate() {
-            assets.text(
-                name,
-                origin.x + 268.,
-                origin.y + 375. + i as f32 * 16.,
-                12,
-                WHITE,
-            );
+        let item = |number: usize| assets.dialog_rect_at(145, number, origin);
+        for (number, text) in [(67, 66), (68, 67), (69, 68)] {
+            assets.dialog_text(&assets.squad_text[text], item(number));
+        }
+        for i in 0..5 {
             controls.push(Control {
                 rect: Rect::new(origin.x + 241., origin.y + 364. + i as f32 * 16., 130., 16.),
                 enabled: !self.selection.modify_squad,
                 action: Action::Application(ApplicationAction::Difficulty(i as i16 - 2)),
             });
         }
+        for number in 27..=31 {
+            assets.panel(179, item(number));
+        }
+        let chosen = usize::try_from(self.selection.difficulty + 29).unwrap_or(29);
+        let mark = item(chosen);
         assets.panel(
-            179,
-            Rect::new(
-                origin.x + 241.,
-                origin.y + 364. + f32::from(self.selection.difficulty + 2) * 16.,
-                13.,
-                13.,
-            ),
-        );
-        assets.wrapped_color(
-            &assets.squad_text[68],
-            Rect::new(origin.x + 12., origin.y + 311., 202., 119.),
-            12,
-            16.,
-            YELLOW,
+            147,
+            Rect::new(mark.x + 2., mark.y + 2., mark.w - 4., mark.h - 4.),
         );
     }
 }
@@ -779,4 +791,9 @@ fn pool(assets: &Assets, value: i16, maximum: i16, at: Vec2) {
     };
     let size = if value > 999 { 10 } else { 12 };
     assets.text(&value.to_string(), at.x, at.y, size, color);
+}
+
+/// A warning from STR# 3.
+fn warning(index: i16) -> Event {
+    Event::Feedback(centurions_core::feedback::GameFeedback::Warning { index })
 }

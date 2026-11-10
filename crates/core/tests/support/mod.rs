@@ -15,13 +15,8 @@ pub use command_replay::{assert_no_turn_started, current_combat, saved_command};
 
 pub fn fixture_content(identity: &str) -> Content {
     Content {
-        tutorials: vec![],
         identity: identity.into(),
-        warriors: vec![],
-        items: vec![],
-        resources: vec![],
-        original_services: None,
-        scenario: None,
+        ..Content::default()
     }
 }
 

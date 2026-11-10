@@ -44,12 +44,14 @@ pub enum ResultSlot {
     Cleared,
 }
 
-/// What a step shows: nothing, the spell's name, a body's move, a result icon, a
-/// spell effect, a missile's flight, or a framed body.
+/// What a step shows: nothing, the spell's name, a body's move, a damaged monster
+/// brought into view, a result icon, a spell effect, a missile's flight, or a framed
+/// body.
 enum Visual {
     None,
     SpellInfo(SpellInfo),
     Move { body: i16, point: (i16, i16) },
+    Stage { body: i16 },
     Icon(ResultIcon),
     Effect { bodies: u128, base: i16, ticks: i16 },
     Flight(FlightFrames),
@@ -74,6 +76,8 @@ pub struct Settings {
     /// The last chosen target cell relative to the warrior who last acted, which turns a
     /// firearm's missile icon.
     pub aim_offset: (i16, i16),
+    /// The 800 by 600 preference (item 22), which chooses the large field.
+    pub large_field: bool,
 }
 
 /// One ray crossing: its first and last event, the walk step that crossed it and
@@ -163,6 +167,21 @@ fn resolvespell_result(event: &Event) -> bool {
     }
 }
 
+/// The monster whose health a resolvespell result changes.
+///
+/// Original: resolvespell
+fn damaged_monster(event: &Event) -> Option<i16> {
+    match event {
+        Event::AttackResolved { target, damage, .. }
+        | Event::SpellResolved { target, damage, .. }
+            if *target > 9 && *damage != 0 && resolvespell_result(event) =>
+        {
+            Some(*target)
+        }
+        _ => None,
+    }
+}
+
 /// spelleffect's first cicn: 0x2ef8 without an effect, else effect * 8 + 0x2ed8.
 ///
 /// Original: spelleffect
@@ -249,6 +268,7 @@ pub struct Playback {
     /// centre, so it only redraws.
     pub view: Option<(i16, i16)>,
     aim_offset: (i16, i16),
+    large_field: bool,
     steps: VecDeque<Step>,
     until: f64,
 }
@@ -376,6 +396,8 @@ struct Builder<'a> {
     effect: i8,
     /// While a ray walk plays: its walk, frames and the ticks already shown.
     ray: Option<(usize, FlightFrames, i16)>,
+    /// The monster whose result message already brought it into view.
+    staged: Option<i16>,
 }
 
 impl<'a> Builder<'a> {
@@ -401,6 +423,7 @@ impl<'a> Builder<'a> {
             mode: settings.targeting as i8,
             effect: settings.effect,
             ray: None,
+            staged: None,
         }
     }
 
@@ -417,6 +440,7 @@ impl<'a> Builder<'a> {
             self.killbody_delay = false;
             return;
         }
+        self.stage_result(event);
         match event {
             Event::Sound { .. } if after_hit || after_step => {
                 if let Some(step) = self.steps.back_mut() {
@@ -581,8 +605,22 @@ impl<'a> Builder<'a> {
     }
 
     /// Handles a combat result message: a zero-damage spell result flashes its
-    /// target first.
+    /// target first, and a message ahead of a monster's damaging spell result comes
+    /// after the monster is brought into view.
     fn on_feedback(&mut self, index: usize, event: &Event, feedback: &GameFeedback) {
+        let next_result = self.events[index + 1..].iter().find(|event| {
+            matches!(
+                event,
+                Event::AttackResolved { .. } | Event::SpellResolved { .. }
+            )
+        });
+        if let GameFeedback::CombatResult { body, .. } = feedback
+            && next_result.and_then(damaged_monster) == Some(*body)
+            && self.staged != Some(*body)
+        {
+            self.push_stage(*body);
+            self.staged = Some(*body);
+        }
         if let GameFeedback::CombatResult {
             body, amount: 0, ..
         } = feedback
@@ -619,6 +657,26 @@ impl<'a> Builder<'a> {
                     })
                 });
             self.push(visual, None, result_ticks(self.settings.speed));
+        }
+    }
+
+    /// centerstage2(body, 0): resolvespell brings a monster whose health the result
+    /// changes into view before anything else of the result shows.
+    fn push_stage(&mut self, body: i16) {
+        self.steps.push_back(Step {
+            events: vec![],
+            visual: Visual::Stage { body },
+            hit: None,
+            ticks: 0,
+        });
+    }
+
+    /// Brings the monster a result changes into view, unless its message already did.
+    fn stage_result(&mut self, event: &Event) {
+        if let Some(body) = damaged_monster(event)
+            && self.staged.take() != Some(body)
+        {
+            self.push_stage(body);
         }
     }
 
@@ -774,6 +832,7 @@ impl<'a> Builder<'a> {
                 cast_icon: None,
                 missile_icon: None,
                 aim_offset: self.settings.aim_offset,
+                large_field: self.settings.large_field,
                 result_slot: None,
                 spell_info: None,
                 framed: None,
@@ -862,6 +921,7 @@ impl Playback {
                 })
             }
             Visual::Icon(icon) => self.icon = Some(icon),
+            Visual::Stage { body } => self.stage(body),
             Visual::Move { body, point } => {
                 if self.place(body, point).is_err() {
                     // The copy no longer matches the field the rules saw:
@@ -877,7 +937,11 @@ impl Playback {
                     if self.view.is_some()
                         && let Some(combat) = &self.session.combat
                     {
-                        self.view = Some(crate::combat_controls::centered(combat, point));
+                        self.view = Some(crate::combat_controls::centered(
+                            combat,
+                            point,
+                            self.large_field,
+                        ));
                     }
                     self.until = now;
                     return Advance::Step(step.events);
@@ -895,7 +959,11 @@ impl Playback {
                     if (picture || !(1..=8).contains(&relative.0) || !(1..=8).contains(&relative.1))
                         && let Some(combat) = &self.session.combat
                     {
-                        self.view = Some(crate::combat_controls::centered(combat, point));
+                        self.view = Some(crate::combat_controls::centered(
+                            combat,
+                            point,
+                            self.large_field,
+                        ));
                     }
                 }
             }
@@ -941,6 +1009,28 @@ impl Playback {
         })
     }
 
+    /// Recentres the field on a body that stands outside the view's window: columns 1 to 12
+    /// and rows 1 to 11 of the large field, columns and rows 1 to 7 of the small one.
+    ///
+    /// Original: centerstage2
+    fn stage(&mut self, body: i16) {
+        let (Some(origin), Some(combat)) = (self.view, self.session.combat.as_ref()) else {
+            return;
+        };
+        let Some((point, _)) = Self::body_cell(combat, body) else {
+            return;
+        };
+        let large = i16::from(self.large_field);
+        let (x, y) = (point.0 - origin.0, point.1 - origin.1);
+        if !((1..8 + 5 * large).contains(&x) && (1..8 + 4 * large).contains(&y)) {
+            self.view = Some(crate::combat_controls::centered(
+                combat,
+                point,
+                self.large_field,
+            ));
+        }
+    }
+
     /// Once a sprite's rectangle misses the clip (33, 33, 287, 287), cast
     /// recentres on the target cell and the walk continues.
     ///
@@ -969,6 +1059,7 @@ impl Playback {
                 (target.0 + 16).div_euclid(32),
                 (target.1 + 16).div_euclid(32),
             ),
+            self.large_field,
         ));
     }
 

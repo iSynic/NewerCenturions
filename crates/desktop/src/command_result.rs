@@ -123,6 +123,9 @@ fn present_success(
     if input.medical {
         ui.medical_result(state, events);
     }
+    if input.capture {
+        ui.combat_view.stage(state);
+    }
     if input.psi {
         ui.inspection = None;
         ui.psi.pending = None;
@@ -177,6 +180,7 @@ fn present_success(
                         .as_deref()
                         .and_then(|item| item.get(0x30..0x32))
                         .map_or(0, |word| i16::from_be_bytes([word[0], word[1]])),
+                    large_field: ui.large_field(),
                 },
             )
         });
@@ -225,6 +229,7 @@ struct InputEffects {
     shot: bool,
     medical: bool,
     movement: bool,
+    capture: bool,
     field_control: Option<centurions_core::field_controls::Action>,
 }
 impl InputEffects {
@@ -266,6 +271,7 @@ impl InputEffects {
                 | Command::StopBleeding { .. }
         );
         let movement = matches!(command, Command::Move { .. } | Command::CombatClick { .. });
+        let capture = matches!(command, Command::BeginCapture);
         let field_control = if let Command::FieldControl { action } = command {
             Some(*action)
         } else {
@@ -281,6 +287,7 @@ impl InputEffects {
             shot,
             medical,
             movement,
+            capture,
             field_control,
         }
     }

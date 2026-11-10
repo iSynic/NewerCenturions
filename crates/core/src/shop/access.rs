@@ -72,7 +72,8 @@ pub(crate) fn validate(state: &Session, content: &Content) -> Result<(), RuleErr
 }
 
 /// The shop script operation opens a shop; a positive parameter also lets the
-/// party reach its inventory later.
+/// party reach its inventory later. An ordinary shop lifts any limit on the stock the party may
+/// take.
 ///
 /// Original: newland
 pub(crate) fn visit(
@@ -82,6 +83,7 @@ pub(crate) fn visit(
 ) -> Result<bool, RuleError> {
     let id = parameter.wrapping_abs() as u8;
     state.loot_limit = None;
+    state.globals.limited_stock = 0;
     let map = state.map(content, 0).ok_or("shop scenario unavailable")?;
     load_shop(state, map, id)?;
     state.shop_access = Some(Access {
@@ -166,6 +168,8 @@ pub(crate) fn alter(state: &mut Session, content: &Content, extra: &[u8]) -> Res
 
 /// Visits a shop that sells only a limited number of enhanced items: the extra gives the
 /// enhancement level (stored one higher) and how many items the party may take.
+///
+/// Original: newland
 pub(crate) fn visit_restricted(
     state: &mut Session,
     content: &Content,
@@ -175,6 +179,7 @@ pub(crate) fn visit_restricted(
     let access = state.shop_access.as_mut().unwrap();
     access.enhancement = word(extra, 4)?.wrapping_add(1);
     access.remaining = word(extra, 2)?;
+    state.globals.limited_stock = access.remaining;
     Ok(())
 }
 
@@ -257,6 +262,7 @@ pub(crate) fn command_allowed(command: &Command) -> bool {
             | Command::Continue
             | Command::Reload { .. }
             | Command::ViewWarrior { .. }
+            | Command::CreationDialog
             | Command::RetargetItemInformation { .. }
             | Command::ListItemUsers { .. }
             | Command::ShowDraggedItemInformation { .. }

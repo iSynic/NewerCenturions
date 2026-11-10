@@ -174,7 +174,7 @@ pub use error::RuleError;
 pub use event::{
     Event, Flight, PresentationFlight, PresentationIcon, RayCrossing, SpellArea, SpellInfo,
 };
-pub use persistence::{atomic_write, load, save};
+pub use persistence::{atomic_write, load, save, scenario_owner_mismatch};
 pub use random::RandomState;
 pub use state::*;
 

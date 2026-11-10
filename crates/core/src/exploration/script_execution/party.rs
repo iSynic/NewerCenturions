@@ -28,7 +28,7 @@ pub(super) fn execute(
     let script = position.script.as_mut().unwrap();
     match operation {
         Operation::AdjustStatistics => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Magnitude(parameter),
@@ -64,7 +64,7 @@ pub(super) fn execute(
             }
         }
         Operation::Clinic => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Magnitude(parameter),
@@ -106,10 +106,20 @@ pub(super) fn execute(
                     wait: 0,
                     sound: 30005,
                 }));
+            } else {
+                // A negative parameter shows the note at once instead of announcing it, and the
+                // script waits until the player closes it.
+                effects.extend(crate::reference_views::note(state, content, index)?);
+                state
+                    .exploration
+                    .as_mut()
+                    .ok_or("note map missing")?
+                    .presentation = Some(Presentation::Note { index });
+                return Ok(ScriptStep::Pause);
             }
         }
         Operation::SelectedHealth | Operation::PartyHealth => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Magnitude(parameter),
@@ -183,7 +193,7 @@ pub(super) fn execute(
             }
         }
         Operation::FilterParty => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Magnitude(parameter),
@@ -205,7 +215,7 @@ pub(super) fn execute(
             )?;
         }
         Operation::SetRecoveryRestrictions => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Magnitude(parameter),
@@ -217,7 +227,7 @@ pub(super) fn execute(
             state.energy_recovery_disabled = restrictions.energy;
         }
         Operation::ChangeFatigue => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Magnitude(parameter),
@@ -242,7 +252,10 @@ pub(super) fn execute(
         }
         Operation::AddAlly => {
             let definition = span(
-                &map.combat.as_ref().unwrap().monsters,
+                &map.combat
+                    .as_ref()
+                    .ok_or("ally definitions missing")?
+                    .monsters,
                 parameter as usize * story_allies::ALLY_BYTES,
                 story_allies::ALLY_BYTES,
             )?;
@@ -285,7 +298,7 @@ pub(super) fn execute(
             script.restart_from(&replacement);
         }
         Operation::LimitedShopOrTreasure => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Magnitude(parameter),
@@ -302,6 +315,8 @@ pub(super) fn execute(
                 } else {
                     None
                 };
+                // The count is kept even for a treasure without a limit.
+                state.globals.limited_stock = limited.limit()?;
                 effects.extend(present_treasure(state, content, id)?);
             }
             return Ok(ScriptStep::Pause);
@@ -310,7 +325,7 @@ pub(super) fn execute(
         // for members chosen by e1 (all, picked, stamina above -10) with sound e4,
         // the portrait effect and showresults code e2 + 1.
         Operation::GiveCondition => {
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             story_party::give_condition(
                 &mut state.warriors,
                 &state.globals.party_track,
@@ -320,7 +335,7 @@ pub(super) fn execute(
         }
         // Clears the picks, then picks members by trait.
         Operation::PickByTrait => {
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             state.globals.party_track = story_party::pick_by_trait(
                 &state.warriors,
                 PickByTraitExtra(extra),
@@ -329,14 +344,14 @@ pub(super) fn execute(
             )?;
         }
         Operation::PickByCaste => {
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             state.globals.party_track =
                 story_party::pick_by_caste(&state.warriors, PickByCasteExtra(extra))?;
         }
         // Clears the carried credits of every member, or of picked members when e2
         // is set; the wealth type e1 is not read.
         Operation::DropMemberCredits => {
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             let picked_only = DropCreditsExtra(extra).picked_only()?;
             for (member, warrior) in state.warriors.iter_mut().enumerate() {
                 if !picked_only || state.globals.party_track[member] != 0 {
@@ -345,7 +360,7 @@ pub(super) fn execute(
             }
         }
         Operation::TakeVictoryPoints => {
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             story_party::take_victory_points(
                 &mut state.warriors,
                 &state.globals.party_track,
@@ -372,11 +387,11 @@ pub(super) fn execute(
             }
         }
         Operation::AlterShop => {
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             crate::shop::alter(state, content, extra)?;
         }
         Operation::RandomTreasure => {
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             let (count, record) = crate::story::treasure::random_items(
                 &mut state.random,
                 RandomTreasureExtra(extra),
@@ -406,8 +421,8 @@ pub(super) fn execute(
             return Ok(ScriptStep::Pause);
         }
         Operation::ConsumePartyItems => {
-            let tables = map.combat.as_ref().unwrap();
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let tables = map.combat.as_ref().ok_or("story combat tables missing")?;
             let consumed = story_inventory::consume_party_items_with_record(
                 &state.warriors,
                 content,

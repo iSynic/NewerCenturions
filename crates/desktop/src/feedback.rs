@@ -172,10 +172,10 @@ impl UiState {
     }
 
     /// Draws the technical error, or else the message at the head of the queue (or
-    /// the one that stays up), at `warning_origin`.
+    /// the one that stays up); a warning steps left while the items screen is open.
     ///
     /// Original: warn
-    pub fn draw_feedback(&self, assets: &Assets, warning_origin: Vec2) {
+    pub fn draw_feedback(&self, assets: &Assets, in_items: bool) {
         if let Some(error) = &self.technical_error {
             draw_rectangle(40., 180., 720., 240., Color::from_rgba(25, 25, 25, 255));
             draw_rectangle_lines(40., 180., 720., 240., 2., RED);
@@ -191,16 +191,17 @@ impl UiState {
         else {
             return;
         };
-        draw_message(assets, warning_origin, feedback);
+        draw_message(assets, in_items, feedback);
     }
 }
 
 /// Draws one message in its box: the flash, warning or combat notice it is, with its picture and
-/// border. A warning sits at `warning_origin`.
+/// border. A warning sits 31 pixels right of the game window and 41 below it, 18 pixels further
+/// left while the items screen is open.
 ///
 /// Original: warn
-pub fn draw_message(assets: &Assets, warning_origin: Vec2, feedback: &GameFeedback) {
-    let (text, rect, picture) = match feedback {
+pub fn draw_message(assets: &Assets, in_items: bool, feedback: &GameFeedback) {
+    let (text, window) = match feedback {
         GameFeedback::OutdoorBodyStatus { permanent, .. } => {
             let address = if *permanent { 0x403294 } else { 0x403286 };
             if let Ok(text) = assets.game_text.text(address, true) {
@@ -242,26 +243,26 @@ pub fn draw_message(assets: &Assets, warning_origin: Vec2, feedback: &GameFeedba
                         "original flash resource missing".into(),
                     )
                 }),
-            Rect::new(f32::from(*x), f32::from(*y) + 20., 260., 62.),
-            156,
+            MessageWindow::Flash(flash_origin(*x, *y)),
         ),
         GameFeedback::Flash { address, x, y, .. } => (
             assets.game_text.text(*address, false),
-            Rect::new(f32::from(*x), f32::from(*y) + 20., 260., 62.),
-            156,
+            MessageWindow::Flash(flash_origin(*x, *y)),
         ),
         GameFeedback::EquipmentLevel { level } => (
             assets
                 .game_text
                 .text(crate::game_strings::MINIMUM_SKILL_LEVEL, false)
                 .map(|prefix| format!("{prefix}{level}")),
-            Rect::new(50., 70., 260., 62.),
-            156,
+            MessageWindow::Flash(flash_origin(50, 50)),
         ),
         GameFeedback::Combat { kind } => (
             assets.game_text.text(kind.address(), true),
-            Rect::new(580., 536., 208., 62.),
-            156,
+            MessageWindow::CombatLine {
+                y: COMBAT_REFUSAL_BASELINE,
+                size: 18,
+                color: QUICKDRAW_YELLOW,
+            },
         ),
         GameFeedback::CombatResourceResult { resource_id, index } => (
             assets
@@ -280,8 +281,11 @@ pub fn draw_message(assets: &Assets, warning_origin: Vec2, feedback: &GameFeedba
                         "original combat result resource missing".into(),
                     )
                 }),
-            Rect::new(580., 536., 208., 62.),
-            156,
+            MessageWindow::CombatLine {
+                y: COMBAT_RESULT_BASELINE,
+                size: 20,
+                color: QUICKDRAW_RED,
+            },
         ),
         GameFeedback::CombatResult { code, amount, .. } => {
             // showresults prints string(abs(damage)) in red, then the plural
@@ -301,24 +305,18 @@ pub fn draw_message(assets: &Assets, warning_origin: Vec2, feedback: &GameFeedba
             let Ok(label) = assets.game_text.text(address, true) else {
                 return;
             };
-            // showresults uses TextMode srcOr, TextSize 20 and
-            // ForeColor(redColor) for the amount; the amount codes then switch
-            // to yellowColor for their label. In combat it draws PICT 156 over
-            // the message rectangle and moves to (420, 443 - 32) from the panel
-            // origin; the controls sit 20 pixels lower here than in the game's
-            // window (scene's combat panels).
-            let rect = Rect::new(568., 538., 232., 50.);
-            assets.panel(156, rect);
-            let red = Color::from_rgba(0xdd, 0x08, 0x06, 255);
-            let yellow = Color::from_rgba(0xfc, 0xf3, 0x05, 255);
-            let (x, y) = (580., 571.);
+            // showresults prints in bold at size 20 over PICT 156 in the combat message
+            // rectangle: the amount in red, the amount codes' label after it in yellow, any
+            // other label in red.
+            assets.panel(156, COMBAT_MESSAGE);
+            let (x, y) = (COMBAT_TEXT_LEFT, COMBAT_RESULT_BASELINE);
             if matches!(code, -23..=-19 | -16 | -15 | 0) {
                 let amount = amount.wrapping_abs().to_string();
-                assets.text(&amount, x, y, 20, red);
-                let width = assets.text_width(&amount, 20);
-                assets.text(&label, x + width, y, 20, yellow);
+                assets.bold_text(&amount, x, y, 20, QUICKDRAW_RED);
+                let width = assets.bold_width(&amount, 20);
+                assets.bold_text(&label, x + width, y, 20, QUICKDRAW_YELLOW);
             } else {
-                assets.text(&label, x, y, 20, red);
+                assets.bold_text(&label, x, y, 20, QUICKDRAW_RED);
             }
             return;
         }
@@ -330,43 +328,82 @@ pub fn draw_message(assets: &Assets, warning_origin: Vec2, feedback: &GameFeedba
                 .ok_or_else(|| {
                     centurions_content::ContentError::Invalid("warning text missing".into())
                 }),
-            Rect::new(warning_origin.x + 31., warning_origin.y + 41., 259., 60.),
-            182,
+            MessageWindow::Warning(warning_origin(in_items)),
         ),
         GameFeedback::Sound { .. } | GameFeedback::Silent | GameFeedback::Tutorial { .. } => {
             return;
         }
     };
-    assets.panel(picture, rect);
-    if matches!(feedback, GameFeedback::Warning { .. }) {
-        assets.panel(144, Rect::new(rect.x + 4., rect.y + 4., 45., 50.));
+    let text = text.unwrap_or_default();
+    match window {
+        MessageWindow::Warning(origin) => {
+            assets.draw_dialog_with_parameters(WARNING_DIALOG, origin, &[&text]);
+            plain_box_frame(assets.dialog_rect_at(WARNING_DIALOG, 2, origin));
+        }
+        MessageWindow::Flash(origin) => {
+            // ParamText gives the flash its text as the second parameter.
+            assets.draw_dialog_with_parameters(FLASH_DIALOG, origin, &["", &text]);
+            plain_box_frame(assets.dialog_rect_at(FLASH_DIALOG, 1, origin));
+        }
+        MessageWindow::CombatLine { y, size, color } => {
+            assets.panel(156, COMBAT_MESSAGE);
+            assets.bold_text(&text, COMBAT_TEXT_LEFT, y, size, color);
+        }
     }
-    if matches!(
-        feedback,
-        GameFeedback::Flash { .. }
-            | GameFeedback::ResourceFlash { .. }
-            | GameFeedback::EquipmentLevel { .. }
-    ) {
-        draw_rectangle_lines(
-            rect.x - 1.,
-            rect.y - 1.,
-            rect.w + 2.,
-            rect.h + 2.,
-            1.,
-            YELLOW,
-        );
-    }
-    if let Ok(text) = text {
-        assets.wrapped_color(
-            &text,
-            if matches!(feedback, GameFeedback::Warning { .. }) {
-                Rect::new(rect.x + 50., rect.y + 5., 204., 50.)
-            } else {
-                Rect::new(rect.x + 10., rect.y + 8., rect.w - 20., rect.h - 10.)
-            },
-            12,
-            15.,
-            YELLOW,
-        );
-    }
+}
+
+/// Where a message is shown: the warning dialog or the flash dialog with its top left at the
+/// point given, or one bold line over the combat message picture with its baseline at `y`.
+enum MessageWindow {
+    Warning(Vec2),
+    Flash(Vec2),
+    CombatLine { y: f32, size: u16, color: Color },
+}
+
+/// The warning dialog.
+const WARNING_DIALOG: i16 = 140;
+/// The flash dialog.
+const FLASH_DIALOG: i16 = 156;
+/// How far the warning dialog sits from the game window's top left.
+const WARNING_OFFSET: Vec2 = Vec2::new(31., 41.);
+/// How far the warning dialog steps left while the items screen is open.
+const ITEMS_WARNING_STEP: f32 = 18.;
+/// The combat message rectangle that PICT 156 fills.
+const COMBAT_MESSAGE: Rect = Rect::new(568., 538., 232., 50.);
+/// Where combat refusals and results start their line.
+const COMBAT_TEXT_LEFT: f32 = 580.;
+/// The baseline of a combat refusal.
+const COMBAT_REFUSAL_BASELINE: f32 = 568.;
+/// The baseline of a combat result.
+const COMBAT_RESULT_BASELINE: f32 = 571.;
+/// QuickDraw's redColor.
+const QUICKDRAW_RED: Color = Color::new(221. / 255., 8. / 255., 6. / 255., 1.);
+/// QuickDraw's yellowColor.
+const QUICKDRAW_YELLOW: Color = Color::new(252. / 255., 243. / 255., 5. / 255., 1.);
+
+/// The warning dialog's top left: off the game window under the menu bar, stepped left while the
+/// items screen is open.
+///
+/// Original: warn
+fn warning_origin(in_items: bool) -> Vec2 {
+    let step = if in_items { ITEMS_WARNING_STEP } else { 0. };
+    vec2(0., 20.) + WARNING_OFFSET - vec2(step, 0.)
+}
+
+/// The flash dialog's top left for a flash at `(x, y)` of the game window, under the menu bar.
+fn flash_origin(x: i16, y: i16) -> Vec2 {
+    vec2(f32::from(x), f32::from(y) + 20.)
+}
+
+/// Draws the one-pixel frame of a plain dialog box round `window`, in the yellow frame colour
+/// of the warning and flash dialogs.
+fn plain_box_frame(window: Rect) {
+    draw_rectangle_lines(
+        window.x - 1.,
+        window.y - 1.,
+        window.w + 2.,
+        window.h + 2.,
+        1.,
+        YELLOW,
+    );
 }

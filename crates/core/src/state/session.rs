@@ -193,8 +193,10 @@ pub struct CommandPreferences {
     /// The animation delay the player chose, in steps of 5 up to 50.
     #[serde(default)]
     pub animation_delay: i16,
-    /// Preference 22 selects the fixed combat layout. It is a command input
-    /// because a script's position read can reach its rectangles.
+    /// Preference 22 off selects the 640 by 480 screen: the fixed combat layout
+    /// and the small field view. It is a command input because a script's
+    /// position read can reach its rectangles and the view's sweep marks what
+    /// the party has seen.
     #[serde(default, skip_serializing_if = "large_combat_field")]
     pub small_combat_field: bool,
     /// Records `trace` entries for this command only; never serialized.

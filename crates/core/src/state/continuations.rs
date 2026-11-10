@@ -365,6 +365,10 @@ pub enum Presentation {
     WarriorChoice {
         extra: i16,
     },
+    /// A note a script shows; the script goes on when the player closes it.
+    Note {
+        index: usize,
+    },
     /// Choosing party members for a script: `remaining` more members to pick,
     /// dead ones too when `unconscious`; the inverted form flips the finished
     /// pick.

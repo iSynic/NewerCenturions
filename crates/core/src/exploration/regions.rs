@@ -144,8 +144,9 @@ pub(super) fn regional_selection_chance(
     Ok(Regional::None)
 }
 
-/// Starts what a region roll gave: the battle, the region's event script, or the avoidance question
-/// with its dialogue and sound, then the question's own sound and tutorial.
+/// Starts what a region roll gave: the battle, the region's event script (after the party breaks
+/// camp, leaves the shop and the view recentres on it), or the avoidance question with its dialogue and sound, then the question's own
+/// sound and tutorial.
 ///
 /// Original: timeclick, question2
 pub(super) fn apply_region(
@@ -160,6 +161,12 @@ pub(super) fn apply_region(
         }
         Regional::Script(id) => {
             let map = active_map(state, content)?;
+            // The event breaks camp and leaves the shop; a clinic visit stands.
+            if let Some(control) = state.field_controls.as_mut() {
+                control.camping = false;
+            }
+            state.shop_access = None;
+            super::boat::recentre(state);
             state.exploration.as_mut().unwrap().script =
                 Some(ScriptState::scheduled(map.script(id)?.to_vec(), 0));
             run_script(state, content)

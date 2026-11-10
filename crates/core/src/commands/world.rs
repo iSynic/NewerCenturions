@@ -32,8 +32,9 @@ pub(super) fn execute(
             {
                 return Err(RuleError::Refused { feedback: vec![] });
             }
+            let events = crate::roster::load_saved_items(state, content)?;
             crate::mission::end(state, content)?;
-            Ok(vec![])
+            Ok(events)
         }
         Command::SetDifficulty { level } => {
             if state.phase != Phase::SquadSelection || !(-2..=2).contains(&level) {

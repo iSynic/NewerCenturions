@@ -39,6 +39,8 @@ impl StoryRecordMut<'_> {
         self.0[41] = shared[41];
     }
     /// Loading or branching to another event keeps this event's eight-byte header.
+    ///
+    /// Original: loaddoor2
     pub fn replace_body(&mut self, replacement: &[u8]) {
         self.0[8..].copy_from_slice(&replacement[8..]);
     }

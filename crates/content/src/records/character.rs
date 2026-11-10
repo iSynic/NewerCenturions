@@ -77,9 +77,20 @@ impl CharacterIdentityMut<'_> {
     ///
     /// Original: savecharacter, setverify
     pub fn refresh_save_checksums(&mut self) -> Result<(), ContentError> {
+        self.stamp_checksums(&[6, 0x5a, 0x9e4, 0x9e6])
+    }
+    /// Stamps the three checksums of a new warrior saved before it joins a squad. Its second sum
+    /// takes its last two words one word earlier than a squad member's second sum does.
+    ///
+    /// Original: savecharacter, setverify
+    pub fn refresh_new_warrior_checksums(&mut self) -> Result<(), ContentError> {
+        self.stamp_checksums(&[6, 0x5a, 0x9e2, 0x9e4])
+    }
+    /// Stamps the three wrapping checksums, the second over `second`.
+    fn stamp_checksums(&mut self, second: &[usize]) -> Result<(), ContentError> {
         for (destination, fields) in [
             (2, &[0x3a, 0x52, 0x1e][..]),
-            (0x124, &[6, 0x5a, 0x9e4, 0x9e6][..]),
+            (0x124, second),
             (0xa40, &[0xa, 0x52, 0x9e8, 0x52, 0x22][..]),
         ] {
             let value = fields.iter().try_fold(0_i16, |sum, offset| {

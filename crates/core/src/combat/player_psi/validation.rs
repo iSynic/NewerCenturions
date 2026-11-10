@@ -83,7 +83,7 @@ pub(super) fn validate_target(
         .active_body()
         .filter(|body| (0..6).contains(body))
         .ok_or_else(|| RuleError::Invalid("psi casting requires an active warrior".into()))?;
-    if !can_cast(warriors, actor, disabled)? {
+    if !can_cast(warriors, actor, disabled, true)? {
         return Err(RuleError::Invalid("warrior cannot cast psi".into()));
     }
     if !warriors[actor as usize].knows_spell(request.spell)? {

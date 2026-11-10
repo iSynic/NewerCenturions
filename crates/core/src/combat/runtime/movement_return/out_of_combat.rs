@@ -11,6 +11,7 @@ pub(in crate::combat::runtime) use casting::{
     out_of_combat_flight, out_of_combat_ray,
 };
 mod occupied;
+pub(in crate::combat::runtime) use occupied::do_reload;
 mod retry;
 mod target_list;
 

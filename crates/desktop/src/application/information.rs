@@ -17,7 +17,19 @@ impl Application {
         let mut next = None;
         let mut events = Vec::new();
         match action {
-            ApplicationAction::CloseNote => self.notes.open = None,
+            ApplicationAction::CloseNote => {
+                self.notes.open = None;
+                // A note a script showed lets the script go on.
+                if matches!(
+                    state
+                        .exploration
+                        .as_ref()
+                        .and_then(|p| p.presentation.as_ref()),
+                    Some(centurions_core::Presentation::Note { .. })
+                ) {
+                    next = Some(Action::Command(Command::Continue));
+                }
+            }
             ApplicationAction::CreatureItem(item) => {
                 let view = self
                     .creature
@@ -169,15 +181,21 @@ impl Application {
                     96 | 97 => {
                         let creation =
                             crate::creation::Creation::profile(state, content, member, item == 97)?;
-                        events = crate::creation::Creation::tutorial_events(creation.stage);
+                        // The information screen's own tutorial page comes before the dialog's.
+                        events = vec![Event::Feedback(
+                            centurions_core::feedback::GameFeedback::Tutorial {
+                                first: if item == 97 { 46 } else { 47 },
+                                last: if item == 97 { 46 } else { 47 },
+                            },
+                        )];
+                        events.extend(apply(Command::CreationDialog, state, content)?);
+                        events.extend(crate::creation::Creation::tutorial_events(creation.stage));
                         self.characters.creation = Some(creation);
                     }
                     100 => {
+                        // The statistics dialog opens with the same drawn sound as the profiles.
+                        events = apply(Command::CreationDialog, state, content)?;
                         self.characters.information.as_mut().unwrap().detailed = true;
-                        let mut presentation_random = state.random.clone();
-                        events.push(Event::Sound {
-                            resource_id: presentation_random.bound(2).wrapping_add(200),
-                        });
                     }
                     65 | 105 => {
                         let mut editor = crate::editor::WarriorEditor::new(state, member)?;

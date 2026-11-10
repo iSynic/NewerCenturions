@@ -28,7 +28,7 @@ mod presentation;
 /// How a script parameter selects its EXTRA record.
 #[derive(Clone, Copy)]
 pub(super) enum ExtraIndex {
-    /// `parameter as usize`: a negative parameter selects past the table.
+    /// The parameter read as an unsigned number: a negative parameter selects far past the table.
     Signed(i16),
     /// The parameter's magnitude.
     Magnitude(i16),
@@ -36,29 +36,38 @@ pub(super) enum ExtraIndex {
     Exact(usize),
 }
 
-/// Reads a script's extra record and keeps a copy as the shared extra row. With
-/// `missing` absent, a map without combat tables panics; otherwise it returns
-/// that error.
+/// Reads a script's extra record into the shared extra row and returns the row. A record at or
+/// past the end of the table overwrites only the bytes it has, leaving the rest of the row as it
+/// was. A land without an extra table is refused with `missing`, or a general message when none
+/// is given.
 ///
 /// Original: loadextracode
-pub(super) fn load_extra<'a>(
+pub(super) fn load_extra(
     globals: &mut crate::Globals,
-    map: &'a OpeningMission,
+    map: &OpeningMission,
     index: ExtraIndex,
     missing: Option<&'static str>,
-) -> Result<&'a [u8], RuleError> {
-    let tables = match missing {
-        Some(message) => map.combat.as_ref().ok_or(message)?,
-        None => map.combat.as_ref().unwrap(),
+) -> Result<Vec<u8>, RuleError> {
+    let tables = map
+        .combat
+        .as_ref()
+        .ok_or(missing.unwrap_or("story extra records missing"))?;
+    let id = match index {
+        ExtraIndex::Signed(parameter) => parameter as u16,
+        ExtraIndex::Magnitude(parameter) => parameter.unsigned_abs(),
+        ExtraIndex::Exact(index) => index as u16,
     };
-    let index = match index {
-        ExtraIndex::Signed(parameter) => parameter as usize,
-        ExtraIndex::Magnitude(parameter) => usize::from(parameter.unsigned_abs()),
-        ExtraIndex::Exact(index) => index,
-    };
-    let extra = ExtraTable(&tables.encounters).record(index)?;
-    globals.extra_record = extra.to_vec();
-    Ok(extra)
+    Ok(read_extra(globals, &tables.encounters, id))
+}
+
+/// Reads EXTRA record `id` of `table` over the shared extra row and returns the row.
+///
+/// Original: loadextracode
+pub(crate) fn read_extra(globals: &mut crate::Globals, table: &[u8], id: u16) -> Vec<u8> {
+    let read = ExtraTable(table).read(id);
+    globals.extra_record.resize(ExtraTable::RECORD_BYTES, 0);
+    globals.extra_record[..read.len()].copy_from_slice(read);
+    globals.extra_record.clone()
 }
 
 /// Whether the script goes on to its next action or stops to wait for the player.

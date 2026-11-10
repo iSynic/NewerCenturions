@@ -6,6 +6,10 @@ use macroquad::prelude::*;
 
 /// The look window a note is drawn in.
 const LOOK: Rect = Rect::new(160., 60., 320., 320.);
+/// The dialog that holds a note's text.
+const NOTE_DIALOG: i16 = 169;
+/// The static text item the note's text fills.
+const NOTE_TEXT: usize = 2;
 
 /// The note the player is reading and the labels the notes menu lists for this map.
 #[derive(Default)]
@@ -15,17 +19,23 @@ pub struct Notes {
     pub unknown_labels: Vec<String>,
 }
 
-/// A note the player opened from the Maps and Notes menu, with its scroll.
+/// A note the player opened from the Maps and Notes menu.
 pub struct Note {
     pub record: Vec<u8>,
     pub text: String,
-    pub scroll: f32,
 }
 impl Note {
-    /// Draws the note: its picture or map section, and its text, scrolled.
+    /// Draws the note: its picture or map section, then its text in bold in the note dialog
+    /// under the look window, which sits higher with the 800 x 600 preference.
     ///
     /// Original: showmap
-    pub fn draw(&self, state: &Session, content: &Content, assets: &Assets) {
+    pub fn draw(
+        &self,
+        state: &Session,
+        content: &Content,
+        assets: &Assets,
+        placement: crate::placement::Placement,
+    ) {
         draw_rectangle(0., 20., 640., 460., BLACK);
         let view = MapNote(&self.record);
         if view.picture().unwrap_or(0) != 0 {
@@ -33,7 +43,10 @@ impl Note {
         } else {
             draw_section(&view, state, content, assets);
         }
-        assets.dialog_text(&self.text, Rect::new(40., 405. - self.scroll, 560., 70.));
+        let origin = placement.scan_description();
+        assets.draw_dialog_at(NOTE_DIALOG, origin);
+        let text = assets.dialog_rect_at(NOTE_DIALOG, NOTE_TEXT, origin);
+        assets.bold_wrapped(&self.text, text, 12, YELLOW);
     }
 }
 

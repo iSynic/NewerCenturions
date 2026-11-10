@@ -1,6 +1,7 @@
 use super::*;
 use crate::presentation::{Action, UiState};
 use centurions_content::word;
+use centurions_core::roster::{Roster, mission_records, new_warrior_record, saved_record};
 use centurions_core::{Command, apply};
 
 use crate::original_content::fixture as native_fixture;
@@ -149,14 +150,18 @@ fn scenario_selection_and_archive_children_use_the_application_handlers() {
     assert_eq!(driver.state, before);
 }
 
-// Protects the creation-to-mission lifecycle and atomic roster persistence, including failed exit.
+// Protects the creation-to-mission lifecycle and atomic roster persistence, including failed exit,
+// and the warrior index rows a schema-1 roster opens with.
 #[test]
 fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
     let mut driver = DesktopReplay::new();
     let directory = std::env::temp_dir().join(format!("centurions-roster-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("warriors.json");
-    let _ = std::fs::remove_file(&path);
+    let legacy = serde_json::json!({"schema_version": 1, "warriors": driver.content.warriors,
+        "content_identity": driver.content.identity});
+    std::fs::write(&path, legacy.to_string()).unwrap();
+    let open = |content: &Content| Roster::open(&path, content, &[]).unwrap();
     driver.app.help.enabled = false;
     driver.app.load_roster(&path, &driver.content).unwrap();
     let supplied = driver.app.roster.as_ref().unwrap().warriors.len();
@@ -172,7 +177,8 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
         assert_eq!((refused, asked), (ask == 0, ask));
         let _ = driver.handle(ApplicationAction::CreationAnswer(false));
     }
-    driver.act(ApplicationAction::CreationCancel);
+    driver.name_creation("", 0.);
+    driver.act(ApplicationAction::CreationItem(4));
     driver.act(ApplicationAction::CreationAnswer(true));
     driver.act(ApplicationAction::Menu(136, 5));
     driver.name_creation("New Warrior", 0.);
@@ -194,9 +200,9 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
     assert!(created.inventory().unwrap().len() >= 2);
     assert!(driver.state.warriors.is_empty());
     driver.act(ApplicationAction::CreationAnswer(true));
-    let roster = centurions_core::roster::Roster::open(&path, &driver.content).unwrap();
-    assert_eq!(roster.warriors.len(), supplied + 1);
-    assert_eq!(roster.warriors.last().unwrap().name, "New Warrior");
+    // A new warrior is kept with the checksums of a warrior saved apart from any squad.
+    let kept = open(&driver.content).listed(supplied).cloned().unwrap();
+    assert_eq!(new_warrior_record(&kept).unwrap(), kept);
     driver.act(ApplicationAction::Menu(136, 5));
     driver.name_creation("New Psion", 0.);
     for item in [4, 3, 29] {
@@ -216,22 +222,20 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
     assert!(created.knows_spell(1101).unwrap());
     assert!(driver.app.characters.editor.is_none());
     driver.act(ApplicationAction::CreationAnswer(false));
-    assert_eq!(
-        driver.app.roster.as_ref().unwrap().warriors.len(),
-        supplied + 1
-    );
+    // Discarding blanks the row the level step gave the name.
+    let roster = driver.app.roster.as_ref().unwrap();
+    assert!(roster.warriors.len() == supplied + 1 && roster.index[supplied + 1].name.is_empty());
     driver.act(ApplicationAction::Menu(130, 1));
     driver.act(ApplicationAction::Warrior(supplied));
     driver.act(ApplicationAction::Add);
     driver.act(ApplicationAction::Warrior(0));
     driver.act(ApplicationAction::Add);
     driver.act(ApplicationAction::Done);
+    // Done lists each member again in the first blank row, so the first member takes row 0.
+    assert!(open(&driver.content).index[0].name == "New Warrior");
     let original = driver.state.clone();
-    driver.act(ApplicationAction::Menu(136, 7));
-    driver.act(ApplicationAction::Member(1));
-    driver.act(ApplicationAction::Remove);
-    driver.act(ApplicationAction::SquadCancel);
-    assert_eq!(driver.state, original);
+    driver.state.psi_menu_choices[0] =
+        serde_json::from_str(r#"{"row":1,"column":2,"power":3}"#).ok();
     driver.act(ApplicationAction::Menu(136, 1));
     for member in [0, 1] {
         driver.act(ApplicationAction::OrderMember(member));
@@ -240,21 +244,32 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
         driver.state.warriors,
         [original.warriors[1].clone(), original.warriors[0].clone()]
     );
+    // The Psi menu choices stay with the member slots.
+    assert!(driver.state.psi_menu_choices[0].is_some());
     assert_eq!(driver.state.random, original.random);
+    driver.state.warriors[0].record_mut().set_stamina(3);
+    let removed = saved_record(&driver.state, &driver.content, &driver.state.warriors[0], 0);
     driver.act(ApplicationAction::Menu(136, 7));
     driver.act(ApplicationAction::Member(0));
     driver.act(ApplicationAction::Remove);
+    // Remove saves the member's current record to the roster.
+    assert!(open(&driver.content).warriors.contains(&removed.unwrap()));
     driver.act(ApplicationAction::Done);
     assert_eq!(driver.state.warriors.len(), 1);
     assert_eq!(driver.state.exploration, original.exploration);
+    // Quitting saves each member to the roster first.
+    driver.state.warriors[0].record_mut().set_stamina(1);
+    let quitting = mission_records(&driver.state, &driver.content).unwrap();
+    driver.act(ApplicationAction::QuitAnswer(true));
+    assert!(driver.app.quit && open(&driver.content).warriors.contains(&quitting[0]));
+    driver.state.warriors[0].record_mut().set_stamina(2);
     driver.act(ApplicationAction::Menu(130, 3));
     let (next, _) = driver.act(ApplicationAction::EndAnswer(false));
     assert!(matches!(next, Some(Action::Save)));
     let saved = directory.join("session.json");
     centurions_core::save(&saved, &driver.state, &driver.content).unwrap();
     let before_exit = driver.state.clone();
-    let expected =
-        centurions_core::roster::mission_records(&driver.state, &driver.content).unwrap();
+    let expected = mission_records(&driver.state, &driver.content).unwrap();
     driver.act(ApplicationAction::EndSaved);
     assert_eq!(driver.app.screen, Screen::Title);
     assert_eq!(driver.state.phase, Phase::SquadSelection);
@@ -263,14 +278,14 @@ fn creation_roster_squad_and_mission_exit_use_the_application_handlers() {
         centurions_core::load(&saved, &driver.content).unwrap(),
         before_exit
     );
-    let roster = centurions_core::roster::Roster::open(&path, &driver.content).unwrap();
-    assert!(roster.warriors.contains(&expected[0]));
-    driver.app.squad.clear();
+    assert!(open(&driver.content).warriors.contains(&expected[0]));
     driver.act(ApplicationAction::Warrior(supplied));
     driver.act(ApplicationAction::EraseWarrior);
     driver.act(ApplicationAction::EraseAnswer(true));
-    let json = std::fs::read_to_string(&path).unwrap();
-    assert!(!json.contains("New Warrior"));
+    // Erasing leaves the warrior's row blank and the rows below in place.
+    let roster = open(&driver.content);
+    assert!(!roster.holds_name("New Warrior") && roster.index[supplied].name.is_empty());
+    assert_eq!(roster.index.len(), supplied + 2);
     driver.state = before_exit;
     driver.app.screen = Screen::Game;
     let blocked = directory.join("blocked");
@@ -323,16 +338,13 @@ fn preference_dialog_commits_only_persisted_choices_and_drives_gameplay_policy()
         );
     }
     assert_eq!(driver.state, untouched);
-    let before = driver.app.preferences.clone();
     driver.act(ApplicationAction::Menu(137, 3));
-    driver.act(ApplicationAction::PreferenceItem(15));
-    driver.act(ApplicationAction::PreferenceCancel);
-    assert_eq!(driver.app.preferences, before);
-    driver.act(ApplicationAction::Menu(137, 3));
-    for item in [12, 13, 14, 15, 16, 17, 21, 3, 57, 10, 2, 2] {
+    for item in [12, 13, 14, 15, 16, 17, 21, 3, 57, 10, 2] {
         driver.act(ApplicationAction::PreferenceItem(item));
     }
-    assert_eq!(driver.app.preferences.indoor_icon, 9282);
+    // Each choice takes effect before OK; there is no cancel.
+    assert!(driver.app.preferences.indoor_icon == 9282 && !driver.app.preferences.enabled(21));
+    driver.act(ApplicationAction::PreferenceItem(2));
     let mut restored = Application::at(Screen::Title, 0.);
     restored.preferences(path.clone()).unwrap();
     let audio = &restored.audio;
@@ -676,13 +688,11 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
     assert_eq!(driver.app.audio.music_request, Some(20128));
     driver.act(ApplicationAction::Playlist(0));
     assert!(!driver.app.audio.playlist[0]);
-    assert_eq!(driver.state, unchanged);
-    let seed = driver.state.random.clone();
     driver.act(ApplicationAction::OpenInformation(0));
-    assert_eq!(driver.state.random, seed);
     inventory_reference::information_entry(&driver.state, &unchanged, 0);
     inventory_reference::compare_character_fields(&driver.content, &driver.state, &root);
-    let viewed = driver.state.clone();
+    let mut viewed = driver.state.clone();
+    viewed.random.bound(2);
     driver.act(ApplicationAction::InformationItem(100));
     assert!(driver.information().detailed);
     driver.act(ApplicationAction::InformationItem(73));
@@ -698,12 +708,14 @@ fn editor_cancel_undo_member_navigation_and_saved_commit_preserve_native_scope()
         assert_eq!(driver.state, viewed);
     }
     for item in [96, 97] {
-        driver.act(ApplicationAction::InformationItem(item));
+        let mut drawn = driver.state.clone();
+        let resource_id = drawn.random.bound(2).wrapping_add(200);
+        let (_, events) = driver.act(ApplicationAction::InformationItem(item));
+        assert_eq!(events[1], Event::Sound { resource_id });
         assert!(driver.creation().read_only);
         driver.act(ApplicationAction::CreationChoice(1));
         driver.act(ApplicationAction::CreationItem(56));
-        assert!(driver.app.characters.information.is_some());
-        assert_eq!(driver.state, viewed);
+        assert_eq!(driver.state, drawn);
     }
     driver.act(ApplicationAction::InformationItem(65));
     assert!(!driver.editor().free);
@@ -760,7 +772,7 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
     state = before;
     state.exploration.as_mut().unwrap().presentation = None;
     let mut ui = UiState::default();
-    ui.inventory.open(0, state.warriors.len());
+    ui.inventory.open_trade(0, state.warriors.len());
     // A worn item is held in place, so the loaded firearm is taken off before it is dragged.
     let take_off = Command::UnequipItem {
         warrior: 0,
@@ -904,7 +916,7 @@ fn item_editor_commits_equipped_changes_and_preserves_saved_provenance() {
                 .map(|slot| (actor, slot))
         })
         .unwrap();
-    ui.inventory.open(actor, restored.warriors.len());
+    ui.inventory.open_trade(actor, restored.warriors.len());
     for action in [
         crate::inventory::InventoryAction::Item {
             side: 0,

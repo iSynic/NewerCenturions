@@ -4,33 +4,58 @@ use crate::{Phase, RuleError, Session, combat::party_buffs};
 use centurions_content::Content;
 use centurions_content::mission::OpeningMission;
 
-/// How far a view of the field map looks: the number of fans in each sweep, the fan that looks
-/// straight ahead, and the steps each sweep takes.
+/// A view of the field map: how far it looks (the number of fans in each sweep, the fan that looks
+/// straight ahead and the steps each sweep takes), the cell the party sits in, and how far across
+/// and down the view can scroll.
 struct View {
     fans: i16,
     straight: i16,
     steps: [i16; 2],
+    centre: i32,
+    limits: (i32, i32),
 }
 
-/// The 15 by 13 view of the field map.
+/// The 15 by 13 view of the 800 by 600 screen.
 const LARGE_VIEW: View = View {
     fans: 15,
     straight: 8,
     steps: [9, 8],
+    centre: 8,
+    limits: (75, 76),
 };
 
-/// The top left square of the field map view: the party sits in the ninth column and row, and the
-/// view stops scrolling at 75 across and 76 down.
-///
-/// Original: centerpictlarge
-pub fn field_origin(x: i32, y: i32) -> (i32, i32) {
-    ((x - 8).clamp(0, 75), (y - 8).clamp(0, 76))
+/// The 10 by 10 view of the 640 by 480 screen.
+const SMALL_VIEW: View = View {
+    fans: 10,
+    straight: 5,
+    steps: [6, 6],
+    centre: 5,
+    limits: (80, 80),
+};
+
+/// The view the screen size preference chooses.
+fn view(large: bool) -> &'static View {
+    if large { &LARGE_VIEW } else { &SMALL_VIEW }
 }
 
-/// Marks the squares the party sees from where it stands. Seen squares stay seen, on every land
-/// whether or not the land hides what is unseen.
+/// The top left square of the field map view. On the large view the party sits in the ninth
+/// column and row and the view stops scrolling at 75 across and 76 down; on the small view it sits
+/// in the sixth and the view stops at 80 both ways.
 ///
-/// Original: cansee3
+/// Original: centerpictlarge, centerpictsmall
+pub fn field_origin(x: i32, y: i32, large: bool) -> (i32, i32) {
+    let view = view(large);
+    (
+        (x - view.centre).clamp(0, view.limits.0),
+        (y - view.centre).clamp(0, view.limits.1),
+    )
+}
+
+/// Marks the squares the party sees from where it stands, with the sweep of the view the screen
+/// size preference chooses. Seen squares stay seen, on every land whether or not the land hides
+/// what is unseen.
+///
+/// Original: cansee3, cansee2
 pub(crate) fn reveal_sight(state: &mut Session, content: &Content) -> Result<(), RuleError> {
     if state.phase != Phase::Exploration {
         return Ok(());
@@ -48,9 +73,10 @@ pub(crate) fn reveal_sight(state: &mut Session, content: &Content) -> Result<(),
         return Ok(());
     };
     let through_walls = party_buffs::wizard_eye(&state.party_condition)?;
-    let (origin_x, origin_y) = field_origin(position.x, position.y);
+    let large = !state.command_preferences.small_combat_field;
+    let (origin_x, origin_y) = field_origin(position.x, position.y, large);
     let seen = sweep(
-        &LARGE_VIEW,
+        view(large),
         (position.x - origin_x, position.y - origin_y),
         (origin_x, origin_y),
         through_walls,

@@ -109,7 +109,7 @@ impl ScanEditor {
             assets.text(&cost.to_string(), rect.x, rect.bottom() - 2., 12, YELLOW);
             let rect = Self::rect(assets, 2 + tier);
             if tier == self.selection.tier {
-                draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1., YELLOW);
+                crate::presentation::bevel::draw_edge(assets, rect, false);
             }
             controls.push(Control {
                 rect,
@@ -128,9 +128,14 @@ impl ScanEditor {
                 12,
                 YELLOW,
             );
-            if warrior.record().known_scan(self.selection.tier, column) != 0 {
-                assets.panel(179, Rect::new(rect.x - 17., rect.y + 5., 9., 9.));
+            let known = warrior.record().known_scan(self.selection.tier, column) != 0;
+            if known {
+                assets.panel(
+                    crate::layout::TICKED_BOX,
+                    Rect::new(rect.x - 17., rect.y + 8., 9., 9.),
+                );
             }
+            crate::presentation::bevel::draw_edge(assets, rect, !known);
             controls.push(Control {
                 rect,
                 enabled: true,
@@ -141,10 +146,7 @@ impl ScanEditor {
             && let Some(map) = content.map(0)
             && let Ok(description) = map.scan_description(school, tier, column)
         {
-            let mut rect = Self::rect(assets, 39);
-            rect.y += 12.;
-            rect.h -= 12.;
-            assets.wrapped_color(&description, rect, 12, 15., YELLOW);
+            assets.dialog_text(&description, Self::rect(assets, 39));
         }
         let rect = Self::rect(assets, 32);
         crate::presentation::push_panel_control(
@@ -155,49 +157,28 @@ impl ScanEditor {
             true,
             Action::Application(ApplicationAction::EditorItem(32)),
         );
-        if self.question || self.warning {
+        if self.question {
             controls.clear();
-            let origin = vec2(221., 203.);
-            draw_texture_ex(
-                &assets.panels[&214],
-                origin.x,
-                origin.y,
-                WHITE,
-                DrawTextureParams {
-                    source: Some(Rect::new(140., 167., 358., 195.)),
-                    ..Default::default()
-                },
+            crate::story_dialogs::question_window(
+                assets,
+                &assets.questions[16],
+                Action::Application(ApplicationAction::ScanAnswer(true)),
+                Action::Application(ApplicationAction::ScanAnswer(false)),
+                controls,
             );
-            assets.panel(182, Rect::new(origin.x + 22., origin.y + 23., 320., 84.));
-            let text = if self.question {
-                &assets.questions[16]
-            } else {
-                &assets.warnings[73]
-            };
-            assets.wrapped(
-                text,
-                Rect::new(origin.x + 36., origin.y + 43., 284., 65.),
-                14,
-                17.,
+        } else if self.warning {
+            // The warning waits for a click anywhere.
+            controls.clear();
+            crate::feedback::draw_message(
+                assets,
+                false,
+                &centurions_core::feedback::GameFeedback::Warning { index: 74 },
             );
-            for (id, x, answer) in [(2, 66., true), (4, 208., false)] {
-                if self.warning && !answer {
-                    continue;
-                }
-                let rect = Rect::new(origin.x + x, origin.y + 127., 70., 35.);
-                crate::presentation::push_panel_control(
-                    assets,
-                    controls,
-                    if self.warning { 168 } else { id },
-                    rect,
-                    true,
-                    Action::Application(if self.warning {
-                        ApplicationAction::EditorItem(0)
-                    } else {
-                        ApplicationAction::ScanAnswer(answer)
-                    }),
-                );
-            }
+            controls.push(Control {
+                rect: Rect::new(0., 0., crate::layout::SIZE.x, crate::layout::SIZE.y),
+                enabled: true,
+                action: Action::Application(ApplicationAction::EditorItem(0)),
+            });
         }
     }
 }

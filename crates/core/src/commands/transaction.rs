@@ -157,6 +157,7 @@ impl ExecutionKind {
                 | Command::ClearPsiTargets
                 | Command::RevealSight
                 | Command::ChangeMusic { .. }
+                | Command::PressPsi
         );
         let editing = matches!(
             command,
@@ -170,6 +171,10 @@ impl ExecutionKind {
                 | Command::EndMission
                 | Command::RefitParty
                 | Command::DropItem { .. }
+                | Command::CloseItems { .. }
+                | Command::DropToCrate { .. }
+                | Command::JoinItems { .. }
+                | Command::SplitItem { .. }
                 | Command::TransferItem { .. }
                 | Command::OpenShop
                 | Command::CloseShop

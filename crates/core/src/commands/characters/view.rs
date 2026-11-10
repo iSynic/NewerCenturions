@@ -10,9 +10,7 @@ pub(in crate::commands) fn execute(
 ) -> Result<Vec<Event>, RuleError> {
     match command {
         Command::ViewWarrior { warrior } => {
-            if !(warrior_management_available(state)
-                || state.phase == Phase::Combat && combat::controls::actor(state).is_ok())
-            {
+            if !information_available(state) {
                 return Err(RuleError::Refused { feedback: vec![] });
             }
             let record = state.warriors.get(warrior).ok_or_else(|| {
@@ -46,4 +44,11 @@ pub(in crate::commands) fn execute(
         }
         _ => unreachable!("command routed to wrong subsystem"),
     }
+}
+
+/// Whether a warrior's information can be shown: wherever the squad can be managed, and in combat
+/// while a body is acting.
+pub(super) fn information_available(state: &Session) -> bool {
+    warrior_management_available(state)
+        || state.phase == Phase::Combat && combat::controls::actor(state).is_ok()
 }

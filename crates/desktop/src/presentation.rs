@@ -58,8 +58,22 @@ pub struct UiState {
     pub panel_scratch: std::cell::Cell<i16>,
     /// The logical pointer while the left button is held, for downbutton's look.
     pub held_pointer: Option<Vec2>,
-    /// The map, square and Wizard Eye the party last looked from.
-    pub sight: Option<(i32, i32, i32, [u8; 2])>,
+    /// The action picker's boxes the player has ticked since it opened: a box ticked and then
+    /// cleared shows the empty box picture instead of the first look.
+    pub ticked_actions: std::cell::Cell<[bool; 8]>,
+    /// The map, square, Wizard Eye and screen size the party last looked from.
+    pub sight: Option<(i32, i32, i32, [u8; 2], bool)>,
+}
+impl UiState {
+    /// Whether the 800 by 600 preference is on, which shows the large field view.
+    pub fn large_field(&self) -> bool {
+        self.preferences
+            .enabled(crate::preferences::pref::SCREEN_800_X_600)
+    }
+    /// The window the field map is drawn in.
+    pub fn field_window(&self) -> Rect {
+        crate::layout::field_window(self.large_field())
+    }
 }
 /// An outdoor spell effect playing at a map cell: its cicn base, place, size and
 /// frame timing.
@@ -178,6 +192,7 @@ mod range_lines;
 use map::{draw_outdoor_effect, draw_story_picture, map};
 
 mod scene;
+pub(crate) mod scroll_bar;
 mod spell_panel;
 pub use scene::draw;
 pub(crate) use spell_panel::{draw_aim, draw_info};

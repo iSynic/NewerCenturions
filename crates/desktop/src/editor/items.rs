@@ -151,10 +151,7 @@ impl ItemEditor {
                 && let Some(map) = content.map(0)
                 && let Ok(text) = map.item_description(descriptor)
             {
-                let mut rect = Self::rect(assets, 65);
-                rect.y += 12.;
-                rect.h -= 12.;
-                assets.wrapped_color(&text, rect, 12, 15., YELLOW);
+                assets.dialog_text(&text, Self::rect(assets, 65));
             }
         }
         for item in (40..=63).chain([2, 67, 68, 69, 70]) {

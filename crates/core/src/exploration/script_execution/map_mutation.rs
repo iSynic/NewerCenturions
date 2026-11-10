@@ -22,7 +22,7 @@ pub(super) fn execute(
     let position = state.exploration.as_mut().unwrap();
     match operation {
         Operation::ChangeRegion => {
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             let change = RegionChangeExtra(extra);
             let target = change.map()?;
             let authored = content
@@ -53,7 +53,7 @@ pub(super) fn execute(
             }
         }
         Operation::ClearObjects => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Magnitude(parameter),
@@ -78,7 +78,7 @@ pub(super) fn execute(
             travel::clear_object_rectangle(objects, events, first, last)?;
         }
         Operation::ReplaceMapEvent | Operation::ChangeTiles | Operation::SetEventChances => {
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             let target = MapMutationExtra(extra).map()?;
             if operation == Operation::ReplaceMapEvent && target < 0 {
                 let (saved, authored) = match target {

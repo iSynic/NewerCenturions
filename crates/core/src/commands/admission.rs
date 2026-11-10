@@ -33,6 +33,7 @@ pub(super) fn check(command: &Command, state: &mut Session) -> Result<(), RuleEr
             command,
             Command::ResumeCombatSelection
                 | Command::ViewWarrior { .. }
+                | Command::CreationDialog
                 | Command::ViewCreature { .. }
         )
     {
@@ -48,6 +49,7 @@ pub(super) fn check(command: &Command, state: &mut Session) -> Result<(), RuleEr
             command,
             Command::ClinicControl { .. }
                 | Command::ViewWarrior { .. }
+                | Command::CreationDialog
                 | Command::UpgradeWarrior { .. }
                 | Command::EnterWarriorUpgrade { .. }
                 | Command::EditWarriorUpgrade { .. }
@@ -167,6 +169,7 @@ pub(super) fn check(command: &Command, state: &mut Session) -> Result<(), RuleEr
                 | Command::EscapeCombat
                 | Command::SelectCombatWeapon { .. }
                 | Command::CastPsi { .. }
+                | Command::PressPsi
                 | Command::BeginPsiTargeting { .. }
                 | Command::BeginFireTargets
                 | Command::FirePreparedPsi { .. }
@@ -215,6 +218,11 @@ pub(super) fn check(command: &Command, state: &mut Session) -> Result<(), RuleEr
                 | Command::ChooseAmmunition { .. }
                 | Command::CancelMenu
                 | Command::DropItem { .. }
+                | Command::PressUse { .. }
+                | Command::CloseItems { .. }
+                | Command::DropToCrate { .. }
+                | Command::JoinItems { .. }
+                | Command::SplitItem { .. }
                 | Command::TakeLoot { .. }
                 | Command::StoreLoot { .. }
                 | Command::KeepCurrentSpells

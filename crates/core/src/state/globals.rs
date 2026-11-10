@@ -248,6 +248,37 @@ pub struct Globals {
     #[serde(default, skip_serializing_if = "no_held_powers")]
     #[serde(rename = "psi_powers")]
     pub old_power_level: [Option<i16>; 6],
+    /// The direction the party last moved in, kept apart from the facing a battle turns; a retreat
+    /// steps back along it. Zero at launch (schema 63).
+    #[serde(default, skip_serializing_if = "no_move")]
+    pub last_party_move: [i8; 2],
+    /// How many more items the last limited shop or treasure lets the party take. It outlives the
+    /// visit, and while it holds any the second owner's portraits refuse. Zero at launch (schema
+    /// 63).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub limited_stock: i16,
+    /// Set when a fast spell has been paid for, so the Psi control casts it without asking again; a
+    /// refused press in battle gives the psi back. Clear at launch (schema 63).
+    #[serde(default, skip_serializing_if = "is_clear")]
+    pub fast_spell: u8,
+    /// Set when the spell being cast came from the warrior's psi memory rather than an item. Clear
+    /// at launch (schema 63).
+    #[serde(default, skip_serializing_if = "is_clear")]
+    pub memory_spell: u8,
+    /// Set when a warrior on automatic has just refitted his firearm, which lets him fire with his
+    /// last action point. Zero at launch (schema 63).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub reload_shot: i16,
+}
+
+/// Whether a flag is clear, so it can be left out of a save.
+fn is_clear(value: &u8) -> bool {
+    *value == 0
+}
+
+/// Whether the party has not moved, so the direction can be left out of a save.
+fn no_move(direction: &[i8; 2]) -> bool {
+    *direction == [0; 2]
 }
 
 /// Whether no warrior is holding a power.
@@ -362,6 +393,11 @@ impl Globals {
             target_picks: Default::default(),
             warrior_table: Default::default(),
             old_power_level: [None; 6],
+            last_party_move: [0; 2],
+            limited_stock: 0,
+            fast_spell: 0,
+            memory_spell: 0,
+            reload_shot: 0,
         }
     }
 }

@@ -257,7 +257,7 @@ pub fn draw(
             vec2(499., y + 9.),
             crate::portrait::Marks {
                 class_label: ui.preferences.enabled(crate::preferences::pref::APPEND_MOS),
-                conditions_left: None,
+                conditions: None,
                 automatic: false,
                 // booty clears the combat flag before it draws the recipients.
                 in_combat: false,
@@ -342,7 +342,7 @@ pub fn draw(
         assets.warnings.get(id - 1).cloned()
     };
     if let Some(message) = message {
-        assets.dialog_text(&message, Rect::new(492., 355., 298., 64.));
+        assets.dialog_text(&message, Rect::new(492., 355., 298., 65.));
     }
     // A nonzero share draws PICT 0xe8 (0xe7 at 800 x 600) with the share.
     if !crate_view && tally.share != 0 {

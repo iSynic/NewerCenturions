@@ -86,7 +86,7 @@ pub(super) fn execute(
         | Operation::VariableBranch
         | Operation::RandomBranch
         | Operation::AllyClassBranch => {
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             let continuation = match operation {
                 Operation::PartyItemBranch => {
                     story_variables::party_item_condition(&state.warriors, extra)?
@@ -212,7 +212,7 @@ pub(super) fn execute(
         // Rewrites simple encounter e1 in the encounter file with choice e2
         // disabled.
         Operation::DisableEncounterChoice => {
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             let extra = DisableChoiceExtra(extra);
             let choice = extra.choice()?;
             let offset = usize::try_from(extra.encounter()?)
@@ -232,7 +232,7 @@ pub(super) fn execute(
         | Operation::FlagBranch
         | Operation::DifficultyBranch
         | Operation::TileBranch => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Magnitude(parameter),

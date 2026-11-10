@@ -12,6 +12,17 @@ impl<'a> ExtraTable<'a> {
     pub fn record(&self, index: usize) -> Result<&'a [u8], ContentError> {
         span(self.0, index * Self::RECORD_BYTES, Self::RECORD_BYTES)
     }
+
+    /// The bytes a read of record `id` finds: the record's place is `id` times the
+    /// record size, so any id names a place, and a record at or past the end of the
+    /// table reads short or not at all.
+    ///
+    /// Original: loadextracode
+    pub fn read(&self, id: u16) -> &'a [u8] {
+        let start = usize::from(id) * Self::RECORD_BYTES;
+        let rest = self.0.get(start..).unwrap_or(&[]);
+        &rest[..rest.len().min(Self::RECORD_BYTES)]
+    }
     /// Combat story effects select their EXTRA by the parameter's magnitude.
     pub fn by_magnitude(&self, id: i16) -> Result<&'a [u8], ContentError> {
         self.record(usize::from(id.unsigned_abs()))

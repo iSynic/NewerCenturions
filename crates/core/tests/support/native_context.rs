@@ -63,6 +63,11 @@ pub fn captured_session(state: &Session) -> Session {
     captured.globals.weapon_traits.natural_attack_index = 0;
     captured.globals.encounter_headers = Default::default();
     captured.globals.in_spell = 0;
+    captured.globals.last_party_move = [0; 2];
+    captured.globals.limited_stock = 0;
+    captured.globals.fast_spell = 0;
+    captured.globals.memory_spell = 0;
+    captured.globals.reload_shot = 0;
     captured.globals.death_processing = Default::default();
     captured.globals.battle_order = centurions_core::combat::globals::BattleOrder {
         order: vec![0; 110],

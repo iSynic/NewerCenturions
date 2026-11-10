@@ -121,12 +121,7 @@ fn selected_files_and_cancellation_preserve_the_session_and_originals() {
 fn portable_named_save_roundtrip_and_failed_load() {
     let content = Content {
         identity: "portable-save".into(),
-        tutorials: vec![],
-        warriors: vec![],
-        items: vec![],
-        resources: vec![],
-        original_services: None,
-        scenario: None,
+        ..Content::default()
     };
     let mut state = Session::new(&content);
     let directory =

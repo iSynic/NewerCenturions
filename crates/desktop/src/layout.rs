@@ -13,14 +13,21 @@ pub const ORIGIN_TOP: f32 = 140.;
 pub const LARGE_FIELD_SHIFT: f32 = 32.;
 /// The area the map is drawn in.
 pub const MAP: Rect = Rect::new(0., 20., 480., 416.);
+/// The area the map is drawn in on the 640 by 480 screen, ten cells square.
+pub const SMALL_MAP: Rect = Rect::new(0., 20., 320., 320.);
 /// The left edge of the squad rows beside the map.
 pub const ROW_X: f32 = 488.;
-/// The top of the first squad row.
-pub const ROW_Y: f32 = 22.;
+/// The top of the first squad row: the game window's top, under the menu bar.
+pub const ROW_Y: f32 = 20.;
 /// The height of each squad row.
 pub const ROW_HEIGHT: f32 = 50.;
-/// The information box under the squad rows.
+/// The information box under the squad rows, where its lines are printed.
 pub const INFORMATION: Rect = Rect::new(488., 324., 308., 104.);
+/// The rectangle the information box's picture (PICT 224) is drawn into.
+pub const INFORMATION_PICTURE: Rect = Rect::new(480., 320., 320., 108.);
+/// The strip picture (PICT 206) the 800 by 600 window draws under the field and along the
+/// bottom of the screen.
+pub const STRIP: i16 = 206;
 /// The message box under the map.
 pub const MESSAGE: Rect = Rect::new(0., 449., 468., 139.);
 /// The Items button during combat; outside combat the main window's own
@@ -35,6 +42,10 @@ pub const CONTINUE: Rect = Rect::new(330., 558., 126., 25.);
 pub const MESSAGE_TEXT: Rect = Rect::new(12., 467., 444., 82.);
 /// The centred 640 x 480 dialog and splash frame.
 pub const DIALOG_FRAME: Rect = Rect::new(80., 80., 640., 460.);
+/// PICT 147, the ticked box a chosen option shows.
+pub const TICKED_BOX: i16 = 147;
+/// PICT 146, the empty box an option shows once its tick is taken away.
+pub const EMPTY_BOX: i16 = 146;
 /// PICT 154, drawn over a control that is unavailable.
 pub const DISABLED_CONTROL_PICT: i16 = 154;
 /// Mission introduction text colour.
@@ -68,6 +79,8 @@ pub mod control {
     pub const SHOW_ITEMS: i16 = 168;
     /// "ShowMain Conditions".
     pub const SHOW_CONDITIONS: i16 = 169;
+    /// "Torch".
+    pub const TORCH: i16 = 175;
     /// "Auto Pos 1"; members 2..6 follow at 191..195.
     pub const AUTO_POSITION: i16 = 190;
     /// "main scan".
@@ -137,15 +150,34 @@ impl Canvas {
         );
     }
 }
+/// The cell of squad row `index` that answers a click: the main window's characters control
+/// (CNTL 500, 50 pixels wide down the portrait boxes) cut into rows of 50.
+///
+/// Original: mainscreeninit, buttonchoice
+pub fn roster_cell(index: usize) -> Rect {
+    Rect::new(
+        ORIGIN_LEFT + 320.,
+        ROW_Y + index as f32 * ROW_HEIGHT,
+        50.,
+        ROW_HEIGHT,
+    )
+}
 /// The rectangle of squad row `index`.
 pub fn row(index: usize) -> Rect {
     Rect::new(ROW_X, ROW_Y + index as f32 * ROW_HEIGHT, 308., ROW_HEIGHT)
 }
 
-/// The outdoor view origin: the party sits in cell 8, and the origin stops at
-/// 75 across and 76 down.
+/// The window the field map is drawn in: the large one on the 800 by 600 screen, the ten cells
+/// square of the 640 by 480 screen otherwise.
 ///
-/// Original: centerpictlarge
-pub fn outdoor_origin(x: i32, y: i32) -> (i32, i32) {
-    centurions_core::field_origin(x, y)
+/// Original: ToolBoxInit
+pub fn field_window(large: bool) -> Rect {
+    if large { MAP } else { SMALL_MAP }
+}
+
+/// The outdoor view origin of the large or the small view.
+///
+/// Original: centerpictlarge, centerpictsmall
+pub fn outdoor_origin(x: i32, y: i32, large: bool) -> (i32, i32) {
+    centurions_core::field_origin(x, y, large)
 }

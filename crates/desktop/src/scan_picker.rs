@@ -84,6 +84,7 @@ fn allowed(
                 &state.warriors,
                 member as i16,
                 state.psi_disabled,
+                state.combat.is_some(),
             )
             .unwrap_or(false);
     }
@@ -116,7 +117,8 @@ pub fn draw(
     controls: &mut Vec<Control>,
 ) {
     controls.clear();
-    let origin = vec2(480., 20.);
+    let placement = crate::placement::Placement::new(ui.large_field());
+    let origin = placement.scan_picker();
     let rectangle = |item| assets.dialog_rect_at(144, item, origin);
     assets.draw_dialog_at(144, origin);
     let warrior = &state.warriors[member];
@@ -148,7 +150,7 @@ pub fn draw(
             draw_rectangle(rect.x, rect.y, rect.w, rect.h, Color::new(0., 0., 0., 0.5));
         }
         if ui.psi.choice.is_some_and(|choice| choice.0 == spell) && known {
-            draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1., YELLOW);
+            crate::presentation::bevel::draw_edge(assets, rect, false);
             chosen = Some(spell);
         }
         controls.push(Control {
@@ -170,7 +172,7 @@ pub fn draw(
         ] {
             let rect = rectangle(item);
             if selected {
-                draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1., YELLOW);
+                crate::presentation::bevel::draw_edge(assets, rect, false);
             }
             controls.push(Control {
                 rect,
@@ -200,7 +202,7 @@ pub fn draw(
             && let Ok(description) =
                 mission.scan_description(school, level, (spell % 100 - 1) as usize)
         {
-            let description_origin = vec2(0., 436.);
+            let description_origin = placement.scan_description();
             assets.draw_dialog_at(169, description_origin);
             assets.dialog_text(
                 &description,
@@ -256,6 +258,7 @@ pub fn draw(
                         &state.warriors,
                         *candidate as i16,
                         state.psi_disabled,
+                        state.combat.is_some(),
                     )
                     .unwrap_or(false)
                 });

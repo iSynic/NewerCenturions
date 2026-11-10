@@ -241,10 +241,10 @@ pub(super) fn resume_getup(
     select_turn_inner(state, content, true, 2, false)
 }
 
-/// Walks the battle order to the next body that can act. When advancing, the departing body's
-/// guard is announced, the position in the order moves on and the spell fields tick; deaths queued
-/// by the last action run next, and no hostile monster left ends the action. A new round starts at
-/// the end of the order. Bodies that are dead, absent or skipping turns are passed over; the first
+/// Walks the battle order to the next body that can act. When advancing, capture mode ends, the
+/// departing body's guard is announced, the position in the order moves on and the spell fields
+/// tick; deaths queued by the last action run next, and no hostile monster left ends the action. A
+/// new round starts at the end of the order. Bodies that are dead, absent or skipping turns are passed over; the first
 /// body able to act has its turn set up and started.
 ///
 /// Original: getup
@@ -261,7 +261,7 @@ fn select_turn_inner(
             .combat
             .as_mut()
             .ok_or_else(|| RuleError::Invalid("combat missing".into()))?;
-        combat.capture_actor = None;
+        events.extend(crate::combat::capture::leave(combat));
         combat.turn_origin = None;
         state.clear_targets();
         state.bandage_ready = 1;
@@ -277,15 +277,18 @@ fn select_turn_inner(
     if state.selected_battle_treasure.is_some()
         && i16::from(c.kill_party) >= state.warriors.len() as i16
     {
-        return crate::mission::defeat(state, content);
+        events.extend(crate::mission::defeat(state, content)?);
+        return Ok(events);
     }
     if !super::has_active_warrior(&state.warriors) {
         c.kill_counts.finish();
         state.globals.coward = 1;
-        if state.selected_battle_treasure.is_some() {
-            return super::selected_rewards::begin_getup(state, content);
-        }
-        return crate::mission::defeat(state, content);
+        events.extend(if state.selected_battle_treasure.is_some() {
+            super::selected_rewards::begin_getup(state, content)?
+        } else {
+            crate::mission::defeat(state, content)?
+        });
+        return Ok(events);
     }
     if advance
         && let Some(body) = c.active_body()

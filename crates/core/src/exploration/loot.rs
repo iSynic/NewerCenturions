@@ -198,6 +198,7 @@ pub fn take_loot(
         && *limit != 0
     {
         *limit = limit.wrapping_sub(1);
+        state.globals.limited_stock = state.globals.limited_stock.wrapping_sub(1);
         if *limit == 0 {
             state.booty_list.fill(InventoryRecord([0; 22]));
             if !needs_spell_confirmation(state) {

@@ -10,6 +10,22 @@ use macroquad::prelude::*;
 /// `Some` when a modal handler consumed the frame, carrying its action if any.
 type Handled = Option<Option<Action>>;
 
+/// Whether `key` is a modifier, which raises no key event of its own.
+fn is_modifier(key: KeyCode) -> bool {
+    matches!(
+        key,
+        KeyCode::LeftShift
+            | KeyCode::RightShift
+            | KeyCode::LeftControl
+            | KeyCode::RightControl
+            | KeyCode::LeftAlt
+            | KeyCode::RightAlt
+            | KeyCode::LeftSuper
+            | KeyCode::RightSuper
+            | KeyCode::CapsLock
+    )
+}
+
 /// A left click on the topmost enabled control, as most modal dialogs accept it.
 fn enabled_click(controls: &[Control], pointer: Option<Vec2>) -> Option<Action> {
     if is_mouse_button_pressed(MouseButton::Left)
@@ -79,13 +95,13 @@ impl Application {
         self.menu_bar_input(state, assets, controls, pointer)
     }
 
-    /// The About box closes on Escape, Return or a click on its button.
+    /// The About box closes only on a click on its button; Return is swallowed and no other key
+    /// closes it.
+    ///
+    /// Original: aboutNC
     fn about_input(&self, controls: &[Control], pointer: Option<Vec2>) -> Handled {
         if !self.about {
             return None;
-        }
-        if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Enter) {
-            return Some(Some(Action::Application(ApplicationAction::CloseAbout)));
         }
         Some(
             pointer
@@ -116,11 +132,9 @@ impl Application {
         Some(enabled_click(controls, pointer))
     }
 
-    /// A viewed note scrolls with the mouse wheel and closes on Escape, Return or a
-    /// click.
+    /// A viewed note closes on Escape, Return or a click.
     fn note_input(&mut self) -> Handled {
-        let note = self.notes.open.as_mut()?;
-        note.scroll = (note.scroll + mouse_wheel().1 * 14.).clamp(0., 70.);
+        self.notes.open.as_ref()?;
         if is_key_pressed(KeyCode::Escape)
             || is_key_pressed(KeyCode::Enter)
             || is_mouse_button_pressed(MouseButton::Left)
@@ -166,15 +180,11 @@ impl Application {
         }
     }
 
-    /// The preferences dialog: Escape cancels, Return accepts, and clicks go to its
-    /// choices.
+    /// The preferences dialog has no cancel: Return accepts, and clicks go to its choices.
+    ///
+    /// Original: preference
     fn preferences_input(&self, controls: &[Control], pointer: Option<Vec2>) -> Handled {
         self.preferences_dialog.as_ref()?;
-        if is_key_pressed(KeyCode::Escape) {
-            return Some(Some(Action::Application(
-                ApplicationAction::PreferenceCancel,
-            )));
-        }
         if is_key_pressed(KeyCode::Enter) {
             return Some(Some(Action::Application(
                 ApplicationAction::PreferenceItem(2),
@@ -183,12 +193,16 @@ impl Application {
         Some(enabled_click(controls, pointer))
     }
 
-    /// The squad screen's cancel key and roster wheel, which wait while the Erase Warrior question
-    /// or the restrictions dialog is open; anything else falls through.
+    /// The squad screen's roster wheel, which waits while the Erase Warrior question or the
+    /// restrictions dialog is open; the squad dialog has no cancel. Any key closes the restrictions
+    /// dialog, as Return presses its default item and any other key goes to an edit text item,
+    /// either of which ends the dialog. Anything else falls through.
+    ///
+    /// Original: partyselect, viewrestrictions
     fn squad_input(&self) -> Handled {
         if self.screen == Screen::Squad
             && self.selection.restrictions
-            && (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter))
+            && get_keys_pressed().iter().any(|key| !is_modifier(*key))
         {
             return Some(Some(Action::Application(
                 ApplicationAction::CloseRestrictions,
@@ -198,10 +212,8 @@ impl Application {
             && self.help.page.is_none()
             && !self.selection.restrictions
             && !self.selection.erase_question
+            && self.selection.remove_question.is_none()
         {
-            if is_key_pressed(KeyCode::Escape) {
-                return Some(Some(Action::Application(ApplicationAction::SquadCancel)));
-            }
             let wheel = mouse_wheel().1;
             if wheel != 0. {
                 return Some(Some(Action::Application(ApplicationAction::RosterScroll(
@@ -233,8 +245,8 @@ impl Application {
         Some(None)
     }
 
-    /// The new warrior screens: Escape asks whether to cancel, typing fills in the name, Return presses the
-    /// stage's Done, and clicks answer the current stage. A name is a Pascal string of at most 255
+    /// The new warrior screens: typing fills in the name, Return presses the stage's Done, and
+    /// clicks answer the current stage; the dialogs have no cancel key. A name is a Pascal string of at most 255
     /// characters; the name dialog measures it in its 15-point text.
     fn creation_input(
         &mut self,
@@ -250,9 +262,6 @@ impl Application {
         }
         if editing {
             return None;
-        }
-        if is_key_pressed(KeyCode::Escape) {
-            return Some(Some(Action::Application(ApplicationAction::CreationCancel)));
         }
         if creation.stage == crate::creation::Stage::Name {
             while let Some(character) = get_char_pressed() {
@@ -281,6 +290,12 @@ impl Application {
             return Some(Some(Action::Application(ApplicationAction::CreationItem(
                 item,
             ))));
+        }
+        // The race and M.O.S. lists open where the player clicks.
+        if is_mouse_button_pressed(MouseButton::Left)
+            && let Some(point) = pointer
+        {
+            creation.click = point;
         }
         Some(enabled_click(controls, pointer))
     }
@@ -383,6 +398,7 @@ impl Application {
             || self.characters.editor_question
             || self.selection.end_question
             || self.selection.erase_question
+            || self.selection.remove_question.is_some()
             || self.questions.escape)
         {
             return None;
@@ -394,6 +410,8 @@ impl Application {
                 ApplicationAction::EscapeAnswer(answer)
             } else if self.selection.erase_question {
                 ApplicationAction::EraseAnswer(answer)
+            } else if self.selection.remove_question.is_some() {
+                ApplicationAction::RemoveAnswer(answer)
             } else if self.selection.end_question {
                 ApplicationAction::EndAnswer(answer)
             } else if self.characters.editor_question {
@@ -427,6 +445,7 @@ impl Application {
                             | ApplicationAction::EditorAnswer(_)
                             | ApplicationAction::EndAnswer(_)
                             | ApplicationAction::EraseAnswer(_)
+                            | ApplicationAction::RemoveAnswer(_)
                             | ApplicationAction::EscapeAnswer(_)
                             | ApplicationAction::CreationAnswer(_)
                     )
@@ -437,6 +456,8 @@ impl Application {
     }
 
     /// Any mouse button skips the logo.
+    ///
+    /// Original: delay2
     fn logo_input(&self) -> Handled {
         if self.screen != Screen::Logo {
             return None;

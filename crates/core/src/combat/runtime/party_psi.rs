@@ -53,7 +53,8 @@ pub(super) fn require_field_turn(state: &Session) -> Result<(), RuleError> {
 }
 
 /// Starts a paid cast: the warrior's choice is remembered and, when targets must still be chosen,
-/// the cast waits for them; otherwise it is resolved on the party.
+/// the cast waits for them; otherwise it is resolved on the party, which ends the marks of a memory
+/// spell and a paid fast spell.
 ///
 /// Original: buttonchoice
 pub(super) fn begin_cast(
@@ -102,5 +103,7 @@ pub(super) fn begin_cast(
     state.globals.define_spells = memory;
     let outcome =
         crate::story::spell::resolve_party_outdoors(state, content, &packet, spell, power)?;
+    state.globals.memory_spell = 0;
+    state.globals.fast_spell = 0;
     Ok(outcome.events)
 }

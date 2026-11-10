@@ -12,7 +12,9 @@ pub(in crate::commands) fn execute(
 ) -> Result<Vec<Event>, RuleError> {
     match command {
         Command::CreationDialog => {
-            if state.phase != Phase::SquadSelection {
+            // The race and M.O.S. dialogs open while a warrior is made and when a warrior's
+            // information shows its profile.
+            if state.phase != Phase::SquadSelection && !super::view::information_available(state) {
                 return Err(RuleError::Refused { feedback: vec![] });
             }
             Ok(vec![Event::Sound {
@@ -92,14 +94,10 @@ pub(in crate::commands) fn execute(
                 ));
             }
             let before = state.warriors.clone();
-            let choices = state.psi_menu_choices.clone();
-            let words = std::array::from_fn(|member| state.psi_power(member));
             for (member, destination) in destinations.into_iter().enumerate() {
                 state.warriors[destination] = before[member].clone();
-                state.psi_menu_choices[destination] = choices[member].clone();
             }
-            // Remembered Psi powers stay with their member slots.
-            state.keep_psi_powers(words);
+            // The Psi menu choices and remembered powers stay with the member slots.
             state.globals.define_spells = initial_psi_memory(&state.warriors)?;
             Ok(vec![])
         }

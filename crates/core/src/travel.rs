@@ -228,6 +228,8 @@ pub struct SecretSearch {
 /// Searches the nine squares around the party for secret tiles (magnitude above 2999). A roll of
 /// 100 not above the skill reveals a tile by moving it 1000 toward zero, and revealing the tile
 /// under the party ends the search.
+///
+/// Original: checkforsecret
 pub fn discover_secrets(
     floor: &[i16],
     position: (i16, i16),

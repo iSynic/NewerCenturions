@@ -11,7 +11,7 @@ use centurions_content::{Content, mission::OpeningMission};
 use serde::{Deserialize, Serialize};
 mod out_of_combat;
 pub(super) use out_of_combat::{
-    OutOfCombatFieldOrigin, out_of_combat_field_target_mask, out_of_combat_flight,
+    OutOfCombatFieldOrigin, do_reload, out_of_combat_field_target_mask, out_of_combat_flight,
     out_of_combat_ray,
 };
 

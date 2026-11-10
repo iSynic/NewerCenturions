@@ -56,7 +56,7 @@ pub(super) fn draw_combat_information(
         }
     }
     assets.panel(166, Rect::new(0., 449., 308., 139.));
-    assets.panel(206, Rect::new(0., 436., 480., 11.));
+    assets.panel(crate::layout::STRIP, Rect::new(0., 436., 480., 11.));
     assets.panel(228, Rect::new(310., 449., 160., 140.));
     if !crate::acting::is_warrior_body(body) {
         let Some(monster) = combat.roster.records.get((body - 10) as usize) else {

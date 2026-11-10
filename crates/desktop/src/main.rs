@@ -33,6 +33,7 @@ mod note;
 #[path = "../tests/unit/original_content.rs"]
 mod original_content;
 mod picker;
+mod placement;
 mod portrait;
 mod preference_icon;
 mod preferences;
@@ -120,7 +121,15 @@ async fn main() {
             if let Ok(audio) = &audio {
                 audio.tick_sounds(get_time());
             }
-            farewell.draw(assets, get_time());
+            farewell.draw(
+                assets,
+                placement::Placement::new(
+                    application
+                        .preferences
+                        .enabled(crate::preferences::pref::SCREEN_800_X_600),
+                ),
+                get_time(),
+            );
         } else if let (Ok(content), Some(state), Some(Ok(assets))) =
             (&loaded, &mut state, &mut assets)
         {
@@ -135,8 +144,8 @@ async fn main() {
             let content = render_context
                 .as_ref()
                 .map_or(content, |(_, selected)| selected);
-            frame::look_at_land(state, content, &mut ui);
             ui.preferences = application.preferences.clone();
+            frame::look_at_land(state, content, &application, &mut ui);
             assets.set_artistic_font(
                 ui.preferences
                     .enabled(crate::preferences::pref::TERMINATOR_FONT),
@@ -151,6 +160,7 @@ async fn main() {
             }
             frame::advance_playback(&mut ui, audio.as_ref().ok());
             let before = (cfg!(debug_assertions) || audit_log.is_some()).then(|| state.clone());
+            application.reopen_note(state, content);
             if let Err(error) = application.sync(state, capture.is_none()) {
                 if !sync_error {
                     ui.error(error.to_string());
@@ -203,7 +213,7 @@ async fn main() {
             };
             frame::play_feedback_sound(&application, &mut ui, audio.as_ref().ok());
             if application.help.page.is_none() || ui.technical_error.is_some() {
-                ui.draw_feedback(assets, application.warning_origin());
+                ui.draw_feedback(assets, inventory::in_items(state, &ui));
             }
             if let Some(before) = &before {
                 debug_assert_eq!(*state, *before, "rendering changed rule state");
@@ -273,6 +283,9 @@ async fn main() {
             {
                 ui.question_keys = story_dialogs::question_keys(content, state, assets);
                 action = input::action(state, content, &mut ui, &controls, pointer);
+                if action.is_none() {
+                    action = ui.inventory.take_follow_up();
+                }
             } else {
                 ui.movement.reset();
                 if blocked {
@@ -314,6 +327,9 @@ async fn main() {
             ui.inventory.quick_info = application
                 .preferences
                 .enabled(crate::preferences::pref::SCREEN_800_X_600);
+            ui.inventory.drop_protection = application
+                .preferences
+                .enabled(crate::preferences::pref::DROP_ITEM_PROTECTION);
             action = match ui.resolve_inventory(action, state, content, get_time()) {
                 Ok(next) => next,
                 Err(error) => {
@@ -387,6 +403,9 @@ async fn main() {
             draw_text(&error, 24., 64., 20., WHITE);
         }
         canvas.draw(&target);
+        if application.fatal_exit && ui.feedback.queue.is_empty() {
+            break;
+        }
         if application.quit {
             match &farewell {
                 None if capture.is_none() && matches!(assets, Some(Ok(_))) => {

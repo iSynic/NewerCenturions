@@ -6,13 +6,14 @@ use centurions_core::Session;
 use macroquad::prelude::*;
 
 impl IntroScreen {
-    /// Tiles the movie background and draws the scrolled movie text over it, each
-    /// run of the text in its own size and colour.
+    /// Tiles the movie background over the movie window, the size of the field's view at the
+    /// game window's corner, and draws the scrolled movie text over it, each run of the text in
+    /// its own size, colour and face.
     ///
     /// Original: movie
-    pub(super) fn draw(&self, content: &Content, state: &Session, assets: &Assets) {
+    pub(super) fn draw(&self, content: &Content, state: &Session, assets: &Assets, large: bool) {
         clear_background(BLACK);
-        let rect = Rect::new(160., 92., 480., 416.);
+        let rect = crate::placement::Placement::new(large).movie();
         let background = &assets.movie_background;
         for y in (0..rect.h as usize).step_by(background.height() as usize) {
             for x in (0..rect.w as usize).step_by(background.width() as usize) {
@@ -101,6 +102,7 @@ struct Style {
     size: u16,
     color: Color,
     height: f32,
+    bold: bool,
 }
 
 impl Style {
@@ -121,6 +123,7 @@ impl Style {
                         255,
                     ),
                     height: f32::from(run.line_height),
+                    bold: run.bold,
                 }
             }
             None => Self {
@@ -128,6 +131,7 @@ impl Style {
                 size: 24,
                 color: crate::layout::INTRO_TEXT,
                 height: 25.,
+                bold: false,
             },
         }
     }
@@ -159,12 +163,43 @@ fn line_width(assets: &Assets, line: &[(char, Style)]) -> f32 {
         .sum()
 }
 
-/// The width of a group of one style; inside a line its own ending spaces count.
+/// The width of a group of one style; inside a line its own ending spaces count. A bold
+/// character is one pixel wider, as the synthesised bold face is.
 fn group_width(assets: &Assets, text: &str, style: &Style, inside: bool) -> f32 {
-    if inside {
+    let plain = if inside {
         assets.text_width(&format!("{text}|"), style.size) - assets.text_width("|", style.size)
     } else {
         assets.text_width(text, style.size)
+    };
+    if style.bold {
+        plain + text.chars().count() as f32
+    } else {
+        plain
+    }
+}
+
+/// Draws a group of one style at baseline `(x, y)`. A bold group is drawn a character at a
+/// time, each struck twice a pixel apart and advanced a pixel further, which is how the
+/// synthesised bold face looks.
+fn draw_group(assets: &Assets, text: &str, x: f32, y: f32, style: &Style) {
+    if !style.bold {
+        assets.text(text, x, y, style.size, style.color);
+        return;
+    }
+    for (index, (at, character)) in text.char_indices().enumerate() {
+        let left =
+            x + group_width(
+                assets,
+                &text[..at],
+                &Style {
+                    bold: false,
+                    ..*style
+                },
+                true,
+            ) + index as f32;
+        let glyph = character.to_string();
+        assets.text(&glyph, left, y, style.size, style.color);
+        assets.text(&glyph, left + 1., y, style.size, style.color);
     }
 }
 
@@ -179,7 +214,7 @@ fn draw_line(assets: &Assets, rect: &Rect, line: &[(char, Style)], y: &mut f32) 
         let groups = groups(line);
         let mut x = rect.x;
         for (index, (text, style)) in groups.iter().enumerate() {
-            assets.text(text, x, *y, style.size, style.color);
+            draw_group(assets, text, x, *y, style);
             x += group_width(assets, text, style, index + 1 < groups.len());
         }
     }

@@ -95,13 +95,34 @@ pub(super) fn apply(
     })
 }
 
-/// Refits the weapon after a shot found it empty; the move ends. The warrior is released from
-/// computer control and warned of the lack of ammunition when the refit does not complete.
+/// Refits the weapon after a shot found it empty; the move ends.
+fn reload(state: &mut Session, content: &Content, actor: usize) -> Result<Outcome, RuleError> {
+    Ok(Outcome::returned(do_reload(state, content, actor)?))
+}
+
+/// Prepares the warrior's shot again and refits his weapon when the first slot of his pack holds
+/// fewer rounds than a shot uses. A refit that does not complete releases him from computer control
+/// and automatic play, ends any spell under way and warns that he is out of ammunition.
 ///
 /// Original: doreload
-fn reload(state: &mut Session, content: &Content, actor: usize) -> Result<Outcome, RuleError> {
-    // A reload prepares the shot again and ends the move.
+pub(crate) fn do_reload(
+    state: &mut Session,
+    content: &Content,
+    actor: usize,
+) -> Result<Vec<crate::Event>, RuleError> {
     prepare(state, content, actor)?;
+    let rounds = ItemDefinition(
+        state
+            .globals
+            .loaded_items
+            .weapon
+            .as_deref()
+            .ok_or_else(|| RuleError::from("WEAPON work missing"))?,
+    )
+    .rounds_per_shot()?;
+    if state.warriors[actor].record().inventory_quantity(0)? >= rounds {
+        return Ok(vec![]);
+    }
     let result = ammunition::refit_with_record(
         &state.warriors[actor],
         &state.ammunition,
@@ -122,13 +143,16 @@ fn reload(state: &mut Session, content: &Content, actor: usize) -> Result<Outcom
         state.warriors[actor].record_mut().set_computer_control(0);
         state.globals.possessed = 0;
         state.set_in_spell(0);
+        if let Some(combat) = state.combat.as_mut() {
+            combat.do_auto[actor] = false;
+        }
         events.push(crate::Event::Feedback(
             crate::feedback::GameFeedback::Warning {
                 index: crate::feedback::OUT_OF_AMMUNITION_WARNING,
             },
         ));
     }
-    Ok(Outcome::returned(events))
+    Ok(events)
 }
 
 /// Loads the equipped weapon. When the equipped copy holds ammunition, also loads that, builds the

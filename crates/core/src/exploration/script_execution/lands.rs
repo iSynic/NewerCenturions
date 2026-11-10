@@ -135,7 +135,7 @@ pub(super) fn travel(
         // Travel, and teleport-activate, which then starts any event at the
         // destination.
         Operation::Travel | Operation::TeleportActivate => {
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             let destination = TravelExtra(extra);
             let target = destination.map(position.map)?;
             let x = destination.x(position.x)?;
@@ -177,7 +177,7 @@ pub(super) fn travel(
             }
         }
         Operation::ShiftParty => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Signed(parameter),
@@ -208,7 +208,7 @@ pub(super) fn travel(
             effects.push(Event::Moved { x, y });
         }
         Operation::BoatCampingBranch => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Signed(parameter),
@@ -235,7 +235,7 @@ pub(super) fn travel(
             }
         }
         Operation::SetLandLight => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Signed(parameter),
@@ -256,7 +256,7 @@ pub(super) fn travel(
         // work; only an hour of exactly 24 starts the next day and its time
         // encounters.
         Operation::AlterGameTime => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Signed(parameter),

@@ -8,6 +8,24 @@ use crate::assets::Assets;
 use centurions_content::graphics::Image;
 use macroquad::prelude::*;
 
+/// The picture pressbutton copies its button looks from.
+const BUTTON_LOOKS: i16 = 192;
+/// The side of the square button look in the button looks picture.
+const SQUARE: f32 = 50.;
+
+/// pressbutton's look for a 50-pixel square button laid over `rect`, the picture's white left
+/// out: the raised look, or the sunken one beside it when `pressed`.
+///
+/// Original: pressbutton
+pub(crate) fn press_square(assets: &Assets, rect: Rect, pressed: bool) {
+    let left = if pressed { SQUARE } else { 0. };
+    assets.transparent_part(
+        BUTTON_LOOKS,
+        Rect::new(left, 0., SQUARE, SQUARE),
+        Rect::new(rect.x, rect.y, SQUARE, SQUARE),
+    );
+}
+
 /// downbutton's look for a combat panel button held under the pointer.
 ///
 /// Original: downbutton

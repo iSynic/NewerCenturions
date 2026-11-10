@@ -2,28 +2,95 @@
 use crate::{
     application::ApplicationAction,
     assets::Assets,
+    placement::Placement,
     presentation::{Action, Control, Inspection, UiState},
 };
 use centurions_content::Content;
 use centurions_core::{Command, Presentation, Session, story::EncounterHeaders};
 use macroquad::prelude::*;
 
-/// Draws a yes-or-no question (DLOG 137) with its two answers.
+/// Draws a yes-or-no question (DLOG 137) with its two answers, as the only controls.
 pub fn question(assets: &Assets, text: &str, yes: Action, no: Action, controls: &mut Vec<Control>) {
     controls.clear();
-    assets.draw_dialog(137);
-    assets.dialog_text(text, assets.dialog_rect(137, 5));
-    for (item, action) in [(7, yes), (6, no)] {
+    question_window(assets, text, yes, no, controls);
+}
+
+/// Draws the question dialog at the top left of the game window with `text` in its static text,
+/// in the game font, and adds its yes (left) and no (right) buttons to `controls`.
+///
+/// Original: question
+pub fn question_window(
+    assets: &Assets,
+    text: &str,
+    yes: Action,
+    no: Action,
+    controls: &mut Vec<Control>,
+) {
+    let size = assets.dialog_sizes[&QUESTION_DIALOG];
+    double_box_frame(Rect::new(
+        QUESTION_ORIGIN.x,
+        QUESTION_ORIGIN.y,
+        size.x,
+        size.y,
+    ));
+    assets.draw_dialog_with_parameters(QUESTION_DIALOG, QUESTION_ORIGIN, &[text]);
+    for (item, action) in [(QUESTION_YES, yes), (QUESTION_NO, no)] {
         controls.push(Control {
-            rect: assets.dialog_rect(137, item),
+            rect: assets.dialog_rect_at(QUESTION_DIALOG, item, QUESTION_ORIGIN),
             enabled: true,
             action,
         });
     }
 }
 
-/// Where the question strip sits in the window: right of the map, under the information box.
-const QUESTION_STRIP: Vec2 = Vec2::new(482., 429.);
+/// Draws the double frame of a dialog box round `window`: a band of the content colour, a black
+/// line, three shaded lines set one pixel apart from each other, and the yellow frame colour
+/// outside them. Only what falls in the game window under the menu bar shows.
+///
+/// Original: dBoxProc
+fn double_box_frame(window: Rect) {
+    let (right, bottom) = (window.right() - 1., window.bottom() - 1.);
+    // Each line runs from `near` pixels before the content to `far` pixels after its last pixel.
+    let outline = |near: f32, far: f32, color: Color| {
+        let (left, top) = (window.x - near, window.y - near);
+        let (width, height) = (right + far - left + 1., bottom + far - top + 1.);
+        for strip in [
+            Rect::new(left, top, width, 1.),
+            Rect::new(left, bottom + far, width, 1.),
+            Rect::new(left, top, 1., height),
+            Rect::new(right + far, top, 1., height),
+        ] {
+            if let Some(shown) = strip.intersect(GAME_WINDOW) {
+                draw_rectangle(shown.x, shown.y, shown.w, shown.h, color);
+            }
+        }
+    };
+    for near in 1..=3 {
+        outline(near as f32, near as f32, CONTENT_COLOR);
+    }
+    outline(4., 4., BLACK);
+    outline(7., 5., Color::from_rgba(205, 202, 255, 255));
+    outline(6., 6., Color::from_rgba(189, 185, 189, 255));
+    outline(5., 7., Color::from_rgba(123, 121, 156, 255));
+    outline(8., 8., FRAME_COLOR);
+}
+
+/// The game window under the menu bar, where dialog frames show.
+const GAME_WINDOW: Rect = Rect::new(0., 20., 800., 580.);
+/// The content colour of the question, warning and flash dialogs.
+const CONTENT_COLOR: Color = Color::new(0.2, 0.2, 0., 1.);
+/// The frame colour of the question, warning and flash dialogs.
+const FRAME_COLOR: Color = Color::new(1., 1., 0., 1.);
+
+/// The yes/no question dialog.
+const QUESTION_DIALOG: i16 = 137;
+/// The question window's place: the game window's top left, under the menu bar.
+const QUESTION_ORIGIN: Vec2 = Vec2::new(0., 20.);
+/// The question's yes button, the item its y key chooses.
+const QUESTION_YES: usize = 2;
+/// The question's no button, the item its n key chooses.
+const QUESTION_NO: usize = 1;
+
 /// The strip's item for the right half, which answers no.
 const STRIP_NO: usize = 1;
 /// The strip's item for the left half, which answers yes.
@@ -58,6 +125,7 @@ pub fn question_strip(
     content: &Content,
     state: &Session,
     assets: &Assets,
+    placement: Placement,
     controls: &mut Vec<Control>,
 ) {
     let answers = (
@@ -65,34 +133,43 @@ pub fn question_strip(
         Action::Command(Command::Choose { answer: false }),
     );
     let Some([yes, no]) = question_captions(content, state, assets) else {
-        plain_question_strip(assets, answers.0, answers.1, controls);
+        plain_question_strip(assets, placement, answers.0, answers.1, controls);
         return;
     };
     let (yes, no) = (yes.text(), no.text());
-    assets.draw_dialog_with_parameters(CAPTIONED_STRIP, QUESTION_STRIP, &[&yes, &no]);
-    strip_controls(assets, CAPTIONED_STRIP, answers, controls);
+    let origin = placement.question_strip();
+    assets.draw_dialog_with_parameters(CAPTIONED_STRIP, origin, &[&yes, &no]);
+    strip_controls(assets, CAPTIONED_STRIP, origin, answers, controls);
 }
 
 /// Draws the question strip of plain Yes and No pictures, as a question asked with no captions
 /// has it, and makes its left half give `yes` and its right half give `no`.
 ///
 /// Original: question2
-pub fn plain_question_strip(assets: &Assets, yes: Action, no: Action, controls: &mut Vec<Control>) {
-    assets.draw_dialog_at(PLAIN_STRIP, QUESTION_STRIP);
-    strip_controls(assets, PLAIN_STRIP, (yes, no), controls);
+pub fn plain_question_strip(
+    assets: &Assets,
+    placement: Placement,
+    yes: Action,
+    no: Action,
+    controls: &mut Vec<Control>,
+) {
+    let origin = placement.question_strip();
+    assets.draw_dialog_at(PLAIN_STRIP, origin);
+    strip_controls(assets, PLAIN_STRIP, origin, (yes, no), controls);
 }
 
-/// Adds the two halves of the strip drawn from `dialog` as controls: the left half answers yes and
-/// the right half no.
+/// Adds the two halves of the strip drawn from `dialog` at `origin` as controls: the left half
+/// answers yes and the right half no.
 fn strip_controls(
     assets: &Assets,
     dialog: i16,
+    origin: Vec2,
     (yes, no): (Action, Action),
     controls: &mut Vec<Control>,
 ) {
     for (item, action) in [(STRIP_YES, yes), (STRIP_NO, no)] {
         controls.push(Control {
-            rect: assets.dialog_rect_at(dialog, item, QUESTION_STRIP),
+            rect: assets.dialog_rect_at(dialog, item, origin),
             enabled: true,
             action,
         });
@@ -164,27 +241,45 @@ pub fn menu_slot_action(headers: &EncounterHeaders, slot: usize) -> Action {
     }
 }
 
-/// Draws a scenario's menu of choices (DLOG 147) under the message text. Choices that are no
-/// longer offered are greyed but can still be clicked, and then sound the error.
+/// Draws a scenario's menu of choices (DLOG 147) beside the message text. Choices that are no
+/// longer offered are greyed but can still be clicked, and then sound the error. A menu the party
+/// cannot back out of is cut short above its cancel button.
 ///
 /// Original: encounter
 pub fn menu(
     state: &Session,
     assets: &Assets,
+    placement: Placement,
     text: &str,
     labels: &[String],
     controls: &mut Vec<Control>,
 ) {
     controls.clear();
-    assets.wrapped_color(text, crate::layout::MESSAGE_TEXT, 12, 16., YELLOW);
-    assets.draw_dialog(147);
+    assets.wrapped_color(
+        text,
+        crate::layout::MESSAGE_TEXT,
+        12,
+        crate::assets::line_height(12),
+        YELLOW,
+    );
     let headers = &state.globals.encounter_headers;
+    let can_back_out = headers
+        .header(false)
+        .get(100)
+        .is_some_and(|byte| *byte != 0);
+    let origin = placement.encounter_menu();
+    let item = |number: usize| assets.dialog_rect_at(147, number, origin);
+    assets.draw_sized_dialog(
+        147,
+        origin,
+        vec2(259., if can_back_out { 320. } else { 267. }),
+    );
     for (slot, label) in labels.iter().take(4).enumerate() {
         assets.wrapped_color(
             &super::presentation::authored_text(label, &state.warriors),
-            assets.dialog_rect(147, 5 + slot),
+            item(5 + slot),
             12,
-            14.,
+            crate::assets::line_height(12),
             if menu_slot_enabled(headers, slot) {
                 YELLOW
             } else {
@@ -192,16 +287,18 @@ pub fn menu(
             },
         );
         controls.push(Control {
-            rect: assets.dialog_rect(147, 1 + slot),
+            rect: item(1 + slot),
             enabled: true,
             action: menu_slot_action(headers, slot),
         });
     }
-    controls.push(Control {
-        rect: assets.dialog_rect(147, 9),
-        enabled: true,
-        action: Action::Command(Command::CancelMenu),
-    });
+    if can_back_out {
+        controls.push(Control {
+            rect: item(9),
+            enabled: true,
+            action: Action::Command(Command::CancelMenu),
+        });
+    }
 }
 
 /// Whether the encounter takes typed text: only when it has a password.
@@ -212,11 +309,12 @@ pub fn text_entry_available(state: &Session, content: &Content) -> bool {
     })
 }
 
-/// Draws the typed encounter dialog (DLOG 153) under the message text, with its scan, physical
-/// action, item, typed word and cancel controls, each available only as the encounter allows.
-/// While a word is being typed, draws the word entry (DLOG 157) with the text typed so far.
+/// Draws the typed encounter dialog (DLOG 153) under the field, with its scan, physical action,
+/// item, typed word and cancel controls, each available only as the encounter allows; an
+/// encounter the party cannot back out of cuts the strip short before its cancel button. While a
+/// word is being typed, draws the word entry (DLOG 157) with the text typed so far.
 ///
-/// Original: getword
+/// Original: encounter2, getword
 pub fn typed(
     content: &Content,
     state: &Session,
@@ -226,8 +324,26 @@ pub fn typed(
     controls: &mut Vec<Control>,
 ) {
     controls.clear();
-    assets.wrapped_color(text, crate::layout::MESSAGE_TEXT, 12, 16., YELLOW);
-    assets.draw_dialog(153);
+    assets.wrapped_color(
+        text,
+        crate::layout::MESSAGE_TEXT,
+        12,
+        crate::assets::line_height(12),
+        YELLOW,
+    );
+    let placement = Placement::new(ui.large_field());
+    let origin = placement.typed_encounter();
+    let can_back_out = state
+        .globals
+        .encounter_headers
+        .header(true)
+        .get(151)
+        .is_some_and(|byte| *byte != 0);
+    assets.draw_sized_dialog(
+        153,
+        origin,
+        vec2(if can_back_out { 250. } else { 200. }, 50.),
+    );
     for (item, action, enabled) in [
         (
             2,
@@ -253,7 +369,10 @@ pub fn typed(
         ),
         (7, Action::Command(Command::CancelMenu), true),
     ] {
-        let rect = assets.dialog_rect(153, item);
+        if item == 7 && !can_back_out {
+            continue;
+        }
+        let rect = assets.dialog_rect_at(153, item, origin);
         if !enabled {
             draw_rectangle(rect.x, rect.y, rect.w, rect.h, Color::new(0., 0., 0., 0.6));
         }
@@ -265,10 +384,11 @@ pub fn typed(
     }
     if ui.typed_entry && text_entry_available(state, content) {
         controls.clear();
-        assets.draw_dialog(157);
-        assets.dialog_text(&ui.typed_text, assets.dialog_rect(157, 2));
+        let origin = placement.word_entry();
+        assets.draw_dialog_at(157, origin);
+        assets.dialog_text(&ui.typed_text, assets.dialog_rect_at(157, 2, origin));
         controls.push(Control {
-            rect: assets.dialog_rect(157, 4),
+            rect: assets.dialog_rect_at(157, 4, origin),
             enabled: true,
             action: Action::Command(Command::SubmitText {
                 text: ui.typed_text.clone(),

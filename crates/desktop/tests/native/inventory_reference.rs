@@ -200,7 +200,7 @@ pub(super) fn compare_encounter_returns(
         centurions_core::save(path, &restored, &content).unwrap();
         restored = centurions_core::load(path, &content).unwrap();
         let before = restored.clone();
-        ui.inventory.open(
+        ui.inventory.open_trade(
             case.get("actor")
                 .map_or(2, |v| v.as_u64().unwrap() as usize),
             restored.warriors.len(),

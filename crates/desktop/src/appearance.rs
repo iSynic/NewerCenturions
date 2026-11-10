@@ -85,8 +85,8 @@ impl Appearance {
     ///
     /// Original: portrait, iconpicture
     pub fn draw(&self, assets: &Assets, controls: &mut Vec<Control>) {
-        let origin = vec2(0., 20.);
-        draw_rectangle(0., 20., 640., 460., BLACK);
+        let origin = picker::ORIGIN;
+        draw_rectangle(origin.x, origin.y, 640., 460., BLACK);
         let actor = &self.draft.warriors[self.draft.char_select_new];
         let subject = Subject {
             race: actor.record().race().unwrap_or(0),
@@ -152,7 +152,7 @@ impl Appearance {
             picker::print(assets, 65 + i, origin, &warrior.name);
         }
         let selected = picker::item_rect(assets, 33 + self.draft.char_select_new, origin);
-        draw_rectangle_lines(selected.x, selected.y, selected.w, selected.h, 1., YELLOW);
+        crate::presentation::bevel::draw_edge(assets, selected, false);
     }
 }
 /// A click on item `number` of the appearance dialog.

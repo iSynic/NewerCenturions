@@ -17,6 +17,19 @@ impl Session {
         self.globals.loaded_item_field32 = self.globals.loaded_items.load_item(content, id)?;
         Ok(())
     }
+    /// Loads the definition of item `id` into the loaded-item globals with its type as stored; an
+    /// id past the item tables keeps the item already loaded.
+    ///
+    /// Original: loaditemnotype
+    pub(crate) fn load_item_keeping_type(&mut self, content: &Content, id: i16) {
+        if let Some(caliber) = self
+            .globals
+            .loaded_items
+            .load_item_keeping_type(&content.items, id)
+        {
+            self.globals.loaded_item_field32 = caliber;
+        }
+    }
     /// A new game: the squad is being selected, no mission has begun, and every record starts
     /// empty.
     pub fn new(content: &Content) -> Self {
@@ -511,7 +524,10 @@ impl Session {
                             .combat
                             .as_ref()
                             .is_some_and(|combat| combat.round_macros.pending.is_some()))
-                        && matches!(position.presentation, Some(Presentation::Dialogue { .. })))
+                        && matches!(
+                            position.presentation,
+                            Some(Presentation::Dialogue { .. } | Presentation::Note { .. })
+                        ))
                     && !matches!(
                         position.presentation,
                         Some(
@@ -533,6 +549,7 @@ impl Session {
                     position.presentation,
                     Some(Presentation::Avoidance { region: 20.., .. })
                 )
+                || matches!(position.presentation, Some(Presentation::Note { index }) if index >= NOTE_BYTES)
             {
                 return Err(RuleError::Invalid("invalid mission state".into()));
             }

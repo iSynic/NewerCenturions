@@ -23,3 +23,21 @@ pub fn content() -> centurions_content::Content {
     )
     .unwrap()
 }
+
+/// A command applied to a saved copy and to the live state must agree.
+pub fn command_resumed(
+    path: &std::path::Path,
+    state: &mut crate::Session,
+    content: &centurions_content::Content,
+    command: crate::Command,
+) -> Vec<crate::Event> {
+    crate::save(path, state, content).unwrap();
+    let mut resumed = crate::load(path, content).unwrap();
+    let events = crate::apply(command.clone(), state, content).unwrap();
+    assert_eq!(
+        crate::apply(command, &mut resumed, content).unwrap(),
+        events
+    );
+    assert_eq!(*state, resumed);
+    events
+}

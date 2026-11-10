@@ -62,6 +62,14 @@ pub fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+/// One row of the warrior index: a kept warrior's name and the level word written with it. A
+/// blank row has no name and keeps the level word it last had.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct IndexSlot {
+    pub name: String,
+    pub level: i16,
+}
+
 /// A warrior as a file stores it.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Warrior {
@@ -199,7 +207,7 @@ pub struct Resource {
 
 /// Everything the game reads from its installation: the starter warriors, item
 /// tables, scenarios, resources and tutorial text.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Content {
     /// The digest of the installation's manifest.
     pub identity: String,
@@ -281,6 +289,19 @@ impl Content {
         Ok(std::borrow::Cow::Owned(result))
     }
 
+    /// How many owner resources (type `NEWC`) the program and scenario `name` hold together: the
+    /// program file and the scenario's level 0 Scenario file, the one choosing the scenario opens.
+    pub fn owner_resource_count(&self, name: &str) -> usize {
+        let scenario = format!("TheNewCenturions/Scenarios/{name}/0/Scenario");
+        self.resources
+            .iter()
+            .filter(|r| {
+                r.r#type == "NEWC"
+                    && (r.original == "TheNewCenturions/New Centurions" || r.original == scenario)
+            })
+            .count()
+    }
+
     /// The names of the scenarios the installation holds at level 0.
     pub fn scenario_names(&self) -> Vec<String> {
         let Some(current) = &self.scenario else {
@@ -294,7 +315,11 @@ impl Content {
                 .filter(|(_, level)| *level == 0)
                 .map(|(name, _)| name.clone()),
         );
-        names.into_iter().collect()
+        // The Mission menu lists the scenario folders in the file system's order, which ignores
+        // case.
+        let mut names: Vec<_> = names.into_iter().collect();
+        names.sort_by_key(|name| name.to_lowercase());
+        names
     }
 
     /// Map `index` of the scenario `name` at `level`; `None` names the current one.
@@ -389,6 +414,34 @@ impl Content {
             original_services: None,
         })
     }
+}
+
+/// Reads the warrior index of the `Warriors` folder in the installation at `root`: rows of 32
+/// bytes, a name of up to 30 bytes ended by a zero and the level word, 500 at most. An
+/// installation without one lists no warriors.
+pub fn read_warrior_index(root: &Path) -> Result<Vec<IndexSlot>, ContentError> {
+    let Some(path) = [
+        root.join("Warriors/Data CD"),
+        root.join("NewCenturions/TheNewCenturions/Warriors/Data CD"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file()) else {
+        return Ok(Vec::new());
+    };
+    let bytes = fs::read(path)?;
+    Ok(bytes
+        .as_chunks::<32>()
+        .0
+        .iter()
+        .take(500)
+        .map(|row| {
+            let length = row[..30].iter().position(|b| *b == 0).unwrap_or(30);
+            IndexSlot {
+                name: encoding_rs::MACINTOSH.decode(&row[..length]).0.into_owned(),
+                level: i16::from_be_bytes([row[30], row[31]]),
+            }
+        })
+        .collect())
 }
 
 /// Reads a data fork the manifest lists, checking its size and digest.

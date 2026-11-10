@@ -51,8 +51,8 @@ impl IconPicker {
     ///
     /// Original: iconpicture
     pub fn draw(&self, preferences: &Preferences, assets: &Assets, controls: &mut Vec<Control>) {
-        let origin = vec2(0., 20.);
-        draw_rectangle(0., 20., 640., 460., BLACK);
+        let origin = picker::ORIGIN;
+        draw_rectangle(origin.x, origin.y, 640., 460., BLACK);
         let control = |rect, item| Control {
             rect,
             enabled: true,

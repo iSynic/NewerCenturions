@@ -18,6 +18,32 @@ fn begin_fire_targets(state: &mut Session, content: &Content, ui: &mut UiState) 
     true
 }
 
+/// Presses the Psi control; false after a refusal, which leaves the scan menu shut.
+fn press_psi(
+    state: &mut Session,
+    content: &Content,
+    application: &mut Application,
+    ui: &mut UiState,
+    audio: Option<&Audio>,
+) -> bool {
+    match apply(Command::PressPsi, state, content) {
+        Ok(events) => {
+            ui.events(&events);
+            application.observe(&events);
+            if application.audio.sound
+                && let Some(audio) = audio
+            {
+                audio.play(&events);
+            }
+            true
+        }
+        Err(error) => {
+            ui.failure(error);
+            false
+        }
+    }
+}
+
 /// Reopens the acting warrior's remembered Psi menu row and known spell.
 fn restore_psi_choice(state: &Session, ui: &mut UiState) {
     let actor = crate::acting::acting_warrior(state, ui.selected);
@@ -81,6 +107,17 @@ pub fn handle(
             }
         }
         Action::Open(inspection) => {
+            if inspection == presentation::Inspection::Psi
+                && !state.exploration.as_ref().is_some_and(|p| {
+                    matches!(
+                        p.presentation,
+                        Some(centurions_core::Presentation::Typed { .. })
+                    )
+                })
+                && !press_psi(state, content, application, ui, audio)
+            {
+                return false;
+            }
             if matches!(
                 inspection,
                 presentation::Inspection::Conditions
@@ -247,7 +284,8 @@ pub fn handle(
     true
 }
 
-/// Opens the Items screen for warrior `owner`, in a shop or the field.
+/// Opens the Items window for warrior `owner`, or the trade window the field's Trade button asked
+/// for, or the shop window in a shop.
 fn enter_items(
     state: &mut Session,
     content: &Content,
@@ -257,8 +295,8 @@ fn enter_items(
     button_sound: bool,
     audio: Option<&Audio>,
 ) -> Result<(), centurions_core::RuleError> {
-    let events = if crate::inventory::Inventory::shop(state) {
-        ui.inventory.open(owner, state.warriors.len());
+    let events = if crate::inventory::Inventory::shop(state) || ui.inventory.trade_requested() {
+        ui.inventory.open_trade(owner, state.warriors.len());
         apply(ui.inventory.context_command(), state, content)?
     } else {
         let quick_info = application

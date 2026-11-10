@@ -39,11 +39,16 @@ pub(crate) fn log_pressed_keys(input_log: &Option<String>) {
     }
 }
 
-/// The party looks at the land again whenever its square or its Wizard Eye changes, before the
-/// field map is drawn.
+/// The party looks at the land again whenever its square, its Wizard Eye or the screen size
+/// changes, before the field map is drawn, with the sweep of the view the screen size chooses.
 ///
-/// Original: centerpictlarge
-pub(crate) fn look_at_land(state: &mut Session, content: &Content, ui: &mut UiState) {
+/// Original: centerpict
+pub(crate) fn look_at_land(
+    state: &mut Session,
+    content: &Content,
+    application: &Application,
+    ui: &mut UiState,
+) {
     let Some(position) = state.exploration.as_ref() else {
         return;
     };
@@ -51,14 +56,22 @@ pub(crate) fn look_at_land(state: &mut Session, content: &Content, ui: &mut UiSt
         .party_condition
         .get(8..10)
         .map_or([0; 2], |bytes| [bytes[0], bytes[1]]);
-    let key = (position.map, position.x, position.y, eye);
+    let key = (
+        position.map,
+        position.x,
+        position.y,
+        eye,
+        application.preferences.enabled(pref::SCREEN_800_X_600),
+    );
     if state.phase != centurions_core::Phase::Exploration || ui.sight == Some(key) {
         return;
     }
     ui.sight = Some(key);
-    if let Err(error) =
-        centurions_core::apply(centurions_core::Command::RevealSight, state, content)
-    {
+    if let Err(error) = centurions_core::apply(
+        application.command(centurions_core::Command::RevealSight),
+        state,
+        content,
+    ) {
         ui.failure(error);
     }
 }
@@ -198,6 +211,9 @@ pub(crate) fn run_application_command(
         }
         Err(e) => ui.failure(e),
     }
+    if application.preferences_open() {
+        return action;
+    }
     let size = (previous_preferences.enabled(pref::SCREEN_800_X_600)
         != application.preferences.enabled(pref::SCREEN_800_X_600))
     .then(|| {
@@ -306,6 +322,12 @@ pub(crate) fn perform_file_action(
 ) -> bool {
     let mut loaded = false;
     let saving = !matches!(action, Action::Load);
+    if saving && let Err(refusal) = application.check_scenario_owner(content) {
+        ui.failure(refusal);
+        application.quit_after_save = false;
+        application.end_after_save = false;
+        return false;
+    }
     let title = &assets.menus[&129].items[if saving { 2 } else { 0 }].text;
     match saves.perform(&action, state, content, |saving, initial| {
         crate::file_dialog::choose(saving, initial, title)
@@ -317,8 +339,10 @@ pub(crate) fn perform_file_action(
             {
                 ui.failure(error);
             }
-            if application.quit_after_save {
-                application.quit = true;
+            if application.quit_after_save
+                && let Err(error) = application.quit_game(state, content)
+            {
+                ui.failure(error);
             }
         }
         Ok(true) => {

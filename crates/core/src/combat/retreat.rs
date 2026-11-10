@@ -134,11 +134,13 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
             .ok_or("NPC retreat continuation missing")?;
         script.cursor = start.restore(&mut script.record, false)?.unwrap() as u8;
         let outcome = start.return_kind(false, true);
-        crate::story::npc_battle::finish(
-            outcome,
-            &mut state.warriors,
-            [position.last_move[0] as u8, position.last_move[1] as u8],
-        )?;
+        let [dx, dy] = state.globals.last_party_move;
+        // Escaping steps back along the party's last move, not the facing the battle left.
+        if let Some([dx, dy]) =
+            crate::story::npc_battle::finish(outcome, &mut state.warriors, [dx as u8, dy as u8])?
+        {
+            position.last_move = [dx as i8, dy as i8];
+        }
         match outcome {
             crate::story::npc_battle::NpcBattleReturn::EscapeScript(id) => replacement = Some(id),
             crate::story::npc_battle::NpcBattleReturn::EscapeMove => {
@@ -147,18 +149,13 @@ pub(crate) fn finish(state: &mut Session, content: &Content) -> Result<Vec<Event
                     Event::Sound { resource_id: 26260 },
                     Event::Feedback(GameFeedback::Warning { index: 124 }),
                 ]);
-                position.x -= i32::from(position.last_move[0]);
-                position.y -= i32::from(position.last_move[1]);
-                OpeningMission::index(position.x, position.y)?;
                 position.script = None;
-                events.push(Event::Moved {
-                    x: position.x,
-                    y: position.y,
-                });
+                events.extend(crate::exploration::boat::move_party(state, -1)?);
             }
             _ => {}
         }
     }
+    let position = state.exploration.as_mut().ok_or("retreat map missing")?;
     if let Some(id) = replacement {
         let map = content.map(position.map).ok_or("retreat content missing")?;
         let record = map.script(id)?.to_vec();

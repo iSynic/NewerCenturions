@@ -119,6 +119,21 @@ impl View {
             .is_some_and(|monster| monster.record().guarding() != 0)
     }
 
+    /// Centres the view on the acting body for the rest of the turn, as the Capture button does
+    /// before capture mode begins.
+    ///
+    /// Original: centerstage2
+    pub fn stage(&mut self, state: &Session) {
+        if let Some(c) = &state.combat {
+            if self.turn != Some((c.combat_round, c.battle_order_index)) {
+                *self = Self::default();
+            }
+            self.turn = Some((c.combat_round, c.battle_order_index));
+            self.body = c.active_body();
+            self.point = None;
+        }
+    }
+
     /// Centres the view on a battlefield point for the rest of the turn.
     pub fn pan(&mut self, state: &Session, point: (i16, i16)) {
         if let Some(c) = &state.combat {
@@ -277,13 +292,13 @@ pub fn peek(state: &Session, ui: &mut UiState, pointer: Option<Vec2>) -> bool {
         if !(is_mouse_button_pressed(MouseButton::Left)
             && crate::application::command_modifier()
             && allowed
-            && pointer.is_some_and(|point| crate::layout::MAP.contains(point))
+            && pointer.is_some_and(|point| ui.field_window().contains(point))
             && ui.combat_view.begin_peek(state))
         {
             return false;
         }
     }
-    if let Some(point) = pointer.filter(|point| crate::layout::MAP.contains(*point))
+    if let Some(point) = pointer.filter(|point| ui.field_window().contains(*point))
         && let Some(cell) = map_position(state, ui, point)
         && let Some(body) = body_on(state, cell)
     {
@@ -342,15 +357,20 @@ pub fn origin(state: &Session, ui: &UiState) -> Option<(i16, i16)> {
     } else {
         *c.roster.mon_pos.get((body - 10) as usize)?
     };
-    Some(centered(c, point))
+    Some(centered(c, point, ui.large_field()))
 }
 
-/// The view origin that puts a tactical position at the view's centre cell.
-pub fn centered(c: &centurions_core::combat::Combat, point: (i16, i16)) -> (i16, i16) {
+/// The view origin that puts a tactical position at the view's centre cell, cell 7 across and
+/// down on the large field and cell 5 on the small one, with the view held on the field map to
+/// 0..=75 (0..=79 on the small field) on both axes.
+///
+/// Original: centerfield
+pub fn centered(c: &centurions_core::combat::Combat, point: (i16, i16), large: bool) -> (i16, i16) {
+    let (centre, bound) = if large { (7, 75) } else { (5, 79) };
     let shift = (c.field.map_shift.0 + 5, c.field.map_shift.1 + 5);
     (
-        (point.0 - 7).clamp(-shift.0, 75 - shift.0),
-        (point.1 - 6).clamp(-shift.1, 77 - shift.1),
+        (point.0 - centre).clamp(-shift.0, bound - shift.0),
+        (point.1 - centre).clamp(-shift.1, bound - shift.1),
     )
 }
 

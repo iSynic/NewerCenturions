@@ -11,9 +11,6 @@ use std::collections::BTreeMap;
 
 /// The item information fields already built for an item record.
 pub(super) type ItemInformation = (Vec<u8>, BTreeMap<u16, InformationField>);
-/// Centered between the panes so both lists keep clickable rows, as DLOG 149
-/// opens beside the Items and second-owner windows.
-const ORIGIN: Vec2 = vec2(222., 20.);
 
 impl Inventory {
     /// Draws the item information window (DLOG 149) over the booty screen.
@@ -26,7 +23,7 @@ impl Inventory {
     ) {
         self.draw_information(content, state, assets, controls);
     }
-    /// Draws the item information window (DLOG 149) over the Items lists.
+    /// Draws the item information window (DLOG 149) at the right, over the second list.
     pub(super) fn draw_information(
         &self,
         content: &Content,
@@ -51,11 +48,19 @@ impl Inventory {
                 action: Action::Inventory(InventoryAction::CloseInformation),
             },
         );
-        assets.draw_dialog_at(149, ORIGIN);
+        let origin = crate::placement::Placement::new(self.quick_info).item_information();
+        assets.draw_dialog_at(149, origin);
+        // The window lies over the rows of the list beside it, which a click there cannot reach.
+        let size = assets.dialog_sizes[&149];
+        controls.push(Control {
+            rect: Rect::new(origin.x, origin.y, size.x, size.y),
+            enabled: true,
+            action: Action::Inventory(InventoryAction::CloseInformation),
+        });
         // Items 1 and 2 open showcondition modes 4 and 3.
         for (item, professions) in [(1, false), (2, true)] {
             controls.push(Control {
-                rect: assets.dialog_rect_at(149, item, ORIGIN),
+                rect: assets.dialog_rect_at(149, item, origin),
                 enabled: true,
                 action: Action::Inventory(InventoryAction::UseList(professions)),
             });
@@ -100,11 +105,11 @@ impl Inventory {
             return;
         };
         for (item, field) in fields {
-            let rect = assets.dialog_rect_at(149, usize::from(*item), ORIGIN);
+            let rect = assets.dialog_rect_at(149, usize::from(*item), origin);
             match field {
                 InformationField::Text { text, red } => {
                     let color = if *red { RED } else { YELLOW };
-                    assets.wrapped_color(text, rect, 10, 12., color);
+                    assets.wrapped_color(text, rect, 10, crate::assets::line_height(10), color);
                 }
                 InformationField::Icon(id) => {
                     if let Some(image) = assets.icons.get(id) {

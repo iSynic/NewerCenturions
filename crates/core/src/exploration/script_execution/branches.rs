@@ -33,7 +33,7 @@ pub(super) fn execute(
     map: &OpeningMission,
     effects: &mut Vec<Event>,
 ) -> Result<ScriptStep, RuleError> {
-    let extra = load_extra(
+    let extra = &load_extra(
         &mut state.globals,
         map,
         ExtraIndex::Signed(parameter),

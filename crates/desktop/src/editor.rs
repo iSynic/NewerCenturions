@@ -13,6 +13,11 @@ use centurions_core::{Command, Event, Session, apply};
 use controls::UpgradeControl;
 use macroquad::prelude::*;
 
+/// The level-up notice's dialog.
+const LEVEL_UP: i16 = 150;
+/// The text size the level-up notice sets before it draws.
+const LEVEL_UP_TEXT_SIZE: u16 = 14;
+
 /// The Upgrade Warrior dialog: a draft of the session in which a warrior's
 /// attributes and level are changed, with the choices to undo them.
 pub struct WarriorEditor {
@@ -262,6 +267,41 @@ impl WarriorEditor {
         centurions_core::character::calculate_statistics(&mut self.draft.warriors[self.member])
             .map_err(|e| e.to_string())
     }
+    /// Draws the level-up notice (dialog 150) near the game window's corner: the warrior's
+    /// portrait and name, and the 1 that marks a level opening a new scan tier, in the dialog's
+    /// items in the size and colour the notice sets. Any click closes it.
+    ///
+    /// Original: levelup
+    fn draw_level_up(
+        assets: &Assets,
+        placement: crate::placement::Placement,
+        warrior: &Warrior,
+        controls: &mut Vec<Control>,
+    ) {
+        let origin = placement.level_up();
+        let item = |number: usize| assets.dialog_rect_at(LEVEL_UP, number, origin);
+        assets.draw_dialog_at(LEVEL_UP, origin);
+        if let Ok(id) = warrior.record().portrait()
+            && let Some(portrait) = assets.portraits.get(&id)
+        {
+            crate::assets::icon_in(portrait, item(2).point());
+        }
+        for (number, text) in [(4, warrior.name.as_str()), (5, "1")] {
+            assets.wrapped_color(
+                text,
+                item(number),
+                LEVEL_UP_TEXT_SIZE,
+                crate::assets::line_height(LEVEL_UP_TEXT_SIZE),
+                crate::layout::POOL_BELOW_MAXIMUM,
+            );
+        }
+        let size = assets.dialog_sizes[&LEVEL_UP];
+        controls.push(Control {
+            rect: Rect::new(origin.x, origin.y, size.x, size.y),
+            enabled: true,
+            action: Action::Application(ApplicationAction::EditorItem(0)),
+        });
+    }
     /// Item `item` of the Upgrade Warrior dialog as a rectangle in the window.
     fn rect(assets: &Assets, item: usize) -> Rect {
         let [top, left, bottom, right] = assets.upgrade_dialog[item - 1].rect;
@@ -276,7 +316,13 @@ impl WarriorEditor {
     /// the controls.
     ///
     /// Original: showupgrade
-    pub fn draw(&self, content: &Content, assets: &Assets, controls: &mut Vec<Control>) {
+    pub fn draw(
+        &self,
+        content: &Content,
+        assets: &Assets,
+        placement: crate::placement::Placement,
+        controls: &mut Vec<Control>,
+    ) {
         clear_background(BLACK);
         assets.panel(165, crate::layout::DIALOG_FRAME);
         for item in [39, 88] {
@@ -333,9 +379,12 @@ impl WarriorEditor {
             if attribute.display_available() {
                 number(item, value);
             }
-            let rect = Self::rect(assets, 48 + selector);
             if selector == usize::from(self.selector) {
-                draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1., YELLOW);
+                crate::presentation::bevel::draw_edge(
+                    assets,
+                    Self::rect(assets, 48 + selector),
+                    false,
+                );
             }
         }
         let rect = Self::rect(assets, 42);
@@ -346,15 +395,9 @@ impl WarriorEditor {
             12,
             YELLOW,
         );
-        let mut rect = Self::rect(assets, 47);
-        rect.y += 12.;
-        rect.h -= 12.;
-        assets.wrapped_color(
+        assets.dialog_text(
             &assets.upgrade_formulas[usize::from(self.selector)],
-            rect,
-            12,
-            15.,
-            YELLOW,
+            Self::rect(assets, 47),
         );
         if let Ok(mos) = warrior.record().mos()
             && let Some(profile) = content.map(0).and_then(|map| {
@@ -386,21 +429,7 @@ impl WarriorEditor {
         }
         if self.level_information {
             controls.clear();
-            let origin = vec2(275., 245.);
-            let rect = Rect::new(origin.x, origin.y, 249., 111.);
-            assets.panel(173, rect);
-            assets.text(&warrior.name, origin.x + 73., origin.y + 35., 12, YELLOW);
-            assets.text("1", origin.x + 212., origin.y + 83., 12, YELLOW);
-            if let Ok(id) = warrior.record().portrait()
-                && let Some(portrait) = assets.portraits.get(&id)
-            {
-                crate::assets::icon_in(portrait, vec2(origin.x + 22., origin.y + 22.));
-            }
-            controls.push(Control {
-                rect,
-                enabled: true,
-                action: Action::Application(ApplicationAction::EditorItem(0)),
-            });
+            Self::draw_level_up(assets, placement, warrior, controls);
         }
         if let Some(scan) = &self.scans {
             controls.clear();

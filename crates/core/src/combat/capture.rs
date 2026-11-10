@@ -134,10 +134,17 @@ fn flash(address: u32, wait: i16, sound: i16) -> Event {
 /// Leaves capture mode without attacking.
 pub fn cancel(state: &mut Session) -> Result<Vec<Event>, RuleError> {
     let combat = state.combat.as_mut().ok_or_else(silent)?;
-    if combat.capture_actor.take().is_none() {
+    if combat.capture_actor.is_none() {
         return Err(silent());
     }
-    Ok(vec![flash(0x40250d, -1, 0)])
+    Ok(leave(combat).into_iter().collect())
+}
+
+/// Ends capture mode when it is on, with the message that says so.
+///
+/// Original: exitcapturemode
+pub(crate) fn leave(combat: &mut crate::combat::Combat) -> Option<Event> {
+    combat.capture_actor.take().map(|_| flash(0x40250d, -1, 0))
 }
 
 /// Attacks the monster in the cell next to the warrior toward the chosen point. Capture mode

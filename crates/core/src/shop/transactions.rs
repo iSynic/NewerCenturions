@@ -103,6 +103,9 @@ pub(crate) fn buy(
     {
         access.remaining = access.remaining.wrapping_sub(1);
     }
+    if state.globals.limited_stock != 0 {
+        state.globals.limited_stock = state.globals.limited_stock.wrapping_sub(1);
+    }
     state.globals.the_shop.buy_one(slot)?;
     Ok(events)
 }

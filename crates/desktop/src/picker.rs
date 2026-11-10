@@ -32,6 +32,11 @@ const EXTRA_ICONS: u32 = 0x4034ba;
 const EXTRA_PAGE: i16 = 48;
 /// The cicn border inside a picker cell around a 32-pixel figure.
 const CELL_INSET: f32 = 6.;
+/// Where the picker dialog has its top left: no picker moves it, so it stays centred on the
+/// screen as its resource asks, for the editor and the preferences as for warrior creation.
+///
+/// Original: portrait, iconpicture
+pub const ORIGIN: Vec2 = vec2(80., 80.);
 
 /// Item `number` of the picker dialog as a rectangle, with the dialog's top left at `origin`.
 pub fn item_rect(assets: &Assets, number: usize, origin: Vec2) -> Rect {

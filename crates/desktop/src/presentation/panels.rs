@@ -6,22 +6,29 @@ use centurions_core::{Command, Session};
 use macroquad::prelude::*;
 
 /// Draws the clinic dialog (DLOG 159) for `member`, with its controls.
+///
+/// Original: temple
 pub(super) fn draw_clinic(
     state: &Session,
     assets: &Assets,
+    placement: crate::placement::Placement,
     member: usize,
     percent: i16,
     controls: &mut Vec<Control>,
 ) {
-    assets.draw_dialog(159);
-    for item in [6, 7, 11, 15, 16, 17, 18, 20, 21, 22] {
+    let origin = placement.clinic();
+    let item = |number: usize| assets.dialog_rect_at(159, number, origin);
+    assets.draw_dialog_at(159, origin);
+    for number in [6, 7, 11, 15, 16, 17, 18, 20, 21, 22] {
         controls.push(Control {
-            rect: assets.dialog_rect(159, item),
+            rect: item(number),
             enabled: true,
-            action: Action::Command(Command::ClinicControl { item: item as u16 }),
+            action: Action::Command(Command::ClinicControl {
+                item: number as u16,
+            }),
         });
     }
-    for (item, action) in [
+    for (number, action) in [
         (2, Action::Open(Inspection::Conditions)),
         (
             3,
@@ -35,12 +42,12 @@ pub(super) fn draw_clinic(
         ),
     ] {
         controls.push(Control {
-            rect: assets.dialog_rect(159, item),
+            rect: item(number),
             enabled: true,
             action,
         });
     }
-    let field = |item, text: String| assets.dialog_text(&text, assets.dialog_rect(159, item));
+    let field = |number, text: String| assets.dialog_text(&text, item(number));
     for (index, price) in centurions_core::clinic::prices(percent).iter().enumerate() {
         if matches!(index, 0..=3 | 5..=7) {
             field(46 + index, price.to_string());
@@ -61,7 +68,7 @@ pub(super) fn draw_clinic(
             assets.conditions.get(index).cloned().unwrap_or_default(),
         );
     }
-    let rect = assets.dialog_rect(159, 14);
+    let rect = item(14);
     if let Some(portrait) = assets
         .portraits
         .get(&warrior.record().portrait().unwrap_or(0))
@@ -198,7 +205,7 @@ pub(super) fn equipped_ammunition_reserve(state: &Session, warrior: &Warrior) ->
         .copied()
         .unwrap_or(0)
 }
-/// DLOG 160: one 32-pixel header and one row per named ability.
+/// DLOG 160 over the field: one 32-pixel header and one row per named ability.
 ///
 /// Original: showspecial
 pub fn draw_specials(state: &Session, assets: &Assets, ui: &UiState, controls: &mut Vec<Control>) {
@@ -216,7 +223,7 @@ pub fn draw_specials(state: &Session, assets: &Assets, ui: &UiState, controls: &
             })
         })
         .collect();
-    let origin = vec2(100., 170.);
+    let origin = crate::placement::Placement::new(ui.large_field()).special_abilities();
     let port = Rect::new(origin.x, origin.y, 300., (rows.len() + 1) as f32 * 32.);
     for row in 0..=rows.len() {
         assets.panel(

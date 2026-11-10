@@ -316,6 +316,7 @@ fn ordinary_clicks_and_refusals_use_the_shared_command_boundary() {
         position.x = 10;
         position.y = 10;
         position.last_move = [1, 0];
+        state.globals.last_party_move = [1, 0];
         position.script = Some(centurions_core::ScriptState::scheduled(
             content.map(0).unwrap().script(0).unwrap().to_vec(),
             0,

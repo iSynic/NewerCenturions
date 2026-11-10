@@ -118,7 +118,7 @@ pub(super) fn execute(
         // Keeps the parameter's low byte.
         Operation::SetRandomBattles => state.globals.random_battles = parameter as u8,
         Operation::DisplayRandomString | Operation::AdjustPickedPsi => {
-            let extra = load_extra(
+            let extra = &load_extra(
                 &mut state.globals,
                 map,
                 ExtraIndex::Signed(parameter),
@@ -216,7 +216,7 @@ pub(super) fn execute(
             return Ok(ScriptStep::Pause);
         }
         Operation::MapEffect => {
-            let extra = load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
+            let extra = &load_extra(&mut state.globals, map, ExtraIndex::Signed(parameter), None)?;
             let effect = MapEffectExtra(extra);
             effects.push(Event::OutdoorEffect {
                 effect: effect.effect()?,

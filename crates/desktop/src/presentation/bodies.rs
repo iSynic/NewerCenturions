@@ -70,7 +70,7 @@ pub(super) fn draw(
             plot(texture, rect);
         }
     }
-    let targets = capture_targets(state, combat, view);
+    let targets = capture_targets(state, combat, view, ui.large_field());
     for (index, enemy) in combat.roster.records.iter().enumerate() {
         let monster = enemy.record();
         if enemy.stamina().unwrap_or(0) < 1 {
@@ -129,15 +129,21 @@ pub(super) fn draw(
 }
 
 /// For each monster of the roster, whether capture mode draws it: empty outside capture mode.
-/// The monsters in view are taken in roster order with a range counter that starts at 1 and
-/// grows by one for each monster with a size; the monster must also pass `capture_target`.
+/// The monsters in view are taken in roster order. On the large field a range counter starts at 1
+/// and grows by one for each monster with a size; on the small field the monster must stand at a
+/// range of exactly 1. The monster must also pass `capture_target`.
 ///
-/// Original: centerfieldlarge
-pub(super) fn capture_targets(state: &Session, combat: &Combat, view: (i32, i32)) -> Vec<bool> {
+/// Original: centerfieldlarge, centerfieldsmall
+pub(super) fn capture_targets(
+    state: &Session,
+    combat: &Combat,
+    view: (i32, i32),
+    large: bool,
+) -> Vec<bool> {
     let Some(actor) = combat.capture_actor else {
         return Vec::new();
     };
-    let mut range = 1;
+    let mut range = large.then_some(1);
     combat
         .roster
         .records
@@ -149,7 +155,7 @@ pub(super) fn capture_targets(state: &Session, combat: &Combat, view: (i32, i32)
             };
             enemy.stamina().unwrap_or(0) >= 1
                 && on_field(combat, position, index as i16 + 10)
-                && in_view(position, view)
+                && in_view(position, view, large)
                 && capture_target(
                     state,
                     combat,
@@ -161,29 +167,34 @@ pub(super) fn capture_targets(state: &Session, combat: &Combat, view: (i32, i32)
         .collect()
 }
 
-/// Whether capture mode frames a monster in view: the range counter grows by one for each monster
-/// with a size, the monster must lie within that many cells of the capturing warrior, belong to
-/// the opposing faction and be a mechanical body, and a disabled body also needs the warrior's
-/// second special skill.
+/// Whether capture mode frames a monster in view: with a range counter (the large field) the
+/// counter grows by one for each monster with a size and the monster must lie within that many
+/// cells of the capturing warrior; without one it must lie at a range of exactly 1. It must also
+/// belong to the opposing faction and be a mechanical body, and a disabled body also needs the
+/// warrior's second special skill.
 ///
-/// Original: centerfieldlarge
+/// Original: centerfieldlarge, centerfieldsmall
 fn capture_target(
     state: &Session,
     combat: &Combat,
     actor: i16,
     (monster, position): (&centurions_content::records::EnemyRecord<'_>, (i16, i16)),
-    range: &mut i16,
+    range: &mut Option<i16>,
 ) -> bool {
-    if monster.size().unwrap_or(0) != 0 {
+    use centurions_core::combat::player_psi::in_range;
+    if let Some(range) = range.as_mut()
+        && monster.size().unwrap_or(0) != 0
+    {
         *range += 1;
     }
     let Some(from) = combat.squad.pos.get(actor as usize).copied() else {
         return false;
     };
-    if !centurions_core::combat::player_psi::in_range(from, position, *range)
-        || monster.faction().unwrap_or(0) == 0
-        || monster.mechanical_state() == 0
-    {
+    let reached = match *range {
+        Some(range) => in_range(from, position, range),
+        None => in_range(from, position, 1) && !in_range(from, position, 0),
+    };
+    if !reached || monster.faction().unwrap_or(0) == 0 || monster.mechanical_state() == 0 {
         return false;
     }
     monster.mechanical_state() != 255
@@ -197,11 +208,13 @@ fn capture_target(
         })
 }
 
-/// Whether a body's cell lies in the 16 by 16 cells the field redraw visits.
+/// Whether a body's cell lies in the cells the field redraw visits: 16 by 16 on the large field,
+/// 11 by 11 on the small one.
 ///
-/// Original: centerfieldlarge
-fn in_view((x, y): (i16, i16), (vx, vy): (i32, i32)) -> bool {
-    (0..16).contains(&(i32::from(x) - vx)) && (0..16).contains(&(i32::from(y) - vy))
+/// Original: centerfieldlarge, centerfieldsmall
+fn in_view((x, y): (i16, i16), (vx, vy): (i32, i32), large: bool) -> bool {
+    let span = if large { 0..16 } else { 0..11 };
+    span.contains(&(i32::from(x) - vx)) && span.contains(&(i32::from(y) - vy))
 }
 
 /// A warrior's cicn: facing * 10000 + tactical icon, kept to 16 bits.

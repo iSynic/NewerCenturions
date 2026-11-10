@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::Path;
 
 /// The version of the saved session layout.
-const CURRENT_SCHEMA_VERSION: u32 = 62;
+const CURRENT_SCHEMA_VERSION: u32 = 63;
 
 /// A saved session with the version of the layout it was written in.
 #[derive(Serialize, Deserialize)]
@@ -25,6 +25,17 @@ pub fn save(path: &Path, state: &Session, content: &Content) -> Result<(), RuleE
         session: state.clone(),
     })?;
     atomic_write(path, &bytes)
+}
+
+/// Whether scenario `name`, chosen as Mission menu item `item`, holds the wrong number of owner
+/// resources for that place: with the program's own, one less than their count must name the
+/// item, unless only the program's own is there. Saving or starting a new game then raises
+/// warning 92 and ends the program.
+///
+/// Original: save, setupnewgame
+pub fn scenario_owner_mismatch(content: &Content, name: &str, item: usize) -> bool {
+    let count = (content.owner_resource_count(name) as u16).wrapping_sub(1);
+    count != 0 && usize::from(count) != item
 }
 
 /// Writes a file atomically: the bytes go to a temporary file beside it, which then replaces the

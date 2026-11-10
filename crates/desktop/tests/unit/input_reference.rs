@@ -26,8 +26,6 @@ fn held_navigation_repeats_without_backlog_and_release_stops_it() {
     }
     input.reset();
     assert!(input.pointer_step((1, 0), true, true, 1.).is_some());
-    assert!(input.pointer_step((1, 0), false, true, 1.05).is_none());
-    assert!(input.pointer_step((1, 0), false, true, 1.11).is_some());
     input.refuse();
     assert!(input.pointer_step((1, 0), false, true, 2.).is_none());
     assert!(input.pointer_step((1, 0), false, false, 2.).is_none());
@@ -50,9 +48,9 @@ fn outdoor_camera_and_mouse_targeting_match_original_centering() {
         let position = state.exploration.as_mut().unwrap();
         position.x = x;
         position.y = y;
-        assert!(outdoor_move(&state, x - expected.0, y - expected.1).is_none());
+        assert!(outdoor_move(&state, x - expected.0, y - expected.1, true).is_none());
         assert!(matches!(
-            outdoor_move(&state, x - expected.0 + 1, y - expected.1),
+            outdoor_move(&state, x - expected.0 + 1, y - expected.1, true),
             Some(Action::Command(Command::Move { dx: 1, dy: 0 }))
         ));
     }

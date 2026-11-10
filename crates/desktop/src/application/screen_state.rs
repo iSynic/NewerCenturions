@@ -35,6 +35,9 @@ pub(super) struct SquadScreen {
     pub(super) end_question: bool,
     /// The Erase Warrior question (STR# 135 question 3) is waiting for an answer.
     pub(super) erase_question: bool,
+    /// The question (STR# 135 question 13) asked before the member in this slot is removed
+    /// with its mission items is waiting for an answer.
+    pub(super) remove_question: Option<usize>,
     /// The Scenario Restrictions dialog is open.
     pub(super) restrictions: bool,
     pub(super) selected: Option<usize>,
@@ -50,6 +53,7 @@ impl SquadScreen {
             order: None,
             end_question: false,
             erase_question: false,
+            remove_question: None,
             restrictions: false,
             selected: None,
             member: None,

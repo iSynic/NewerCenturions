@@ -250,7 +250,7 @@ pub enum Command {
     },
     /// The Items ammunition button and the item chosen from the ammunition
     /// popup (MENU 1000) for the row plus scroll slot; zero when the item has no
-    /// caliber and the button only warns.
+    /// caliber and the button only warns, or when the popup closes without a choice.
     ChooseAmmunition {
         warrior: usize,
         scroll: usize,
@@ -258,7 +258,8 @@ pub enum Command {
         item: u16,
     },
     /// The item chosen from the ammunition popup (MENU 1000) that the combat Load
-    /// control opened for the warrior's firearm in `slot`.
+    /// control opened for the warrior's firearm in `slot`; zero when it closes
+    /// without a choice.
     ChooseCombatAmmunition {
         warrior: usize,
         slot: usize,
@@ -327,6 +328,9 @@ pub enum Command {
     },
     FireSelectedTargets,
     CancelFireTargets,
+    /// The Psi control (the field's Scan button) pressed for the selected warrior, or in battle for
+    /// the warrior whose turn it is, before the scan menu opens.
+    PressPsi,
     CastPsi {
         #[serde(default)]
         rotation: u8,
@@ -419,6 +423,37 @@ pub enum Command {
     },
     AddToBooty {
         item: InventoryRecord,
+    },
+    /// The Items window's Use button on the row at `row` below the scroll position.
+    PressUse {
+        warrior: usize,
+        scroll: usize,
+        row: usize,
+    },
+    /// The Items window's Done button, which tidies the owner's pack.
+    CloseItems {
+        warrior: usize,
+    },
+    /// The Items window's Drop button on the row at `row` below the scroll position, with whether
+    /// the Command key is down and Drop Item Protection is on.
+    DropToCrate {
+        warrior: usize,
+        scroll: usize,
+        row: usize,
+        command_key: bool,
+        protected: bool,
+    },
+    /// The Items window's Join button on a row.
+    JoinItems {
+        warrior: usize,
+        scroll: usize,
+        row: usize,
+    },
+    /// The Items window's Split button on a row.
+    SplitItem {
+        warrior: usize,
+        scroll: usize,
+        row: usize,
     },
 }
 

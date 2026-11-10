@@ -82,6 +82,10 @@ pub(crate) async fn prepare() -> Ready {
     };
     let mut application = application::Application::new(screen);
     application.trace = audit_log.is_some();
+    match centurions_content::read_warrior_index(&root) {
+        Ok(index) => application.supplied_index = index,
+        Err(error) => ui.error(error.to_string()),
+    }
     if let Ok(content) = &loaded
         && let Err(error) = application.load_roster(
             &option("--roster-path")
@@ -111,8 +115,19 @@ pub(crate) async fn prepare() -> Ready {
     if capture.is_some()
         && screen == application::Screen::Squad
         && std::env::args().any(|arg| arg == "--selected-starters")
+        && let Ok(content) = &loaded
     {
-        application.squad = (0..6).collect();
+        // The capture chooses the supplied warriors on an unsaved roster, so the player's own
+        // roster keeps its rows.
+        let mut roster =
+            centurions_core::roster::Roster::supplied(content, &application.supplied_index);
+        for warrior in &content.warriors {
+            if let Err(error) = roster.minus(&warrior.name, false) {
+                ui.error(error.to_string());
+            }
+        }
+        application.roster = Some(roster);
+        application.squad = content.warriors.clone();
     }
     if let Some(menu) = option("--menu").and_then(|id| id.parse().ok()) {
         application.menu_bar.menu = Some(menu);
@@ -148,13 +163,45 @@ pub(crate) async fn prepare() -> Ready {
     {
         ui.error(e.to_string());
     }
+    // A capture of the quit or Warrior Edit question chooses its menu item first.
+    let menu_item = match option("--screen").as_deref() {
+        Some("quit") => Some((129, 6)),
+        Some("warrior-edit") => Some((136, 8)),
+        _ => None,
+    };
     if capture.is_some()
-        && option("--screen").as_deref() == Some("quit")
+        && let Some((menu, item)) = menu_item
         && let (Ok(content), Some(state)) = (&loaded, &mut state)
-        && let Err(e) =
-            application.handle(application::ApplicationAction::Menu(129, 6), state, content)
+        && let Err(e) = application.handle(
+            application::ApplicationAction::Menu(menu, item),
+            state,
+            content,
+        )
     {
         ui.failure(e);
+    }
+    // A capture of the Items window opens it on the first warrior; a capture of the trade window
+    // opens that on the first warrior and the next.
+    if capture.is_some()
+        && matches!(option("--screen").as_deref(), Some("items" | "trade"))
+        && let (Ok(content), Some(state)) = (&loaded, &mut state)
+    {
+        if option("--screen").as_deref() == Some("trade") {
+            let _ = ui.inventory.handle(
+                crate::inventory::InventoryAction::OpenTrade,
+                state,
+                content,
+                0.,
+            );
+        }
+        crate::view_actions::handle(
+            crate::presentation::Action::Open(crate::presentation::Inspection::Items),
+            state,
+            content,
+            &mut application,
+            &mut ui,
+            None,
+        );
     }
     if let Err(e) = &audio {
         ui.error(e.clone());

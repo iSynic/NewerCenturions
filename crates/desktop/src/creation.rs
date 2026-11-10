@@ -3,6 +3,7 @@ use crate::{
     assets::Assets,
     game_strings,
     picker::{self, Picker, Subject},
+    placement::Placement,
     presentation::{Action, Control},
 };
 use centurions_content::records::{ProfileTable, RACE_PROFILE_BYTES};
@@ -42,6 +43,8 @@ const CANCEL_QUESTION: usize = 11;
 const REPLACE_QUESTION: usize = 4;
 /// Question 2: whether to keep the finished warrior.
 const KEEP_QUESTION: usize = 2;
+/// The starting levels of the level dialog (DITL 161), on items 3 to 9.
+const LEVELS: [i16; 7] = [1, 3, 5, 10, 15, 20, 30];
 
 /// The steps of making a new warrior, each with its own dialog and taken in this order: name,
 /// level, M.O.S., race, gender (only for a race that offers a choice), portrait, icon and
@@ -82,7 +85,12 @@ pub struct Creation {
     pub stage: Stage,
     pub draft: Session,
     pub request: Request,
-    popup: bool,
+    /// Where the open race or M.O.S. list has its top left: the point the player clicked.
+    popup: Option<Vec2>,
+    /// Where the player last clicked in the dialog.
+    pub click: Vec2,
+    /// The gender whose box the last choice cleared, which shows the empty box.
+    cleared_gender: i16,
     page: i16,
     /// Whether the page button has turned a page since the step opened.
     turned: bool,
@@ -114,7 +122,9 @@ impl Creation {
                 portrait: 257,
                 icon: 9257,
             },
-            popup: false,
+            popup: None,
+            click: Vec2::ZERO,
+            cleared_gender: 0,
             page: 0,
             turned: false,
             fields: None,
@@ -124,7 +134,10 @@ impl Creation {
         }
     }
     /// Shows the race or M.O.S. profile of squad member `member` as the same dialog
-    /// used to choose them, read only.
+    /// used to choose them, read only. The caller draws its opening sound through the
+    /// creation command, as choosing does.
+    ///
+    /// Original: Race, Caste
     pub fn profile(
         state: &Session,
         content: &Content,
@@ -232,16 +245,18 @@ impl Creation {
                 self.request.mos = value;
             }
             Stage::Gender if (1..=3).contains(&value) => {
+                // The first choice clears the male box, as if male had been ticked before.
+                self.cleared_gender = self.request.gender.max(1);
                 self.request.gender = value;
                 sound = Some(141);
             }
-            Stage::Level if [1, 3, 5, 10, 15, 20, 30].contains(&value) => {
+            Stage::Level if LEVELS.contains(&value) => {
                 self.request.level = value;
                 sound = Some(130);
             }
             _ => return Err("Creation choice is unavailable.".into()),
         }
-        self.popup = false;
+        self.popup = None;
         Ok(sound
             .map(|resource_id| Event::Sound { resource_id })
             .into_iter()
@@ -293,17 +308,21 @@ impl Creation {
         item: usize,
         state: &mut Session,
         content: &Content,
-        roster: &Roster,
+        roster: &mut Roster,
     ) -> Result<Vec<Event>, RuleError> {
         if matches!(self.stage, Stage::Race | Stage::Mos) && matches!(item, 57 | 58 | 74) {
-            self.popup = !self.popup;
+            self.popup = if self.popup.is_some() {
+                None
+            } else {
+                Some(self.click)
+            };
             return Ok(vec![]);
         }
         if self.stage == Stage::Gender && matches!(item, 2 | 3) {
             return self.choice(item as i16 - 1, content);
         }
         if self.stage == Stage::Level && (3..=9).contains(&item) {
-            return self.choice([1, 3, 5, 10, 15, 20, 30][item - 3], content);
+            return self.choice(LEVELS[item - 3], content);
         }
         if matches!(self.stage, Stage::Portrait | Stage::Icon) {
             if item == 57 {
@@ -360,7 +379,16 @@ impl Creation {
         }
         let (next, sound) = match self.stage {
             Stage::Name => return self.accept_name(roster, state, content),
-            Stage::Level if self.request.level != 0 => (Stage::Mos, Some(6001)),
+            Stage::Level if self.request.level != 0 => {
+                // The name is listed with the chosen item's number less two as its level word.
+                let item = LEVELS
+                    .iter()
+                    .position(|level| *level == self.request.level)
+                    .ok_or("Creation level is unavailable.")?
+                    + 3;
+                roster.start_level(&self.request.name, item as i16 - 2)?;
+                (Stage::Mos, Some(6001))
+            }
             Stage::Mos if self.request.mos != 0 => (Stage::Race, Some(214)),
             Stage::Race if self.request.race != 0 => {
                 if !self.read_only {
@@ -540,14 +568,32 @@ impl Creation {
         self.fields_attempted = false;
         Ok(events)
     }
+    /// Where the current step's dialog stands: the name entry and the starting level are moved by
+    /// their routines, and the other dialogs stay centred on the screen.
+    ///
+    /// Original: Name, Startlevel
+    fn origin(&self, assets: &Assets, placement: Placement) -> Vec2 {
+        match self.stage {
+            Stage::Name => placement.name_entry(),
+            Stage::Level => placement.starting_level(),
+            _ => assets.dialog_origin(self.dialog()),
+        }
+    }
     /// Draws the dialog for the current step with its choices and controls.
-    pub fn draw(&self, content: &Content, assets: &Assets, controls: &mut Vec<Control>) {
+    pub fn draw(
+        &self,
+        content: &Content,
+        assets: &Assets,
+        placement: Placement,
+        controls: &mut Vec<Control>,
+    ) {
         if matches!(self.stage, Stage::Scans | Stage::Keep) {
             return;
         }
         let id = self.dialog();
+        let origin = self.origin(assets, placement);
         if id != 170 {
-            assets.draw_dialog(id);
+            assets.draw_dialog_at(id, origin);
         } else {
             assets.panel(214, crate::layout::DIALOG_FRAME);
             for (i, item) in assets.appearance_dialog.iter().enumerate() {
@@ -566,27 +612,28 @@ impl Creation {
             Stage::Gender => {
                 enabled.extend([2, 3, 6]);
                 if self.request.gender > 0 {
-                    let rect = assets.dialog_rect(id, self.request.gender as usize + 3);
-                    assets.panel(179, rect);
+                    let box_rect = |gender: i16| assets.dialog_rect(id, gender as usize + 3);
+                    let cleared = self.cleared_gender.max(1);
+                    if cleared != self.request.gender {
+                        assets.panel(crate::layout::EMPTY_BOX, box_rect(cleared));
+                    }
+                    assets.panel(crate::layout::TICKED_BOX, box_rect(self.request.gender));
                 }
             }
             Stage::Level => {
                 enabled.extend([3, 4, 5, 6, 7, 8, 9, 29]);
-                if let Some(index) = [1, 3, 5, 10, 15, 20, 30]
-                    .iter()
-                    .position(|v| *v == self.request.level)
-                {
-                    let rect = assets.dialog_rect(id, index + 3);
-                    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1., YELLOW);
+                if let Some(index) = LEVELS.iter().position(|v| *v == self.request.level) {
+                    let rect = assets.dialog_rect_at(id, index + 3, origin);
+                    crate::presentation::bevel::draw_edge(assets, rect, false);
                 }
             }
             Stage::Name => {
                 enabled.push(4);
                 assets.wrapped_color(
                     &self.request.name,
-                    assets.dialog_rect(id, 2),
+                    assets.dialog_rect_at(id, 2, origin),
                     18,
-                    20.,
+                    crate::assets::line_height(18),
                     YELLOW,
                 );
             }
@@ -609,7 +656,7 @@ impl Creation {
                                 value,
                                 assets.dialog_rect(128, *item as usize),
                                 *size,
-                                *size as f32 + 2.,
+                                crate::assets::line_height(*size),
                                 YELLOW,
                             );
                         }
@@ -622,7 +669,7 @@ impl Creation {
             let r = if id == 170 {
                 picker::item_rect(assets, item, PICKER_ORIGIN)
             } else {
-                assets.dialog_rect(id, item)
+                assets.dialog_rect_at(id, item, origin)
             };
             controls.push(Control {
                 rect: r,
@@ -630,18 +677,35 @@ impl Creation {
                 action: Action::Application(ApplicationAction::CreationItem(item)),
             });
         }
-        if self.popup {
+        if let Some(click) = self.popup {
             let choices = self.choices(assets);
-            let origin = assets.dialog_origin(id) + vec2(64., 40.);
+            let height = choices.len() as f32 * POPUP_ROW;
+            let at = vec2(
+                click.x.min(crate::layout::SIZE.x - POPUP_WIDTH - 1.),
+                click
+                    .y
+                    .min(crate::layout::SIZE.y - height - 1.)
+                    .max(crate::layout::MENU_BAR),
+            );
             draw_rectangle(
-                origin.x,
-                origin.y,
-                240.,
-                choices.len() as f32 * 20.,
+                at.x,
+                at.y,
+                POPUP_WIDTH,
+                height,
                 Color::from_rgba(238, 238, 238, 255),
             );
+            draw_rectangle_lines(
+                at.x - 1.,
+                at.y - 1.,
+                POPUP_WIDTH + 2.,
+                height + 2.,
+                1.,
+                BLACK,
+            );
+            draw_rectangle(at.x + 1., at.y + height + 1., POPUP_WIDTH + 1., 1., BLACK);
+            draw_rectangle(at.x + POPUP_WIDTH + 1., at.y + 1., 1., height + 1., BLACK);
             for (i, (value, name)) in choices.iter().enumerate() {
-                let r = Rect::new(origin.x, origin.y + i as f32 * 20., 240., 20.);
+                let r = Rect::new(at.x, at.y + i as f32 * POPUP_ROW, POPUP_WIDTH, POPUP_ROW);
                 let selectable = self.selectable(content, *value);
                 if let Some(image) = self
                     .listed_portrait(content, *value)
@@ -841,7 +905,11 @@ impl Creation {
     }
 }
 /// Where the picker dialog (DITL 170) has its top left in the window.
-const PICKER_ORIGIN: Vec2 = vec2(80., 80.);
+const PICKER_ORIGIN: Vec2 = picker::ORIGIN;
+/// The width of the race or M.O.S. list.
+const POPUP_WIDTH: f32 = 240.;
+/// The height of a row of the race or M.O.S. list.
+const POPUP_ROW: f32 = 20.;
 
 /// A run of 16-bit fields in the race or M.O.S. dialog: first dialog item, count, first record
 /// offset, and whether the row hides zero and shows signs.

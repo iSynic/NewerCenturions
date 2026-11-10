@@ -175,7 +175,7 @@ pub fn begin_learned_heal(
         .active_body()
         .filter(|actor| (0..6).contains(actor))
         .ok_or_else(|| RuleError::Invalid("learned Heal requires an active warrior".into()))?;
-    if !player_psi::can_cast(&state.warriors, actor, state.psi_disabled)? {
+    if !player_psi::can_cast(&state.warriors, actor, state.psi_disabled, true)? {
         return Err(RuleError::Invalid(
             "warrior cannot cast learned Heal".into(),
         ));

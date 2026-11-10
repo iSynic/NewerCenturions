@@ -72,7 +72,12 @@ fn apply_inner(
         | Command::UseAmmunitionPack { .. }
         | Command::UseItem { .. }
         | Command::AddToCrate { .. }
-        | Command::AddToBooty { .. }) => inventory::execute(command, state, content),
+        | Command::AddToBooty { .. }
+        | Command::PressUse { .. }
+        | Command::CloseItems { .. }
+        | Command::DropToCrate { .. }
+        | Command::JoinItems { .. }
+        | Command::SplitItem { .. }) => inventory::execute(command, state, content),
         command @ (Command::SwapCombatants { .. }
         | Command::AnswerOccupiedChoice { .. }
         | Command::AutomaticBandage
@@ -100,6 +105,7 @@ fn apply_inner(
         | Command::FireSelectedTargets
         | Command::CancelFireTargets
         | Command::CastPsi { .. }
+        | Command::PressPsi
         | Command::CastPartyPsi { .. }
         | Command::FastSpell { .. }
         | Command::CastPsiOnWarrior { .. }

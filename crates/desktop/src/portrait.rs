@@ -9,9 +9,9 @@ use macroquad::prelude::*;
 pub struct Marks {
     /// Preference item 17, Append M.O.S. To Portrait: the class label.
     pub class_label: bool,
-    /// The left edge plotportrait gives its condition cicns in the current
-    /// window, or `None` where it skips them.
-    pub conditions_left: Option<f32>,
+    /// Where plotportrait starts its condition cicns in the current window: the left edge they
+    /// run leftward from and how far below the box's top they sit, or `None` where it skips them.
+    pub conditions: Option<(f32, f32)>,
     /// Whether the member is on automatic.
     pub automatic: bool,
     /// Whether a battle is on: a warrior who is down but no longer bleeding then shows the
@@ -19,11 +19,43 @@ pub struct Marks {
     pub in_combat: bool,
 }
 
-/// Plots the portrait with its 32-pixel box's upper-left corner at `at`. A
-/// 40-pixel cicn grows the box by four on every side.
+/// Plots the portrait with its 32-pixel box's upper-left corner at `at`, then
+/// the stamina marks. A 40-pixel cicn grows the box by four on every side.
 ///
 /// Original: plotportrait, updatepictbox
 pub fn draw(assets: &Assets, warrior: &Warrior, at: Vec2, marks: Marks) {
+    plot(assets, warrior, at, &marks);
+    // updatepictbox: stamina below 1 adds cicn 2019 over the box grown by four; then below -9
+    // cicn 2015, or in a battle for a warrior who is not bleeding cicn 177, over the 32-pixel box.
+    let record = warrior.record();
+    let stamina = record.stamina().unwrap_or(0);
+    if stamina < 1 {
+        let overlay = if stamina < -9 {
+            Some(2015)
+        } else if record.bleeding() == 0 && marks.in_combat {
+            Some(177)
+        } else {
+            None
+        };
+        for (id, rect) in [
+            (Some(2019), Rect::new(at.x - 4., at.y - 4., 40., 40.)),
+            (overlay, Rect::new(at.x, at.y, 32., 32.)),
+        ] {
+            if let Some(id) = id
+                && let Some(texture) = assets.icons.get(&id)
+            {
+                icon(texture, rect);
+            }
+        }
+    }
+}
+
+/// Plots the portrait cicn with its 32-pixel box's upper-left corner at `at`,
+/// with its condition cicns and class label; a 40-pixel cicn grows the box by
+/// four on every side.
+///
+/// Original: plotportrait
+pub fn plot(assets: &Assets, warrior: &Warrior, at: Vec2, marks: &Marks) {
     let record = warrior.record();
     let texture = record
         .portrait()
@@ -33,15 +65,15 @@ pub fn draw(assets: &Assets, warrior: &Warrior, at: Vec2, marks: Marks) {
     if let Some(texture) = texture {
         icon(texture, rect);
     }
-    // Each condition cicn is 16 pixels left of the last, at the box's top + 3.
-    if let Some(mut left) = marks.conditions_left {
+    // Each condition cicn is 16 pixels left of the last, the window's distance below the box's top.
+    if let Some((mut left, down)) = marks.conditions {
         for id in record
             .portrait_condition_icons(marks.automatic)
             .unwrap_or_default()
         {
             left -= 16.;
             if let Some(texture) = assets.icons.get(&id) {
-                icon(texture, Rect::new(left, rect.y + 3., 16., 16.));
+                icon(texture, Rect::new(left, rect.y + down, 16., 16.));
             }
         }
     }
@@ -65,28 +97,6 @@ pub fn draw(assets: &Assets, warrior: &Warrior, at: Vec2, marks: Marks) {
             label.pop();
         }
         assets.text(&label, rect.x + 5., rect.bottom() - 3., 10, WHITE);
-    }
-    // updatepictbox: stamina below 1 adds cicn 2019 over the box grown by four; then below -9
-    // cicn 2015, or in a battle for a warrior who is not bleeding cicn 177, over the 32-pixel box.
-    let stamina = record.stamina().unwrap_or(0);
-    if stamina < 1 {
-        let overlay = if stamina < -9 {
-            Some(2015)
-        } else if record.bleeding() == 0 && marks.in_combat {
-            Some(177)
-        } else {
-            None
-        };
-        for (id, rect) in [
-            (Some(2019), Rect::new(at.x - 4., at.y - 4., 40., 40.)),
-            (overlay, Rect::new(at.x, at.y, 32., 32.)),
-        ] {
-            if let Some(id) = id
-                && let Some(texture) = assets.icons.get(&id)
-            {
-                icon(texture, rect);
-            }
-        }
     }
 }
 

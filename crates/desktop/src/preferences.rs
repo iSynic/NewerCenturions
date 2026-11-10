@@ -156,10 +156,6 @@ impl Dialog {
         }
         Ok(Taken::staying(141))
     }
-    /// Closes the icon picker if it is open; returns whether it was.
-    pub fn close_picker(&mut self) -> bool {
-        self.picker.take().is_some()
-    }
     /// Draws the Preferences dialog (DITL 167): each checkbox in its on (PICT 179) or off
     /// (PICT 180) look with its label, the squad icon of the preferences, and the description
     /// of the last choice changed; or the icon picker while it is open.

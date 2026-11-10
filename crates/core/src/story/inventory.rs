@@ -29,6 +29,45 @@ pub fn query_party_item(warriors: &[Warrior], id: i16) -> Result<Option<PartyIte
     Ok(None)
 }
 
+/// Uses one charge of an item from the first warrior who carries it, lightening his load by the
+/// charge's weight and removing the item when its last charge goes and it is discarded when empty;
+/// the item is left loaded. Returns false when no one carries it or the first one found is spent.
+///
+/// Original: checkforitem
+pub(crate) fn use_party_charge(
+    state: &mut crate::Session,
+    content: &Content,
+    id: i16,
+) -> Result<bool, RuleError> {
+    for warrior in &mut state.warriors {
+        for (slot, item) in warrior.inventory()?.iter().enumerate() {
+            if item.id() != id {
+                continue;
+            }
+            let quantity = item.charge()?;
+            if quantity <= 0 {
+                return Ok(false);
+            }
+            let definition = content
+                .items
+                .get(id.unsigned_abs() as usize)
+                .ok_or_else(|| RuleError::Invalid("used item definition unavailable".into()))?;
+            let weight = ItemDefinition(definition).charge_weight()?;
+            let carried = warrior.record().load()?.wrapping_sub(weight);
+            warrior.record_mut().set_load(carried);
+            warrior
+                .record_mut()
+                .set_inventory_quantity(slot, quantity - 1);
+            if quantity == 1 && ItemDefinition(definition).discarded_when_empty()? != 0 {
+                items::remove_inventory_slot(warrior, slot)?;
+            }
+            state.load_item(content, id)?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Whether the party's carrying of an item meets an item prerequisite: required absent, required
 /// present, or either.
 pub fn item_prerequisite_matches(warriors: &[Warrior], extra: &[u8]) -> Result<bool, RuleError> {

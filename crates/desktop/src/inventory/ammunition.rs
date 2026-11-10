@@ -1,5 +1,5 @@
-//! The Items ammunition button (CNTL 176, the Ammo part of PICT 6) and
-//! loadammoproc's MENU 1000 popup.
+//! loadammoproc's MENU 1000 popup, from the Items window's Ammo button (CNTL 176) or the combat
+//! Load control.
 use super::{Inventory, InventoryAction};
 use crate::{
     assets::Assets,
@@ -12,10 +12,6 @@ use centurions_core::{
 };
 use macroquad::prelude::*;
 
-/// The button's place in the Items strip and its PICT 6 source.
-pub(super) const BUTTON: Rect = Rect::new(287., 411., 71., 39.);
-/// The Ammo button's part of PICT 6.
-const SOURCE: Rect = Rect::new(142., 0., 71., 39.);
 /// The height of a row in the ammunition popup.
 const ROW: f32 = 18.;
 
@@ -57,7 +53,10 @@ impl Inventory {
                             row,
                             item,
                             entries,
-                            anchor: BUTTON,
+                            anchor: super::items_window::place(
+                                super::items_window::AMMO,
+                                self.shift(),
+                            ),
                             combat: false,
                         });
                         None
@@ -112,9 +111,23 @@ impl Inventory {
                     item,
                 }))
             }
+            // Closing the popup without a choice still keeps what building it loaded.
             _ => {
-                self.ammunition = None;
-                None
+                let popup = self.ammunition.take()?;
+                Some(Action::Command(if popup.combat {
+                    Command::ChooseCombatAmmunition {
+                        warrior: popup.warrior,
+                        slot: popup.row,
+                        item: 0,
+                    }
+                } else {
+                    Command::ChooseAmmunition {
+                        warrior: popup.warrior,
+                        scroll: popup.scroll,
+                        row: popup.row,
+                        item: 0,
+                    }
+                }))
             }
         }
     }
@@ -143,16 +156,6 @@ impl Inventory {
         if self.load_popup_open() {
             self.draw_ammunition(assets, controls);
         }
-    }
-
-    /// Draws the Ammo button (CNTL 176) on the Items screen.
-    pub(super) fn draw_ammunition_button(&self, assets: &Assets, controls: &mut Vec<Control>) {
-        assets.panel_part(6, SOURCE, BUTTON);
-        controls.push(Control {
-            rect: BUTTON,
-            enabled: true,
-            action: Action::Inventory(InventoryAction::Ammunition),
-        });
     }
 
     /// Draws the ammunition popup (MENU 1000) for the weapon in the selected row.

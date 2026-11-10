@@ -40,7 +40,7 @@ pub(crate) use script_return::{dialogue, store_script_stamp, store_turn_header};
 mod battle_entry;
 pub(crate) use battle_entry::{StoryBattle, begin_story_battle};
 mod script_execution;
-pub(crate) use script_execution::{Operation, run_script};
+pub(crate) use script_execution::{Operation, read_extra, run_script};
 
 #[cfg(all(test, feature = "original-fixtures"))]
 use crate::*;

@@ -1,10 +1,7 @@
 //! Choices the player makes while a script runs: picking members and menu entries.
 use super::{active_map, choose_avoidance, finish_dispatch, run_script, typed_record, unsupported};
-use crate::{
-    Event, Exploration, Phase, Presentation, RuleError, Session, mission, story, typed_encounter,
-};
+use crate::{Event, Phase, Presentation, RuleError, Session, mission, story, typed_encounter};
 use centurions_content::Content;
-use centurions_content::mission::OpeningMission;
 use centurions_content::records::{EventHeaderTableMut, ExtraTable, StoryRecordMut};
 
 /// Takes the player's choice of party member for a script that asked the party to pick someone.
@@ -50,9 +47,12 @@ pub fn choose_warrior(
         position.presentation = None;
         return run_script(state, content);
     }
-    let record = ExtraTable(&map.combat.as_ref().unwrap().encounters).record(*extra as usize)?;
-    state.globals.extra_record = record.to_vec();
-    let plan = crate::story::skill::predicate(record, &state.warriors, &selected)?;
+    let tables = map
+        .combat
+        .as_ref()
+        .ok_or("warrior choice extra records missing")?;
+    let record = super::read_extra(&mut state.globals, &tables.encounters, *extra as u16);
+    let plan = crate::story::skill::predicate(&record, &state.warriors, &selected)?;
     let script = position
         .script
         .as_mut()
@@ -164,15 +164,18 @@ pub fn choose(
     let Some(Presentation::Question { extra, .. }) = position.presentation.as_ref() else {
         return Err(RuleError::Invalid("no question active".into()));
     };
-    let record = ExtraTable(&map.combat.as_ref().unwrap().encounters).record(*extra as usize)?;
-    state.globals.extra_record = record.to_vec();
-    match typed_encounter::question_plan(record, answer)? {
+    let tables = map
+        .combat
+        .as_ref()
+        .ok_or("question extra records missing")?;
+    let record = super::read_extra(&mut state.globals, &tables.encounters, *extra as u16);
+    match typed_encounter::question_plan(&record, answer)? {
         typed_encounter::QuestionPlan::Continue => {}
         typed_encounter::QuestionPlan::MoveAway => {
-            let movement = back_out(position)?;
+            let mut events = super::boat::move_party(state, -1)?;
+            let position = state.exploration.as_mut().unwrap();
             position.presentation = None;
             position.script = None;
-            let mut events = vec![movement];
             if let Some(closed) = finish_dispatch(state, content)? {
                 events.extend(closed);
             }
@@ -229,27 +232,6 @@ pub fn question_label_words(state: &Session, content: &Content) -> Option<(i16, 
         .filter(|(first, _)| *first != 0)
 }
 
-/// Steps the party back out of the square it just entered.
-pub(super) fn back_out(position: &mut Exploration) -> Result<Event, RuleError> {
-    let [dx, dy] = position.last_move;
-    let forward = OpeningMission::index(position.x + i32::from(dx), position.y + i32::from(dy))?;
-    let undone = crate::story::move_away::move_away(
-        position.x,
-        position.y,
-        dx,
-        dy,
-        position.floor[forward],
-        [0; 6],
-    );
-    OpeningMission::index(undone.x, undone.y)?;
-    position.x = undone.x;
-    position.y = undone.y;
-    Ok(Event::Moved {
-        x: undone.x,
-        y: undone.y,
-    })
-}
-
 /// Backs out of a scenario menu or typed prompt.
 pub fn cancel_menu(state: &mut Session, content: &Content) -> Result<Vec<Event>, RuleError> {
     let position = state
@@ -282,10 +264,11 @@ pub fn cancel_menu(state: &mut Session, content: &Content) -> Result<Vec<Event>,
         matches!(position.presentation, Some(Presentation::Typed { .. })) || !script.item_return;
     let mut events =
         if state.phase == Phase::Exploration && backstep && position.last_move != [0; 2] {
-            vec![back_out(position)?]
+            super::boat::move_party(state, -1)?
         } else {
             vec![]
         };
+    let position = state.exploration.as_mut().unwrap();
     position.presentation = None;
     position.script = None;
     if let Some(closed) = finish_dispatch(state, content)? {
