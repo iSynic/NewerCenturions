@@ -110,39 +110,27 @@ jobs:
               packages[0].rename(root / f'NewerCenturions-{tag}-{platform}{suffix}.zip')
           PY
           cat > release-notes.md <<'NOTES'
-          This beta covers 83 changes since beta.12. Most of it closes routine parity gaps found by reviewing the source against the original 1.3.2 code: story text, the field map, shops, combat targeting and many screens now follow the original routines, their text and their update order. The source now uses the original author's vocabulary and the manual's terms, and the game has its own application icon. Registration checks are not reimplemented and always pass. This is not a claim that every original behavior has been verified.
+          This beta covers 13 changes since beta.13. It closes more routine parity gaps found by re-grading the source against the original 1.3.2 code, and redraws the game's dialogs and windows from the original layouts. Registration checks are not reimplemented and always pass. This is not a claim that every original behavior has been verified.
 
-          ### Story, field and shops
+          ### Dialogs and windows
 
-          - Story text, dialogs and menu actions follow the original routines. Story questions are asked on the original question strip with the scenario's own captions, answer keys and the question tutorial.
-          - Stepping off a land's edge slides to the neighbouring land named by the scenario layout.
-          - The field map draws the original sight fog, revealing and hiding terrain with the original sight rules.
-          - The party can cast a remembered spell from the field with the original admission, casting and result rules.
-          - Passive secret search, party conditions and timers, map notes and building pictures follow the original routines.
-          - Shop purchases, equipment changes and item inspection follow the original routines.
-          - Field and combat ambient sounds use the original selection and cycle, and each music track change draws its title from the game's random numbers as the original does.
+          - Question, warning and flash windows draw their text inside the original dialog items in the game font on the original line spacing, so long questions such as the Warrior Edit prompt no longer spill out of their frames.
+          - Windows open where the original routines place them, in both the 800 x 600 and the small view: the action picker, creature page, encounters, Get Word, the clinic, level-up, the question strip, special abilities, item information, the intro, the logo and the farewell.
+          - Selections press in as bevels and check boxes use the original pictures, as the original draws them.
+          - The squad, note, editor, information and creation text draws in the original dialog rectangles and colours; script messages are yellow; warnings sit at the original warning position.
+          - The trade window's member strips, scroll bars, item button and credits follow the original layout.
+          - The Items window is now its own window, with Use, View, Ammo, Weapon, Drop, Join, Split, Refit, Trade and Done on the original button strip. Drop, Join, Split, Use and Done follow the original warnings and order.
+          - The squad roster on the main screen uses the original columns and portrait cells.
+          - The Apple menu shows only About under a silhouette of the game's icon; the order form is left out.
 
-          ### Combat
+          ### Rules and persistence
 
-          - The combat panel shows the original warrior and target information, control buttons and party indicators, and opens the original peek and creature popups.
-          - The Load control opens the original reserve popup and fits the chosen reserve for one action point and one reload sound.
-          - The battlefield draws the original spell field and target overlays. Targeting draws the original aim icons and range readout.
-          - Ray casts for shots, spells and psi powers wait the original delay between steps.
-          - The Psi target preview includes a rotating spell's rotation, as the cast does.
-          - An ally rifle's target scan counts only warriors with stamina left, and a short squad no longer stops ally firearm targeting with an error.
-
-          ### Screens
-
-          - The intro, information, settings, menu, collection, creature, item editor and farewell screens follow the original text runs and layout.
-          - The squad screen draws the original restriction panel, difficulty and roster controls.
-          - Warrior creation uses the original dialog texts and name entry limits; the appearance and preference pickers use the original layout, icons and selection.
-          - The escape question answers only to Y and N, as the original's yes/no prompt does.
-          - Rarely seen routines for warrior and tutorial records, saved-game conversion, the roster, help pages and menus follow the original conditions, ordering and text.
-          - The window, taskbar and Windows program file show a winged shield icon. On Windows, a taskbar button pinned from an earlier beta shows the new icon after it is unpinned and pinned again.
-
-          ### Source
-
-          The source names records, fields and routines with the original author's vocabulary and uses the manual's terms where it defines them: action points, armor rating, psi resistance, M.O.S. and victory points. Comments describe the game rules they enforce, and long routines are split along their steps. A maintainer starting point and docs index are included.
+          - The warrior index, erasing, storing, starting level and quitting follow the original roster and checksum rules.
+          - Casting admission, automatic warriors' firearm choice, reloading and firing, capture mode, mission end and the ammunition popup follow the original routines.
+          - Retreats step back along the party's last move, limited stock gives its warning, script notes wait for the click, and fast spells refund on a refused press.
+          - Story notes shown by script, extra records, backing out of a square, the scenario owner check, the last scenario and profile sounds follow the original routines.
+          - With the 800 x 600 preference off, the field, sight, combat framing, capture range and recentring follow the original small view.
+          - Weapon damage shown for a weapon no worn slot holds scales by one, an approved compatibility choice where the original reads an unset value.
 
           ### Arithmetic
 
@@ -150,9 +138,9 @@ jobs:
 
           ### Compatibility and verification
 
-          New saves use schema 62. **Saves from earlier betas are not supported**; start a new game or import an original save. Original 1.3.2 saves import and continue, and this has been accepted with saves written by the original game's own save routine. Keep backups when switching builds.
+          New saves use schema 63. **Saves from earlier betas are not supported**; start a new game or import an original save. Original 1.3.2 saves import and continue, and this has been accepted with saves written by the original game's own save routine. Keep backups when switching builds.
 
-          Local verification passed 405 executable Rust cases, 16 Python checks and six assisted campaign routes with unchanged state, events and save/resume results. Formatting, Clippy and release compilation passed. All 293 original files are unchanged, and the 420 native fixtures pass. Maintained test code is 7.48% of maintained production code; native comparison tests add another 32.29%.
+          Local verification passed 405 executable Rust cases, 16 Python checks and six assisted campaign routes with unchanged state, events and save/resume results. Formatting, Clippy and release compilation passed. All 293 original files are unchanged, and the 420 native fixtures pass. Maintained test code is 7.24% of maintained production code; native comparison tests add another 31.31%.
 
           ### Hive qualification
 
